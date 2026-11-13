@@ -946,6 +946,12 @@ casier, recalcule les têtes de chaque secret et de ses métadonnées, puis ré�
 Ce contrôle détecte le retour en arrière d'un fragment isolé. Le retour en arrière du fichier
 entier reste hors de portée (§ 14, point 11).
 
+Les colonnes en clair d'`operations` ne servent que d'index : chaque lecture d'une opération
+vérifie qu'elles sont égales aux champs authentifiés (casier, auteur, appareil, rang). Un
+attaquant qui efface en plus les lignes récentes du journal ramène le coffre à un état
+antérieur cohérent : c'est un retour en arrière du fichier, que seul un compteur monotone
+matériel pourra détecter (point 11, étape 5).
+
 ## 11. Bourrage
 
 Le bourrage masque la taille exacte des contenus scellés. Il s'applique à **toute**
