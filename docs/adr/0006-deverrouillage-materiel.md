@@ -1,6 +1,6 @@
 # ADR 0006 — Déverrouillage lié au matériel
 
-- Statut : accepté, à prototyper sur chaque système
+- Statut : accepté, à prototyper sur chaque système ; complété par l'ADR 0011 (clés par appareil)
 - Date : 2026-11-13
 
 ## Contexte
