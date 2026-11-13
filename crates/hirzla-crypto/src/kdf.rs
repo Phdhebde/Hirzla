@@ -1,15 +1,16 @@
 //! HKDF-SHA-512 key derivation with typed context labels (`docs/crypto.md`).
 //!
 //! A derivation is fully described by a [`KdfLabel`]: no free-form string can reach the
-//! `info` input. Every label encodes as
+//! `info` input. Every element of `info`, the name included, is prefixed by its length on two
+//! big-endian bytes, so that no two labels can produce the same bytes:
 //!
 //! ```text
-//! info = ASCII name ‖ 0x00 ‖ fixed-size parameters
+//! info = len(name) ‖ name ‖ len(p1) ‖ p1 ‖ len(p2) ‖ p2 ‖ …
 //! ```
 //!
 //! | Label | Name | Parameters |
 //! | --- | --- | --- |
-//! | [`KdfLabel::Unlock`] | `hirzla/v1/unlock` | method index (1 byte) ‖ method kind (1 byte) |
+//! | [`KdfLabel::Unlock`] | `hirzla/v1/unlock` | method index (1 byte), method kind (1 byte) |
 //! | [`KdfLabel::DeviceWrap`] | `hirzla/v1/device-wrap` | none |
 //!
 //! The output is always a 32-byte [`SymmetricKey`].
@@ -46,19 +47,26 @@ impl KdfLabel {
         }
     }
 
-    /// The exact `info` bytes of this label.
+    fn params(self) -> Vec<Vec<u8>> {
+        match self {
+            KdfLabel::Unlock {
+                method_index,
+                method_kind,
+            } => vec![vec![method_index], vec![method_kind]],
+            KdfLabel::DeviceWrap => Vec::new(),
+        }
+    }
+
+    /// The exact `info` bytes of this label: each element prefixed by its length.
     #[must_use]
     pub fn info(self) -> Vec<u8> {
         let mut info = Vec::with_capacity(32);
-        info.extend_from_slice(self.name());
-        info.push(0x00);
-        if let KdfLabel::Unlock {
-            method_index,
-            method_kind,
-        } = self
-        {
-            info.push(method_index);
-            info.push(method_kind);
+        let name: &[u8] = self.name();
+        for element in core::iter::once(name.to_vec()).chain(self.params()) {
+            // Labels are compile-time constants far below 64 KiB.
+            let len = u16::try_from(element.len()).unwrap_or(u16::MAX);
+            info.extend_from_slice(&len.to_be_bytes());
+            info.extend_from_slice(&element);
         }
         info
     }

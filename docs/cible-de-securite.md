@@ -259,6 +259,11 @@ Menaces résiduelles, à déclarer au CESTI :
   quorum le visant peut l'emporter (`sync-protocol.md` § 9.4).
 - **F15** : un adversaire capable de casser les mécanismes d'interopérabilité obtient l'accès
   au service tiers concerné, jamais au coffre.
+- **Bibliothèques sans rapport d'audit publié** (ADR 0012) : `vsss-rs` (partage de secret, F2
+  récupération) et RustCrypto `argon2` (F3, recours par mot de passe). Mesures : version figée de
+  `vsss-rs`, test de temps constant de type dudect, parts authentifiées par signature hybride
+  vérifiée contre une clé épinglée ; vecteur RFC 9106 et test croisé avec le code C de
+  référence pour Argon2id. À relire par le référent cryptographie et à signaler au CESTI.
 - **H1** : un attaquant administrateur du poste, pendant l'ouverture, lit ce qui est descellé.
 - Retour en arrière d'un coffre local vers une copie plus ancienne : non détecté hors ligne
   (`format.md`, point ouvert n° 11).
@@ -284,3 +289,5 @@ Menaces résiduelles, à déclarer au CESTI :
    contact avant le registre de transparence.
 10. **Agent A10 et menaces M18, M19** : ajoutés pour les clés par appareil (ADR 0011) et le
     quorum de propriétaires.
+11. **Risque résiduel des bibliothèques non auditées** (`vsss-rs`, `argon2`) : décision de
+    validation de l'ADR 0012, inscrite au § 8.

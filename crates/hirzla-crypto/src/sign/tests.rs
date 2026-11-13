@@ -106,6 +106,7 @@ fn each_role_signs_and_verifies_its_domains() {
         DeviceDomain::DeviceAuth,
         DeviceDomain::ExchangeFile,
         DeviceDomain::DeviceEnrol,
+        DeviceDomain::RecoveryShare,
     ] {
         let sig = device.sign(d, MSG).unwrap();
         device.verifying_key().verify(d, MSG, &sig).unwrap();
@@ -154,6 +155,7 @@ fn signature_does_not_verify_in_another_domain_or_for_another_message() {
         Domain::Receipt,
         Domain::ExchangeFile,
         Domain::DeviceEnrol,
+        Domain::RecoveryShare,
     ] {
         assert_eq!(
             vk.verify(d, MSG, &sig),
@@ -184,6 +186,7 @@ fn domain_labels_are_distinct_and_prefix_free() {
         Domain::Receipt,
         Domain::ExchangeFile,
         Domain::DeviceEnrol,
+        Domain::RecoveryShare,
     ];
     for a in all {
         assert!(a.label().is_ascii() && !a.label().contains(&0));

@@ -34,3 +34,11 @@ lto = true
 codegen-units = 1
 panic = "abort"
 overflow-checks = true
+
+# Argon2id runs at 64 MiB or more: unoptimised, a single derivation takes tens of seconds
+# in debug builds and tests. Optimise only these dependencies.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3

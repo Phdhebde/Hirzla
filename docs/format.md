@@ -137,6 +137,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/op-payload` | AAD, contenu scellé d'une opération | § 7.2 |
 | `hirzla/v1/attachment-chunk` | AAD, morceau de fichier joint | § 8.4 |
 | `hirzla/v1/device-enrol` | Contexte KEM, transfert des clés à l'enrôlement | `sync-protocol.md` |
+| `hirzla/v1/recovery-share` | Signature d'une part de récupération (Shamir) | `crypto.md` |
 | `hirzla/v1/exchange-file` | Contexte KEM et signature, fichier d'échange | `sync-protocol.md` |
 | `hirzla/v1/server-auth` | Signature du serveur à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/device-auth` | Signature de l'appareil à l'ouverture de session | `sync-protocol.md` |
@@ -339,6 +340,9 @@ Paramètres du mot de passe (`kind = 1`) :
 | 4 | `salt` | `bstr(32)` | Aléa, propre à cette méthode |
 | 5 | `version` | `uint` | `19` (Argon2 v1.3) |
 
+Ces paramètres sont ceux de `PasswordParams` dans `hirzla-crypto` (module `password`), qui
+refuse toute valeur hors de ces bornes à la construction comme au décodage.
+
 Paramètres matériels (`kind` 2 à 5) :
 
 | Clé | Nom | Type | Contraintes |
@@ -351,7 +355,8 @@ Le **secret de méthode** fait 32 octets :
 - matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob`.
 
 `KEK_unlock = HKDF-SHA-512(ikm = secret de méthode, salt = vault_id,
-info = "hirzla/v1/unlock" ‖ 0x00 ‖ rang de la méthode (1 octet) ‖ kind (1 octet), L = 32)`.
+info = len ‖ "hirzla/v1/unlock" ‖ len ‖ rang de la méthode (1 octet) ‖ len ‖ kind (1 octet), L = 32)`,
+chaque `len` étant la longueur de l'élément qui suit, sur 2 octets gros-boutistes.
 
 Les plafonds protègent contre un en-tête piégé qui ferait calculer Argon2id indéfiniment.
 Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refusé avant tout calcul.
@@ -359,7 +364,7 @@ Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refus�
 ### 4.3 Clé d'emballage locale
 
 `K_dev_wrap = HKDF-SHA-512(ikm = DeviceKey, salt = vault_id,
-info = "hirzla/v1/device-wrap" ‖ 0x00, L = 32)`.
+info = len ‖ "hirzla/v1/device-wrap", L = 32)`.
 
 Ces `info` sont les étiquettes typées de `hirzla-crypto` (module `kdf`) : aucune chaîne libre.
 
@@ -1044,5 +1049,6 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 22. **`block_id` tiré par le sceau** et porté par chaque `SealedBox`, plutôt que fourni par
     l'appelant : il ne peut pas être réutilisé, et toutes les boîtes en ont un, pas seulement
     les contenus d'opération. Le champ 11 de l'opération disparaît.
-23. **`info` HKDF binaires** (`nom ‖ 0x00 ‖ paramètres`) au lieu de CBOR, pour que
-    `hirzla-crypto` reste sans dépendance CBOR et que les étiquettes soient des types.
+23. **`info` HKDF binaires** au lieu de CBOR (validé), chaque élément préfixé par sa longueur
+    sur 2 octets (décision de validation), pour que `hirzla-crypto` reste sans dépendance CBOR et
+    que les étiquettes soient des types.
