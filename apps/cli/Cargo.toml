@@ -1,0 +1,17 @@
+[package]
+name = "hirzla-cli"
+description = "Hirzla command line."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hirzla"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+hirzla-core = { path = "../../crates/hirzla-core" }

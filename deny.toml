@@ -1,0 +1,23 @@
+# cargo-deny : licences, avis de sécurité et provenance des dépendances.
+[advisories]
+yanked = "deny"
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0"]
+confidence-threshold = 0.9
+
+# Workspace crates are `publish = false` and the project licence is not chosen yet:
+# only third-party crates are subject to the allow list above.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Internal `path` dependencies between unpublished workspace crates are not wildcards;
+# a `*` version on a registry dependency is still refused.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/hirzla-crypto",
+    "crates/hirzla-vault",
+    "crates/hirzla-sync",
+    "crates/hirzla-access",
+    "crates/hirzla-keystore",
+    "crates/hirzla-audit",
+    "crates/hirzla-core",
+    "apps/cli",
+    "apps/server",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+dbg_macro = "deny"
+print_stdout = "warn"
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+overflow-checks = true

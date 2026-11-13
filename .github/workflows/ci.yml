@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        # Installs the toolchain and components pinned in rust-toolchain.toml.
+        run: |
+          rustup toolchain install
+          rustup show
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  secrets:
+    name: no tracked secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Refuse tracked vaults, certificates and private keys
+        shell: bash
+        run: |
+          tracked="$(git ls-files -- ':(icase)*.hirzla' ':(icase)*.pem' ':(icase)*.key')"
+          if [ -n "$tracked" ]; then
+            echo "::error::Files that may hold secrets are tracked by git:"
+            echo "$tracked"
+            exit 1
+          fi
+          echo "No *.hirzla, *.pem or *.key file is tracked."

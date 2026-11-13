@@ -1,0 +1,12 @@
+[package]
+name = "hirzla-crypto"
+description = "Hybrid post-quantum suites, envelopes, key derivation and secret sharing. Pure, no I/O."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]

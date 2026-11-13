@@ -1,0 +1,19 @@
+[package]
+name = "hirzla-server"
+description = "Hirzla blind server: sync relay, key directory, policies, audit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hirzlad"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+hirzla-crypto = { path = "../../crates/hirzla-crypto" }
+hirzla-access = { path = "../../crates/hirzla-access" }
+hirzla-audit = { path = "../../crates/hirzla-audit" }
