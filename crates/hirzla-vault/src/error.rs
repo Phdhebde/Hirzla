@@ -38,6 +38,10 @@ pub enum VaultError {
 
 impl From<rusqlite::Error> for VaultError {
     fn from(e: rusqlite::Error) -> Self {
+        #[cfg(test)]
+        if let rusqlite::Error::SqliteFailure(f, _) = &e {
+            diagnostics::record(f.extended_code);
+        }
         match e {
             rusqlite::Error::SqliteFailure(f, _)
                 if matches!(
@@ -61,5 +65,25 @@ impl From<crate::cbor::CborError> for VaultError {
 impl From<hirzla_crypto::Error> for VaultError {
     fn from(_: hirzla_crypto::Error) -> Self {
         VaultError::Crypto
+    }
+}
+
+/// Test-only diagnostics: the extended SQLite result code behind the last storage error of
+/// this thread. The public error never carries it.
+#[cfg(test)]
+pub(crate) mod diagnostics {
+    use std::cell::Cell;
+
+    thread_local! {
+        static LAST: Cell<Option<i32>> = const { Cell::new(None) };
+    }
+
+    pub(crate) fn record(code: i32) {
+        LAST.with(|c| c.set(Some(code)));
+    }
+
+    /// Extended SQLite result code of the last storage error on this thread.
+    pub(crate) fn last_sqlite_code() -> Option<i32> {
+        LAST.with(Cell::get)
     }
 }

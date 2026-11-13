@@ -22,11 +22,39 @@ fn options() -> CreateOptions {
     }
 }
 
+/// Unwraps, and on failure reports the extended SQLite code behind a storage error.
+fn diag<T>(r: Result<T, VaultError>, what: &str) -> T {
+    r.unwrap_or_else(|e| {
+        panic!(
+            "{what}: {e:?} (extended SQLite code {:?})",
+            crate::error::diagnostics::last_sqlite_code()
+        )
+    })
+}
+
 fn new_vault() -> (tempfile::TempDir, PathBuf, Vault) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test.hirzla");
-    let v = Vault::create(&path, PASSWORD, &options()).unwrap();
+    let v = diag(Vault::create(&path, PASSWORD, &options()), "create");
     (dir, path, v)
+}
+
+/// A vault whose parent directory is reached through a symbolic link (as `/var` is on
+/// macOS) is refused by `SQLITE_OPEN_NOFOLLOW`.
+#[cfg(unix)]
+#[test]
+fn symlink_in_vault_path_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let real = dir.path().join("real");
+    std::fs::create_dir(&real).unwrap();
+    let link = dir.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let err = Vault::create(&link.join("v.hirzla"), PASSWORD, &options()).err();
+    assert_eq!(
+        crate::error::diagnostics::last_sqlite_code(),
+        Some(rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK)
+    );
+    assert_eq!(err, Some(VaultError::Storage));
 }
 
 fn text(f: Field, s: &str) -> (Field, FieldValue) {
