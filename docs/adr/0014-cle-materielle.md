@@ -19,6 +19,39 @@ Ces décisions priment sur les propositions du reste du document.
 5. **Lint `unsafe_code = "deny"`** dans l'espace de travail, `#![forbid(unsafe_code)]` à la
    racine de toutes les caisses sauf `hirzla-keystore`, et un test de CI qui le vérifie.
 
+## Décision complémentaire : Windows sans TPM pour l'instant (2026-11-13)
+
+Le prototype a montré que la décision 4 n'est pas réalisable sous Windows : aucune version
+publiée de `tss-esapi` (7.7.0, 8.0.0-alpha.4) n'ouvre le TCTI `tbs`, et `tss-esapi-sys` 0.6
+n'a pas de bindings Windows (ajoutés en amont le 2026-11-12, non publiés). Option retenue :
+**attendre**. Ni dépendance git, ni `tpm2-protocol`.
+
+6. **En attendant, Windows utilise le repli mot de passe + Argon2id, renforcé par DPAPI.**
+   - `CryptProtectData` en **portée utilisateur** (sans `CRYPTPROTECT_LOCAL_MACHINE`), sans
+     interface (`CRYPTPROTECT_UI_FORBIDDEN`), protège un facteur aléatoire de 32 octets.
+   - Ce facteur est **toujours combiné au mot de passe** (KDF(facteur DPAPI ‖ sortie
+     Argon2id)), **jamais seul** : un coffre copié hors du compte Windows ne s'ouvre pas même
+     avec le mot de passe, et le compte Windows seul ne suffit pas.
+   - Garanties déclarées : liée au compte Windows sur ce poste ; **pas de limitation
+     d'essais matérielle** (celle du mot de passe reste Argon2id) ; pas de présence
+     utilisateur ; **pas de compteur monotone**. Tout processus qui tourne sous le compte
+     de l'utilisateur peut desceller le facteur. Dans un domaine Active Directory, les clés
+     maîtresses DPAPI sont sauvegardées par la clé de secours du domaine (RSA, non
+     post-quantique) : un administrateur du domaine peut desceller le facteur, d'où
+     l'obligation de le combiner au mot de passe.
+   - Dépendance : `windows-sys` 0.61 (Microsoft, MIT OR Apache-2.0), déjà présente dans le
+     graphe, ajoutée en direct pour Windows avec les seules fonctionnalités
+     `Win32_Foundation` et `Win32_Security_Cryptography`. Appels FFI en `unsafe`, bloc par
+     bloc, justifiés par `// SAFETY:`.
+7. **Condition de reprise** : dès qu'une version **publiée** de `tss-esapi` ouvre le TCTI
+   `tbs` (et fournit des bindings Windows ou permet de les générer sans téléchargement), on
+   écrit le prototype TPM Windows (scellement, compteur, test manuel W2) avant toute
+   implémentation. DPAPI reste alors le repli des postes sans TPM 2.0.
+8. **tpm2-tss ≥ 4.1.3** partout (bindings de `tss-esapi-sys` 0.6). Les distributions en
+   livrent parfois une plus ancienne (Ubuntu 24.04 : 4.0.1) : la CI construit tpm2-tss 4.1.6
+   depuis l'archive publiée, figée par empreinte SHA-256 (signature vérifiée avant
+   figement), avec `.github/scripts/install-tpm2-tss.sh`.
+
 ## Contexte
 
 L'étape 5 écrit `hirzla-keystore`. L'ADR 0006 y place une interface commune entre la clé du
@@ -248,8 +281,8 @@ même ne contenir aucun `unsafe`.
 
 ## Conséquences
 
-- La CI Linux installe `libtss2-dev`. La CI Windows prépare tpm2-tss : c'est du temps de
-  construction et une chaîne C de plus à surveiller.
+- La CI Linux construit tpm2-tss 4.1.6 depuis son archive figée (décision 8). Rien n'est
+  construit pour le TPM sous Windows tant que la condition de la décision 7 n'est pas remplie.
 - Les binaires Linux dépendent de `libtss2-esys` à l'exécution, ce qui est à déclarer dans
   les paquets.
 - macOS n'a pas de compteur monotone. Windows peut-être pas non plus. Le point ouvert n° 11
@@ -257,7 +290,8 @@ même ne contenir aucun `unsafe`.
 - La Secure Enclave impose une application signée pour la persistance par le trousseau.
   La CLI non signée risque de ne pas y avoir accès (erreur -34018 rapportée par les forums
   Apple).
-- `deny.toml` : aucun changement attendu (Apache-2.0, MIT). À vérifier à l'ajout.
+- `deny.toml` : une exception, limitée à `target-lexicon` (Apache-2.0 WITH LLVM-exception,
+  dépendance de construction de `tss-esapi-sys`).
 
 ## Alternatives écartées
 
