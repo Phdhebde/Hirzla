@@ -48,8 +48,10 @@ Le format exact est à figer dans `hirzla-crypto` et à tester par vecteurs.
 6. **Clé racine du serveur** : AES-256 sous sceau (HSM, quorum, TPM). Elle chiffre le stockage
    du serveur une seconde fois et protège ses clés de signature. Elle n'ouvre aucun secret.
 
-Les données associées de chaque chiffrement lient l'identifiant du casier, celui du secret et
-sa version : un bloc déplacé ou rejoué ailleurs ne se déchiffre pas.
+Les données associées de chaque chiffrement lient l'identifiant du casier, un identifiant de
+bloc opaque, l'auteur, son rang et l'époque de la clé : un bloc déplacé ou rejoué ailleurs ne se
+déchiffre pas. L'identifiant du secret est dans le chiffré, pour que le serveur n'apprenne pas
+quel secret change (`docs/format.md` § 7.2).
 
 ## Transport
 
