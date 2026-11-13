@@ -11,3 +11,14 @@ workspace = true
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
+# ADR 0013.
+cbor4ii = { version = "1.2.4", default-features = false, features = ["use_alloc"] }
+icu_normalizer = "2.4.0"
+rusqlite = { version = "0.42.0", features = ["bundled"] }
+thiserror = "2.0"
+url = "2.5.8"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+proptest = "1.12.0"
+tempfile = "3.27.0"
