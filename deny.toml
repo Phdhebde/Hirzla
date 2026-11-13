@@ -7,6 +7,12 @@ yanked = "deny"
 allow = ["MIT", "Apache-2.0", "BSD-3-Clause", "ISC", "Unicode-3.0", "Zlib"]
 confidence-threshold = 0.9
 
+# target-lexicon: build dependency of tss-esapi-sys (ADR 0014), Apache-2.0 with the LLVM
+# exception (more permissive than Apache-2.0). Allowed for this crate only.
+[[licenses.exceptions]]
+crate = "target-lexicon"
+allow = ["Apache-2.0 WITH LLVM-exception"]
+
 # Workspace crates are `publish = false` and the project licence is not chosen yet:
 # only third-party crates are subject to the allow list above.
 [licenses.private]
