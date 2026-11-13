@@ -23,6 +23,20 @@ jobs:
         run: |
           rustup toolchain install
           rustup show
+      # aws-lc-rs builds the AWS-LC C library (ADR 0009): CMake on every OS,
+      # NASM for the x86-64 assembly on Windows.
+      - name: CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "3.31.x"
+      - name: NASM
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
+      - name: Build tools
+        shell: bash
+        run: |
+          cmake --version
+          if [ "$RUNNER_OS" = "Windows" ]; then nasm -v; fi
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
