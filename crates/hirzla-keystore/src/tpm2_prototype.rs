@@ -8,8 +8,15 @@
 //! - Every command runs in an HMAC session **salted** to that primary key, with parameter
 //!   encryption both ways, so the unsealed secret does not cross the bus in clear. The salt is
 //!   protected by ECDH P-256 only: this protects the bus, not the stored object.
-//! - The counter is an NV index of type `TPM_NT_COUNTER`, defined under the owner hierarchy
-//!   and read or incremented with its own (empty) authorisation.
+//! - The salt key is checked: its name (digest of its public area) is stored with each sealed
+//!   object at sealing time and compared before unsealing, so a substituted key (bus
+//!   interposer) is refused. The first sealing trusts the key it is given.
+//! - The counter is an NV index of type `TPM_NT_COUNTER`, defined under the owner hierarchy and
+//!   read or incremented with its own **random** authorisation, kept by the caller: other
+//!   local processes cannot move it.
+//! - Without a PIN, any process allowed to talk to this TPM can unseal the object: that mode
+//!   only binds the secret to the machine (copying the blob elsewhere is useless). A PIN adds
+//!   the TPM's dictionary-attack protection.
 
 use std::str::FromStr;
 
@@ -35,7 +42,7 @@ use zeroize::Zeroizing;
 /// TCTI used when `HIRZLA_TPM_TCTI` is not set: the kernel resource manager.
 pub const DEFAULT_TCTI: &str = "device:/dev/tpmrm0";
 
-/// First and last handle of the owner NV range (TCG handle registry, `0x01000000`â€“`0x013FFFFF`).
+/// First and last handle of the owner NV range (TCG handle registry, `0x01000000`–`0x013FFFFF`).
 const NV_OWNER_FIRST: u32 = 0x0100_0000;
 const NV_OWNER_LAST: u32 = 0x013F_FFFF;
 
@@ -54,11 +61,16 @@ pub enum PrototypeError {
     /// The random generator failed.
     #[error("random generator failure")]
     Random,
+    /// The storage key is not the one the object was sealed under.
+    #[error("storage key mismatch")]
+    PrimaryMismatch,
 }
 
 /// A sealed object as stored by the caller: marshalled public area and private blob.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SealedBlob {
+    /// Name of the storage primary key at sealing time, checked before unsealing.
+    pub primary_name: Vec<u8>,
     /// `TPM2B_PUBLIC` contents, marshalled.
     pub public: Vec<u8>,
     /// `TPM2B_PRIVATE` contents (encrypted by the TPM under the primary key's seed).
@@ -66,16 +78,14 @@ pub struct SealedBlob {
 }
 
 impl SealedBlob {
-    /// `len(public) (2, big-endian) â€– public â€– private`.
+    /// `len(name) ‖ name ‖ len(public) ‖ public ‖ private`, lengths on 2 bytes big-endian.
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(2 + self.public.len() + self.private.len());
-        out.extend_from_slice(
-            &u16::try_from(self.public.len())
-                .unwrap_or(u16::MAX)
-                .to_be_bytes(),
-        );
-        out.extend_from_slice(&self.public);
+        let mut out = Vec::new();
+        for part in [&self.primary_name, &self.public] {
+            out.extend_from_slice(&u16::try_from(part.len()).unwrap_or(u16::MAX).to_be_bytes());
+            out.extend_from_slice(part);
+        }
         out.extend_from_slice(&self.private);
         out
     }
@@ -85,13 +95,35 @@ impl SealedBlob {
     /// # Errors
     /// [`PrototypeError::Blob`] if truncated.
     pub fn from_bytes(b: &[u8]) -> Result<Self, PrototypeError> {
-        let (len, rest) = b.split_at_checked(2).ok_or(PrototypeError::Blob)?;
-        let len = usize::from(u16::from_be_bytes([len[0], len[1]]));
-        let (public, private) = rest.split_at_checked(len).ok_or(PrototypeError::Blob)?;
+        fn take(b: &[u8]) -> Result<(&[u8], &[u8]), PrototypeError> {
+            let (len, rest) = b.split_at_checked(2).ok_or(PrototypeError::Blob)?;
+            let len = usize::from(u16::from_be_bytes([len[0], len[1]]));
+            rest.split_at_checked(len).ok_or(PrototypeError::Blob)
+        }
+        let (primary_name, rest) = take(b)?;
+        let (public, private) = take(rest)?;
         Ok(SealedBlob {
+            primary_name: primary_name.to_vec(),
             public: public.to_vec(),
             private: private.to_vec(),
         })
+    }
+}
+
+/// A monotonic counter: its NV index and its random authorisation value.
+#[derive(Clone)]
+pub struct CounterRef {
+    /// NV index handle (owner range).
+    pub index: u32,
+    /// Authorisation value of the index, 32 random bytes. Kept by the caller (sealed).
+    pub auth: Zeroizing<Vec<u8>>,
+}
+
+impl std::fmt::Debug for CounterRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CounterRef")
+            .field("index", &format_args!("{:#010x}", self.index))
+            .finish_non_exhaustive()
     }
 }
 
@@ -108,6 +140,7 @@ pub struct TpmInfo {
 pub struct Tpm2Prototype {
     ctx: Context,
     primary: KeyHandle,
+    primary_name: Vec<u8>,
     session: AuthSession,
     info: TpmInfo,
 }
@@ -203,6 +236,7 @@ impl Tpm2Prototype {
                 (r.key_handle, false)
             }
         };
+        let primary_name = ctx.tr_get_name(primary.into())?.value().to_vec();
         let symmetric = if aes_256 {
             SymmetricDefinition::AES_256_CFB
         } else {
@@ -231,6 +265,7 @@ impl Tpm2Prototype {
         Ok(Tpm2Prototype {
             ctx,
             primary,
+            primary_name,
             session,
             info,
         })
@@ -262,6 +297,7 @@ impl Tpm2Prototype {
             c.create(primary, template, auth, Some(data), None, None)
         })?;
         Ok(SealedBlob {
+            primary_name: self.primary_name.clone(),
             public: created.out_public.marshall()?,
             private: created.out_private.value().to_vec(),
         })
@@ -270,12 +306,17 @@ impl Tpm2Prototype {
     /// Unseals the 32 bytes.
     ///
     /// # Errors
-    /// Any TPM failure (wrong PIN, object from another TPM, lockoutâ€¦).
+    /// Any TPM failure (wrong PIN, object from another TPM, lockout…).
     pub fn unseal(
         &mut self,
         blob: &SealedBlob,
         pin: Option<&[u8]>,
     ) -> Result<Zeroizing<[u8; 32]>, PrototypeError> {
+        // The session was salted to `self.primary`: only trust it if that key is the one the
+        // object was sealed under.
+        if !hirzla_crypto::util::constant_time_eq(&blob.primary_name, &self.primary_name) {
+            return Err(PrototypeError::PrimaryMismatch);
+        }
         let public = Public::unmarshall(&blob.public)?;
         let private = Private::try_from(blob.private.clone())?;
         let primary = self.primary;
@@ -302,20 +343,26 @@ impl Tpm2Prototype {
         Ok(out)
     }
 
-    /// Defines a new monotonic counter at a random free owner NV index; returns its handle.
+    /// Defines a new monotonic counter at a random free owner NV index, with a random
+    /// authorisation value, and increments it once (a counter reads only once written).
     ///
     /// # Errors
     /// Any TPM failure, notably when the owner authorisation is not available (Windows).
-    pub fn counter_create(&mut self) -> Result<u32, PrototypeError> {
+    pub fn counter_create(&mut self) -> Result<CounterRef, PrototypeError> {
         let attributes = NvIndexAttributesBuilder::new()
             .with_nv_index_type(tss_esapi::constants::NvIndexType::Counter)
             .with_auth_read(true)
             .with_auth_write(true)
             .with_no_da(true)
             .build()?;
+        let auth = Zeroizing::new(
+            hirzla_crypto::util::random_array::<32>()
+                .map_err(|_| PrototypeError::Random)?
+                .to_vec(),
+        );
         for _ in 0..16 {
-            let mut r = [0u8; 4];
-            hirzla_crypto::util::random_bytes(&mut r).map_err(|_| PrototypeError::Random)?;
+            let r: [u8; 4] =
+                hirzla_crypto::util::random_array().map_err(|_| PrototypeError::Random)?;
             let index =
                 NV_OWNER_FIRST + u32::from_be_bytes(r) % (NV_OWNER_LAST - NV_OWNER_FIRST + 1);
             let public = NvPublicBuilder::new()
@@ -324,18 +371,17 @@ impl Tpm2Prototype {
                 .with_index_attributes(attributes)
                 .with_data_area_size(8)
                 .build()?;
+            let index_auth = tss_esapi::structures::Auth::try_from(auth.to_vec())?;
             let session = self.session;
             match self.ctx.execute_with_session(Some(session), |c| {
-                c.nv_define_space(Provision::Owner, None, public)
+                c.nv_define_space(Provision::Owner, Some(index_auth), public)
             }) {
                 Ok(handle) => {
-                    // A counter reads only once incremented (TPMA_NV_WRITTEN).
-                    self.ctx.execute_with_session(Some(session), |c| {
-                        c.nv_increment(NvAuth::NvIndex(handle), handle)
-                    })?;
                     let mut h: ObjectHandle = handle.into();
                     let _ = self.ctx.tr_close(&mut h);
-                    return Ok(index);
+                    let counter = CounterRef { index, auth };
+                    self.counter_increment(&counter)?;
+                    return Ok(counter);
                 }
                 Err(e) if is_nv_defined(&e) => {}
                 Err(e) => return Err(e.into()),
@@ -344,21 +390,27 @@ impl Tpm2Prototype {
         Err(PrototypeError::NoFreeIndex)
     }
 
-    fn nv_handle(&mut self, index: u32) -> Result<NvIndexHandle, PrototypeError> {
-        let tpm_handle = TpmHandle::NvIndex(NvIndexTpmHandle::new(index)?);
-        let session = self.session;
+    fn nv_handle(&mut self, counter: &CounterRef) -> Result<NvIndexHandle, PrototypeError> {
+        let tpm_handle = TpmHandle::NvIndex(NvIndexTpmHandle::new(counter.index)?);
+        // NV_ReadPublic takes no authorisation and no encryptable parameter: no session. A
+        // forged public area changes the index name, and the authorised command that follows
+        // then fails its HMAC.
         let object = self
             .ctx
-            .execute_with_session(Some(session), |c| c.tr_from_tpm_public(tpm_handle))?;
+            .execute_without_session(|c| c.tr_from_tpm_public(tpm_handle))?;
+        self.ctx.tr_set_auth(
+            object,
+            tss_esapi::structures::Auth::try_from(counter.auth.to_vec())?,
+        )?;
         Ok(object.into())
     }
 
     /// Reads the counter.
     ///
     /// # Errors
-    /// Any TPM failure.
-    pub fn counter_read(&mut self, index: u32) -> Result<u64, PrototypeError> {
-        let handle = self.nv_handle(index)?;
+    /// Any TPM failure (wrong authorisation, deleted index…).
+    pub fn counter_read(&mut self, counter: &CounterRef) -> Result<u64, PrototypeError> {
+        let handle = self.nv_handle(counter)?;
         let session = self.session;
         let data = self.ctx.execute_with_session(Some(session), |c| {
             c.nv_read(NvAuth::NvIndex(handle), handle, 8, 0)
@@ -373,9 +425,9 @@ impl Tpm2Prototype {
     /// Increments the counter and returns the new value.
     ///
     /// # Errors
-    /// Any TPM failure.
-    pub fn counter_increment(&mut self, index: u32) -> Result<u64, PrototypeError> {
-        let handle = self.nv_handle(index)?;
+    /// Any TPM failure (wrong authorisation, deleted index…).
+    pub fn counter_increment(&mut self, counter: &CounterRef) -> Result<u64, PrototypeError> {
+        let handle = self.nv_handle(counter)?;
         let session = self.session;
         let r = self.ctx.execute_with_session(Some(session), |c| {
             c.nv_increment(NvAuth::NvIndex(handle), handle)
@@ -383,15 +435,15 @@ impl Tpm2Prototype {
         let mut h: ObjectHandle = handle.into();
         let _ = self.ctx.tr_close(&mut h);
         r?;
-        self.counter_read(index)
+        self.counter_read(counter)
     }
 
-    /// Deletes the counter.
+    /// Deletes the counter (owner authorisation).
     ///
     /// # Errors
     /// Any TPM failure.
-    pub fn counter_destroy(&mut self, index: u32) -> Result<(), PrototypeError> {
-        let handle = self.nv_handle(index)?;
+    pub fn counter_destroy(&mut self, counter: &CounterRef) -> Result<(), PrototypeError> {
+        let handle = self.nv_handle(counter)?;
         let session = self.session;
         self.ctx.execute_with_session(Some(session), |c| {
             c.nv_undefine_space(Provision::Owner, handle)
