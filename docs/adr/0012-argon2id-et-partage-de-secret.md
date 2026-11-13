@@ -1,6 +1,6 @@
 # ADR 0012 — Bibliothèques pour Argon2id et le partage de secret de Shamir
 
-- Statut : proposé
+- Statut : accepté (2026-11-13)
 - Date : 2026-11-13
 
 ## Contexte
@@ -47,7 +47,7 @@ une dépendance qui manipule des secrets ou contient du `unsafe`.
 | Dépendances | Nombreuses avec les options par défaut (`elliptic-curve`, `crypto-bigint`, `num-bigint`, `serde`…), réductibles par les options | Légères | `crypto_secretbox`, `rand` 0.8 |
 | Licence | Apache-2.0 OR MIT | MIT | MIT |
 
-## Décision proposée
+## Décision
 
 1. **Argon2id : RustCrypto `argon2`** en production, sans options par défaut, avec `alloc` et
    `zeroize`. C'est le seul candidat en Rust, sans nouvelle bibliothèque C. Il gère tous les
@@ -95,12 +95,22 @@ une dépendance qui manipule des secrets ou contient du `unsafe`.
 - **`shamirsecretsharing`** : non audité, et son authentification utilise XSalsa20-Poly1305,
   hors de la suite V1.
 
-## Points à trancher
+## Décisions prises à la validation
 
-1. Valider `argon2` (production) et `argon2-kdf` (tests seulement).
-2. Valider `vsss-rs` (production) et `blahaj` (tests seulement, si compatible).
-3. Valider l'authentification des parts par signature hybride et le nouveau domaine
-   `hirzla/v1/recovery-share`.
+1. **Argon2id** : RustCrypto `argon2` en production ; vecteur de la RFC 9106 et test croisé avec
+   `argon2-kdf` (code C de référence) en `dev-dependencies` ; mot de passe et clé dérivée dans
+   des types qui s'effacent ; plancher imposé (64 Mio, t ≥ 3) et plafonds (4 Gio, t ≤ 64, p ≤ 16).
+2. **Shamir** : `vsss-rs` avec le corps `Gf256`, **version figée** (`=6.0.1`). Un test de
+   temps constant de type dudect (test t de Welch sur deux classes de secrets) accompagne le
+   module. L'absence de rapport d'audit publié est inscrite comme **risque résiduel** dans la
+   cible de sécurité CSPN.
+3. **Parts authentifiées** par signature hybride sous `hirzla/v1/recovery-share`, sans
+   Feldman ni Pedersen. **Chaque part porte l'empreinte de la clé signataire.** À la
+   reconstitution, la signature est vérifiée contre une clé **épinglée** fournie par
+   l'appelant, jamais contre une clé jointe à la part.
+4. **`blahaj` n'est pas ajouté** : il n'est pas repris dans la validation, et ses tables
+   rendent son corps peu utile comme référence de temps constant. Le croisement de Shamir se
+   fait par les propriétés de reconstruction.
 
 ## Sources
 
