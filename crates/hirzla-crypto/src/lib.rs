@@ -2,12 +2,13 @@
 //!
 //! This crate assembles audited primitives; it never implements one.
 //! It performs no I/O and depends on no other Hirzla crate.
-//! See `docs/crypto.md` and ADRs 0002, 0009 and 0011.
+//! See `docs/crypto.md` and ADRs 0002, 0009, 0011 and 0012.
 
 pub mod envelope;
 mod error;
 pub mod kdf;
 pub mod kem;
+pub mod password;
 pub mod sign;
 pub mod sym;
 #[cfg(test)]

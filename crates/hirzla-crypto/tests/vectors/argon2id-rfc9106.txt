@@ -1,0 +1,12 @@
+# Argon2id test vector of RFC 9106, section 5.3 (version 0x13).
+# Source: https://www.rfc-editor.org/rfc/rfc9106#section-5.3. Unmodified values.
+# m is the memory cost in KiB, t the number of passes, p the parallelism, all in hex.
+
+password = 0101010101010101010101010101010101010101010101010101010101010101
+salt = 02020202020202020202020202020202
+secret = 0303030303030303
+ad = 040404040404040404040404
+m = 20
+t = 03
+p = 04
+tag = 0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659

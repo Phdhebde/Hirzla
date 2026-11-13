@@ -27,6 +27,12 @@ pub enum Error {
     /// A signature did not verify.
     #[error("invalid signature")]
     InvalidSignature,
+    /// Parameters are outside the accepted bounds.
+    #[error("invalid parameters")]
+    InvalidParameters,
+    /// A secret share is malformed, unauthenticated or inconsistent.
+    #[error("invalid share")]
+    InvalidShare,
     /// The underlying library or the random generator failed.
     #[error("cryptographic failure")]
     Internal,
