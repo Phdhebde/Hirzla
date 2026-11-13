@@ -769,6 +769,7 @@ dependencies = [
  "security-framework-sys",
  "thiserror",
  "tss-esapi",
+ "windows-sys",
  "zeroize",
 ]
 
