@@ -1,6 +1,6 @@
 # ADR 0013 — Dépendances de `hirzla-vault` : SQLite, CBOR, Unicode et URL
 
-- Statut : proposé
+- Statut : accepté (2026-11-13)
 - Date : 2026-11-13
 
 ## Contexte
@@ -54,7 +54,7 @@ sert à lire et à écrire les éléments, pas à décider de la canonicité.
 | URL Standard du WHATWG, hôte en A-label | `url` 2.5.8 (servo, environ 1 G de téléchargements, MIT OR Apache-2.0, 1 ligne `unsafe`) | `idna` seul | `url` tire `idna` → `idna_adapter` → `icu_normalizer` et `icu_properties` (ICU4X) |
 | NFC | `icu_normalizer` 2.4.0 (ICU4X, Unicode-3.0) | `unicode-normalization` 0.1.26 | `icu_normalizer` est **déjà tiré par `url`** : le prendre évite une seconde bibliothèque Unicode |
 
-## Décision proposée
+## Décision
 
 1. **`rusqlite` 0.42 avec l'option `bundled`**, version figée par `Cargo.lock`. C'est le seul
    candidat qui expose tous les réglages de défense exigés par le format. La bibliothèque SQLite
@@ -96,12 +96,18 @@ sert à lire et à écrire les éléments, pas à décider de la canonicité.
 - **`unicode-normalization`** : correct, mais ajouterait une seconde bibliothèque Unicode à
   côté d'ICU4X, déjà tiré par `url`.
 
-## Points à trancher
+## Décisions prises à la validation
 
-1. Valider `rusqlite` (`bundled`) et le passage de `rust-version` à 1.89.
-2. Valider `cbor4ii`, ou préférer `minicbor` (avec modification de `deny.toml`) ou un codec interne.
-3. Valider `url` et `icu_normalizer`.
-4. Valider `proptest` et `tempfile` en dépendances de test.
+1. `rusqlite` 0.42 avec SQLite 3.54.1 embarqué ; `rust-version` passe à 1.89.
+2. `cbor4ii`, avec un **contrôle canonique strict côté Hirzla** : tout encodage non canonique
+   est refusé (réencodage et comparaison, clés dupliquées, flottants, étiquettes, longueurs
+   indéfinies, profondeur au-delà de 16).
+3. `url` et `icu_normalizer`.
+4. `proptest` et `tempfile` en `dev-dependencies`.
+5. `PRAGMA secure_delete = ON` fait partie de la configuration **vérifiée** à l'ouverture
+   (`docs/format.md` § 5.3).
+6. Une cible `cargo-fuzz` couvre le décodage de `SecretBody`, `LockerBody` et de l'en-tête
+   (dossier `fuzz/`, hors de l'espace de travail, job court non bloquant en intégration continue).
 
 ## Sources
 

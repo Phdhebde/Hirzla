@@ -483,6 +483,9 @@ Dans cet ordre. Le premier échec arrête l'ouverture.
 1. Ouvrir sans suivre de lien symbolique, avec les réglages de connexion du § 5.1.
 2. Vérifier `application_id`, `user_version`, `page_size` = 4096, `auto_vacuum` = `FULL`
    et `journal_mode` = `DELETE`. Un fichier en mode WAL est refusé.
+   Relire ensuite les réglages de connexion appliqués : `secure_delete` = `ON`,
+   `trusted_schema` = `OFF`, `cell_size_check` = `ON`, `temp_store` = `MEMORY`, mode défensif
+   actif. Une valeur différente refuse l'ouverture.
 3. `PRAGMA quick_check` doit renvoyer `ok`.
 4. Comparer `sqlite_schema` au § 5.2 : mêmes objets, aucun autre (ni vue, ni déclencheur,
    ni table, ni index). Comparer les colonnes avec `PRAGMA table_xinfo` et les index avec
