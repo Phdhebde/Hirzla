@@ -41,3 +41,29 @@ fn dpapi_damaged_blob_is_refused() {
     assert!(unprotect(&blob[..blob.len() / 2], ENTROPY).is_err());
     assert!(unprotect(&[], ENTROPY).is_err());
 }
+
+/// Manual test W3 (`docs/keystore-prototypes.md`). First run, under account A: writes a blob to
+/// `HIRZLA_DPAPI_BLOB`. Second run, under account B or on another PC, with the same file:
+/// unprotecting must fail. Running it again under account A must succeed.
+#[test]
+#[ignore = "manual: run once under one Windows account, then under another account or PC"]
+fn dpapi_blob_from_another_account_is_refused() {
+    #![allow(clippy::print_stdout, clippy::panic)]
+    let Ok(path) = std::env::var("HIRZLA_DPAPI_BLOB") else {
+        panic!("set HIRZLA_DPAPI_BLOB to a file path shared by both accounts");
+    };
+    let factor = [0x77u8; 32];
+    match std::fs::read(&path) {
+        Err(_) => {
+            std::fs::write(&path, protect(&factor, ENTROPY).unwrap()).unwrap();
+            println!("blob written to {path}: now run this test under another account or PC");
+        }
+        Ok(blob) => match unprotect(&blob, ENTROPY) {
+            Ok(f) if *f == factor => {
+                println!("unprotected: this is the account (and PC) that wrote the blob");
+            }
+            Ok(_) => panic!("unprotected to a different value"),
+            Err(e) => println!("refused as expected outside the writing account: {e}"),
+        },
+    }
+}

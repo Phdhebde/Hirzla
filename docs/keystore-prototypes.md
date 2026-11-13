@@ -129,18 +129,21 @@ Précautions :
 
 ### W3 — Windows : le facteur DPAPI ne sort pas du compte
 
-Les tests automatiques ne peuvent pas changer de compte. Sur n'importe quel PC Windows :
+Les tests automatiques ne peuvent pas changer de compte. Utiliser un fichier accessible aux
+deux comptes, par exemple `C:\Users\Public\hirzla-dpapi.bin` :
 
 ```powershell
-cargo test -p hirzla-keystore --test dpapi_prototype -- --nocapture
+$env:HIRZLA_DPAPI_BLOB = "C:\Users\Public\hirzla-dpapi.bin"
+cargo test -p hirzla-keystore --test dpapi_prototype -- --ignored --nocapture
 ```
 
-puis, pour vérifier la liaison au compte, ouvrir une session sous **un autre compte
-Windows** du même poste et relancer la même commande sur une copie du dépôt : les tests
-doivent passer (chaque compte protège et retrouve ses propres facteurs). Le refus d'un
-facteur protégé par un autre compte sera testé avec l'interface `Keystore`, quand le blob
-sera stocké dans un coffre ; d'ici là, ce test confirme seulement que DPAPI fonctionne pour
-chaque compte.
+1. Sous le compte A : le test écrit le blob (« blob written »).
+2. Sous un **autre compte** du même PC, même commande : attendu « refused as expected ».
+3. Copier le fichier sur un **autre PC**, même commande : attendu « refused as expected ».
+4. De nouveau sous le compte A : attendu « unprotected ».
+
+Les étapes 1 et 4 ont été vérifiées sur le poste de développement. Supprimer le fichier
+ensuite : il ne contient qu'un facteur de test, sans valeur.
 
 ### M1 — macOS, Secure Enclave (Mac Apple silicon ou avec puce T2)
 
