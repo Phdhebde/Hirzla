@@ -6,6 +6,7 @@
 
 mod error;
 pub mod kem;
+pub mod sym;
 #[cfg(test)]
 mod test_support;
 

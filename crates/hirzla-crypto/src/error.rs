@@ -15,10 +15,19 @@ pub enum Error {
     /// A private key is malformed or does not match its public key.
     #[error("invalid key")]
     InvalidKey,
-    /// The context is empty or too long.
+    /// The context or associated data is empty or too long.
     #[error("invalid context")]
     InvalidContext,
     /// Key establishment failed.
     #[error("key establishment failed")]
     KeyEstablishment,
+    /// Unsealing or unwrapping failed. The cause is never given.
+    #[error("unsealing failed")]
+    Unseal,
+    /// A signature did not verify.
+    #[error("invalid signature")]
+    InvalidSignature,
+    /// The underlying library or the random generator failed.
+    #[error("cryptographic failure")]
+    Internal,
 }
