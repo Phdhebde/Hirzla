@@ -21,7 +21,9 @@ rust-version = "1.89"
 publish = false
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# `deny`, not `forbid`: hirzla-keystore allows it block by block (ADR 0014). Every other
+# crate root declares `#![forbid(unsafe_code)]`, checked by hirzla-keystore/tests/unsafe_policy.rs.
+unsafe_code = "deny"
 missing_docs = "warn"
 
 [workspace.lints.clippy]

@@ -4,6 +4,8 @@
 //! or a signing key the peers accept (write, share, manage). See `docs/roles.md`
 //! and ADRs 0004 and 0008.
 
+#![forbid(unsafe_code)]
+
 /// Roles a member can hold on a locker.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {

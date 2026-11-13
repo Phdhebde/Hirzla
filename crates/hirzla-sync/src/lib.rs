@@ -2,3 +2,5 @@
 //! merging is deterministic whatever the delivery order.
 //!
 //! The protocol is specified in `docs/sync-protocol.md`. See ADR 0005.
+
+#![forbid(unsafe_code)]

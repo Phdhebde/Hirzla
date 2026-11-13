@@ -3,6 +3,8 @@
 //! Every record is encrypted by `hirzla-crypto` before it reaches storage.
 //! The format is specified in `docs/format.md`; change the spec first.
 
+#![forbid(unsafe_code)]
+
 pub mod cbor;
 mod error;
 pub mod model;
