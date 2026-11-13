@@ -32,6 +32,11 @@ jobs:
       - name: NASM
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
+      # The Argon2 C reference (argon2-kdf, test-only, not built on Windows) runs bindgen,
+      # which needs libclang. macOS runners have it through Xcode.
+      - name: libclang
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libclang-dev
       - name: Build tools
         shell: bash
         run: |
@@ -43,6 +48,21 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
         run: cargo test --workspace
+
+  # dudect-style timing test of the Shamir arithmetic (ADR 0012). Shared runners are noisy:
+  # the result is informative and never blocks a merge.
+  constant-time:
+    name: constant time (informative)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+      - name: dudect
+        run: cargo test --release -p hirzla-crypto -- --ignored dudect --nocapture
 
   deny:
     name: cargo-deny
