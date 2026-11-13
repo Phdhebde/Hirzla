@@ -86,6 +86,29 @@ jobs:
             cargo +nightly fuzz run "$target" -- -max_total_time=60
           done
 
+  # TPM 2.0 prototype (ADR 0014) against swtpm, the software TPM. Real chips are tested by
+  # hand (docs/keystore-prototypes.md).
+  tpm-swtpm:
+    name: TPM prototype (swtpm)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools, tpm2-tss and swtpm
+        run: sudo apt-get update && sudo apt-get install -y cmake libtss2-dev swtpm swtpm-tools
+      - name: Start swtpm
+        run: |
+          mkdir -p "$RUNNER_TEMP/swtpm"
+          swtpm_setup --tpm2 --tpmstate "$RUNNER_TEMP/swtpm"
+          swtpm socket --tpm2 --tpmstate dir="$RUNNER_TEMP/swtpm" --server type=tcp,port=2321 --ctrl type=tcp,port=2322 --flags not-need-init,startup-clear --daemon
+      - name: Prototype tests
+        env:
+          HIRZLA_TPM_TCTI: swtpm:port=2321
+        run: >-
+          cargo test -p hirzla-keystore --test tpm2_prototype --
+          --ignored --nocapture --test-threads=1
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

@@ -3,3 +3,9 @@
 //!
 //! This is the only crate allowed to use `unsafe` (workspace lint `deny`, ADR 0014),
 //! each block opted in with `#[allow(unsafe_code)]` and a `// SAFETY:` comment. See ADR 0006.
+//!
+//! Step 5 starts with prototypes, one per system, to learn what really works before the
+//! common `Keystore` trait is written (`docs/keystore-prototypes.md`).
+
+#[cfg(target_os = "linux")]
+pub mod tpm2_prototype;
