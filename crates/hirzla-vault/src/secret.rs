@@ -742,6 +742,14 @@ impl SecretBody {
     }
 
     fn check_required(&self) -> Result<(), CborError> {
+        // A purged version carries no content at all (§ 7.3), and only then.
+        if self.state.0 == SecretState::Purged {
+            return if self.fields.is_empty() && self.sets.is_empty() && self.custom.is_empty() {
+                Ok(())
+            } else {
+                Err(CborError::Malformed)
+            };
+        }
         for r in required_fields(self.secret_type) {
             if !self.fields.contains_key(r) {
                 return Err(CborError::Malformed);
@@ -827,6 +835,12 @@ pub fn merge(heads: &[SecretBody]) -> Result<SecretBody, CborError> {
         if purged {
             out.state.0 = SecretState::Purged;
         }
+    }
+    if out.state.0 == SecretState::Purged {
+        // The merged state of a purged secret keeps no content (`sync-protocol.md` § 8.2).
+        out.fields.clear();
+        out.sets.clear();
+        out.custom.clear();
     }
     Ok(out)
 }
@@ -960,6 +974,12 @@ pub fn apply_edit(
     }
     if let Some(s) = edit.state {
         body.state = (s, stamp);
+    }
+    if body.state.0 == SecretState::Purged {
+        // A purge version carries no content (§ 7.3, § 9.2).
+        body.fields.clear();
+        body.sets.clear();
+        body.custom.clear();
     }
     if body.custom.len() > MAX_CUSTOM {
         return Err(EditError::NotAllowed);

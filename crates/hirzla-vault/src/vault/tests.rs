@@ -430,7 +430,7 @@ fn corrupted_or_truncated_files_are_refused() {
 
 #[test]
 fn moved_blocks_are_refused() {
-    let (_dir, path, mut v) = new_vault();
+    let (_dir, _path, mut v) = new_vault();
     let (locker, ids) = populate(&mut v);
     let personal = v.personal_locker();
     let secret_in_personal = v
@@ -515,20 +515,6 @@ fn moved_blocks_are_refused() {
     );
     let _ = secret_in_personal;
     v.close();
-
-    // Index fragments swapped between lockers: their AAD binds the locker.
-    tamper(
-        &path,
-        &format!(
-            "UPDATE index_shards SET box = (SELECT box FROM index_shards WHERE locker_id = x'{}') WHERE locker_id = x'{}';",
-            to_hex(&personal),
-            to_hex(&locker)
-        ),
-    );
-    assert_eq!(
-        Vault::open(&path, PASSWORD).err(),
-        Some(VaultError::Corrupt)
-    );
 }
 
 #[test]
@@ -673,23 +659,154 @@ fn format_and_structure_checks() {
 #[test]
 fn non_zero_padding_is_refused() {
     let (_dir, path, v) = new_vault();
-    let locker = v.personal_locker();
-    let shard = v.shard(&locker).unwrap().encode().unwrap();
-    let mut padded = pad::pad(&shard).unwrap();
+    let settings = Settings::default().encode().unwrap();
+    let mut padded = pad::pad(&settings).unwrap();
     let last = padded.len() - 1;
     padded[last] = 1;
-    let sealed = v.seal_local_raw(&v.index_aad(&locker), &padded);
+    let sealed = v.seal_local_raw(&v.settings_aad(), &padded);
     v.connection()
-        .execute(
-            "UPDATE index_shards SET box = ?1 WHERE locker_id = ?2",
-            params![sealed, locker.as_slice()],
-        )
+        .execute("UPDATE settings SET box = ?1", params![sealed])
         .unwrap();
     v.close();
     assert_eq!(
         Vault::open(&path, PASSWORD).err(),
         Some(VaultError::Corrupt)
     );
+}
+
+#[test]
+fn swapped_stale_or_missing_index_fragments_are_rebuilt() {
+    let (_dir, path, mut v) = new_vault();
+    let personal = v.personal_locker();
+    let locker = v.create_locker("Équipe").unwrap();
+    let first = v
+        .create_secret(
+            locker,
+            SecretType::Note,
+            SecretEdit {
+                set: vec![text(Field::Title, "premier")],
+                ..SecretEdit::default()
+            },
+        )
+        .unwrap();
+    // Keep the fragment as it is now, then write more.
+    let old_box: Vec<u8> = v
+        .connection()
+        .query_row(
+            "SELECT box FROM index_shards WHERE locker_id = ?1",
+            [locker.as_slice()],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let second = v
+        .create_secret(
+            locker,
+            SecretType::Note,
+            SecretEdit {
+                set: vec![text(Field::Title, "second")],
+                ..SecretEdit::default()
+            },
+        )
+        .unwrap();
+    v.purge_secret(locker, first).unwrap();
+    v.close();
+
+    let titles = |v: &Vault| -> Vec<(Id16, String, SecretState)> {
+        v.list(locker)
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.secret_id, e.title.to_string(), e.state))
+            .collect()
+    };
+    let expected = {
+        let v = Vault::open(&path, PASSWORD).unwrap();
+        titles(&v)
+    };
+    assert!(expected.contains(&(second, "second".into(), SecretState::Active)));
+    assert!(expected.contains(&(first, String::new(), SecretState::Purged)));
+
+    // 1. Rolled back: the older fragment put back in place is detected and rebuilt; the
+    //    purged title does not come back.
+    let conn = Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE index_shards SET box = ?1 WHERE locker_id = ?2",
+        params![old_box, locker.as_slice()],
+    )
+    .unwrap();
+    drop(conn);
+    let v = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(titles(&v), expected);
+    v.close();
+
+    // 2. Swapped with another locker's fragment: it does not unseal there, and is rebuilt.
+    tamper(
+        &path,
+        &format!(
+            "UPDATE index_shards SET box = (SELECT box FROM index_shards WHERE locker_id = x'{}') WHERE locker_id = x'{}';",
+            to_hex(&personal),
+            to_hex(&locker)
+        ),
+    );
+    let v = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(titles(&v), expected);
+    v.close();
+
+    // 3. Deleted: rebuilt.
+    tamper(
+        &path,
+        &format!(
+            "DELETE FROM index_shards WHERE locker_id = x'{}';",
+            to_hex(&locker)
+        ),
+    );
+    let v = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(titles(&v), expected);
+    let names: Vec<String> = v.lockers().iter().map(|l| l.name.to_string()).collect();
+    assert!(names.contains(&"Équipe".to_string()));
+}
+
+#[test]
+fn purge_leaves_no_content_and_drops_attachments() {
+    let (_dir, path, mut v) = new_vault();
+    let (locker, ids) = populate_with(&mut v, 10_000);
+    let file_id = ids[5];
+    let count = |v: &Vault| -> i64 {
+        v.connection()
+            .query_row("SELECT count(*) FROM attachment_chunks", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(count(&v), 1);
+    v.purge_secret(locker, file_id).unwrap();
+    assert_eq!(count(&v), 0, "attachment chunks are deleted with the purge");
+
+    let purged = v.read_secret(locker, file_id).unwrap();
+    assert_eq!(purged.state.0, SecretState::Purged);
+    assert!(purged.fields.is_empty() && purged.sets.is_empty() && purged.custom.is_empty());
+    let history = v.history(locker, file_id).unwrap();
+    assert_eq!(history.len(), 1);
+    assert!(history[0].body.fields.is_empty());
+    let entry = v
+        .list(locker)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.secret_id == file_id)
+        .unwrap();
+    assert!(entry.title.is_empty() && entry.hosts.is_empty() && entry.tags.is_empty());
+    v.close();
+
+    // The title of the purged secret is nowhere in the file any more.
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(!bytes.windows(14).any(|w| w == "Plan du réseau".as_bytes()));
+    // A purge version carrying content is refused on read.
+    let mut body = purged.clone();
+    body.fields.insert(
+        Field::Title,
+        crate::secret::FieldEntry {
+            value: FieldValue::text("x"),
+            stamp: body.state.1,
+        },
+    );
+    assert!(SecretBody::from_value(&body.to_value().unwrap()).is_err());
 }
 
 #[test]

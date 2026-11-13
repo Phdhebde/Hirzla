@@ -2,10 +2,10 @@
 # Argon2id(NFC password, salt, m, t, p) -> HKDF unlock label (index 0, kind 1) -> unwrap.
 # password = the UTF-8 string "hirzla fixture v1 — mot de passe"
 
-vault_id = c68433dfa164f2067e43134d63b56f87
+vault_id = b25df354a8be939b60798e93b842efe0
 m_kib = 65536
 t = 3
 p = 1
-salt = f2c1e8fae8f47ea934d0b78a30ed2dba135af506c44ea92082054fa8c5db5c7e
-wrapped_device_key = 4593847e0f7b4674a819a03a3e03d8cbc2af2d87e4ba09b7f00b1cb6b77950c0b747a96254beea6a
-device_key = 4340f691854a67154e3b57e9020519bf856a4b8a5ab59a68a8b5a0f3d47ac61e
+salt = 43d46907d3ba10227bb9c446c9417b5f054f88e96504a39bad86035c1c3385c1
+wrapped_device_key = 76a194492f2be8b9dbcc9493ed8f1af52bc769ce4b8d92b78a74279ceef992fc61e9dea06ce4e613
+device_key = fbbbdc5fca0c02b249e07aa70673349e34b88ae1c0247d1cd105128b333f7101

@@ -543,7 +543,8 @@ impl Vault {
             &settings_box,
         )?)?;
 
-        // Lazy reading: only the index fragments.
+        // Lazy reading: only the index fragments. A fragment that does not unseal is
+        // treated as missing and rebuilt by the freshness check below (§ 10).
         let mut shards = BTreeMap::new();
         {
             let mut stmt = conn.prepare("SELECT locker_id, box FROM index_shards")?;
@@ -553,21 +554,16 @@ impl Vault {
             for row in rows {
                 let (locker, sealed) = row?;
                 let locker: Id16 = locker.try_into().map_err(|_| VaultError::Corrupt)?;
-                let shard = IndexShard::decode(&unseal_padded(
-                    &dev_wrap,
-                    &aad_index(&vault_id, &locker)?,
-                    &sealed,
-                )?)?;
-                if shard.locker_id != locker {
-                    return Err(VaultError::Corrupt);
+                let shard = unseal_padded(&dev_wrap, &aad_index(&vault_id, &locker)?, &sealed)
+                    .and_then(|c| Ok(IndexShard::decode(&c)?));
+                if let Ok(shard) = shard {
+                    if shard.locker_id == locker {
+                        shards.insert(locker, shard);
+                    }
                 }
-                shards.insert(locker, shard);
             }
         }
-        if !shards.contains_key(&identity.personal_locker) {
-            return Err(VaultError::Corrupt);
-        }
-        Ok(Vault {
+        let mut vault = Vault {
             conn,
             vault_id,
             dev_wrap,
@@ -576,6 +572,139 @@ impl Vault {
             device_sign,
             device_vk,
             shards,
+        };
+        vault.refresh_index()?;
+        if !vault.shards.contains_key(&vault.identity.personal_locker) {
+            return Err(VaultError::Corrupt);
+        }
+        Ok(vault)
+    }
+
+    /// Extremities of the device chains of a locker: operations without a `seq + 1`
+    /// successor from the same device, read from the clear columns only.
+    fn chain_tips(&self, locker: &Id16) -> Result<Vec<(OpId, Id16, Id16)>, VaultError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT o.op_id, o.author_member, o.author_device FROM operations o
+             WHERE o.locker_id = ?1 AND NOT EXISTS (
+               SELECT 1 FROM operations n WHERE n.locker_id = o.locker_id
+                 AND n.author_member = o.author_member AND n.author_device = o.author_device
+                 AND n.seq = o.seq + 1)",
+        )?;
+        let rows = stmt
+            .query_map([locker.as_slice()], |r| {
+                Ok((
+                    r.get::<_, Vec<u8>>(0)?,
+                    r.get::<_, Vec<u8>>(1)?,
+                    r.get::<_, Vec<u8>>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(|(id, m, d)| {
+                Ok((
+                    id.try_into().map_err(|_| VaultError::Corrupt)?,
+                    m.try_into().map_err(|_| VaultError::Corrupt)?,
+                    d.try_into().map_err(|_| VaultError::Corrupt)?,
+                ))
+            })
+            .collect()
+    }
+
+    /// Freshness check of § 10: every locker of the journal has a fragment whose
+    /// `built_from` is made of chain extremities and holds this device's one. A missing,
+    /// unreadable, stale or rolled-back fragment is rebuilt.
+    fn refresh_index(&mut self) -> Result<(), VaultError> {
+        let lockers: Vec<Id16> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT DISTINCT locker_id FROM operations")?;
+            let rows = stmt
+                .query_map([], |r| r.get::<_, Vec<u8>>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows.into_iter()
+                .map(|l| l.try_into().map_err(|_| VaultError::Corrupt))
+                .collect::<Result<_, _>>()?
+        };
+        if self.shards.keys().any(|k| !lockers.contains(k)) {
+            return Err(VaultError::Corrupt);
+        }
+        let (me, device) = self.me();
+        for locker in lockers {
+            let tips = self.chain_tips(&locker)?;
+            let tip_ids: BTreeSet<OpId> = tips.iter().map(|t| t.0).collect();
+            let own_tip = tips
+                .iter()
+                .find(|t| t.1 == me && t.2 == device)
+                .map(|t| t.0);
+            let fresh = self.shards.get(&locker).is_some_and(|s| {
+                s.built_from.iter().all(|h| tip_ids.contains(h))
+                    && own_tip.is_none_or(|t| s.built_from.contains(&t))
+            });
+            if !fresh {
+                let shard = self.rebuild_shard(&locker, tip_ids.into_iter().collect())?;
+                let tx = self.conn.unchecked_transaction()?;
+                self.write_shard(&tx, &shard)?;
+                before_commit();
+                tx.commit()?;
+                self.shards.insert(locker, shard);
+            }
+        }
+        Ok(())
+    }
+
+    /// Rebuilds a locker's index fragment by unsealing its stored versions (§ 10).
+    fn rebuild_shard(&self, locker: &Id16, tips: Vec<OpId>) -> Result<IndexShard, VaultError> {
+        let ids: Vec<Vec<u8>> = {
+            let mut stmt = self.conn.prepare(
+                "SELECT op_id FROM operations WHERE locker_id = ?1 AND status != ?2
+                 ORDER BY author_member, author_device, seq",
+            )?;
+            let rows = stmt
+                .query_map(params![locker.as_slice(), status::PRUNED], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut versions: BTreeMap<Id16, Vec<(OpId, SecretBody)>> = BTreeMap::new();
+        let mut metas: Vec<(OpId, LockerBody)> = Vec::new();
+        for id in ids {
+            let id: OpId = id.try_into().map_err(|_| VaultError::Corrupt)?;
+            let (_, p) = self.load(&id)?;
+            match (p.kind, p.content.as_ref()) {
+                (KIND_SECRET_PUT, Some(c)) => {
+                    let body = SecretBody::from_value(c)?;
+                    versions.entry(body.secret_id).or_default().push((id, body));
+                }
+                (KIND_LOCKER_META_PUT, Some(c)) => metas.push((id, LockerBody::from_value(c)?)),
+                _ => {}
+            }
+        }
+        let mut entries = BTreeMap::new();
+        for (secret_id, vs) in versions {
+            let cited: BTreeSet<OpId> = vs
+                .iter()
+                .flat_map(|(_, b)| b.parents.iter().copied())
+                .collect();
+            let heads: Vec<&(OpId, SecretBody)> =
+                vs.iter().filter(|(id, _)| !cited.contains(id)).collect();
+            let bodies: Vec<SecretBody> = heads.iter().map(|(_, b)| b.clone()).collect();
+            let merged = secret::merge(&bodies)?;
+            let head_ids = heads.iter().map(|(id, _)| *id).collect();
+            entries.insert(secret_id, IndexEntry::of(&merged, head_ids));
+        }
+        let cited: BTreeSet<OpId> = metas
+            .iter()
+            .flat_map(|(_, b)| b.parents.iter().copied())
+            .collect();
+        let meta_heads: Vec<&(OpId, LockerBody)> =
+            metas.iter().filter(|(id, _)| !cited.contains(id)).collect();
+        let meta_bodies: Vec<LockerBody> = meta_heads.iter().map(|(_, b)| b.clone()).collect();
+        let merged = secret::merge_locker(&meta_bodies).ok_or(VaultError::Corrupt)?;
+        Ok(IndexShard {
+            locker_id: *locker,
+            built_from: tips,
+            name: Zeroizing::new(merged.name().to_owned()),
+            meta_heads: meta_heads.iter().map(|(id, _)| *id).collect(),
+            entries,
         })
     }
 
@@ -1133,7 +1262,7 @@ impl Vault {
         edit: SecretEdit,
     ) -> Result<Id16, VaultError> {
         let id: Id16 = random_array()?;
-        self.write_secret(locker, id, Some(secret_type), edit)?;
+        self.write_secret(locker, id, Some(secret_type), edit, None)?;
         Ok(id)
     }
 
@@ -1147,7 +1276,7 @@ impl Vault {
         secret_id: Id16,
         edit: SecretEdit,
     ) -> Result<(), VaultError> {
-        self.write_secret(locker, secret_id, None, edit)
+        self.write_secret(locker, secret_id, None, edit, None)
     }
 
     /// Moves a secret to the trash.
@@ -1185,29 +1314,29 @@ impl Vault {
     /// # Errors
     /// See [`Vault::update_secret`].
     pub fn purge_secret(&mut self, locker: Id16, secret_id: Id16) -> Result<(), VaultError> {
-        let older: Vec<OpId> = self
-            .history(locker, secret_id)?
-            .into_iter()
-            .map(|v| v.op_id)
-            .collect();
-        self.update_secret(
+        let history = self.history(locker, secret_id)?;
+        let older: Vec<OpId> = history.iter().map(|v| v.op_id).collect();
+        let mut attachments = BTreeSet::new();
+        for v in &history {
+            if let Some(set) = v.body.sets.get(&secret::SetKind::Attachments) {
+                for e in &set.elems {
+                    if let secret::SetValue::Attachment(a) = &e.value {
+                        attachments.insert(a.id);
+                    }
+                }
+            }
+        }
+        let attachments: Vec<Id16> = attachments.into_iter().collect();
+        self.write_secret(
             locker,
             secret_id,
+            None,
             SecretEdit {
                 state: Some(SecretState::Purged),
                 ..SecretEdit::default()
             },
-        )?;
-        let tx = self.conn.unchecked_transaction()?;
-        for id in older {
-            tx.execute(
-                "UPDATE operations SET body = x'', status = ?1 WHERE op_id = ?2",
-                params![status::PRUNED, id.as_slice()],
-            )?;
-        }
-        before_commit();
-        tx.commit()?;
-        Ok(())
+            Some((&older, &attachments)),
+        )
     }
 
     fn write_secret(
@@ -1216,6 +1345,7 @@ impl Vault {
         secret_id: Id16,
         create: Option<SecretType>,
         edit: SecretEdit,
+        purge_cleanup: Option<(&[OpId], &[Id16])>,
     ) -> Result<(), VaultError> {
         let shard = self.shard(&locker)?.clone();
         let (base, secret_type, parents) = match create {
@@ -1287,6 +1417,21 @@ impl Vault {
             .entries
             .insert(secret_id, IndexEntry::of(&body, vec![id]));
         self.write_shard(&tx, &shard)?;
+        if let Some((older, attachments)) = purge_cleanup {
+            // Same transaction as the purge version (§ 9.2): prune and drop attachments.
+            for old in older {
+                tx.execute(
+                    "UPDATE operations SET body = x'', status = ?1 WHERE op_id = ?2",
+                    params![status::PRUNED, old.as_slice()],
+                )?;
+            }
+            for a in attachments {
+                tx.execute(
+                    "DELETE FROM attachment_chunks WHERE attachment_id = ?1 AND locker_id = ?2",
+                    params![a.as_slice(), locker.as_slice()],
+                )?;
+            }
+        }
         before_commit();
         tx.commit()?;
         self.shards.insert(locker, shard);
@@ -1397,9 +1542,9 @@ pub(crate) mod test_hooks {
                 .to_vec()
         }
 
-        pub(crate) fn index_aad(&self, locker: &Id16) -> Zeroizing<Vec<u8>> {
+        pub(crate) fn settings_aad(&self) -> Zeroizing<Vec<u8>> {
             #[allow(clippy::unwrap_used)]
-            aad_index(&self.vault_id, locker).unwrap()
+            aad_vault("hirzla/v1/settings", &self.vault_id).unwrap()
         }
     }
 }
