@@ -39,3 +39,11 @@ l'anglais dans le code.
 | Souche | `Stub` | Ce qui reste d'une opération élaguée |
 | Fichier d'échange | `ExchangeFile` | Fichier scellé qui transporte des opérations en mode Self |
 | Enrôlement | `Enrolment` | Ajout d'un appareil à un membre |
+| Clé du membre | `MemberKey` | Clé de signature qui identifie un membre et certifie ses appareils |
+| Certificat d'appareil | `DeviceCert` | Clés publiques d'un appareil, signées par la clé du membre |
+| Révocation d'appareil | `DeviceRevocation` | Retrait définitif d'un appareil, signé par la clé du membre |
+| Appareil de certification | `CertificationDevice` | Appareil qui détient la clé privée du membre |
+| Accord | `Approval` | Signature d'un propriétaire jointe à une action à plusieurs |
+| Quorum | `Quorum` | Nombre de propriétaires requis pour retirer un propriétaire plus ancien |
+| Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
+| Identifiant de bloc | `BlockId` | Identifiant opaque d'un contenu scellé, lié aux données associées |
