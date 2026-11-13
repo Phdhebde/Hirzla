@@ -835,12 +835,23 @@ impl Vault {
 
     /// Reads, authenticates and unseals one operation.
     fn load(&self, op_id: &OpId) -> Result<(Operation, SealedPayload), VaultError> {
-        let (body, st): (Vec<u8>, i64) = self
+        type Row = (Vec<u8>, i64, Vec<u8>, Vec<u8>, Vec<u8>, i64);
+        let (body, st, col_locker, col_member, col_device, col_seq): Row = self
             .conn
             .query_row(
-                "SELECT body, status FROM operations WHERE op_id = ?1",
+                "SELECT body, status, locker_id, author_member, author_device, seq
+                 FROM operations WHERE op_id = ?1",
                 [op_id.as_slice()],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
             )
             .optional()?
             .ok_or(VaultError::NotFound)?;
@@ -851,6 +862,15 @@ impl Vault {
             return Err(VaultError::Corrupt);
         }
         let op = Operation::decode(&body)?;
+        // The clear columns are only an index: they must match the authenticated operation,
+        // so that a row moved to another locker or chain position is refused.
+        let columns_match = col_locker == op.locker_id
+            && col_member == op.opref.member
+            && col_device == op.opref.device
+            && u64::try_from(col_seq).ok() == Some(op.opref.seq);
+        if !columns_match {
+            return Err(VaultError::Corrupt);
+        }
         let (member, device) = self.me();
         if op.opref.member != member || op.opref.device != device {
             // Operations of other devices arrive with synchronisation (step 9).

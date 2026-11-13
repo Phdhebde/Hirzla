@@ -518,6 +518,58 @@ fn moved_blocks_are_refused() {
 }
 
 #[test]
+fn operation_rows_moved_in_the_clear_columns_are_refused() {
+    // An operation row relabelled through the clear columns (another chain position, another
+    // locker): the columns no longer match the authenticated operation, and opening (which
+    // then rebuilds the index from the journal) or reading refuses it.
+    let setup = || {
+        let (dir, path, mut v) = new_vault();
+        let personal = v.personal_locker();
+        let other = v.create_locker("Autre").unwrap();
+        let id = v
+            .create_secret(
+                other,
+                SecretType::Note,
+                SecretEdit {
+                    set: vec![text(Field::Title, "déplacé")],
+                    ..SecretEdit::default()
+                },
+            )
+            .unwrap();
+        let head = v.shard(&other).unwrap().entries[&id].heads[0];
+        v.close();
+        (dir, path, personal, head)
+    };
+
+    let (_d, path, _, head) = setup();
+    tamper(
+        &path,
+        &format!(
+            "UPDATE operations SET seq = 99 WHERE op_id = x'{}';",
+            to_hex(&head)
+        ),
+    );
+    assert_eq!(
+        Vault::open(&path, PASSWORD).err(),
+        Some(VaultError::Corrupt)
+    );
+
+    let (_d, path, personal, head) = setup();
+    tamper(
+        &path,
+        &format!(
+            "UPDATE operations SET seq = 3, locker_id = x'{}' WHERE op_id = x'{}';",
+            to_hex(&personal),
+            to_hex(&head)
+        ),
+    );
+    assert_eq!(
+        Vault::open(&path, PASSWORD).err(),
+        Some(VaultError::Corrupt)
+    );
+}
+
+#[test]
 fn attachment_chunks_cannot_be_reordered() {
     let (_dir, path, mut v) = new_vault();
     let (locker, ids) = populate(&mut v);
