@@ -9,3 +9,6 @@
 
 #[cfg(target_os = "linux")]
 pub mod tpm2_prototype;
+
+#[cfg(target_os = "macos")]
+pub mod secure_enclave_prototype;
