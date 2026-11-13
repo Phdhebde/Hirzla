@@ -8,6 +8,7 @@ mod error;
 pub mod model;
 pub mod pad;
 pub mod secret;
+pub mod store;
 #[cfg(test)]
 mod test_support;
 
