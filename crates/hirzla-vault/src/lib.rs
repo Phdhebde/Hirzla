@@ -11,8 +11,10 @@ pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod test_support;
+mod vault;
 
 pub use error::VaultError;
+pub use vault::{CreateOptions, KdfCost, LockerInfo, SecretVersion, Vault};
 
 /// Version of the on-disk vault format.
 pub const FORMAT_VERSION: u16 = 1;
