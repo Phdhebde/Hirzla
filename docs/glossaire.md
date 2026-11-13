@@ -25,3 +25,17 @@ l'anglais dans le code.
 | Leurre | `Decoy` | Identifiant factice qui signale un vol |
 | Dépositaire | `Trustee` | Détenteur d'une part de récupération |
 | Sceau | `Seal` | Ce qui protège la clé racine du serveur |
+| Version | `Version` | État complet d'un secret écrit par une opération `SecretPut` |
+| Tête | `Head` | Opération ou version qui n'est dans le passé d'aucune autre |
+| Époque | `Epoch` | Une clé de casier, identifiée par l'opération qui l'a créée |
+| Enveloppe | `KeyEnvelope` | Clé de casier chiffrée pour un membre |
+| Boîte scellée | `SealedBox` | Donnée chiffrée sous une clé de donnée neuve, elle-même enveloppée |
+| Casier personnel | `PersonalLocker` | Casier d'un seul membre, porte aussi la liste de ses appareils |
+| Ancienneté | `Seniority` | Rang d'un propriétaire ; seul un plus ancien peut le retirer |
+| Quarantaine | `Quarantine` | Opération suspecte, ni appliquée ni diffusée, en attente d'un propriétaire |
+| Bifurcation | `Fork` | Deux opérations d'un même appareil avec le même rang |
+| Rescellement | `Reseal` | Nouvelle version identique, scellée sous l'époque courante |
+| Compaction | `Compaction` | Élagage des versions inutiles d'un journal |
+| Souche | `Stub` | Ce qui reste d'une opération élaguée |
+| Fichier d'échange | `ExchangeFile` | Fichier scellé qui transporte des opérations en mode Self |
+| Enrôlement | `Enrolment` | Ajout d'un appareil à un membre |
