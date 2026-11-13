@@ -28,6 +28,9 @@ pub enum VaultError {
     /// The file already exists.
     #[error("the file already exists")]
     AlreadyExists,
+    /// The vault path goes through a symbolic link (on any component), which is refused.
+    #[error("the vault path must not go through a symbolic link")]
+    SymlinkInPath,
     /// Storage failure.
     #[error("storage error")]
     Storage,
@@ -43,6 +46,11 @@ impl From<rusqlite::Error> for VaultError {
             diagnostics::record(f.extended_code);
         }
         match e {
+            rusqlite::Error::SqliteFailure(f, _)
+                if f.extended_code == rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK =>
+            {
+                VaultError::SymlinkInPath
+            }
             rusqlite::Error::SqliteFailure(f, _)
                 if matches!(
                     f.code,

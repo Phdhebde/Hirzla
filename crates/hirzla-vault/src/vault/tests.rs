@@ -22,6 +22,15 @@ fn options() -> CreateOptions {
     }
 }
 
+/// A temporary directory reached without symbolic links. On macOS the system temporary
+/// directory is under `/var`, a link to `/private/var`, which `SQLITE_OPEN_NOFOLLOW` refuses.
+fn tempdir() -> tempfile::TempDir {
+    let base = std::env::temp_dir();
+    #[cfg(unix)]
+    let base = base.canonicalize().unwrap();
+    tempfile::tempdir_in(base).unwrap()
+}
+
 /// Unwraps, and on failure reports the extended SQLite code behind a storage error.
 fn diag<T>(r: Result<T, VaultError>, what: &str) -> T {
     r.unwrap_or_else(|e| {
@@ -33,18 +42,18 @@ fn diag<T>(r: Result<T, VaultError>, what: &str) -> T {
 }
 
 fn new_vault() -> (tempfile::TempDir, PathBuf, Vault) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let path = dir.path().join("test.hirzla");
     let v = diag(Vault::create(&path, PASSWORD, &options()), "create");
     (dir, path, v)
 }
 
 /// A vault whose parent directory is reached through a symbolic link (as `/var` is on
-/// macOS) is refused by `SQLITE_OPEN_NOFOLLOW`.
+/// macOS) is refused by `SQLITE_OPEN_NOFOLLOW`, with an error that says so.
 #[cfg(unix)]
 #[test]
 fn symlink_in_vault_path_is_refused() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let real = dir.path().join("real");
     std::fs::create_dir(&real).unwrap();
     let link = dir.path().join("link");
@@ -54,7 +63,7 @@ fn symlink_in_vault_path_is_refused() {
         crate::error::diagnostics::last_sqlite_code(),
         Some(rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK)
     );
-    assert_eq!(err, Some(VaultError::Storage));
+    assert_eq!(err, Some(VaultError::SymlinkInPath));
 }
 
 fn text(f: Field, s: &str) -> (Field, FieldValue) {
@@ -373,7 +382,7 @@ fn schema_rules_are_enforced_on_write() {
 
 #[test]
 fn passwords_are_normalised_and_checked() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let path = dir.path().join("nfc.hirzla");
     // "é" precomposed at creation, decomposed at opening.
     Vault::create(&path, "caf\u{e9}", &options())
@@ -980,7 +989,7 @@ fn scan_directory(dir: &Path) -> usize {
 
 #[test]
 fn no_title_url_or_locker_name_in_clear() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let path = dir.path().join("clear.hirzla");
     let dir_path = dir.path().to_path_buf();
     // While each transaction is still open, SQLite's rollback journal exists: scan it too.
@@ -1127,7 +1136,7 @@ fn records(text: &str) -> Vec<std::collections::BTreeMap<String, String>> {
 }
 
 fn fixture_copy() -> (tempfile::TempDir, PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempdir();
     let path = dir.path().join("fixture.hirzla");
     std::fs::copy(Path::new(FIXTURE_DIR).join("vault.hirzla.fixture"), &path).unwrap();
     (dir, path)
@@ -1206,7 +1215,7 @@ fn reference_unlock_is_deterministic() {
 fn generate_reference_files() {
     let dir = Path::new(FIXTURE_DIR);
     std::fs::create_dir_all(dir).unwrap();
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = tempdir();
     let path = tmp.path().join("fixture.hirzla");
     let mut v = Vault::create(&path, FIXTURE_PASSWORD, &options()).unwrap();
     let (locker, ids) = populate_with(&mut v, 10_000);
