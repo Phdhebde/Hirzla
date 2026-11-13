@@ -84,7 +84,7 @@ Notation des types dans les tableaux :
 | `locker_id` | `ID16` | Tiré à la création du casier |
 | `secret_id` | `ID16` | Tiré à la création du secret |
 | `attachment_id` | `ID16` | Tiré à l'ajout du fichier joint |
-| `block_id` | `ID16` | Tiré pour chaque contenu scellé d'opération. Jamais réutilisé, sans lien avec `secret_id` (§ 7.2) |
+| `block_id` | `ID16` | Tiré par le sceau pour chaque `SealedBox`. Jamais réutilisé, sans lien avec `secret_id` (§ 3.2) |
 | `op_id` | `OpId` | SHA-384 de l'opération encodée complète |
 
 Aucun identifiant n'est dérivé d'un contenu lisible. Ils ne révèlent rien en clair.
@@ -146,30 +146,19 @@ Une étiquette n'a qu'un seul usage. Toute nouvelle étiquette s'ajoute à ce re
 
 ## 3. Objets cryptographiques
 
-Ces objets assemblent les mécanismes de `docs/crypto.md`, sans en ajouter. Les octets exacts
-des clés et des chiffrés (tailles ci-dessous) sont fixés par `hirzla-crypto` aux étapes 2 et 3.
-En cas d'écart, `docs/crypto.md` fait foi et ce document est corrigé.
+Ces objets assemblent les mécanismes de `docs/crypto.md`, sans en ajouter. Leur encodage
+binaire est celui de `hirzla-crypto`, figé par ses vecteurs : il commence toujours par le
+`SuiteId` sur 2 octets gros-boutistes, et toute autre longueur, suite ou valeur est refusée.
+Dans les structures CBOR de ce document, chacun de ces objets est un **`bstr` qui contient
+cet encodage binaire**. En cas d'écart, `docs/crypto.md` fait foi.
 
 ### 3.1 Clés publiques et signature
 
-`KemPublicKey` :
-
-| Clé | Nom | Type | Contraintes |
-| --- | --- | --- | --- |
-| 1 | `suite` | `uint` | `1` |
-| 2 | `ecdh` | `bstr(97)` | Point P-384 non compressé (SEC 1) |
-| 3 | `mlkem` | `bstr(1568)` | Clé publique ML-KEM-1024 |
-
-Ces trois champs sont les morceaux de l'**encodage binaire** de `hirzla-crypto` :
-`suite` (2 octets, gros-boutiste) ‖ `ecdh` ‖ `mlkem`, soit 1 667 octets (`docs/crypto.md`).
-
-`SigPublicKey` :
-
-| Clé | Nom | Type | Contraintes |
-| --- | --- | --- | --- |
-| 1 | `suite` | `uint` | `1` |
-| 2 | `ecdsa` | `bstr(97)` | Point P-384 non compressé |
-| 3 | `mldsa` | `bstr(2592)` | Clé publique ML-DSA-87 |
+| Objet | Composition | Longueur |
+| --- | --- | --- |
+| `KemPublicKey` | suite ‖ point P-384 SEC 1 non compressé (97) ‖ clé d'encapsulation ML-KEM-1024 (1 568) | 1 667 |
+| `SigPublicKey` | suite ‖ point ECDSA P-384 SEC 1 non compressé (97) ‖ clé publique ML-DSA-87 (2 592) | 2 691 |
+| `HybridSignature` | suite ‖ ECDSA P-384 `r ‖ s` (96) ‖ signature ML-DSA-87 (4 627) | 4 725 |
 
 `MemberKeys` — identité du membre, racine de certification (ADR 0011) :
 
@@ -181,30 +170,35 @@ Ces trois champs sont les morceaux de l'**encodage binaire** de `hirzla-crypto` 
 Empreinte d'un membre : les 20 premiers caractères de `base32(key_id(sig))` (RFC 4648, sans
 bourrage). C'est elle que les utilisateurs comparent hors bande (§ 5.9).
 
-`key_id(k) = SHA-384(CBOR(k))`, pour toute clé publique `k`.
+`key_id(k) = SHA-384(encodage binaire de k)`, pour toute clé publique `k`.
 
 ### 3.2 Boîte scellée (`SealedBox`)
 
 Toute donnée chiffrée du format est une `SealedBox`. Le sceau tire lui-même une **clé de
-donnée** neuve de 32 octets et un nonce. L'appelant ne fournit ni l'une ni l'autre.
+donnée** neuve de 32 octets, un nonce et un **identifiant de bloc** (`block_id`). L'appelant
+ne fournit aucun des trois.
 
-| Clé | Nom | Type | Contraintes |
-| --- | --- | --- | --- |
-| 1 | `suite` | `uint` | Présent dans `suites_read` de l'en-tête |
-| 2 | `wrapped_key` | `bstr(40)` | AES-256-KW avec remplissage (RFC 5649) de la clé de donnée, sous la `KEK` du contexte |
-| 3 | `nonce` | `bstr(12)` | Aléa |
-| 4 | `ct` | `bstr` | Chiffré AES-256-GCM suivi de l'étiquette de 16 octets |
+| Morceau | Longueur | Contenu |
+| --- | --- | --- |
+| `suite` | 2 | `SuiteId`, présent dans `suites_read` de l'en-tête |
+| `block_id` | 16 | Aléa, propre à cette boîte |
+| `wrapped_key` | 40 | AES-256-KW avec remplissage (RFC 5649) de la clé de donnée, sous la `KEK` du contexte |
+| `nonce` | 12 | Aléa |
+| `ct` | taille de `P` + 16 | Chiffré AES-256-GCM de `P`, suivi de l'étiquette de 16 octets |
 
 Sceller `(KEK, AAD, contenu)` :
 
-1. `C = CBOR(contenu)`.
-2. `P = bourrage(C)` (§ 11).
-3. `DK` = 32 octets d'aléa. `nonce` = 12 octets d'aléa.
-4. `ct = AES-256-GCM(DK, nonce, P, AAD)`.
-5. `wrapped_key = AES-256-KW-pad(KEK, DK)`. Effacer `DK`.
+1. `C = CBOR(contenu)`, puis `P = bourrage(C)` (§ 11).
+2. Le sceau tire `block_id`, `DK` (32 octets) et `nonce` (12 octets).
+3. `ct = AES-256-GCM(DK, nonce, P, block_id ‖ AAD)`.
+4. `wrapped_key = AES-256-KW-pad(KEK, DK)`. `DK` est effacée.
 
-Desceller : désenvelopper `DK`, déchiffrer avec l'AAD recalculée, retirer le bourrage
-strictement, décoder le CBOR canoniquement. Tout échec produit **une seule** erreur, sans cause.
+L'AAD du contexte est obligatoire et non vide. Le `block_id` est toujours authentifié avec elle :
+une boîte qui change d'identifiant ne se descelle plus.
+
+Desceller : désenvelopper `DK`, déchiffrer avec `block_id ‖ AAD` recalculée, retirer le
+bourrage strictement, décoder le CBOR canoniquement. Tout échec produit **une seule** erreur,
+sans cause.
 
 La `KEK` vient du contexte, jamais du fichier :
 
@@ -217,25 +211,19 @@ La `KEK` vient du contexte, jamais du fichier :
 
 ### 3.3 Enveloppe de clé de casier (`KeyEnvelope`)
 
-Une enveloppe donne la clé de casier d'une époque à **un appareil**. Elle suit
-l'établissement hybride de `docs/crypto.md`, puis une enveloppe AES-256-KW.
+Une enveloppe donne la clé de casier d'une époque à **un appareil** : établissement hybride
+de `docs/crypto.md`, puis AES-256-KW-pad de la clé sous le secret établi (32 octets).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `suite` | `uint` | `1` |
-| 2 | `member` | `ID16` | Membre destinataire |
-| 3 | `device` | `ID16` | Appareil destinataire |
-| 4 | `recipient_key` | `bstr(48)` | `key_id` de la `KemPublicKey` de son certificat (§ 3.6) |
-| 5 | `ct_ecdh` | `bstr(97)` | Clé publique éphémère P-384 |
-| 6 | `ct_mlkem` | `bstr(1568)` | Chiffré ML-KEM-1024 |
-| 7 | `wrapped` | `bstr(40)` | AES-256-KW-pad(`KEK`, clé enveloppée) |
+| 1 | `member` | `ID16` | Membre destinataire |
+| 2 | `device` | `ID16` | Appareil destinataire |
+| 3 | `recipient_key` | `bstr(48)` | `key_id` de la `KemPublicKey` de son certificat (§ 3.6) |
+| 4 | `envelope` | `bstr(1707)` | Chiffré hybride (1 667, préfixé par la suite) ‖ clé enveloppée (40) |
 
-`suite`, `ct_ecdh` et `ct_mlkem` sont les morceaux de l'encodage binaire du chiffré hybride
-de `hirzla-crypto` : `suite` ‖ `ct_ecdh` ‖ `ct_mlkem`, soit 1 667 octets.
+Paramètres de l'établissement :
 
-`KEK` = les 32 premiers octets de `ss`, la sortie de la combinaison hybride de `crypto.md`, avec :
-
-- `pk_destinataire` = l'encodage binaire de la `KemPublicKey` de l'appareil destinataire (§ 3.1) ;
+- `pk_destinataire` = l'encodage binaire de la `KemPublicKey` de l'appareil destinataire ;
 - `contexte` = `CBOR({1: "hirzla/v1/locker-key", 2: locker_id, 3: époque (OpRef), 4: member,
   5: device})`.
 
@@ -244,13 +232,18 @@ La même structure sert, avec une autre étiquette et un autre contexte, au fich
 
 L'époque est l'`OpRef` de l'opération qui a créé la clé (§ 7, et `sync-protocol.md` § 7).
 
-### 3.4 Signature hybride (`HybridSignature`)
+### 3.4 Signature hybride
 
-| Clé | Nom | Type | Contraintes |
-| --- | --- | --- | --- |
-| 1 | `suite` | `uint` | `1` |
-| 2 | `ecdsa` | `bstr(96)` | ECDSA P-384, `r ‖ s` sur 48 octets chacun |
-| 3 | `mldsa` | `bstr(4627)` | ML-DSA-87 |
+Une `HybridSignature` (§ 3.1) n'est valide que si **les deux** composantes vérifient. Le
+message signé est `étiquette ‖ 0x00 ‖ message` (§ 2.4) ; ML-DSA-87 est utilisé en interface
+externe, pure, avec un contexte FIPS 204 vide : la séparation de domaine est portée par
+l'étiquette. Chaque clé a un rôle et ne signe que ses domaines (ADR 0011) :
+
+| Clé | Étiquettes |
+| --- | --- |
+| Clé du membre | `device-cert`, `device-revoke` |
+| Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol` |
+| Clé du serveur | `server-auth`, `receipt` |
 
 ### 3.5 Clés privées
 
@@ -287,6 +280,11 @@ Contrôles au chargement des clés de l'appareil, tous obligatoires. Un échec r
    être égales à celles du certificat (étape 3).
 
 Le lecteur fait les mêmes contrôles pour `MemberPrivateKey` avec `MemberKeys` (§ 5.5).
+
+Correspondance avec les encodages binaires de `hirzla-crypto` : la clé privée d'établissement
+est `suite ‖ ecdh_sk ‖ mlkem_dk` (3 218 octets), une clé privée de signature est
+`suite ‖ ecdsa_sk ‖ mldsa_seed` (82 octets). Au chargement, `hirzla-crypto` refait les
+contrôles ci-dessus.
 
 ### 3.6 Certificat et révocation d'appareil
 
@@ -353,7 +351,7 @@ Le **secret de méthode** fait 32 octets :
 - matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob`.
 
 `KEK_unlock = HKDF-SHA-512(ikm = secret de méthode, salt = vault_id,
-info = CBOR({1: "hirzla/v1/unlock", 2: rang de la méthode dans le tableau, 3: kind}), L = 32)`.
+info = "hirzla/v1/unlock" ‖ 0x00 ‖ rang de la méthode (1 octet) ‖ kind (1 octet), L = 32)`.
 
 Les plafonds protègent contre un en-tête piégé qui ferait calculer Argon2id indéfiniment.
 Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refusé avant tout calcul.
@@ -361,7 +359,9 @@ Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refus�
 ### 4.3 Clé d'emballage locale
 
 `K_dev_wrap = HKDF-SHA-512(ikm = DeviceKey, salt = vault_id,
-info = CBOR({1: "hirzla/v1/device-wrap"}), L = 32)`.
+info = "hirzla/v1/device-wrap" ‖ 0x00, L = 32)`.
+
+Ces `info` sont les étiquettes typées de `hirzla-crypto` (module `kdf`) : aucune chaîne libre.
 
 La `DeviceKey` ne sert qu'à cette dérivation. `K_dev_wrap` sert de `KEK` à toutes les boîtes
 locales du § 5 et du § 10.
@@ -598,7 +598,7 @@ Règles :
 | En-tête (§ 5.4) | `header` | Déverrouiller | Les méthodes de déverrouillage, les paramètres Argon2id |
 | `op_id`, `locker_id`, auteur, `seq`, `server_seq`, `status` | `operations` | Indexer, synchroniser, valider la chaîne de l'appareil avant de déchiffrer | Le nombre de casiers, d'opérations, d'auteurs et d'appareils, l'état de validation. Ce sont les mêmes informations que celles du serveur (`sync-protocol.md` § 12) |
 | Partie de contrôle des opérations | `operations.body` | Doit être lisible par le serveur (`sync-protocol.md` § 7) | Les membres des casiers, leurs rôles, leurs clés publiques et les certificats de leurs appareils |
-| `block_id` des opérations | `operations.body` | Lié aux données associées (§ 7.2) | Rien : tiré au hasard pour chaque contenu, sans lien entre versions |
+| `block_id` des boîtes | Chaque `SealedBox` | Lié aux données associées (§ 3.2) | Rien : tiré au hasard pour chaque boîte, sans lien entre versions |
 | `locker_id`, `epoch` | `locker_keys` | Retrouver la bonne clé | Le nombre d'époques par casier |
 | `attachment_id`, rang, `locker_id` | `attachment_chunks` | Lecture paresseuse des morceaux | Le nombre et la taille approximative des fichiers joints |
 | Tailles des boîtes | Partout | Inévitable | Une taille arrondie par le bourrage (§ 11) |
@@ -625,7 +625,6 @@ structure. `sync-protocol.md` donne sa sémantique : validation, autorisations, 
 | 8 | `control` | `ControlBody` ou `null` | `null` si et seulement si `class = 1`. Défini dans `sync-protocol.md` § 7 |
 | 9 | `sealed` | `SealedBox` | Contenu scellé (§ 7.2) |
 | 10 | `sig` | `HybridSignature` | Signature de l'appareil auteur |
-| 11 | `block_id` | `ID16` | Identifiant opaque du contenu scellé, tiré pour cette opération |
 
 - Message signé : `"hirzla/v1/op" || 0x00 || CBOR(Operation sans la clé 10)`, avec la clé de
   signature de l'**appareil** `ref.device`, telle que la donne son certificat (§ 3.6).
@@ -639,17 +638,18 @@ structure. `sync-protocol.md` donne sa sémantique : validation, autorisations, 
 
 ```text
 AAD = CBOR({1: "hirzla/v1/op-payload", 2: locker_id, 3: ref.member,
-            4: ref.device, 5: ref.seq, 6: epoch, 7: block_id})
+            4: ref.device, 5: ref.seq, 6: epoch})
 ```
 
-L'AAD lie le casier, l'identifiant de bloc, l'auteur, le rang et l'époque. Un contenu
-déplacé vers une autre opération, un autre casier ou une autre époque ne se descelle pas.
+L'AAD lie le casier, l'auteur, le rang et l'époque ; le sceau y ajoute le `block_id` de la
+boîte (§ 3.2). Un contenu déplacé vers une autre opération, un autre casier ou une autre
+époque ne se descelle pas.
 
 Le `secret_id` est **dans le chiffré**, pas dans l'AAD : en clair, il dirait au serveur quel
 secret change. Il est authentifié par le chiffrement et le lecteur vérifie, à la lecture,
-qu'il est celui attendu (§ 13). Le `block_id`, lui, reste dans l'AAD. Il est tiré au hasard
-pour chaque opération : il identifie le bloc sans permettre de relier deux versions d'un
-même secret.
+qu'il est celui attendu (§ 13). Le `block_id`, lui, est dans l'AAD. Il est tiré au hasard
+pour chaque boîte : il identifie le bloc sans permettre de relier deux versions d'un même
+secret.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
@@ -939,7 +939,7 @@ Encodage canonique, avec `m = 101112…1f`, `d = 202122…2f`, `l = 303132…3f`
 | Objet | Encodage (hexadécimal) |
 | --- | --- |
 | `Stamp {lamport: 42, member: m, device: d}` | `a301182a0250101112131415161718191a1b1c1d1e1f0350202122232425262728292a2b2c2d2e2f` |
-| AAD d'opération : `locker_id = l`, `ref = (m, d, 7)`, `epoch = (m, d, 7)`, `block_id = 404142…4f` | `a701746869727a6c612f76312f6f702d7061796c6f61640250303132333435363738393a3b3c3d3e3f0350101112131415161718191a1b1c1d1e1f0450202122232425262728292a2b2c2d2e2f050706a30150101112131415161718191a1b1c1d1e1f0250202122232425262728292a2b2c2d2e2f03070750404142434445464748494a4b4c4d4e4f` |
+| AAD d'opération (avant le `block_id`, que le sceau préfixe) : `locker_id = l`, `ref = (m, d, 7)`, `epoch = (m, d, 7)` | `a601746869727a6c612f76312f6f702d7061796c6f61640250303132333435363738393a3b3c3d3e3f0350101112131415161718191a1b1c1d1e1f0450202122232425262728292a2b2c2d2e2f050706a30150101112131415161718191a1b1c1d1e1f0250202122232425262728292a2b2c2d2e2f0307` |
 
 Encodages à refuser :
 
@@ -1037,5 +1037,12 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 18. **Refus d'une clé de membre différente** de celle épinglée, en attendant le changement de
     clé de l'étape 10. Une attribution à un membre non vérifié est permise, avec avertissement.
 19. **Délai de quarantaine** de 7 jours par défaut, réglable par casier de 1 heure à 90 jours.
-20. **Graine ML-DSA** : conservée dans le format en attendant l'étape 3, qui vérifiera si la
-    bibliothèque retenue sait générer une clé ML-DSA-87 depuis sa graine `ξ`.
+20. ~~Graine ML-DSA~~ : confirmée à l'étape 3, `aws-lc-rs` génère ML-DSA-87 depuis sa graine `ξ`.
+21. **Objets cryptographiques en `bstr`** : les clés publiques, signatures, boîtes et
+    enveloppes sont stockées dans leur encodage binaire de `hirzla-crypto` plutôt qu'en cartes
+    CBOR qui en répétaient les morceaux (étape 3). `key_id` porte sur cet encodage.
+22. **`block_id` tiré par le sceau** et porté par chaque `SealedBox`, plutôt que fourni par
+    l'appelant : il ne peut pas être réutilisé, et toutes les boîtes en ont un, pas seulement
+    les contenus d'opération. Le champ 11 de l'opération disparaît.
+23. **`info` HKDF binaires** (`nom ‖ 0x00 ‖ paramètres`) au lieu de CBOR, pour que
+    `hirzla-crypto` reste sans dépendance CBOR et que les étiquettes soient des types.
