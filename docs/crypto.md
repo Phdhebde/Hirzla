@@ -121,15 +121,22 @@ croisés avec RustCrypto `aes-gcm` et `aes-kw`.
 ### Dérivation
 
 Module `kdf`. HKDF-SHA-512, sortie de 32 octets, `info` construit uniquement depuis une
-étiquette typée :
+étiquette typée. Chaque élément, le nom compris, est préfixé par sa longueur sur 2 octets
+gros-boutistes :
 
-| Étiquette | `info` |
-| --- | --- |
-| Déverrouillage | `"hirzla/v1/unlock"` ‖ `0x00` ‖ rang de la méthode (1 octet) ‖ type de méthode (1 octet) |
-| Clé d'emballage locale | `"hirzla/v1/device-wrap"` ‖ `0x00` |
+```text
+info = len(nom) ‖ nom ‖ len(p1) ‖ p1 ‖ len(p2) ‖ p2 ‖ …
+```
+
+| Étiquette | Nom | Paramètres | `info` (hexadécimal) |
+| --- | --- | --- | --- |
+| Déverrouillage | `hirzla/v1/unlock` | rang de la méthode (1 octet), type de méthode (1 octet) | `0010` ‖ nom ‖ `0001` ‖ rang ‖ `0001` ‖ type |
+| Clé d'emballage locale | `hirzla/v1/device-wrap` | aucun | `0015` ‖ nom |
 
 Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en publie pas pour
-HKDF seul), test croisé avec RustCrypto `hkdf`.
+HKDF seul), test croisé avec RustCrypto `hkdf`, vecteurs figés des étiquettes
+(`crates/hirzla-crypto/tests/vectors/hirzla-kdf-v1.txt`, calculés par une troisième
+implémentation indépendante).
 
 ## Hiérarchie de clés
 

@@ -5,6 +5,7 @@ use super::*;
 use crate::test_support::{field, hex, records};
 
 const HKDF: &str = include_str!("../../tests/vectors/hkdf-sha512.txt");
+const KDF_V1: &str = include_str!("../../tests/vectors/hirzla-kdf-v1.txt");
 
 fn reference(ikm: &[u8], salt: &[u8], info: &[u8], len: usize) -> Option<Vec<u8>> {
     let hk = ::hkdf::Hkdf::<sha2::Sha512>::new(Some(salt), ikm);
@@ -42,18 +43,49 @@ fn wycheproof_hkdf_sha512() {
 
 #[test]
 fn labels_encode_exactly() {
+    // 0x0015 = 21, the length of "hirzla/v1/device-wrap".
     assert_eq!(
         KdfLabel::DeviceWrap.info(),
-        [b"hirzla/v1/device-wrap".as_slice(), &[0x00]].concat()
+        [&[0x00, 0x15][..], b"hirzla/v1/device-wrap"].concat()
     );
+    // 0x0010 = 16, then two one-byte parameters.
     assert_eq!(
         KdfLabel::Unlock {
             method_index: 2,
             method_kind: 4
         }
         .info(),
-        [b"hirzla/v1/unlock".as_slice(), &[0x00, 0x02, 0x04]].concat()
+        [
+            &[0x00, 0x10][..],
+            b"hirzla/v1/unlock",
+            &[0x00, 0x01, 0x02],
+            &[0x00, 0x01, 0x04]
+        ]
+        .concat()
     );
+}
+
+#[test]
+fn frozen_kdf_vectors() {
+    let recs = records(KDF_V1);
+    assert_eq!(recs.len(), 3);
+    for r in &recs {
+        let label = if field(r, "name") == b"hirzla/v1/device-wrap" {
+            KdfLabel::DeviceWrap
+        } else {
+            let p = field(r, "label_params");
+            KdfLabel::Unlock {
+                method_index: p[0],
+                method_kind: p[1],
+            }
+        };
+        assert_eq!(label.info(), field(r, "info"));
+        let ikm = SymmetricKey::from_bytes(&field(r, "ikm")).unwrap();
+        let got = derive_key(&ikm, &field(r, "salt"), label).unwrap();
+        assert_eq!(&got.as_bytes()[..], &field(r, "okm")[..]);
+        let expected = reference(ikm.as_bytes(), &field(r, "salt"), &label.info(), 32).unwrap();
+        assert_eq!(expected, field(r, "okm"));
+    }
 }
 
 #[test]
