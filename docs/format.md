@@ -695,6 +695,10 @@ vides ; `reseal` vaut `false` hors rescellement. Dans `fields` et `sets`, seules
 clés qui ont une valeur : un champ effacé est retiré du map, pas mis à `null` (seul `custom`
 utilise `null`, pour garder la trace d'une suppression concurrente).
 
+Une version à l'état **purgé** (`state = 2`) ne porte plus aucun contenu : `fields`, `sets` et
+`custom` sont vides, et les champs obligatoires ne s'appliquent pas. Un lecteur refuse une
+version purgée qui porte du contenu.
+
 `FieldEntry` :
 
 | Clé | Nom | Type | Contraintes |
@@ -863,10 +867,15 @@ est immuable. Le modifier, c'est retirer l'ancien et en ajouter un nouveau.
 | --- | --- | --- |
 | Mettre à la corbeille | `state = 1` | Le secret sort des listes, il reste lisible et restaurable |
 | Restaurer | `state = 0` | Le secret revient |
-| Purger | `state = 2` | Définitif. L'état « purgé » est absorbant : aucune version ultérieure ou concurrente ne le défait |
+| Purger | `state = 2`, sans contenu (§ 7.3) | Définitif. L'état « purgé » est absorbant : aucune version ultérieure ou concurrente ne le défait |
 
 Après une purge, toutes les versions du secret sauf celle de purge deviennent élaguables
-(`sync-protocol.md` § 10). Le poste peut effacer leur corps localement tout de suite.
+(`sync-protocol.md` § 10). Le poste les élague localement **dans la même transaction** que
+l'écriture de la purge, avec deux autres effets :
+
+- les morceaux des fichiers joints cités par une version du secret sont supprimés ;
+- l'entrée d'index ne garde que l'identifiant, le type, les têtes et l'état : titre vide, ni
+  nom d'utilisateur, ni hôte, ni étiquette.
 
 ### 9.3 Rétention
 
@@ -924,8 +933,18 @@ compare ces hôtes exactement (`modele-de-menace.md`).
 L'index ne contient **jamais** de champ sensible (§ 8). La recherche se fait en mémoire, dans
 le noyau, après descellement des fragments. Aucun index n'est lisible sans la clé du poste.
 
-Si `built_from` ne correspond pas aux têtes du journal, ou si le fragment ne se descelle pas,
-le noyau reconstruit le fragment. Il descelle pour cela les versions de tête du casier.
+**Fraîcheur.** À l'ouverture, chaque fragment est confronté aux en-têtes en clair du journal,
+sans rien desceller de plus :
+
+- tout casier présent dans `operations` a un fragment ;
+- `built_from` est inclus dans les extrémités des chaînes d'appareil du casier (opérations qui
+  n'ont pas de successeur `seq + 1` du même appareil), et contient celle de cet appareil.
+
+Si un fragment manque, ne se descelle pas, ou ne passe pas ce contrôle (par exemple une copie
+plus ancienne remise à sa place), le noyau le **reconstruit** : il descelle les versions du
+casier, recalcule les têtes de chaque secret et de ses métadonnées, puis réécrit le fragment.
+Ce contrôle détecte le retour en arrière d'un fragment isolé. Le retour en arrière du fichier
+entier reste hors de portée (§ 14, point 11).
 
 ## 11. Bourrage
 
@@ -1091,3 +1110,7 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     de l'index (URL Standard du WHATWG) ; création d'un casier en deux opérations ; fermeture ;
     fichiers de référence au lieu de vecteurs déterministes, impossibles avec l'API de
     `hirzla-crypto`.
+25. **Purge sans contenu, atomique** (constat de revue de sécurité à l'étape 4) : la version de
+    purge ne recopie plus le secret ; élagage, suppression des fichiers joints et entrée d'index
+    réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
+    contre les en-têtes du journal, avec reconstruction.
