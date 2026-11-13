@@ -66,8 +66,9 @@ sert à lire et à écrire les éléments, pas à décider de la canonicité.
 3. **`url`** pour les hôtes de l'index, et **`icu_normalizer`** pour la normalisation NFC.
 4. **Dépendances de test** : `proptest` (aller-retour par propriétés) et `tempfile`
    (répertoires temporaires des tests).
-5. **`deny.toml` reste inchangé** avec ces choix. Toutes les licences (MIT, Apache-2.0,
-   Unicode-3.0) sont déjà autorisées.
+5. **`deny.toml`** : l'ADR proposé annonçait qu'il resterait inchangé. C'était faux :
+   `rusqlite` tire `hashlink` → `hashbrown` → `foldhash`, sous licence **Zlib** (permissive,
+   approuvée par l'OSI). Zlib est ajoutée à la liste autorisée, à l'implémentation.
 
 ## Conséquences
 
