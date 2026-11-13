@@ -14,7 +14,8 @@ hirzla-crypto = { path = "../hirzla-crypto" }
 thiserror = "2.0"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
-# ADR 0014. TPM 2.0 through tpm2-tss (system library >= 2.4.6, found by pkg-config; no
+# ADR 0014. TPM 2.0 through tpm2-tss (>= 4.1.3, found by pkg-config, see
+# .github/scripts/install-tpm2-tss.sh; no
 # source download at build time). Windows is not built yet: no released tss-esapi opens the
 # TBS TCTI (see docs/keystore-prototypes.md).
 [target.'cfg(target_os = "linux")'.dependencies]

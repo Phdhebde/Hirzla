@@ -1,2 +1,3 @@
 # Frozen reference files: never let git convert line endings.
 *.fixture binary
+*.sh text eol=lf
