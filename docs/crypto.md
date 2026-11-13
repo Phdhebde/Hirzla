@@ -63,6 +63,74 @@ Contrôles à la lecture :
 Tests : vecteurs NIST ACVP ML-KEM-1024 (génération, encapsulation, décapsulation, contrôles de
 clés) et CAVP ECDH P-384 ; tests croisés entre `aws-lc-rs` et RustCrypto (ADR 0009).
 
+### Signature hybride
+
+Module `sign` de `hirzla-crypto`. Une signature n'est valide que si **les deux** composantes
+vérifient ; les deux sont toujours évaluées.
+
+```text
+M = étiquette de domaine (ASCII) ‖ 0x00 ‖ message
+signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, ctx = "")
+```
+
+| Objet | Composition | Longueur |
+| --- | --- | --- |
+| Clé publique | `suite_id` ‖ point P-384 SEC 1 non compressé (97) ‖ clé publique ML-DSA-87 (2 592) | 2 691 |
+| Signature | `suite_id` ‖ `r ‖ s` (96) ‖ signature ML-DSA-87 (4 627) | 4 725 |
+| Clé privée | `suite_id` ‖ scalaire P-384 gros-boutiste (48) ‖ graine ML-DSA-87 `ξ` (32) | 82 |
+
+- ML-DSA-87 : interface externe, pure (sans pré-hachage), contexte FIPS 204 vide, signature
+  avec aléa (variante « hedged »). La séparation de domaine est dans `M`.
+- Domaines typés, un rôle de clé par domaine (ADR 0011) :
+
+| Rôle | Étiquettes |
+| --- | --- |
+| Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
+| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol` |
+| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt` |
+
+- Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
+  clé publique attendue, à temps constant.
+
+Tests : NIST ACVP ML-DSA-87 (génération, vérification, signature déterministe), CAVP ECDSA
+P-384/SHA-384 (vérification, paires de clés), tests croisés avec RustCrypto dans les deux sens.
+
+### Sceau symétrique
+
+Module `sym`. Chaque sceau tire une clé de donnée, un nonce et un identifiant de bloc :
+
+```text
+boîte = suite_id ‖ block_id (16) ‖ AES-256-KWP(KEK, DK) (40) ‖ nonce (12)
+        ‖ AES-256-GCM(DK, nonce, clair, AAD = block_id ‖ aad) ‖ étiquette (16)
+```
+
+- `aad` est obligatoire, de 1 à 65 536 octets. Clair : au plus 1 Gio.
+- Tout échec de descellement donne la même erreur, quelle qu'en soit la cause.
+
+Tests : NIST CAVP AES-256-GCM (IV de 96 bits, étiquette de 128 bits) et AES-256-KWP, propriété
+« sceller puis desceller redonne l'entrée », toute modification d'un octet refusée, tests
+croisés avec RustCrypto `aes-gcm` et `aes-kw`.
+
+### Enveloppe de clé
+
+- Clé enveloppée sous une clé : AES-256-KWP d'une clé de 32 octets, 40 octets (RFC 5649).
+- Clé enveloppée pour un destinataire (module `envelope`) : établissement hybride avec le
+  contexte de l'appelant, puis AES-256-KWP de la clé sous le secret établi.
+  `enveloppe = chiffré hybride (1 667) ‖ clé enveloppée (40)`, soit 1 707 octets.
+
+### Dérivation
+
+Module `kdf`. HKDF-SHA-512, sortie de 32 octets, `info` construit uniquement depuis une
+étiquette typée :
+
+| Étiquette | `info` |
+| --- | --- |
+| Déverrouillage | `"hirzla/v1/unlock"` ‖ `0x00` ‖ rang de la méthode (1 octet) ‖ type de méthode (1 octet) |
+| Clé d'emballage locale | `"hirzla/v1/device-wrap"` ‖ `0x00` |
+
+Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en publie pas pour
+HKDF seul), test croisé avec RustCrypto `hkdf`.
+
 ## Hiérarchie de clés
 
 1. **Clé du poste** : gardée par la puce de sécurité ou une clé FIDO2, à défaut dérivée du

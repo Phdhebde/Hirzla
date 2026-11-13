@@ -18,7 +18,10 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 [dev-dependencies]
 # Second, independent implementation for cross tests and NIST vectors only (ADR 0009).
 # Never linked into a shipped binary.
+aes-gcm = "0.11.1"
+aes-kw = "0.3.1"
 hkdf = "0.13.0"
+ml-dsa = "0.1.2"
 ml-kem = { version = "0.3.4", features = ["hazmat"] }
-p384 = { version = "0.14.0", features = ["ecdh"] }
+p384 = { version = "0.14.0", features = ["ecdh", "ecdsa"] }
 sha2 = "0.11.1"
