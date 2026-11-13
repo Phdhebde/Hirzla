@@ -19,3 +19,11 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 # TBS TCTI (see docs/keystore-prototypes.md).
 [target.'cfg(target_os = "linux")'.dependencies]
 tss-esapi = "=7.7.0"
+
+# ADR 0014. Secure Enclave, only ever combined with the master password (decision 1).
+# OSX_10_15: the data protection keychain, the only one that holds enclave keys.
+# security-framework-sys: `SecKeyCreateWithData`, which has no safe wrapper.
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10.1"
+security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
+security-framework-sys = "2.17.0"
