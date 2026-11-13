@@ -14,6 +14,7 @@ pub mod sign;
 pub mod sym;
 #[cfg(test)]
 mod test_support;
+pub mod util;
 
 pub use error::Error;
 
