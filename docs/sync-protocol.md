@@ -346,7 +346,7 @@ Fusionner les têtes `H₁ … Hₙ`, champ par champ :
 | **C** compteur (`sign_count`) | Garder la plus grande valeur ; à valeur égale, la plus grande `Stamp` | Une valeur |
 | **S** ensemble (`sets`) | `elems` = union, dédupliquée par `dot` ; `removed` = union ; visibles = éléments dont le `dot` n'est pas dans `removed` | Un ensemble |
 | Champ personnalisé supprimé | Registre dont la valeur est `null` | Absent de l'affichage |
-| `state` | Si une tête vaut 2 (purgé) : 2. Sinon registre | Actif, corbeille ou purgé |
+| `state` | Si une tête vaut 2 (purgé) : 2, et l'état fusionné ne garde **aucun** contenu (`fields`, `sets`, `custom` vides). Sinon registre | Actif, corbeille ou purgé |
 
 Une `Stamp` est unique pour un champ donné : deux entrées concurrentes d'un même champ ont
 toujours des `Stamp` différentes. La règle n'a donc jamais d'égalité à départager.

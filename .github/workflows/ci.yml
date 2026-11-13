@@ -64,6 +64,26 @@ jobs:
       - name: dudect
         run: cargo test --release -p hirzla-crypto -- --ignored dudect --nocapture
 
+  # Short fuzzing of the vault decoders (ADR 0013). Informative: never blocks a merge.
+  fuzz:
+    name: fuzz (informative)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: cargo-fuzz
+        run: cargo +nightly install cargo-fuzz --locked
+      - name: Fuzz each decoder for 60 seconds
+        working-directory: fuzz
+        run: |
+          for target in decode_secret_body decode_locker_body decode_header; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60
+          done
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

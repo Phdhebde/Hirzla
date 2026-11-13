@@ -1,0 +1,2 @@
+# Frozen reference files: never let git convert line endings.
+*.fixture binary

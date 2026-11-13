@@ -351,12 +351,15 @@ Paramètres matériels (`kind` 2 à 5) :
 
 Le **secret de méthode** fait 32 octets :
 
-- mot de passe : `Argon2id(mot de passe en UTF-8 normalisé NFC, salt, m, t, p)`, sortie de 32 octets ;
+- mot de passe : `Argon2id(mot de passe en UTF-8 normalisé NFC, salt, m, t, p)`, sortie de 32 octets.
+  C'est `hirzla-vault` qui normalise : il reçoit le mot de passe comme texte et le passe en NFC
+  avant de le confier à `hirzla-crypto`. Un mot de passe vide est refusé ;
 - matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob`.
 
 `KEK_unlock = HKDF-SHA-512(ikm = secret de méthode, salt = vault_id,
 info = len ‖ "hirzla/v1/unlock" ‖ len ‖ rang de la méthode (1 octet) ‖ len ‖ kind (1 octet), L = 32)`,
-chaque `len` étant la longueur de l'élément qui suit, sur 2 octets gros-boutistes.
+chaque `len` étant la longueur de l'élément qui suit, sur 2 octets gros-boutistes. Le rang
+de la méthode est sa position dans le tableau `unlock` de l'en-tête, **à partir de 0**.
 
 Les plafonds protègent contre un en-tête piégé qui ferait calculer Argon2id indéfiniment.
 Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refusé avant tout calcul.
@@ -386,6 +389,7 @@ locales du § 5 et du § 10.
 | `secure_delete` | `ON`, à chaque connexion | Écraser les pages libérées |
 | `trusted_schema` | `OFF`, à chaque connexion | Aucun code venu du fichier |
 | `cell_size_check` | `ON`, à chaque connexion | Détecter une corruption |
+| `temp_store` | `MEMORY`, à chaque connexion | Aucun fichier temporaire de tri ou d'index sur le disque |
 | `SQLITE_DBCONFIG_DEFENSIVE` | Activé | Interdire l'écriture directe du schéma |
 
 SQLite 3.37 au minimum (tables `STRICT`).
@@ -477,7 +481,11 @@ Valeurs de `operations.status` :
 Dans cet ordre. Le premier échec arrête l'ouverture.
 
 1. Ouvrir sans suivre de lien symbolique, avec les réglages de connexion du § 5.1.
-2. Vérifier `application_id` et `user_version`.
+2. Vérifier `application_id`, `user_version`, `page_size` = 4096, `auto_vacuum` = `FULL`
+   et `journal_mode` = `DELETE`. Un fichier en mode WAL est refusé.
+   Relire ensuite les réglages de connexion appliqués : `secure_delete` = `ON`,
+   `trusted_schema` = `OFF`, `cell_size_check` = `ON`, `temp_store` = `MEMORY`, mode défensif
+   actif. Une valeur différente refuse l'ouverture.
 3. `PRAGMA quick_check` doit renvoyer `ok`.
 4. Comparer `sqlite_schema` au § 5.2 : mêmes objets, aucun autre (ni vue, ni déclencheur,
    ni table, ni index). Comparer les colonnes avec `PRAGMA table_xinfo` et les index avec
@@ -568,7 +576,8 @@ localement l'accès à une époque (effacement cryptographique, § 9.4).
 ### 5.8 État de synchronisation
 
 `sync_state.box` = `SealedBox`, AAD = `CBOR({1: "hirzla/v1/sync-state", 2: vault_id,
-3: locker_id})`. Le contenu est défini dans `sync-protocol.md` § 11.4.
+3: locker_id})`. Le contenu est défini dans `sync-protocol.md` § 11.4. Une ligne n'existe
+qu'après la première synchronisation du casier : un coffre neuf en mode Self n'en a aucune.
 
 ### 5.9 Clés épinglées (confiance au premier contact)
 
@@ -681,6 +690,15 @@ versions de tête.
 | 7 | `state` | `FieldEntry` | Valeur `uint` : 0 actif, 1 corbeille, 2 purgé |
 | 8 | `reseal` | `bool` | `true` si la version ne fait que resceller le contenu (`sync-protocol.md` § 8.4) |
 
+Les huit clés sont **toujours présentes**. `fields`, `sets` et `custom` peuvent être des maps
+vides ; `reseal` vaut `false` hors rescellement. Dans `fields` et `sets`, seules figurent les
+clés qui ont une valeur : un champ effacé est retiré du map, pas mis à `null` (seul `custom`
+utilise `null`, pour garder la trace d'une suppression concurrente).
+
+Une version à l'état **purgé** (`state = 2`) ne porte plus aucun contenu : `fields`, `sets` et
+`custom` sont vides, et les champs obligatoires ne s'appliquent pas. Un lecteur refuse une
+version purgée qui porte du contenu.
+
 `FieldEntry` :
 
 | Clé | Nom | Type | Contraintes |
@@ -718,6 +736,8 @@ Portées par `LockerMetaPut`, fusionnées comme un secret.
 | --- | --- | --- | --- |
 | 1 | `parents` | `array<OpId>` | Trié |
 | 2 | `fields` | `map<uint, FieldEntry>` | Ci-dessous |
+
+Les deux clés sont toujours présentes. `parents` est vide à la première version.
 
 | Champ | Nom | Valeur | Contraintes |
 | --- | --- | --- | --- |
@@ -847,10 +867,16 @@ est immuable. Le modifier, c'est retirer l'ancien et en ajouter un nouveau.
 | --- | --- | --- |
 | Mettre à la corbeille | `state = 1` | Le secret sort des listes, il reste lisible et restaurable |
 | Restaurer | `state = 0` | Le secret revient |
-| Purger | `state = 2` | Définitif. L'état « purgé » est absorbant : aucune version ultérieure ou concurrente ne le défait |
+| Purger | `state = 2`, sans contenu (§ 7.3) | Définitif. L'état « purgé » est absorbant : aucune version ultérieure ou concurrente ne le défait |
 
 Après une purge, toutes les versions du secret sauf celle de purge deviennent élaguables
-(`sync-protocol.md` § 10). Le poste peut effacer leur corps localement tout de suite.
+(`sync-protocol.md` § 10). Le poste les élague localement **dans la même transaction** que
+l'écriture de la purge, avec deux autres effets :
+
+- les morceaux des fichiers joints cités par une version du secret sont supprimés, sauf ceux
+  qu'une version conservée d'un autre secret du casier cite encore ;
+- l'entrée d'index ne garde que l'identifiant, le type, les têtes et l'état : titre vide, ni
+  nom d'utilisateur, ni hôte, ni étiquette.
 
 ### 9.3 Rétention
 
@@ -894,17 +920,40 @@ AAD = `CBOR({1: "hirzla/v1/index", 2: vault_id, 3: locker_id})`.
 | 3 | `heads` | `array<OpId>` | Versions de tête : ce qu'il faut desceller pour lire le secret |
 | 4 | `title` | `tstr` | |
 | 5 | `username` | `tstr?` | |
-| 6 | `hosts` | `array<tstr>` | Hôtes des `urls`, en minuscules, forme A-label (IDNA) |
+| 6 | `hosts` | `array<tstr>` | Hôtes des `urls`, trié, sans doublon (règle ci-dessous) |
 | 7 | `tags` | `array<tstr>` | |
 | 8 | `favorite` | `bool` | |
 | 9 | `state` | `uint` | |
 | 10 | `updated` | `Stamp` | Plus grande `Stamp` du secret |
 
+Règle des `hosts` : chaque URL est analysée selon le *URL Standard* du WHATWG ; son hôte, en
+ASCII (A-label IDNA, minuscules), entre dans `hosts`. Une URL sans hôte ou qui ne s'analyse
+pas n'y entre pas, mais reste stockée telle quelle dans le secret. Le remplissage automatique
+compare ces hôtes exactement (`modele-de-menace.md`).
+
 L'index ne contient **jamais** de champ sensible (§ 8). La recherche se fait en mémoire, dans
 le noyau, après descellement des fragments. Aucun index n'est lisible sans la clé du poste.
 
-Si `built_from` ne correspond pas aux têtes du journal, ou si le fragment ne se descelle pas,
-le noyau reconstruit le fragment. Il descelle pour cela les versions de tête du casier.
+**Fraîcheur.** À l'ouverture, chaque fragment est confronté aux en-têtes en clair du journal,
+sans rien desceller de plus :
+
+- tout casier présent dans `operations` a un fragment ;
+- `built_from` est inclus dans les extrémités des chaînes d'appareil du casier (opérations qui
+  n'ont pas de successeur `seq + 1` du même appareil), et contient celle de cet appareil.
+
+Si un fragment manque, ne se descelle pas, ou ne passe pas ce contrôle (par exemple une copie
+plus ancienne remise à sa place), le noyau le **reconstruit** : il descelle les versions du
+casier, recalcule les têtes de chaque secret et de ses métadonnées, puis réécrit le fragment.
+Ce contrôle détecte le retour en arrière d'un fragment isolé. Le retour en arrière du fichier
+entier reste hors de portée (§ 14, point 11).
+
+Les colonnes en clair d'`operations` ne servent que d'index : chaque lecture d'une opération
+vérifie qu'elles sont égales aux champs authentifiés (casier, auteur, appareil, rang). Un
+attaquant qui efface en plus les lignes récentes du journal ramène le coffre à un état
+antérieur cohérent : c'est un retour en arrière du fichier, que seul un compteur monotone
+matériel pourra détecter (point 11, étape 5). La reconstruction n'en est pas affaiblie : elle
+authentifie chaque opération qu'elle lit. Elle ne peut en revanche pas voir une version qu'un
+attaquant a effacée ou marquée élaguée, pour la même raison.
 
 ## 11. Bourrage
 
@@ -957,21 +1006,25 @@ Encodages à refuser :
 | `f93c00` | Flottant |
 | `c100` | Étiquette |
 
-### 12.2 Vecteurs à produire à l'étape 4
+### 12.2 Fichiers de référence de l'étape 4
 
-Ils demandent les implémentations des étapes 2 et 3. Ils sont produits avec un générateur
-d'aléa déterministe, réservé aux tests et absent des binaires livrés. Ils sont vérifiés par
-les deux implémentations croisées. Fichiers dans `crates/hirzla-vault/tests/vectors/v1/` :
+`hirzla-crypto` ne laisse aucun appelant choisir une clé, un nonce ou un aléa : un coffre ne
+peut donc pas être reproduit à l'octet près. Les vecteurs des primitives sont ceux de
+`hirzla-crypto` (`tests/vectors/`). Le format, lui, est figé par des **fichiers de référence**
+produits une fois, versionnés, et que chaque version du code doit savoir lire.
+
+Fichiers dans `crates/hirzla-vault/tests/fixtures/v1/` :
 
 | Fichier | Contenu |
 | --- | --- |
-| `unlock-password.json` | Mot de passe, sel, paramètres (m = 65 536, t = 3, p = 4), secret de méthode, `KEK_unlock`, `DeviceKey`, `wrapped_device_key` |
-| `device-wrap.json` | `DeviceKey`, `vault_id`, `K_dev_wrap` |
-| `sealed-box.json` | KEK, AAD, contenu, `DK`, nonce, `SealedBox` attendue |
-| `key-envelope.json` | Clés du destinataire, clés éphémères, contexte, clé de casier, `KeyEnvelope` attendue |
-| `secret-put.json` | Opération `SecretPut` complète : octets, `op_id`, contenu descellé |
-| `vault-minimal.hirzla.fixture` | Coffre complet : un casier, un secret de chaque type, deux versions, un fichier joint |
-| `refus/*.hirzla.fixture` | Contenu d'opération déplacé ; fichier tronqué ; `format_version = 2` ; table en trop ; déclencheur ; bourrage non nul ; `suites_read` modifié ; paramètres Argon2id sous le plancher |
+| `vault.hirzla.fixture` | Coffre complet : casier personnel et un second casier, un secret de chaque type, des versions successives, une mise à la corbeille, une purge |
+| `vault.expected.txt` | Mot de passe du coffre et contenu attendu de chaque secret et de chaque casier, au format `clé = valeur` des autres vecteurs |
+| `unlock.expected.txt` | Pour la méthode mot de passe : paramètres Argon2id, `vault_id`, `wrapped_device_key` et la `DeviceKey` attendue. Ce calcul est déterministe et se vérifie seul |
+
+Les tests de refus dérivent leurs fichiers du coffre de référence, en mémoire : contenu
+d'opération déplacé vers une autre ligne, fichier tronqué, `format_version = 2`,
+`user_version` différent, table en trop, déclencheur, vue, mode WAL, bourrage non nul,
+`suites_read` modifié, paramètres Argon2id sous le plancher.
 
 L'extension `.hirzla.fixture` évite que la protection de secrets de l'intégration continue
 (fichiers `*.hirzla` suivis) bloque les fichiers de référence.
@@ -986,7 +1039,15 @@ un appareil de certification) ; créer le casier personnel par une opération `L
 (`sync-protocol.md` § 7). Un appareil suivant reçoit son identité par l'enrôlement
 (`sync-protocol.md` § 14).
 
+**Créer un casier** : une opération `LockerCreate` (`seq = 1`, nouvelle époque), puis une
+`LockerMetaPut` (`seq = 2`) qui porte au moins le nom. Le casier personnel du premier
+appareil se crée ainsi, avec le nom fourni par l'appelant. La clé de la nouvelle époque
+est mise en cache (§ 5.7) et le fragment d'index est écrit, dans la même transaction.
+
 **Ouvrir** : § 5.3, puis desceller les fragments d'index. Rien d'autre n'est descellé.
+
+**Fermer** : effacer de la mémoire la `DeviceKey`, `K_dev_wrap`, les clés privées, les clés
+de casier et les fragments d'index descellés, puis fermer la connexion SQLite.
 
 **Lire un secret** : prendre ses `heads` dans l'index ; pour chaque tête, lire l'opération,
 prendre la clé de casier de son époque dans le cache (§ 5.7), desceller `sealed` ; vérifier
@@ -1052,3 +1113,13 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 23. **`info` HKDF binaires** au lieu de CBOR (validé), chaque élément préfixé par sa longueur
     sur 2 octets (décision de validation), pour que `hirzla-crypto` reste sans dépendance CBOR et
     que les étiquettes soient des types.
+24. **Précisions de l'étape 4** (spécification corrigée avant le code) : rang de méthode à
+    partir de 0 ; normalisation NFC faite par `hirzla-vault` ; `temp_store = MEMORY` et refus du
+    mode WAL ; présence de toutes les clés de `SecretBody` et `LockerBody` ; règle des `hosts`
+    de l'index (URL Standard du WHATWG) ; création d'un casier en deux opérations ; fermeture ;
+    fichiers de référence au lieu de vecteurs déterministes, impossibles avec l'API de
+    `hirzla-crypto`.
+25. **Purge sans contenu, atomique** (constat de revue de sécurité à l'étape 4) : la version de
+    purge ne recopie plus le secret ; élagage, suppression des fichiers joints et entrée d'index
+    réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
+    contre les en-têtes du journal, avec reconstruction.

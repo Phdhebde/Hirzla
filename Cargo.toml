@@ -11,11 +11,13 @@ members = [
     "apps/cli",
     "apps/server",
 ]
+# Fuzz targets live outside the workspace (nightly, cargo-fuzz).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"
 edition = "2021"
-rust-version = "1.87"
+rust-version = "1.89"
 publish = false
 
 [workspace.lints.rust]
