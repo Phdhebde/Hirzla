@@ -137,6 +137,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/op-payload` | AAD, contenu scellé d'une opération | § 7.2 |
 | `hirzla/v1/attachment-chunk` | AAD, morceau de fichier joint | § 8.4 |
 | `hirzla/v1/device-enrol` | Contexte KEM, transfert des clés à l'enrôlement | `sync-protocol.md` |
+| `hirzla/v1/recovery-share` | Signature d'une part de récupération (Shamir) | `crypto.md` |
 | `hirzla/v1/exchange-file` | Contexte KEM et signature, fichier d'échange | `sync-protocol.md` |
 | `hirzla/v1/server-auth` | Signature du serveur à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/device-auth` | Signature de l'appareil à l'ouverture de session | `sync-protocol.md` |
@@ -338,6 +339,9 @@ Paramètres du mot de passe (`kind = 1`) :
 | 3 | `p` | `uint` | 1 ≤ p ≤ 16 |
 | 4 | `salt` | `bstr(32)` | Aléa, propre à cette méthode |
 | 5 | `version` | `uint` | `19` (Argon2 v1.3) |
+
+Ces paramètres sont ceux de `PasswordParams` dans `hirzla-crypto` (module `password`), qui
+refuse toute valeur hors de ces bornes à la construction comme au décodage.
 
 Paramètres matériels (`kind` 2 à 5) :
 
