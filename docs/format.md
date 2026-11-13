@@ -481,6 +481,13 @@ Valeurs de `operations.status` :
 Dans cet ordre. Le premier échec arrête l'ouverture.
 
 1. Ouvrir sans suivre de lien symbolique, avec les réglages de connexion du § 5.1.
+   `SQLITE_OPEN_NOFOLLOW` refuse un lien sur **n'importe quel élément du chemin**, pas
+   seulement sur le fichier : le chemin du coffre, dossiers parents compris, doit être sans
+   lien symbolique. À la création comme à l'ouverture, un tel chemin est refusé avec un
+   message qui le dit (« le chemin du coffre ne doit pas passer par un lien symbolique »).
+   C'est voulu : un lien posé sur un dossier parent redirigerait le coffre vers un
+   emplacement choisi par un autre. Sous macOS, `/var` et `/tmp` sont des liens vers
+   `/private/…` : l'appelant passe le chemin réel (`/private/var/…`).
 2. Vérifier `application_id`, `user_version`, `page_size` = 4096, `auto_vacuum` = `FULL`
    et `journal_mode` = `DELETE`. Un fichier en mode WAL est refusé.
    Relire ensuite les réglages de connexion appliqués : `secure_delete` = `ON`,
