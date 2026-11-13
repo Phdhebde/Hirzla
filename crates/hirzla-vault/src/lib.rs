@@ -4,9 +4,14 @@
 //! The format is specified in `docs/format.md`; change the spec first.
 
 pub mod cbor;
+mod error;
+pub mod model;
 pub mod pad;
+pub mod secret;
 #[cfg(test)]
 mod test_support;
+
+pub use error::VaultError;
 
 /// Version of the on-disk vault format.
 pub const FORMAT_VERSION: u16 = 1;

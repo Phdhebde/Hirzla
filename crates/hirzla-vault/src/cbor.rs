@@ -112,6 +112,9 @@ impl Value {
     }
 }
 
+/// An encoded item, erased on drop.
+type Encoded = Zeroizing<Vec<u8>>;
+
 fn enc_err<E>(_: E) -> CborError {
     CborError::Malformed
 }
@@ -132,8 +135,7 @@ fn write_value(v: &Value, w: &mut BufWriter) -> Result<(), CborError> {
             Ok(())
         }
         Value::Map(entries) => {
-            let mut encoded: Vec<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>)> =
-                Vec::with_capacity(entries.len());
+            let mut encoded: Vec<(Encoded, Encoded)> = Vec::with_capacity(entries.len());
             for (k, val) in entries {
                 encoded.push((encode(k)?, encode(val)?));
             }

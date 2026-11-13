@@ -1,5 +1,5 @@
 //! Test-only helpers.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, dead_code)]
 
 pub fn hex(s: &str) -> Vec<u8> {
     assert!(s.len().is_multiple_of(2), "odd hex length");
