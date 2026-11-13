@@ -11,6 +11,8 @@ members = [
     "apps/cli",
     "apps/server",
 ]
+# Fuzz targets live outside the workspace (nightly, cargo-fuzz).
+exclude = ["fuzz"]
 
 [workspace.package]
 version = "0.0.0"

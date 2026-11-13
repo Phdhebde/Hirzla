@@ -1,0 +1,39 @@
+# Fuzz targets of hirzla-vault (ADR 0013). Outside the workspace: needs nightly and cargo-fuzz.
+#   cargo install cargo-fuzz
+#   cargo +nightly fuzz run decode_secret_body
+[package]
+name = "hirzla-vault-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+hirzla-vault = { path = "../crates/hirzla-vault" }
+libfuzzer-sys = "0.4"
+
+# Standalone: not a member of the main workspace.
+[workspace]
+
+[[bin]]
+name = "decode_secret_body"
+path = "fuzz_targets/decode_secret_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_locker_body"
+path = "fuzz_targets/decode_locker_body.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_header"
+path = "fuzz_targets/decode_header.rs"
+test = false
+doc = false
+bench = false
