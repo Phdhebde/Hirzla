@@ -15,7 +15,7 @@
 //! | Key | Domains |
 //! | --- | --- |
 //! | [`MemberSigningKey`] | device certificate, device revocation |
-//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment |
+//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share |
 //! | [`ServerSigningKey`] | server authentication, receipt |
 //!
 //! | Object | Layout | Length |
@@ -73,6 +73,8 @@ pub enum Domain {
     ExchangeFile,
     /// A device enrolment package (§ 14).
     DeviceEnrol,
+    /// A secret share for recovery (ADR 0012).
+    RecoveryShare,
 }
 
 impl Domain {
@@ -89,6 +91,7 @@ impl Domain {
             Domain::Receipt => b"hirzla/v1/receipt",
             Domain::ExchangeFile => b"hirzla/v1/exchange-file",
             Domain::DeviceEnrol => b"hirzla/v1/device-enrol",
+            Domain::RecoveryShare => b"hirzla/v1/recovery-share",
         }
     }
 
@@ -124,6 +127,8 @@ pub enum DeviceDomain {
     ExchangeFile,
     /// An enrolment package.
     DeviceEnrol,
+    /// A recovery share.
+    RecoveryShare,
 }
 
 /// Domains a server key may sign.
@@ -152,6 +157,7 @@ impl From<DeviceDomain> for Domain {
             DeviceDomain::DeviceAuth => Domain::DeviceAuth,
             DeviceDomain::ExchangeFile => Domain::ExchangeFile,
             DeviceDomain::DeviceEnrol => Domain::DeviceEnrol,
+            DeviceDomain::RecoveryShare => Domain::RecoveryShare,
         }
     }
 }

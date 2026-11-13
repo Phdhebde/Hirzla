@@ -9,6 +9,7 @@ mod error;
 pub mod kdf;
 pub mod kem;
 pub mod password;
+pub mod shamir;
 pub mod sign;
 pub mod sym;
 #[cfg(test)]
