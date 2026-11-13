@@ -873,7 +873,8 @@ Après une purge, toutes les versions du secret sauf celle de purge deviennent �
 (`sync-protocol.md` § 10). Le poste les élague localement **dans la même transaction** que
 l'écriture de la purge, avec deux autres effets :
 
-- les morceaux des fichiers joints cités par une version du secret sont supprimés ;
+- les morceaux des fichiers joints cités par une version du secret sont supprimés, sauf ceux
+  qu'une version conservée d'un autre secret du casier cite encore ;
 - l'entrée d'index ne garde que l'identifiant, le type, les têtes et l'état : titre vide, ni
   nom d'utilisateur, ni hôte, ni étiquette.
 
@@ -950,7 +951,9 @@ Les colonnes en clair d'`operations` ne servent que d'index : chaque lecture d'u
 vérifie qu'elles sont égales aux champs authentifiés (casier, auteur, appareil, rang). Un
 attaquant qui efface en plus les lignes récentes du journal ramène le coffre à un état
 antérieur cohérent : c'est un retour en arrière du fichier, que seul un compteur monotone
-matériel pourra détecter (point 11, étape 5).
+matériel pourra détecter (point 11, étape 5). La reconstruction n'en est pas affaiblie : elle
+authentifie chaque opération qu'elle lit. Elle ne peut en revanche pas voir une version qu'un
+attaquant a effacée ou marquée élaguée, pour la même raison.
 
 ## 11. Bourrage
 
