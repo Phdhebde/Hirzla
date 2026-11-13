@@ -12,7 +12,13 @@ workspace = true
 [dependencies]
 # Production base (ADR 0009). Non-FIPS build until the FIPS study before phase 5.
 aws-lc-rs = { version = "1.19.0", default-features = false, features = ["aws-lc-sys", "alloc"] }
+# Argon2id (ADR 0012): absent from aws-lc-rs.
+argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "zeroize"] }
+# Random-generator traits required by vsss-rs; fed by the AWS-LC generator.
+rand_core = { version = "0.10.1", default-features = false }
 thiserror = "2.0"
+# Shamir over GF(2^8) (ADR 0012). Pinned: any upgrade is a reviewed change.
+vsss-rs = { version = "=6.0.1", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 [dev-dependencies]
@@ -25,3 +31,10 @@ ml-dsa = "0.1.2"
 ml-kem = { version = "0.3.4", features = ["hazmat"] }
 p384 = { version = "0.14.0", features = ["ecdh", "ecdsa"] }
 sha2 = "0.11.1"
+
+# Argon2 C reference implementation, for the Argon2id cross test only (ADR 0012).
+# Its build runs bindgen, which needs libclang: available on the Linux (installed by CI) and
+# macOS (Xcode) runners, not on a default Windows machine. Argon2id output does not depend on
+# the platform, so the cross test on Linux and macOS covers it.
+[target.'cfg(not(windows))'.dev-dependencies]
+argon2-kdf = "1.7.5"
