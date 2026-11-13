@@ -2,10 +2,12 @@
 //!
 //! This crate assembles audited primitives; it never implements one.
 //! It performs no I/O and depends on no other Hirzla crate.
-//! See `docs/crypto.md` and ADRs 0002 and 0009.
+//! See `docs/crypto.md` and ADRs 0002, 0009 and 0011.
 
 mod error;
 pub mod kem;
+#[cfg(test)]
+mod test_support;
 
 pub use error::Error;
 

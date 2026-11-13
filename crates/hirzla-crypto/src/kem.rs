@@ -421,7 +421,7 @@ fn check_context(context: &[u8]) -> Result<(), Error> {
 }
 
 /// Accepts only an uncompressed SEC 1 point that lies on P-384.
-fn check_ecdh_point(point: &[u8]) -> Result<(), Error> {
+pub(crate) fn check_ecdh_point(point: &[u8]) -> Result<(), Error> {
     if point.len() != ECDH_POINT_LEN || point.first() != Some(&SEC1_UNCOMPRESSED) {
         return Err(Error::InvalidEncoding);
     }
