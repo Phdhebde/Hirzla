@@ -8,9 +8,10 @@ sur du vrai matériel.
 
 | Système | Prototype | Testé ? | Résultat |
 | --- | --- | --- | --- |
-| Linux, TPM 2.0 | `tpm2_prototype` (`tss-esapi` 7.7.0, tpm2-tss 4.0.1) | **Oui, contre swtpm 0.7.3** (Ubuntu 24.04, WSL) | 5 tests sur 5 |
+| Linux, TPM 2.0 | `tpm2_prototype` (`tss-esapi` 7.7.0) | **Oui, contre swtpm 0.7.3** (Ubuntu 24.04, WSL), avec tpm2-tss 4.0.1 puis **4.1.6** | 5 tests sur 5 dans les deux cas |
 | Linux, vraie puce | même code | **Non**, faute de machine | — |
-| Windows, TPM 2.0 | **aucun** | **Non** | Bloqué : voir ci-dessous |
+| Windows, TPM 2.0 | **aucun** | **Non** | En attente d'une version publiée de `tss-esapi` (ADR 0014, décision 7) |
+| Windows, DPAPI | `dpapi_prototype` (`windows-sys` 0.61.2) | **Oui**, sur le poste de développement (Windows 11) | 3 tests sur 3 ; ils tournent avec la suite ordinaire, donc aussi en CI Windows |
 | macOS, Secure Enclave | `secure_enclave_prototype` (`security-framework` 3.7.0) | **Non**, faute de Mac | Contrôle de types et Clippy pour `aarch64-apple-darwin` seulement |
 
 ### Linux contre swtpm
@@ -31,7 +32,12 @@ sur du vrai matériel.
 - Le compteur se définit sous la hiérarchie propriétaire, dont l'autorisation est vide sur
   swtpm et sur la plupart des PC Linux.
 
-### Windows : bloqué
+Version de tpm2-tss : **4.1.3 au minimum** (bindings de `tss-esapi-sys` 0.6). Ubuntu 24.04
+livre 4.0.1 : la CI et le test L1 construisent 4.1.6 avec
+`.github/scripts/install-tpm2-tss.sh` (archive figée par SHA-256, signature vérifiée avant
+figement). Dans WSL, le binaire de test charge bien `libtss2-esys` depuis `/usr/local`.
+
+### Windows : TPM en attente, DPAPI en repli
 
 La décision 4 de l'ADR 0014 (`tss-esapi` partout) n'est pas réalisable aujourd'hui :
 
@@ -40,9 +46,17 @@ La décision 4 de l'ADR 0014 (`tss-esapi` partout) n'est pas réalisable aujourd
 - `tss-esapi-sys` 0.6.0 n'a pas de bindings pré-générés pour Windows. Ils ont été ajoutés en
   amont le 2026-11-12 (pull request #692) mais ne sont pas encore publiés.
 
-Rien n'est donc compilé pour le TPM sous Windows. Les choix possibles sont proposés dans le
-résumé de l'étape. La question 3 (le compteur) peut en revanche être tranchée dès maintenant
-par le test manuel W2, qui n'a pas besoin de `tss-esapi`.
+Décision (ADR 0014, décisions 6 et 7) : attendre une version publiée de `tss-esapi` qui
+ouvre `tbs`, puis prototyper le TPM Windows. La question 3 (le compteur) peut être tranchée
+dès maintenant par le test manuel W2, qui n'a pas besoin de `tss-esapi`.
+
+En attendant, Windows renforce le mot de passe par un **facteur DPAPI** (`CryptProtectData`,
+portée utilisateur), toujours combiné au mot de passe, jamais seul. Vérifié sur ce poste :
+aller-retour, facteur absent du blob, deux protections du même facteur différentes, refus
+avec une autre entropie, refus d'un blob abîmé ou tronqué. Garanties déclarées : liée au
+compte Windows de ce poste ; pas de limitation d'essais matérielle ; pas de compteur ; tout
+processus du compte peut desceller le facteur ; en domaine, la clé de secours du domaine
+(RSA) permet à un administrateur de le desceller.
 
 ### macOS : à tester
 
@@ -67,7 +81,9 @@ une issue ou un message.
 ### L1 — Linux avec une vraie puce TPM 2.0
 
 ```sh
-sudo apt-get install -y build-essential pkg-config cmake clang libtss2-dev tpm2-tools
+sudo apt-get install -y build-essential pkg-config cmake clang libssl-dev tpm2-tools
+sudo -E .github/scripts/install-tpm2-tss.sh   # tpm2-tss 4.1.6 sous /usr/local
+pkg-config --modversion tss2-esys             # doit afficher 4.1.6 (au moins 4.1.3)
 sudo usermod -aG tss "$USER"        # accès à /dev/tpmrm0 ; se reconnecter ensuite
 tpm2_getcap properties-variable | grep -E 'ownerAuthSet|lockoutAuthSet|inLockout'
 tpm2_getcap properties-fixed | grep -A1 -E 'TPM2_PT_MANUFACTURER|TPM2_PT_FIRMWARE_VERSION_1'
@@ -110,6 +126,24 @@ Précautions :
 - ne rien effacer ni réinitialiser dans le TPM ;
 - avoir la clé de récupération BitLocker sous la main avant de démarrer sur la clé USB, au
   cas où le micrologiciel la demanderait au retour sous Windows.
+
+### W3 — Windows : le facteur DPAPI ne sort pas du compte
+
+Les tests automatiques ne peuvent pas changer de compte. Utiliser un fichier accessible aux
+deux comptes, par exemple `C:\Users\Public\hirzla-dpapi.bin` :
+
+```powershell
+$env:HIRZLA_DPAPI_BLOB = "C:\Users\Public\hirzla-dpapi.bin"
+cargo test -p hirzla-keystore --test dpapi_prototype -- --ignored --nocapture
+```
+
+1. Sous le compte A : le test écrit le blob (« blob written »).
+2. Sous un **autre compte** du même PC, même commande : attendu « refused as expected ».
+3. Copier le fichier sur un **autre PC**, même commande : attendu « refused as expected ».
+4. De nouveau sous le compte A : attendu « unprotected ».
+
+Les étapes 1 et 4 ont été vérifiées sur le poste de développement. Supprimer le fichier
+ensuite : il ne contient qu'un facteur de test, sans valeur.
 
 ### M1 — macOS, Secure Enclave (Mac Apple silicon ou avec puce T2)
 

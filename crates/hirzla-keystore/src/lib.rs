@@ -12,3 +12,6 @@ pub mod tpm2_prototype;
 
 #[cfg(target_os = "macos")]
 pub mod secure_enclave_prototype;
+
+#[cfg(windows)]
+pub mod dpapi_prototype;
