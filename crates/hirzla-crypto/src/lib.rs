@@ -5,6 +5,7 @@
 //! See `docs/crypto.md` and ADRs 0002, 0009 and 0011.
 
 mod error;
+pub mod kdf;
 pub mod kem;
 pub mod sym;
 #[cfg(test)]
