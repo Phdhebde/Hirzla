@@ -86,7 +86,7 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 | Rôle | Étiquettes |
 | --- | --- |
 | Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
-| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol` |
+| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share` |
 | Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt` |
 
 - Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
@@ -137,6 +137,57 @@ Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en p
 HKDF seul), test croisé avec RustCrypto `hkdf`, vecteurs figés des étiquettes
 (`crates/hirzla-crypto/tests/vectors/hirzla-kdf-v1.txt`, calculés par une troisième
 implémentation indépendante).
+
+### Mot de passe : Argon2id
+
+Module `password`, bibliothèque RustCrypto `argon2` (ADR 0012). Argon2id, version 1.3, sortie
+de 32 octets, sans secret ni données associées.
+
+| Paramètre | Plancher | Plafond |
+| --- | --- | --- |
+| Mémoire `m` | 65 536 Kio (64 Mio) | 4 194 304 Kio (4 Gio) |
+| Passes `t` | 3 | 64 |
+| Parallélisme `p` | 1 | 16 |
+| Sel | 32 octets d'aléa | — |
+
+Les paramètres sont stockés à côté de ce que la clé protège, en 45 octets :
+`0x13` ‖ `m` (4, gros-boutiste) ‖ `t` (4) ‖ `p` (4) ‖ sel (32). Aucune valeur hors bornes ne peut
+être construite, décodée ni utilisée. Le calibrage part du plancher, double la mémoire jusqu'au
+maximum choisi pour le poste, puis augmente `t` vers la durée visée. Le mot de passe et la clé
+dérivée sont effacés après usage. Le mot de passe est normalisé (NFC) par l'appelant.
+
+Tests : vecteur Argon2id de la RFC 9106 (§ 5.3) ; tests croisés avec l'implémentation C de
+référence (`argon2-kdf`) sous Linux et macOS.
+
+### Partage de secret : Shamir
+
+Module `shamir`, arithmétique `vsss-rs` (`Gf256`, sans table, version figée `=6.0.1`, ADR 0012).
+Les parts sont **authentifiées par Hirzla** :
+
+| Morceau | Longueur | Contenu |
+| --- | --- | --- |
+| `suite_id` | 2 | |
+| identifiant du partage | 16 | Aléa |
+| seuil, nombre, rang | 1 + 1 + 1 | `2 ≤ t ≤ n ≤ 255`, `1 ≤ rang ≤ n` |
+| empreinte du secret | 48 | SHA-384 du secret |
+| empreinte du signataire | 48 | SHA-384 de la clé de vérification de l'appareil qui partage |
+| longueur de la part | 2 | 33 pour un secret de 32 octets |
+| part | 33 | identifiant ‖ valeur (`vsss-rs`) |
+| signature | 4 725 | Signature hybride de tout ce qui précède, domaine `hirzla/v1/recovery-share` |
+
+- À la reconstitution, chaque part doit porter l'empreinte de la **clé épinglée** fournie par
+  l'appelant, et sa signature est vérifiée avec cette clé. Une clé jointe aux parts n'est
+  jamais utilisée.
+- Toutes les parts doivent venir du même partage (identifiant, seuil, nombre, empreinte du
+  secret), sans rang répété. Le secret reconstruit doit redonner l'empreinte signée.
+- Pas de partage vérifiable de Feldman ou Pedersen : leurs engagements reposent sur le
+  logarithme discret, cassé par un adversaire quantique.
+
+Tests : tout sous-ensemble de `t` parts reconstruit le secret, `t − 1` parts sont refusées, une
+part isolée d'un partage 2 sur `n` est uniforme (test du χ²), parts forgées ou resignées
+refusées. Test de temps constant de type dudect (test t de Welch, deux classes de secrets),
+lancé à la demande en mode release : |t| ≤ 2,4 sur trois passes de 50 000 mesures (seuil
+d'alerte 4,5).
 
 ## Hiérarchie de clés
 
