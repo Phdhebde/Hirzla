@@ -4,6 +4,8 @@
 //! It performs no I/O and depends on no other Hirzla crate.
 //! See `docs/crypto.md` and ADRs 0002, 0009, 0011 and 0012.
 
+#![forbid(unsafe_code)]
+
 pub mod envelope;
 mod error;
 pub mod kdf;

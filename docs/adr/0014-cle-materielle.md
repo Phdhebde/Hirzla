@@ -1,7 +1,23 @@
 # ADR 0014 — Garde matérielle de la clé du poste et compteur monotone
 
-- Statut : proposé
+- Statut : accepté (2026-11-13), avec les décisions ci-dessous
 - Date : 2026-11-13
+
+## Décisions de validation
+
+Ces décisions priment sur les propositions du reste du document.
+
+1. **Secure Enclave seulement en combinaison avec le mot de passe**, jamais seule :
+   secret de méthode = KDF(secret ECDH de l'enclave ‖ sortie Argon2id). La méthode déclare
+   ne pas être post-quantique seule : sa résistance post-quantique vient du mot de passe.
+2. **Format v2** pour le compteur monotone, avec un lecteur v1 conservé.
+3. **Compteur sous Windows** : si le prototype ne peut pas en créer, Windows déclare ne pas
+   en avoir, sans contournement.
+4. **`tss-esapi` partout** (Linux et Windows). Aucun téléchargement de sources pendant la
+   compilation (option `bundled` interdite) ; les dépendances système (tpm2-tss) sont
+   installées par la CI.
+5. **Lint `unsafe_code = "deny"`** dans l'espace de travail, `#![forbid(unsafe_code)]` à la
+   racine de toutes les caisses sauf `hirzla-keystore`, et un test de CI qui le vérifie.
 
 ## Contexte
 
