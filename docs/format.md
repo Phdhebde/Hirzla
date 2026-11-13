@@ -626,7 +626,8 @@ Portées par `LockerMetaPut`, fusionnées comme un secret.
 | 6 | Fichier joint | `File` |
 
 Le format **stocke** ces six types. Le calcul d'un code TOTP et la signature avec une clé
-d'accès ou une clé SSH dépendent de l'ADR 0010 (proposé). Ils ne sont pas spécifiés ici.
+d'accès ou une clé SSH suivent l'ADR 0010 (accepté) et la section « Mécanismes
+d'interopérabilité » de `docs/crypto.md`. Ces mécanismes sont hors du périmètre post-quantique.
 
 Règle de fusion par champ, appliquée selon `sync-protocol.md` § 8 :
 
@@ -912,6 +913,6 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 12. **Limites de taille** (titre, notes, fichiers joints de 100 Mio, 64 champs personnalisés,
     256 dépendances, 4 Mio par opération) : choisies sans mesure.
 13. **Rétention par défaut** de 20 versions par secret.
-14. **Usage des types TOTP, clé d'accès et clé SSH** : suspendu à l'ADR 0010.
+14. ~~Usage des types TOTP, clé d'accès et clé SSH~~ : tranché par l'ADR 0010 (accepté).
 15. **Rôles au niveau d'un secret** (`roles.md`) : non couverts par le format v1. Lire un seul
     secret supposerait d'envelopper ses clés de donnée pour un membre. À trancher à l'étape 10.

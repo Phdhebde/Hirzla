@@ -57,6 +57,26 @@ TLS 1.3 uniquement. Groupes : `SecP384r1MLKEM1024` (profil strict), `X25519MLKEM
 Tout objet chiffré ou signé porte son `SuiteId` sur deux octets. Une suite peut être interdite
 en écriture tout en restant lisible, le temps d'un rechiffrement en tâche de fond.
 
+## Mécanismes d'interopérabilité
+
+Certains secrets stockés imposent un mécanisme choisi par un tiers (ADR 0010). Ces mécanismes
+sont **hors du périmètre post-quantique** : la règle « tout asymétrique est hybride » ne
+s'applique pas à eux.
+
+| Usage | Mécanismes admis | Référence |
+| --- | --- | --- |
+| Code TOTP | HMAC-SHA-1, HMAC-SHA-256, HMAC-SHA-512 | RFC 6238, RFC 2104 |
+| Clé d'accès (WebAuthn) | ECDSA P-256 (ES256), Ed25519 (EdDSA) | W3C WebAuthn niveau 2 |
+| Agent SSH | Ed25519, ECDSA P-256 et P-384 | RFC 8709, RFC 5656 |
+
+Règles :
+
+- La liste est exhaustive. RSA est stocké, jamais utilisé, en v1.
+- Ces mécanismes ne protègent jamais une donnée Hirzla. Ils ne s'appliquent qu'au secret
+  stocké, pour le protocole du tiers.
+- Ils tournent dans le noyau, avec une bibliothèque auditée (ADR 0009). La clé ou la graine
+  ne quitte jamais le noyau : l'interface reçoit le code ou la signature.
+
 ## Bibliothèques pressenties
 
 `aws-lc-rs` (socle), `libcrux` ou RustCrypto (seconde implémentation pour tests croisés),
