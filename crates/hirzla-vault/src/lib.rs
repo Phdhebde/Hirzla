@@ -3,5 +3,10 @@
 //! Every record is encrypted by `hirzla-crypto` before it reaches storage.
 //! The format is specified in `docs/format.md`; change the spec first.
 
+pub mod cbor;
+pub mod pad;
+#[cfg(test)]
+mod test_support;
+
 /// Version of the on-disk vault format.
 pub const FORMAT_VERSION: u16 = 1;
