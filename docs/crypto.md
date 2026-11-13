@@ -30,7 +30,38 @@ ss = HKDF-SHA-512(
 ```
 
 Les deux secrets, les deux chiffrés et l'identité du destinataire entrent dans la dérivation.
-Le format exact est à figer dans `hirzla-crypto` et à tester par vecteurs.
+
+Format exact, figé par `hirzla-crypto` (module `kem`) et par le vecteur
+`crates/hirzla-crypto/tests/vectors/hybrid-kem-v1.txt` :
+
+| Élément | Valeur |
+| --- | --- |
+| `ss_ecdh` | Coordonnée x du point partagé P-384, 48 octets |
+| `ss_mlkem` | Secret partagé ML-KEM-1024, 32 octets |
+| `suite_id` | 2 octets, gros-boutiste (`00 01` pour V1) |
+| `ct_ecdh` | Clé publique éphémère P-384, SEC 1 non compressée, 97 octets |
+| `ct_mlkem` | Chiffré ML-KEM-1024, 1 568 octets |
+| `pk_destinataire` | Clé publique encodée complète, 1 667 octets (ci-dessous) |
+| `contexte` | Octets fournis par l'appelant, de 1 à 4 096 |
+| Sortie | `L = 32` octets |
+
+Encodages, tous préfixés par `suite_id`. Toute autre longueur, suite ou valeur est refusée :
+
+| Objet | Composition | Longueur |
+| --- | --- | --- |
+| Clé publique | `suite_id` ‖ point P-384 SEC 1 non compressé (97) ‖ clé d'encapsulation ML-KEM-1024 (1 568) | 1 667 |
+| Chiffré | `suite_id` ‖ point éphémère P-384 (97) ‖ chiffré ML-KEM-1024 (1 568) | 1 667 |
+| Clé privée | `suite_id` ‖ scalaire P-384 gros-boutiste (48) ‖ clé de décapsulation ML-KEM-1024 développée (3 168) | 3 218 |
+
+Contrôles à la lecture :
+
+- point P-384 : préfixe `04`, point sur la courbe ;
+- clé d'encapsulation ML-KEM : contrôle de module de FIPS 203 (§ 7.2), appliqué par AWS-LC ;
+- clé privée : contrôle de cohérence de FIPS 203 (§ 7.3), `ek` inclus égal à la clé publique et
+  `H(ek)` inclus égal à `SHA3-256(ek)` ; point P-384 recalculé égal à la clé publique.
+
+Tests : vecteurs NIST ACVP ML-KEM-1024 (génération, encapsulation, décapsulation, contrôles de
+clés) et CAVP ECDH P-384 ; tests croisés entre `aws-lc-rs` et RustCrypto (ADR 0009).
 
 ## Hiérarchie de clés
 

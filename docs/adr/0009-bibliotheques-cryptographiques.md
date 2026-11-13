@@ -1,6 +1,6 @@
 # ADR 0009 — Bibliothèques cryptographiques
 
-- Statut : proposé
+- Statut : accepté (2026-11-13)
 - Date : 2026-11-13
 
 ## Contexte
@@ -41,7 +41,7 @@ Candidats : `aws-lc-rs`, `libcrux`, et les crates RustCrypto (`ml-kem`, `p384`).
 | Construction | Compilateur C. Sans CMake, ni Go, ni bindgen en mode normal. Mode FIPS : CMake et Go, cibles limitées | Rust pur | Rust pur |
 | Rust minimal | 1.71 | 1.89 | 1.87 (`ml-kem`), 1.85 (`p384`) |
 
-## Décision proposée
+## Décision
 
 1. **Socle : `aws-lc-rs`.** C'est le seul candidat qui couvre seul les trois briques de
    l'étape 2, avec une vérification formelle des parties sensibles et une validation FIPS
@@ -59,22 +59,24 @@ Candidats : `aws-lc-rs`, `libcrux`, et les crates RustCrypto (`ml-kem`, `p384`).
    dans le périmètre du certificat FIPS. Une option de construction FIPS (`aws-lc-fips-sys`)
    sera étudiée plateforme par plateforme avant la phase 5.
 
-## Points à trancher avec cette validation
+## Décisions prises à la validation
 
-1. **Format des clés privées ML-KEM.** `format.md` (§ 3.5) stocke une graine de 64 octets.
-   `aws-lc-rs` ne sait pas générer depuis une graine. Options :
-   - (a) **recommandée** : stocker la clé privée développée (3 168 octets) et la clé publique
-     (1 568 octets). Il faut modifier `format.md` § 3.5, et ce changement de format passe par
-     cet ADR ;
-   - (b) générer les clés avec RustCrypto `ml-kem` en production pour garder la graine. Une
-     crate non auditée entre alors dans le binaire livré.
-2. **Option `hazmat` de RustCrypto `ml-kem`**, activée en `dev-dependencies` seulement, pour
-   les vecteurs d'encapsulation.
-3. **Version minimale de Rust** : `ml-kem` demande 1.87, l'espace de travail déclare 1.85.
-   Proposition : passer `rust-version` à 1.87.
-4. **Licences** : les licences des candidats retenus sont déjà dans `deny.toml` (MIT-0
-   n'apparaît que dans une alternative qui contient Apache-2.0). À confirmer par
-   `cargo deny check` une fois les dépendances ajoutées.
+1. **Format des clés privées ML-KEM** : option (a). La clé privée est stockée sous forme
+   développée (3 168 octets) avec la clé publique (1 568 octets). Au chargement, le contrôle
+   de cohérence de FIPS 203 (§ 7.3) est appliqué : la clé publique incluse dans la clé
+   privée doit être celle fournie, et son empreinte SHA3-256 incluse doit être exacte.
+   Sinon, la clé est refusée. `docs/format.md` § 3.5 est mis à jour.
+2. **RustCrypto en `dev-dependencies` uniquement** : `ml-kem` avec l'option `hazmat`,
+   `p384` avec `ecdh`, plus `hkdf` et `sha2` pour la combinaison de référence.
+3. **`rust-version` passe à 1.87.**
+4. **`libcrux` écarté.**
+5. **Mode FIPS reporté** : le binaire est construit en mode normal (`aws-lc-sys`). Le mode
+   FIPS (`aws-lc-fips-sys`, avec CMake et Go) sera étudié plateforme par plateforme
+   **avant la phase 5** (évaluation). D'ici là, Hirzla utilise le code d'AWS-LC sans se
+   prévaloir du certificat #5314.
+6. **Intégration continue** : CMake est installé sur les trois systèmes, et NASM sous
+   Windows, pour construire `aws-lc-sys`.
+7. **Licences** : à vérifier par `cargo deny check` après ajout des dépendances.
 
 ## Conséquences
 

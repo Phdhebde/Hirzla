@@ -160,6 +160,9 @@ En cas d'écart, `docs/crypto.md` fait foi et ce document est corrigé.
 | 2 | `ecdh` | `bstr(97)` | Point P-384 non compressé (SEC 1) |
 | 3 | `mlkem` | `bstr(1568)` | Clé publique ML-KEM-1024 |
 
+Ces trois champs sont les morceaux de l'**encodage binaire** de `hirzla-crypto` :
+`suite` (2 octets, gros-boutiste) ‖ `ecdh` ‖ `mlkem`, soit 1 667 octets (`docs/crypto.md`).
+
 `SigPublicKey` :
 
 | Clé | Nom | Type | Contraintes |
@@ -227,9 +230,12 @@ l'établissement hybride de `docs/crypto.md`, puis une enveloppe AES-256-KW.
 | 6 | `ct_mlkem` | `bstr(1568)` | Chiffré ML-KEM-1024 |
 | 7 | `wrapped` | `bstr(40)` | AES-256-KW-pad(`KEK`, clé enveloppée) |
 
+`suite`, `ct_ecdh` et `ct_mlkem` sont les morceaux de l'encodage binaire du chiffré hybride
+de `hirzla-crypto` : `suite` ‖ `ct_ecdh` ‖ `ct_mlkem`, soit 1 667 octets.
+
 `KEK` = les 32 premiers octets de `ss`, la sortie de la combinaison hybride de `crypto.md`, avec :
 
-- `pk_destinataire` = `CBOR(KemPublicKey)` de l'appareil destinataire ;
+- `pk_destinataire` = l'encodage binaire de la `KemPublicKey` de l'appareil destinataire (§ 3.1) ;
 - `contexte` = `CBOR({1: "hirzla/v1/locker-key", 2: locker_id, 3: époque (OpRef), 4: member,
   5: device})`.
 
@@ -255,7 +261,7 @@ Toujours dans une `SealedBox`.
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `ecdh_sk` | `bstr(48)` | Scalaire P-384 |
-| 2 | `mlkem_seed` | `bstr(64)` | Graine ML-KEM-1024 (`d ‖ z`, FIPS 203) |
+| 2 | `mlkem_dk` | `bstr(3168)` | Clé de décapsulation ML-KEM-1024 **développée** (FIPS 203, § 7.1) |
 | 3 | `ecdsa_sk` | `bstr(48)` | Scalaire P-384 |
 | 4 | `mldsa_seed` | `bstr(32)` | Graine ML-DSA-87 (`ξ`, FIPS 204) |
 
@@ -266,8 +272,21 @@ Toujours dans une `SealedBox`.
 | 1 | `ecdsa_sk` | `bstr(48)` | Scalaire P-384 |
 | 2 | `mldsa_seed` | `bstr(32)` | Graine ML-DSA-87 |
 
-Le lecteur régénère les clés publiques à partir des graines. Il vérifie qu'elles sont égales
-à celles du certificat et de l'identité (§ 5.5).
+La clé publique ML-KEM de l'appareil (1 568 octets) est stockée dans son certificat
+(`kem.mlkem`, § 3.6). La bibliothèque retenue ne génère pas de clé ML-KEM depuis une graine :
+la clé privée est donc stockée développée (ADR 0009).
+
+Contrôles au chargement des clés de l'appareil, tous obligatoires. Un échec refuse la clé :
+
+1. **Cohérence ML-KEM (FIPS 203, § 7.3)** : `mlkem_dk` = `dk_pke` (1 536 octets) ‖ `ek`
+   (1 568) ‖ `H(ek)` (32) ‖ `z` (32). L'`ek` inclus doit être égal à la clé publique du
+   certificat, et `H(ek)` doit être égal à `SHA3-256(ek)`. La comparaison est à temps constant.
+2. **Cohérence ECDH** : la clé publique recalculée depuis `ecdh_sk` doit être égale à
+   `kem.ecdh` du certificat.
+3. **Signature** : les clés publiques recalculées depuis `ecdsa_sk` et `mldsa_seed` doivent
+   être égales à celles du certificat (étape 3).
+
+Le lecteur fait les mêmes contrôles pour `MemberPrivateKey` avec `MemberKeys` (§ 5.5).
 
 ### 3.6 Certificat et révocation d'appareil
 
@@ -991,8 +1010,8 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
    serveur quelles versions appartiennent au même secret.
 5. **Longueur de la KEK hybride** : les 32 premiers octets de la sortie de la combinaison.
    `crypto.md` ne fixe pas la longueur de sortie. À aligner à l'étape 3.
-6. **Encodages bruts** : P-384 non compressé, ECDSA en `r ‖ s` de longueur fixe, graines
-   ML-KEM et ML-DSA plutôt que clés privées développées. À confirmer aux étapes 2 et 3.
+6. **Encodages bruts** : P-384 non compressé, ECDSA en `r ‖ s` de longueur fixe. Clé ML-KEM
+   développée (décidé par l'ADR 0009), graine ML-DSA à confirmer à l'étape 3.
 7. **Bornes Argon2id** : t ≥ 3 et p ≤ 16 sont ajoutés au plancher de 64 Mio de `crypto.md`.
    Les plafonds (4 Gio, t ≤ 64) sont arbitraires.
 8. **Normalisation NFC du mot de passe** avant Argon2id, pour qu'il donne la même clé sur les
@@ -1018,3 +1037,5 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 18. **Refus d'une clé de membre différente** de celle épinglée, en attendant le changement de
     clé de l'étape 10. Une attribution à un membre non vérifié est permise, avec avertissement.
 19. **Délai de quarantaine** de 7 jours par défaut, réglable par casier de 1 heure à 90 jours.
+20. **Graine ML-DSA** : conservée dans le format en attendant l'étape 3, qui vérifiera si la
+    bibliothèque retenue sait générer une clé ML-DSA-87 depuis sa graine `ξ`.
