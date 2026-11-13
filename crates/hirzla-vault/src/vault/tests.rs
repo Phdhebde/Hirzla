@@ -818,6 +818,35 @@ fn swapped_stale_or_missing_index_fragments_are_rebuilt() {
 }
 
 #[test]
+fn purge_keeps_attachments_still_cited_by_another_secret() {
+    let (_dir, _path, mut v) = new_vault();
+    let l = v.personal_locker();
+    let att = v
+        .add_attachment(l, "commun.bin", "application/octet-stream", &[7u8; 5000])
+        .unwrap();
+    let edit = |title: &str| SecretEdit {
+        set: vec![text(Field::Title, title)],
+        add: vec![(SetKind::Attachments, SetValue::Attachment(att.clone()))],
+        ..SecretEdit::default()
+    };
+    let a = v.create_secret(l, SecretType::File, edit("A")).unwrap();
+    let b = v.create_secret(l, SecretType::File, edit("B")).unwrap();
+    v.purge_secret(l, a).unwrap();
+    // B still reads the shared attachment.
+    let body = v.read_secret(l, b).unwrap();
+    let SetValue::Attachment(r) = body.sets[&SetKind::Attachments].visible().next().unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        v.read_attachment(l, r).unwrap().as_slice(),
+        &[7u8; 5000][..]
+    );
+    // Purging the last citing secret removes the chunks.
+    v.purge_secret(l, b).unwrap();
+    assert_eq!(v.read_attachment(l, &att).err(), Some(VaultError::NotFound));
+}
+
+#[test]
 fn purge_leaves_no_content_and_drops_attachments() {
     let (_dir, path, mut v) = new_vault();
     let (locker, ids) = populate_with(&mut v, 10_000);

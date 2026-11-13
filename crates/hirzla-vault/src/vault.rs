@@ -1346,7 +1346,12 @@ impl Vault {
                 }
             }
         }
-        let attachments: Vec<Id16> = attachments.into_iter().collect();
+        // Keep the chunks of any attachment another stored version still cites.
+        let in_use = self.attachments_cited_by_others(&locker, &secret_id)?;
+        let attachments: Vec<Id16> = attachments
+            .into_iter()
+            .filter(|a| !in_use.contains(a))
+            .collect();
         self.write_secret(
             locker,
             secret_id,
@@ -1357,6 +1362,42 @@ impl Vault {
             },
             Some((&older, &attachments)),
         )
+    }
+
+    /// Attachments cited by any stored version of another secret of the locker.
+    fn attachments_cited_by_others(
+        &self,
+        locker: &Id16,
+        secret_id: &Id16,
+    ) -> Result<BTreeSet<Id16>, VaultError> {
+        let ids: Vec<Vec<u8>> = {
+            let mut stmt = self
+                .conn
+                .prepare("SELECT op_id FROM operations WHERE locker_id = ?1 AND status != ?2")?;
+            let rows = stmt
+                .query_map(params![locker.as_slice(), status::PRUNED], |r| r.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            rows
+        };
+        let mut cited = BTreeSet::new();
+        for id in ids {
+            let id: OpId = id.try_into().map_err(|_| VaultError::Corrupt)?;
+            let (_, p) = self.load(&id)?;
+            if let (KIND_SECRET_PUT, Some(c)) = (p.kind, p.content.as_ref()) {
+                let body = SecretBody::from_value(c)?;
+                if &body.secret_id == secret_id {
+                    continue;
+                }
+                if let Some(set) = body.sets.get(&secret::SetKind::Attachments) {
+                    for e in &set.elems {
+                        if let secret::SetValue::Attachment(a) = &e.value {
+                            cited.insert(a.id);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(cited)
     }
 
     fn write_secret(
