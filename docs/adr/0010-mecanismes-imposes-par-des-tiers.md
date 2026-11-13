@@ -1,6 +1,6 @@
 # ADR 0010 — Mécanismes cryptographiques imposés par des tiers
 
-- Statut : proposé
+- Statut : accepté (2026-11-13)
 - Date : 2026-11-13
 
 > Numéro 0010 : le 0009 est réservé à l'ADR des bibliothèques cryptographiques (étape 2 de
@@ -22,14 +22,15 @@ hybride ») ne peut pas s'appliquer : c'est le site ou le serveur SSH qui choisi
 `docs/crypto.md` ne prévoit pas HMAC.
 
 Le stockage de ces secrets ne pose aucun problème : ce sont des octets scellés comme les
-autres. Le format les spécifie (`docs/format.md`, § 6). Seul leur **usage** par le noyau est
-en suspens.
+autres. Le format les spécifie (`docs/format.md`, § 8). Seul leur **usage** par le noyau
+demandait une décision.
 
-## Décision proposée
+## Décision
 
-Option A, à valider :
+Option A. Ces mécanismes sont des **mécanismes d'interopérabilité**, hors du périmètre
+post-quantique de Hirzla. La cible de sécurité CSPN les mentionne comme tels.
 
-1. `docs/crypto.md` gagne une section « Mécanismes imposés par des tiers ». Elle liste
+1. `docs/crypto.md` gagne une section « Mécanismes d'interopérabilité ». Elle liste
    exhaustivement HMAC (TOTP), ES256 et Ed25519 (WebAuthn), Ed25519 et ECDSA (agent SSH).
 2. Ces mécanismes ne servent **jamais** à protéger une donnée Hirzla. Ils ne s'appliquent
    qu'au secret stocké, pour le protocole du tiers.
@@ -45,7 +46,7 @@ Option A, à valider :
 - Une clé d'accès stockée dans Hirzla est aussi exposée qu'une clé sur un fichier : moins
   qu'un authentificateur matériel. Il faut le dire à l'utilisateur.
 
-## Alternatives écartées (à confirmer)
+## Alternatives écartées
 
 - **B. Stockage seul, aucun calcul** : le noyau rend la graine TOTP ou la clé privée à un
   outil externe. Simple, mais la clé sort du noyau, ce qui contredit l'ADR 0007.

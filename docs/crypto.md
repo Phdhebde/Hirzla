@@ -36,16 +36,22 @@ Le format exact est à figer dans `hirzla-crypto` et à tester par vecteurs.
 
 1. **Clé du poste** : gardée par la puce de sécurité ou une clé FIDO2, à défaut dérivée du
    mot de passe maître par Argon2id. Elle ouvre le coffre local.
-2. **Paires de l'utilisateur** : une paire hybride d'échange, une paire hybride de signature.
-   Clés privées enveloppées par la clé de chaque poste enrôlé. Clés publiques au registre.
-3. **Clé de casier** : une par casier, enveloppée pour chaque membre autorisé à lire.
-   Elle tourne quand un membre est retiré.
-4. **Clé de donnée** : une par version de secret, enveloppée par la clé de casier.
-5. **Clé racine du serveur** : AES-256 sous sceau (HSM, quorum, TPM). Elle chiffre le stockage
+2. **Clé du membre** : une paire hybride de signature, racine de l'identité du membre.
+   Elle ne signe que des certificats et des révocations d'appareil. Clé privée sur les seuls
+   appareils de certification. Clé publique au registre (ADR 0011).
+3. **Paires de l'appareil** : une paire hybride d'échange, une paire hybride de signature,
+   propres à chaque appareil et certifiées par la clé du membre. Clés privées scellées par la
+   clé du poste. L'appareil signe avec elles tout ce qu'il émet.
+4. **Clé de casier** : une par casier et par époque, enveloppée pour chaque appareil non
+   révoqué de chaque membre autorisé à lire. Elle tourne quand un membre ou un appareil est retiré.
+5. **Clé de donnée** : une par version de secret, enveloppée par la clé de casier.
+6. **Clé racine du serveur** : AES-256 sous sceau (HSM, quorum, TPM). Elle chiffre le stockage
    du serveur une seconde fois et protège ses clés de signature. Elle n'ouvre aucun secret.
 
-Les données associées de chaque chiffrement lient l'identifiant du casier, celui du secret et
-sa version : un bloc déplacé ou rejoué ailleurs ne se déchiffre pas.
+Les données associées de chaque chiffrement lient l'identifiant du casier, un identifiant de
+bloc opaque, l'auteur, son rang et l'époque de la clé : un bloc déplacé ou rejoué ailleurs ne se
+déchiffre pas. L'identifiant du secret est dans le chiffré, pour que le serveur n'apprenne pas
+quel secret change (`docs/format.md` § 7.2).
 
 ## Transport
 
@@ -56,6 +62,26 @@ TLS 1.3 uniquement. Groupes : `SecP384r1MLKEM1024` (profil strict), `X25519MLKEM
 
 Tout objet chiffré ou signé porte son `SuiteId` sur deux octets. Une suite peut être interdite
 en écriture tout en restant lisible, le temps d'un rechiffrement en tâche de fond.
+
+## Mécanismes d'interopérabilité
+
+Certains secrets stockés imposent un mécanisme choisi par un tiers (ADR 0010). Ces mécanismes
+sont **hors du périmètre post-quantique** : la règle « tout asymétrique est hybride » ne
+s'applique pas à eux.
+
+| Usage | Mécanismes admis | Référence |
+| --- | --- | --- |
+| Code TOTP | HMAC-SHA-1, HMAC-SHA-256, HMAC-SHA-512 | RFC 6238, RFC 2104 |
+| Clé d'accès (WebAuthn) | ECDSA P-256 (ES256), Ed25519 (EdDSA) | W3C WebAuthn niveau 2 |
+| Agent SSH | Ed25519, ECDSA P-256 et P-384 | RFC 8709, RFC 5656 |
+
+Règles :
+
+- La liste est exhaustive. RSA est stocké, jamais utilisé, en v1.
+- Ces mécanismes ne protègent jamais une donnée Hirzla. Ils ne s'appliquent qu'au secret
+  stocké, pour le protocole du tiers.
+- Ils tournent dans le noyau, avec une bibliothèque auditée (ADR 0009). La clé ou la graine
+  ne quitte jamais le noyau : l'interface reçoit le code ou la signature.
 
 ## Bibliothèques pressenties
 

@@ -13,9 +13,12 @@ fichier ou l'objet. Il ne lit jamais « au mieux ».
 Un fichier `.hirzla` est le coffre local d'**un appareil**. Il contient :
 
 1. un en-tête en clair, juste ce qu'il faut pour déverrouiller ;
-2. l'identité du membre et ses clés privées, scellées par la clé du poste ;
+2. l'identité de l'appareil : son certificat, ses clés privées et, sur un appareil de
+   certification seulement, la clé privée du membre (ADR 0011). Le tout est scellé par la clé
+   du poste ;
 3. le journal des opérations de chaque casier, tel qu'il circule entre postes ;
-4. des caches locaux scellés : clés de casier ouvertes, index de recherche, état de synchronisation ;
+4. des caches locaux scellés : clés de casier ouvertes, index de recherche, état de
+   synchronisation, clés publiques épinglées des autres membres ;
 5. les morceaux chiffrés des fichiers joints.
 
 Le format est le même sur les trois systèmes et dans les deux modes. Un coffre Self qui se
@@ -28,8 +31,10 @@ de vérité. Le reste est du cache recalculable.
 ```text
 Clé du poste (DeviceKey)  ← libérée par TPM / Secure Enclave / FIDO2 / Argon2id (§ 4)
  └─ K_dev_wrap (HKDF)     → scelle identité, caches, index, en-tête (§ 4.3)
-     └─ clés privées du membre (KEM et signature hybrides)
-         └─ enveloppe de la clé de casier, une par époque (§ 3.3)
+     ├─ clé privée du membre (signature)  — appareils de certification seulement
+     │   └─ signe les certificats et révocations d'appareil (§ 3.6)
+     └─ clés privées de l'appareil (KEM et signature hybrides)
+         └─ enveloppe de la clé de casier, une par époque et par appareil (§ 3.3)
              └─ clé de donnée, une par version de secret (§ 3.2)
                  └─ contenu de la version ; clé de fichier joint
 ```
@@ -79,6 +84,7 @@ Notation des types dans les tableaux :
 | `locker_id` | `ID16` | Tiré à la création du casier |
 | `secret_id` | `ID16` | Tiré à la création du secret |
 | `attachment_id` | `ID16` | Tiré à l'ajout du fichier joint |
+| `block_id` | `ID16` | Tiré pour chaque contenu scellé d'opération. Jamais réutilisé, sans lien avec `secret_id` (§ 7.2) |
 | `op_id` | `OpId` | SHA-384 de l'opération encodée complète |
 
 Aucun identifiant n'est dérivé d'un contenu lisible. Ils ne révèlent rien en clair.
@@ -123,6 +129,10 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/index` | AAD, index de recherche | § 10 |
 | `hirzla/v1/sync-state` | AAD, état de synchronisation | § 5.8 |
 | `hirzla/v1/locker-key` | Contexte KEM, enveloppe de clé de casier | § 3.3 |
+| `hirzla/v1/device-cert` | Signature d'un certificat d'appareil | § 3.6 |
+| `hirzla/v1/device-revoke` | Signature d'une révocation d'appareil | § 3.6 |
+| `hirzla/v1/contacts` | AAD, clés épinglées | § 5.9 |
+| `hirzla/v1/approval` | Signature d'un accord de validation à plusieurs | `sync-protocol.md` |
 | `hirzla/v1/op` | Signature d'une opération | § 7.1 |
 | `hirzla/v1/op-payload` | AAD, contenu scellé d'une opération | § 7.2 |
 | `hirzla/v1/attachment-chunk` | AAD, morceau de fichier joint | § 8.4 |
@@ -158,13 +168,15 @@ En cas d'écart, `docs/crypto.md` fait foi et ce document est corrigé.
 | 2 | `ecdsa` | `bstr(97)` | Point P-384 non compressé |
 | 3 | `mldsa` | `bstr(2592)` | Clé publique ML-DSA-87 |
 
-`MemberKeys` :
+`MemberKeys` — identité du membre, racine de certification (ADR 0011) :
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `member` | `ID16` | |
-| 2 | `kem` | `KemPublicKey` | |
-| 3 | `sig` | `SigPublicKey` | |
+| 2 | `sig` | `SigPublicKey` | Clé du membre. Ne signe que des certificats et des révocations d'appareil |
+
+Empreinte d'un membre : les 20 premiers caractères de `base32(key_id(sig))` (RFC 4648, sans
+bourrage). C'est elle que les utilisateurs comparent hors bande (§ 5.9).
 
 `key_id(k) = SHA-384(CBOR(k))`, pour toute clé publique `k`.
 
@@ -196,28 +208,33 @@ La `KEK` vient du contexte, jamais du fichier :
 | Boîte | KEK | AAD |
 | --- | --- | --- |
 | Authentification de l'en-tête | `K_dev_wrap` | § 5.4 |
-| Identité, réglages, cache de clés, index, état de synchronisation | `K_dev_wrap` | § 5 et § 10 |
+| Identité, réglages, cache de clés, index, état de synchronisation, clés épinglées | `K_dev_wrap` | § 5 et § 10 |
 | Contenu d'une opération | Clé de casier de l'époque citée | § 7.2 |
 | Morceau de fichier joint | Clé du fichier joint | § 8.4 |
 
 ### 3.3 Enveloppe de clé de casier (`KeyEnvelope`)
 
-Une enveloppe donne la clé de casier d'une époque à un membre. Elle suit l'établissement
-hybride de `docs/crypto.md`, puis une enveloppe AES-256-KW.
+Une enveloppe donne la clé de casier d'une époque à **un appareil**. Elle suit
+l'établissement hybride de `docs/crypto.md`, puis une enveloppe AES-256-KW.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `suite` | `uint` | `1` |
-| 2 | `recipient` | `ID16` | `member_id` du destinataire |
-| 3 | `recipient_key` | `bstr(48)` | `key_id` de sa `KemPublicKey` |
-| 4 | `ct_ecdh` | `bstr(97)` | Clé publique éphémère P-384 |
-| 5 | `ct_mlkem` | `bstr(1568)` | Chiffré ML-KEM-1024 |
-| 6 | `wrapped` | `bstr(40)` | AES-256-KW-pad(`KEK`, clé de casier) |
+| 2 | `member` | `ID16` | Membre destinataire |
+| 3 | `device` | `ID16` | Appareil destinataire |
+| 4 | `recipient_key` | `bstr(48)` | `key_id` de la `KemPublicKey` de son certificat (§ 3.6) |
+| 5 | `ct_ecdh` | `bstr(97)` | Clé publique éphémère P-384 |
+| 6 | `ct_mlkem` | `bstr(1568)` | Chiffré ML-KEM-1024 |
+| 7 | `wrapped` | `bstr(40)` | AES-256-KW-pad(`KEK`, clé enveloppée) |
 
 `KEK` = les 32 premiers octets de `ss`, la sortie de la combinaison hybride de `crypto.md`, avec :
 
-- `pk_destinataire` = `CBOR(KemPublicKey)` du destinataire ;
-- `contexte` = `CBOR({1: "hirzla/v1/locker-key", 2: locker_id, 3: époque (OpRef), 4: recipient})`.
+- `pk_destinataire` = `CBOR(KemPublicKey)` de l'appareil destinataire ;
+- `contexte` = `CBOR({1: "hirzla/v1/locker-key", 2: locker_id, 3: époque (OpRef), 4: member,
+  5: device})`.
+
+La même structure sert, avec une autre étiquette et un autre contexte, au fichier d'échange
+(`sync-protocol.md` § 13.1).
 
 L'époque est l'`OpRef` de l'opération qui a créé la clé (§ 7, et `sync-protocol.md` § 7).
 
@@ -229,9 +246,11 @@ L'époque est l'`OpRef` de l'opération qui a créé la clé (§ 7, et `sync-pro
 | 2 | `ecdsa` | `bstr(96)` | ECDSA P-384, `r ‖ s` sur 48 octets chacun |
 | 3 | `mldsa` | `bstr(4627)` | ML-DSA-87 |
 
-### 3.5 Clés privées du membre
+### 3.5 Clés privées
 
-`UserPrivateKeys`, toujours dans une `SealedBox` :
+Toujours dans une `SealedBox`.
+
+`DevicePrivateKeys` — clés de l'appareil :
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
@@ -240,8 +259,40 @@ L'époque est l'`OpRef` de l'opération qui a créé la clé (§ 7, et `sync-pro
 | 3 | `ecdsa_sk` | `bstr(48)` | Scalaire P-384 |
 | 4 | `mldsa_seed` | `bstr(32)` | Graine ML-DSA-87 (`ξ`, FIPS 204) |
 
+`MemberPrivateKey` — clé du membre, présente seulement sur un appareil de certification :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `ecdsa_sk` | `bstr(48)` | Scalaire P-384 |
+| 2 | `mldsa_seed` | `bstr(32)` | Graine ML-DSA-87 |
+
 Le lecteur régénère les clés publiques à partir des graines. Il vérifie qu'elles sont égales
-à celles de l'identité (§ 5.5).
+à celles du certificat et de l'identité (§ 5.5).
+
+### 3.6 Certificat et révocation d'appareil
+
+`DeviceCert` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `member` | `ID16` | |
+| 2 | `device` | `ID16` | |
+| 3 | `sig` | `SigPublicKey` | Clé de signature de l'appareil |
+| 4 | `kem` | `KemPublicKey` | Clé d'établissement de l'appareil |
+| 5 | `issued_ms` | `uint` | Indicatif |
+| 6 | `issuer_sig` | `HybridSignature` | Clé du membre, sur `"hirzla/v1/device-cert"` ‖ `0x00` ‖ `CBOR(clés 1 à 5)` |
+
+`DeviceRevocation` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `member` | `ID16` | |
+| 2 | `device` | `ID16` | |
+| 3 | `revoked_ms` | `uint` | Indicatif |
+| 4 | `issuer_sig` | `HybridSignature` | Clé du membre, sur `"hirzla/v1/device-revoke"` ‖ `0x00` ‖ `CBOR(clés 1 à 3)` |
+
+Un certificat et une révocation se vérifient seuls, avec la seule `MemberKeys` du membre.
+Une révocation est définitive : un `device_id` révoqué ne redevient jamais valide.
 
 ## 4. Clé du poste et déverrouillage
 
@@ -370,6 +421,11 @@ CREATE TABLE sync_state (
   box BLOB NOT NULL
 ) STRICT, WITHOUT ROWID;
 
+CREATE TABLE contacts (
+  member_id BLOB PRIMARY KEY CHECK (length(member_id) = 16),
+  box BLOB NOT NULL
+) STRICT, WITHOUT ROWID;
+
 CREATE TABLE attachment_chunks (
   attachment_id BLOB NOT NULL CHECK (length(attachment_id) = 16),
   chunk INTEGER NOT NULL CHECK (chunk >= 0),
@@ -405,7 +461,8 @@ Dans cet ordre. Le premier échec arrête l'ouverture.
 5. Lire `header.body`, le décoder (§ 5.4), vérifier ses bornes.
 6. Déverrouiller (§ 4), dériver `K_dev_wrap`.
 7. Desceller `header.auth`. En cas d'échec, refuser. Ce contrôle détecte un en-tête modifié.
-8. Desceller l'identité. Vérifier que les clés privées redonnent les clés publiques.
+8. Desceller l'identité. Vérifier que les clés privées redonnent les clés publiques et que
+   le certificat de l'appareil est signé par la clé du membre.
 
 Un fichier dont `format_version` est inconnu est refusé, même plus récent. La migration est
 une opération explicite qui écrit un nouveau fichier.
@@ -443,13 +500,14 @@ Leur intégrité est vérifiée dès le déverrouillage (étape 7 du § 5.3).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `member` | `MemberKeys` | Identifiant et clés publiques du membre |
-| 2 | `private` | `UserPrivateKeys` | § 3.5 |
-| 3 | `device_id` | `ID16` | Cet appareil |
-| 4 | `device_label` | `tstr(≤128)` | Nom donné par l'utilisateur |
-| 5 | `personal_locker` | `ID16` | Casier personnel du membre (`sync-protocol.md` § 3) |
-| 6 | `mode` | `uint` | 0 Self, 1 Serveur |
-| 7 | `server` | `ServerInfo?` | Présent si et seulement si `mode = 1` |
+| 1 | `member` | `MemberKeys` | Identité du membre |
+| 2 | `device_cert` | `DeviceCert` | Certificat de cet appareil (§ 3.6) |
+| 3 | `device_private` | `DevicePrivateKeys` | § 3.5 |
+| 4 | `member_private` | `MemberPrivateKey?` | Présent si et seulement si l'appareil est un appareil de certification |
+| 5 | `device_label` | `tstr(≤128)` | Nom donné par l'utilisateur |
+| 6 | `personal_locker` | `ID16` | Casier personnel du membre (`sync-protocol.md` § 3) |
+| 7 | `mode` | `uint` | 0 Self, 1 Serveur |
+| 8 | `server` | `ServerInfo?` | Présent si et seulement si `mode = 1` |
 
 `ServerInfo` :
 
@@ -457,7 +515,8 @@ Leur intégrité est vérifiée dès le déverrouillage (étape 7 du § 5.3).
 | --- | --- | --- | --- |
 | 1 | `url` | `tstr(≤2048)` | `hirzla://hôte:port` |
 | 2 | `server_id` | `ID16` | |
-| 3 | `server_key` | `SigPublicKey` | Clé de signature du serveur, épinglée à l'enrôlement |
+| 3 | `server_key` | `SigPublicKey` | Clé de signature du serveur, épinglée au premier contact |
+| 4 | `server_key_verified` | `bool` | `true` après comparaison hors bande de l'empreinte (§ 5.9) |
 
 ### 5.6 Réglages
 
@@ -487,6 +546,31 @@ localement l'accès à une époque (effacement cryptographique, § 9.4).
 `sync_state.box` = `SealedBox`, AAD = `CBOR({1: "hirzla/v1/sync-state", 2: vault_id,
 3: locker_id})`. Le contenu est défini dans `sync-protocol.md` § 11.4.
 
+### 5.9 Clés épinglées (confiance au premier contact)
+
+Jusqu'au registre de transparence (étape 10, ADR 0008), un poste fait confiance à la clé d'un
+membre ou du serveur **au premier contact**, puis l'épingle. L'utilisateur confirme l'identité
+en comparant l'empreinte hors bande : de vive voix, par téléphone, sur papier.
+
+`contacts.box` = `SealedBox`, `KEK` = `K_dev_wrap`, AAD = `CBOR({1: "hirzla/v1/contacts",
+2: vault_id, 3: member_id})` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `keys` | `MemberKeys` | Clé épinglée au premier contact |
+| 2 | `first_seen_ms` | `uint` | Indicatif |
+| 3 | `verified` | `bool` | `true` après comparaison hors bande de l'empreinte |
+| 4 | `devices` | `array<DeviceCert>` | Certificats connus, vérifiés avec `keys` |
+| 5 | `revoked` | `array<DeviceRevocation>` | Révocations connues |
+
+Règles :
+
+- Une clé différente pour un `member_id` déjà épinglé est **refusée**, et l'utilisateur est
+  alerté. Le changement de clé d'un membre est réservé à l'étape 10.
+- L'interface signale tout membre non vérifié au moment de lui attribuer un rôle.
+- La clé du serveur suit les mêmes règles (`ServerInfo`, § 5.5). Son empreinte figure dans le
+  lien d'invitation et se compare hors bande.
+
 ## 6. Ce qui reste en clair
 
 | Donnée | Où | Pourquoi en clair | Ce qu'un voleur du disque apprend |
@@ -494,7 +578,8 @@ localement l'accès à une époque (effacement cryptographique, § 9.4).
 | Réglages SQLite, schéma | Fichier | Ouvrir et valider avant toute clé | Qu'il s'agit d'un coffre Hirzla v1 |
 | En-tête (§ 5.4) | `header` | Déverrouiller | Les méthodes de déverrouillage, les paramètres Argon2id |
 | `op_id`, `locker_id`, auteur, `seq`, `server_seq`, `status` | `operations` | Indexer, synchroniser, valider la chaîne de l'appareil avant de déchiffrer | Le nombre de casiers, d'opérations, d'auteurs et d'appareils, l'état de validation. Ce sont les mêmes informations que celles du serveur (`sync-protocol.md` § 12) |
-| Partie de contrôle des opérations | `operations.body` | Doit être lisible par le serveur (`sync-protocol.md` § 7) | Les membres des casiers, leurs rôles et leurs clés publiques |
+| Partie de contrôle des opérations | `operations.body` | Doit être lisible par le serveur (`sync-protocol.md` § 7) | Les membres des casiers, leurs rôles, leurs clés publiques et les certificats de leurs appareils |
+| `block_id` des opérations | `operations.body` | Lié aux données associées (§ 7.2) | Rien : tiré au hasard pour chaque contenu, sans lien entre versions |
 | `locker_id`, `epoch` | `locker_keys` | Retrouver la bonne clé | Le nombre d'époques par casier |
 | `attachment_id`, rang, `locker_id` | `attachment_chunks` | Lecture paresseuse des morceaux | Le nombre et la taille approximative des fichiers joints |
 | Tailles des boîtes | Partout | Inévitable | Une taille arrondie par le bourrage (§ 11) |
@@ -520,10 +605,11 @@ structure. `sync-protocol.md` donne sa sémantique : validation, autorisations, 
 | 7 | `epoch` | `OpRef` | Époque de la clé de casier qui scelle `sealed` |
 | 8 | `control` | `ControlBody` ou `null` | `null` si et seulement si `class = 1`. Défini dans `sync-protocol.md` § 7 |
 | 9 | `sealed` | `SealedBox` | Contenu scellé (§ 7.2) |
-| 10 | `sig` | `HybridSignature` | Signature de l'auteur |
+| 10 | `sig` | `HybridSignature` | Signature de l'appareil auteur |
+| 11 | `block_id` | `ID16` | Identifiant opaque du contenu scellé, tiré pour cette opération |
 
 - Message signé : `"hirzla/v1/op" || 0x00 || CBOR(Operation sans la clé 10)`, avec la clé de
-  signature du membre `ref.member`.
+  signature de l'**appareil** `ref.device`, telle que la donne son certificat (§ 3.6).
 - `op_id = SHA-384(CBOR(Operation complète))`.
 - Taille encodée maximale : 4 Mio.
 - `operations.body` stocke les octets reçus, jamais un réencodage.
@@ -534,12 +620,17 @@ structure. `sync-protocol.md` donne sa sémantique : validation, autorisations, 
 
 ```text
 AAD = CBOR({1: "hirzla/v1/op-payload", 2: locker_id, 3: ref.member,
-            4: ref.device, 5: ref.seq, 6: epoch})
+            4: ref.device, 5: ref.seq, 6: epoch, 7: block_id})
 ```
 
-L'AAD lie le casier, l'auteur et le rang. Un contenu déplacé vers une autre opération, un
-autre casier ou une autre époque ne se descelle pas. Le `secret_id` et la version sont
-authentifiés à l'intérieur du chiffré (voir « Points ouverts », n° 4).
+L'AAD lie le casier, l'identifiant de bloc, l'auteur, le rang et l'époque. Un contenu
+déplacé vers une autre opération, un autre casier ou une autre époque ne se descelle pas.
+
+Le `secret_id` est **dans le chiffré**, pas dans l'AAD : en clair, il dirait au serveur quel
+secret change. Il est authentifié par le chiffrement et le lecteur vérifie, à la lecture,
+qu'il est celui attendu (§ 13). Le `block_id`, lui, reste dans l'AAD. Il est tiré au hasard
+pour chaque opération : il identifie le bloc sans permettre de relier deux versions d'un
+même secret.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
@@ -611,6 +702,7 @@ Portées par `LockerMetaPut`, fusionnées comme un secret.
 | 3 | `color` | `uint` | Indice dans la palette de `brand/tokens.json` |
 | 4 | `icon` | `tstr(≤64)` | |
 | 10 | `keep_versions` | `uint` | 1 à 1000, défaut 20. Politique de rétention (§ 9.3) |
+| 11 | `quarantine_timeout_h` | `uint` | 1 à 2160, défaut 168 (7 jours). Délai avant rejet automatique d'une opération en quarantaine (`sync-protocol.md` § 9.3) |
 
 ## 8. Types de secrets
 
@@ -626,7 +718,8 @@ Portées par `LockerMetaPut`, fusionnées comme un secret.
 | 6 | Fichier joint | `File` |
 
 Le format **stocke** ces six types. Le calcul d'un code TOTP et la signature avec une clé
-d'accès ou une clé SSH dépendent de l'ADR 0010 (proposé). Ils ne sont pas spécifiés ici.
+d'accès ou une clé SSH suivent l'ADR 0010 (accepté) et la section « Mécanismes
+d'interopérabilité » de `docs/crypto.md`. Ces mécanismes sont hors du périmètre post-quantique.
 
 Règle de fusion par champ, appliquée selon `sync-protocol.md` § 8 :
 
@@ -827,7 +920,7 @@ Encodage canonique, avec `m = 101112…1f`, `d = 202122…2f`, `l = 303132…3f`
 | Objet | Encodage (hexadécimal) |
 | --- | --- |
 | `Stamp {lamport: 42, member: m, device: d}` | `a301182a0250101112131415161718191a1b1c1d1e1f0350202122232425262728292a2b2c2d2e2f` |
-| AAD d'opération : `locker_id = l`, `ref = (m, d, 7)`, `epoch = (m, d, 7)` | `a601746869727a6c612f76312f6f702d7061796c6f61640250303132333435363738393a3b3c3d3e3f0350101112131415161718191a1b1c1d1e1f0450202122232425262728292a2b2c2d2e2f050706a30150101112131415161718191a1b1c1d1e1f0250202122232425262728292a2b2c2d2e2f0307` |
+| AAD d'opération : `locker_id = l`, `ref = (m, d, 7)`, `epoch = (m, d, 7)`, `block_id = 404142…4f` | `a701746869727a6c612f76312f6f702d7061796c6f61640250303132333435363738393a3b3c3d3e3f0350101112131415161718191a1b1c1d1e1f0450202122232425262728292a2b2c2d2e2f050706a30150101112131415161718191a1b1c1d1e1f0250202122232425262728292a2b2c2d2e2f03070750404142434445464748494a4b4c4d4e4f` |
 
 Encodages à refuser :
 
@@ -861,9 +954,13 @@ L'extension `.hirzla.fixture` évite que la protection de secrets de l'intégrat
 
 ## 13. Procédures
 
-**Créer un coffre** : tirer `vault_id`, `DeviceKey`, `member_id`, `device_id`, les clés du
-membre ; écrire les réglages du § 5.1 puis le schéma ; écrire l'en-tête, son authentification,
-l'identité ; créer le casier personnel par une opération `LockerCreate` (`sync-protocol.md` § 7).
+**Créer un coffre** (premier appareil d'un membre) : tirer `vault_id`, `DeviceKey`,
+`member_id`, `device_id`, la clé du membre et les clés de l'appareil ; signer le certificat
+de l'appareil avec la clé du membre ; écrire les réglages du § 5.1 puis le schéma ; écrire
+l'en-tête, son authentification, l'identité (avec `member_private` : le premier appareil est
+un appareil de certification) ; créer le casier personnel par une opération `LockerCreate`
+(`sync-protocol.md` § 7). Un appareil suivant reçoit son identité par l'enrôlement
+(`sync-protocol.md` § 14).
 
 **Ouvrir** : § 5.3, puis desceller les fragments d'index. Rien d'autre n'est descellé.
 
@@ -888,11 +985,10 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 3. **`DeviceKey` aléatoire**, enveloppée par chaque méthode de déverrouillage. `crypto.md` dit
    qu'elle est « dérivée du mot de passe » à défaut de matériel. Ce choix permet plusieurs
    méthodes et un changement de mot de passe sans tout rechiffrer.
-4. **`secret_id` hors de l'AAD.** `crypto.md` demande que l'AAD lie casier, secret et version.
-   Ici, l'AAD lie le casier, l'auteur, le rang et l'époque. Le `secret_id` est authentifié à
-   l'intérieur du chiffré et vérifié à la lecture. Raison : le mettre dans l'AAD l'obligerait
-   à être en clair, et le serveur apprendrait quel secret change. Le référent cryptographie
-   doit valider cet écart, et `crypto.md` doit être ajusté en conséquence.
+4. ~~`secret_id` hors de l'AAD~~ : **validé**, avec un identifiant de bloc opaque dans
+   l'AAD (§ 7.2). Décision prise seul dans ce cadre : le `block_id` est **tiré à neuf pour
+   chaque opération**, plutôt que stable pour un secret. Un identifiant stable dirait au
+   serveur quelles versions appartiennent au même secret.
 5. **Longueur de la KEK hybride** : les 32 premiers octets de la sortie de la combinaison.
    `crypto.md` ne fixe pas la longueur de sortie. À aligner à l'étape 3.
 6. **Encodages bruts** : P-384 non compressé, ECDSA en `r ‖ s` de longueur fixe, graines
@@ -912,6 +1008,13 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 12. **Limites de taille** (titre, notes, fichiers joints de 100 Mio, 64 champs personnalisés,
     256 dépendances, 4 Mio par opération) : choisies sans mesure.
 13. **Rétention par défaut** de 20 versions par secret.
-14. **Usage des types TOTP, clé d'accès et clé SSH** : suspendu à l'ADR 0010.
+14. ~~Usage des types TOTP, clé d'accès et clé SSH~~ : tranché par l'ADR 0010 (accepté).
 15. **Rôles au niveau d'un secret** (`roles.md`) : non couverts par le format v1. Lire un seul
     secret supposerait d'envelopper ses clés de donnée pour un membre. À trancher à l'étape 10.
+16. **Appareil de certification** (ADR 0011) : par défaut, seul le premier appareil garde la
+    clé privée du membre. L'utilisateur peut en désigner d'autres à l'enrôlement.
+17. **Empreinte de 20 caractères base32** (100 bits) pour la comparaison hors bande des clés
+    de membre et de serveur.
+18. **Refus d'une clé de membre différente** de celle épinglée, en attendant le changement de
+    clé de l'étape 10. Une attribution à un membre non vérifié est permise, avec avertissement.
+19. **Délai de quarantaine** de 7 jours par défaut, réglable par casier de 1 heure à 90 jours.
