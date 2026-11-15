@@ -20,8 +20,8 @@ use super::{
 use crate::cbor::{self, Fields, Value};
 use crate::error::VaultError;
 use crate::model::{
-    lens, Header, Id16, RecoveryParams, Settings, UnlockMethod, UnlockParams,
-    RECOVERY_MAX_COUNT, RECOVERY_MIN_THRESHOLD, UNLOCK_PASSWORD, UNLOCK_RECOVERY,
+    lens, Header, Id16, RecoveryParams, Settings, UnlockMethod, UnlockParams, RECOVERY_MAX_COUNT,
+    RECOVERY_MIN_THRESHOLD, UNLOCK_PASSWORD, UNLOCK_RECOVERY,
 };
 
 /// Magic text of a share file (ADR 0034).
@@ -147,7 +147,8 @@ fn password_params(kdf: KdfCost) -> Result<PasswordParams, VaultError> {
 
 /// Checks that settings are within the bounds the core and the applications accept.
 fn check_settings(s: &Settings) -> Result<(), VaultError> {
-    let auto_ok = s.auto_lock_s == 0 || (MIN_AUTO_LOCK_S..=MAX_AUTO_LOCK_S).contains(&s.auto_lock_s);
+    let auto_ok =
+        s.auto_lock_s == 0 || (MIN_AUTO_LOCK_S..=MAX_AUTO_LOCK_S).contains(&s.auto_lock_s);
     let clip_ok = (MIN_CLIPBOARD_CLEAR_S..=MAX_CLIPBOARD_CLEAR_S).contains(&s.clipboard_clear_s);
     if auto_ok && clip_ok {
         Ok(())
@@ -157,7 +158,10 @@ fn check_settings(s: &Settings) -> Result<(), VaultError> {
 }
 
 /// Derives the device key from the recovery method and `shares` (ADR 0034).
-fn recover_device_key(header: &Header, shares: &[RecoveryShare]) -> Result<SymmetricKey, VaultError> {
+fn recover_device_key(
+    header: &Header,
+    shares: &[RecoveryShare],
+) -> Result<SymmetricKey, VaultError> {
     let (index, method, params) = header
         .unlock
         .iter()

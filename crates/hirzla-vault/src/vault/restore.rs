@@ -51,7 +51,11 @@ impl Vault {
                 continue;
             }
             seen.push(*kind);
-            let wanted: Vec<&SetValue> = old.sets.get(kind).map(|s| s.visible().collect()).unwrap_or_default();
+            let wanted: Vec<&SetValue> = old
+                .sets
+                .get(kind)
+                .map(|s| s.visible().collect())
+                .unwrap_or_default();
             let present: Vec<&SetValue> = current
                 .sets
                 .get(kind)

@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- Contenu des bases de référence KDBX 4 (voir generate.sh). Données fictives. -->
+<KeePassFile>
+	<Meta>
+		<Generator>Hirzla fixtures</Generator>
+		<DatabaseName>Base de test</DatabaseName>
+		<MemoryProtection>
+			<ProtectTitle>False</ProtectTitle>
+			<ProtectUserName>False</ProtectUserName>
+			<ProtectPassword>True</ProtectPassword>
+			<ProtectURL>False</ProtectURL>
+			<ProtectNotes>False</ProtectNotes>
+		</MemoryProtection>
+		<RecycleBinEnabled>True</RecycleBinEnabled>
+		<RecycleBinUUID>3q2+796tvu/erb7v3q2+7w==</RecycleBinUUID>
+		<Binaries>
+			<Binary ID="0">UmVsZXbDqSBkZSBjb21wdGUK</Binary>
+		</Binaries>
+	</Meta>
+	<Root>
+		<Group>
+			<UUID>AAAAAAAAAAAAAAAAAAAAAQ==</UUID>
+			<Name>Base de test</Name>
+			<Entry>
+				<UUID>AAAAAAAAAAAAAAAAAAABAQ==</UUID>
+				<String><Key>Title</Key><Value></Value></String>
+				<String><Key>URL</Key><Value>https://sans-titre.example</Value></String>
+				<String><Key>Password</Key><Value ProtectInMemory="True">x</Value></String>
+			</Entry>
+			<Entry>
+				<UUID>AAAAAAAAAAAAAAAAAAABAg==</UUID>
+				<String><Key>Title</Key><Value>Note seule</Value></String>
+				<String><Key>Notes</Key><Value>Rien d'autre</Value></String>
+			</Entry>
+			<Entry>
+				<UUID>AAAAAAAAAAAAAAAAAAABAw==</UUID>
+				<String><Key>Title</Key><Value>Vide</Value></String>
+			</Entry>
+			<Group>
+				<UUID>AAAAAAAAAAAAAAAAAAAAAg==</UUID>
+				<Name>Internet</Name>
+				<Group>
+					<UUID>AAAAAAAAAAAAAAAAAAAAAw==</UUID>
+					<Name>Mail</Name>
+					<Entry>
+						<UUID>AAAAAAAAAAAAAAAAAAACAQ==</UUID>
+						<Tags>perso;mail</Tags>
+						<String><Key>Title</Key><Value>Messagerie</Value></String>
+						<String><Key>UserName</Key><Value>alice@example.org</Value></String>
+						<String><Key>Password</Key><Value ProtectInMemory="True">mot-de-passe-très-secret</Value></String>
+						<String><Key>URL</Key><Value>https://mail.example.org</Value></String>
+						<String><Key>Notes</Key><Value>Ligne 1
+Ligne 2 &amp; &lt;spécial&gt;</Value></String>
+						<String><Key>Question secrète</Key><Value ProtectInMemory="True">Nom du chat</Value></String>
+						<String><Key>Numéro client</Key><Value>12345</Value></String>
+						<String><Key>otp</Key><Value ProtectInMemory="True">otpauth://totp/Exemple:alice?secret=JBSWY3DPEHPK3PXP&amp;issuer=Exemple</Value></String>
+						<History>
+							<Entry>
+								<UUID>AAAAAAAAAAAAAAAAAAACAQ==</UUID>
+								<String><Key>Title</Key><Value>Messagerie</Value></String>
+								<String><Key>Password</Key><Value ProtectInMemory="True">ancien-mot-de-passe</Value></String>
+							</Entry>
+						</History>
+					</Entry>
+				</Group>
+			</Group>
+			<Group>
+				<UUID>AAAAAAAAAAAAAAAAAAAABA==</UUID>
+				<Name>Banque</Name>
+				<Entry>
+					<UUID>AAAAAAAAAAAAAAAAAAADAQ==</UUID>
+					<String><Key>Title</Key><Value>Banque</Value></String>
+					<String><Key>UserName</Key><Value>bob</Value></String>
+					<String><Key>Password</Key><Value ProtectInMemory="True">Pa55w0rd!</Value></String>
+					<Binary><Key>releve.txt</Key><Value Ref="0"/></Binary>
+				</Entry>
+			</Group>
+			<Group>
+				<UUID>3q2+796tvu/erb7v3q2+7w==</UUID>
+				<Name>Corbeille</Name>
+				<Entry>
+					<UUID>AAAAAAAAAAAAAAAAAAAEAQ==</UUID>
+					<String><Key>Title</Key><Value>Supprimé</Value></String>
+					<String><Key>Password</Key><Value ProtectInMemory="True">corbeille</Value></String>
+				</Entry>
+			</Group>
+		</Group>
+	</Root>
+</KeePassFile>

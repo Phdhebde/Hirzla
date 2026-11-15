@@ -7,6 +7,7 @@
 
 pub mod cbor;
 mod error;
+pub mod kdbx;
 pub mod model;
 pub mod pad;
 pub mod secret;
@@ -17,9 +18,9 @@ mod vault;
 
 pub use error::VaultError;
 pub use vault::{
-    recovery_params, CreateOptions, KdfCost, LockerInfo, RecoveryKit, RecoveryShare,
-    SecretVersion, Vault, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE,
-    MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
+    recovery_params, CreateOptions, KdfCost, LockerInfo, RecoveryKit, RecoveryShare, SecretVersion,
+    Vault, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE, MIN_AUTO_LOCK_S,
+    MIN_CLIPBOARD_CLEAR_S,
 };
 
 /// Version of the on-disk vault format.

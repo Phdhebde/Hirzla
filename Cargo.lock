@@ -611,8 +611,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
+ "cipher",
  "cpufeatures 0.3.1",
  "rand_core",
+ "zeroize",
 ]
 
 [[package]]
@@ -1915,6 +1917,7 @@ dependencies = [
  "argon2",
  "argon2-kdf",
  "aws-lc-rs",
+ "chacha20",
  "hkdf",
  "ml-dsa",
  "ml-kem",
@@ -2003,10 +2006,13 @@ dependencies = [
 name = "hirzla-vault"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "cbor4ii",
+ "flate2",
  "hirzla-crypto",
  "icu_normalizer",
  "proptest",
+ "quick-xml",
  "rusqlite",
  "tempfile",
  "thiserror 2.0.21",
