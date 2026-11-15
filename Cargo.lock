@@ -722,7 +722,10 @@ dependencies = [
 name = "hirzla-audit"
 version = "0.0.0"
 dependencies = [
+ "cbor4ii",
  "hirzla-crypto",
+ "tempfile",
+ "thiserror",
 ]
 
 [[package]]
