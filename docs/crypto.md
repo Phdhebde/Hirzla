@@ -87,7 +87,7 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 | --- | --- |
 | Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
 | Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share` |
-| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt` |
+| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt`, `hirzla/v1/keylog-head` |
 
 - Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
   clé publique attendue, à temps constant.

@@ -172,21 +172,32 @@ Codes de rôle :
 | 18 | `Policy` | 2 `owner_removal_quorum` : `uint` (2 à 16) ; 3 `request_id` : `ID16` ; 4 `approvals` | `Owner`, avec le quorum en vigueur (§ 9.2) |
 | 20 | `DeviceAdd` | 2 `cert` : `DeviceCert` ; 3 `envelopes` | Un appareil du même membre déjà présent ; ou `Owner`, `Manager`, `Editor` |
 | 21 | `DeviceRemove` | 2 `revocation` : `DeviceRevocation` ; 3 `envelopes` ; 4 `prev` | Tout appareil titulaire d'un rôle dans le casier |
-| 30 à 39 | Réservés | | Étape 10 : changement de clé d'un membre, rôles d'organisation et de secret, autres actions à plusieurs |
+| 30 | Réservé | | Changement de clé d'un membre (`transparence.md` § 8) |
+| 31 | `GroupPut` | 2 `group` : `ID16` ; 3 `members` : `array<ID16>` | `Owner`, `Manager` (`roles.md`) |
+| 32 | `GroupBind` | 2 `group` : `ID16` ; 3 `role` : `uint` | Selon le rôle (`roles.md`) |
+| 33 | `SecretRole` | 2 `secret` : `ID16` ; 3 `member` : `ID16` ; 4 `role` : `uint` | `Owner`, `Manager` (`roles.md`) |
+| 34 | `Checkpoint` | 2 `head` : `KeyLogHead` | Tout appareil lecteur (`transparence.md` § 3.6) |
+| 35 à 39 | Réservés | | |
 
 `EpochWrap` = `{1: epoch (OpRef), 2: wrap (bstr(40))}` : AES-256-KW-pad de l'ancienne clé de
 casier sous la nouvelle. Une nouvelle époque emballe **toutes** les époques têtes de l'arbre
 des époques dans son passé. Qui détient la clé courante peut donc remonter tout l'historique.
 
-`keylog_proof` est la preuve d'inscription au registre de transparence (ADR 0008). Il est
-absent jusqu'à l'étape 10. D'ici là, la clé d'un membre est acceptée par **confiance au
-premier contact**, épinglée, et vérifiée par comparaison d'empreinte hors bande
-(`format.md` § 5.9).
+`keylog_proof` est la preuve d'inscription au registre de transparence (ADR 0008), spécifiée
+dans `transparence.md` (§ 3.4 et § 6.3). Absente, l'opération reste valide et le membre est
+signalé « inscription non prouvée ». En mode Self, la clé d'un membre est épinglée et
+vérifiée par comparaison d'empreinte hors bande (`format.md` § 5.9).
 
 Les opérations de données (`class = 1`) : `SecretPut` (`kind = 1`) et `LockerMetaPut`
 (`kind = 2`), émises par un appareil d'un `Owner`, d'un `Manager` ou d'un `Editor`.
 
 ### 7.3 Règles de validité propres à chaque type
+
+**`LockerCreate`** : un casier n'a qu'une `LockerCreate`. Chaque poste épingle son `op_id` :
+celui de la sienne s'il a créé le casier, sinon celui de la `LockerCreate` du passé de la
+première `Grant` qui l'y admet. Toute autre `LockerCreate` du même casier est rejetée : sans
+cette règle, le serveur pourrait injecter une seconde racine avec son propre créateur.
+`creator_device` est l'appareil auteur, et `envelope` lui est destinée.
 
 **`Grant`**
 
@@ -661,6 +672,7 @@ appareil. `PeerVector` = `{1: device, 2: vector (array<VectorEntry>)}`. Tableaux
 | 32 | `MailboxPut` | P → S | `{1: device (destinataire), 2: blob (bstr(≤ 64 Kio))}`. Conservé 10 minutes (§ 7.7, § 14) |
 | 33 | `MailboxGet` | P → S | `{1: device}` → réponse `MailboxBlob` (34) `{1: blob}` |
 | 40 | `Error` | S → P | `{1: code (uint)}` |
+| 60 à 67 | Registre de transparence | | `transparence.md` § 4 |
 | 41 | `Ping` / 42 `Pong` | Les deux | `{}` |
 | 43 | `Bye` | Les deux | `{}` |
 
@@ -742,8 +754,8 @@ Ensuite :
 - Le serveur cesse de servir un casier aux appareils d'un membre retiré dès qu'il reçoit la
   révocation, et à un appareil retiré dès qu'il reçoit la `DeviceRemove`.
 - Le serveur ne peut ni fabriquer, ni modifier, ni réordonner une opération sans être
-  détecté. Il peut en **retenir** une. La parade est la comparaison entre postes des accusés
-  et des têtes, spécifiée avec la transparence des clés (étape 10).
+  détecté. Il peut en **retenir** une. La parade est l'inscription des retraits au registre de
+  transparence et l'échange de têtes entre postes (`transparence.md` § 6.5 et § 6.6).
 
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
@@ -908,10 +920,18 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     sous 10 minutes, rétention des opérations `late` de 30 jours.
 16. **Le serveur garde les opérations `late`** et les transmet aux `Owner`, au lieu de les refuser.
 17. **Dépendances élaguées** : la règle de `lamport` est relâchée (§ 4.3).
-18. **Confiance au premier contact** pour les clés de membre et de serveur, avec comparaison
-    d'empreinte hors bande (décision validée), jusqu'à `docs/transparence.md` (étape 10). D'ici
-    là, un serveur malveillant peut substituer la clé d'un membre **au premier contact**.
-19. **Rôles d'organisation, rôles par secret, changement de clé d'un membre** : types
-    réservés (30 à 39), spécifiés à l'étape 10.
+18. **Confiance au premier contact** pour la clé du serveur, avec comparaison d'empreinte hors
+    bande (décision validée). Les clés de membre sont vérifiées contre le registre de
+    transparence en mode Serveur (`transparence.md`, étape 10).
+19. **Rôles d'organisation et par secret, groupes** : types 31 à 33 (`roles.md`, ADR 0020) ;
+    `Checkpoint` : type 34 (`transparence.md`, ADR 0019). Changement de clé d'un membre : type
+    30, toujours réservé.
 20. **Partage par export chiffré pour un destinataire en mode Self** (`architecture.md`) :
     non spécifié ici.
+21. **`LockerCreate` épinglée** par chaque poste (§ 7.3), décidé à l'étape 10.
+22. **Enveloppes de `Grant`, `DeviceAdd` et `EnvelopeAdd`** : `KeyEnvelope` ne porte pas
+    d'époque ; elles visent l'époque `epoch` de leur opération, donc l'époque courante de leur
+    passé (lecture retenue à l'étape 10 pour « une époque de `past(op)` » du § 7.3).
+23. **Retraits d'appareil hors quarantaine** : une `DeviceRemove` n'est jamais mise en
+    quarantaine par le § 9.4 (étapes 1 et 2), pour que deux révocations croisées s'ajoutent
+    (§ 9.7). La révocation, signée par la clé du membre, est définitive.
