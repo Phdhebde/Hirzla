@@ -1,7 +1,7 @@
 //! Emission of operations (§ 5), compaction (§ 10.2), rescelling (§ 8.4), automatic
 //! quarantine rejection (§ 9.3) and re-emission of stale local operations (§ 5).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hirzla_crypto::sym::SymmetricKey;
@@ -37,10 +37,14 @@ pub(crate) struct Prepared {
 /// Result of [`Replica::reissue_stale_unsent`].
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReissueReport {
-    /// Data operations rewritten: old identifier, new identifier.
+    /// Operations rewritten: old identifier, new identifier.
     pub reissued: Vec<(OpId, OpId)>,
-    /// Control operations removed: the caller decides whether to redo them.
+    /// Operations removed without a successor (a creation, or an `EnvelopeAdd` whose
+    /// recipients no longer lack an envelope).
     pub dropped_control: Vec<OpId>,
+    /// Data operations whose intention no longer applies to the current state (secret
+    /// purged meanwhile, set full): removed, the caller tells the user.
+    pub refused: Vec<OpId>,
 }
 
 fn sorted_envelopes(mut v: Vec<KeyEnvelopeEntry>) -> Vec<KeyEnvelopeEntry> {
@@ -202,6 +206,7 @@ impl<A: Authorizer> Replica<A> {
                 body: Body::Full(bytes),
                 received_ms: (self.clock)(),
                 unsent: true,
+                shared: false,
             },
         );
         self.recompute();
@@ -764,9 +769,10 @@ impl<A: Authorizer> Replica<A> {
     // Pull before push (§ 5)
     // ---------------------------------------------------------------------------------
 
-    /// Rewrites the local, unsent operations whose epoch is no longer current: they are
-    /// removed (they never left the device) and their intention is written again on the
-    /// current state. Control operations are removed and reported.
+    /// Rewrites the local operations that never left the device (unsent, not shared)
+    /// from the first one whose epoch is no longer current: they are removed and their
+    /// intention is written again on the current state. Control operations are removed
+    /// and reported. Call it after pulling to the relay's end (§ 5).
     ///
     /// # Errors
     /// [`SyncError::NoCurrentEpoch`] or a cryptographic failure.
@@ -775,17 +781,29 @@ impl<A: Authorizer> Replica<A> {
         let Some(cur) = self.current_epoch() else {
             return Ok(report);
         };
+        // Only the tail of the device's chain that never left it can be rewritten.
+        let me = (self.device.member_id(), self.device.device_id());
+        let own = |id: &OpId| self.op_ref(id).filter(|r| (r.member, r.device) == me);
+        let floor = self
+            .entries
+            .iter()
+            .filter(|(_, e)| !e.unsent || e.shared)
+            .filter_map(|(id, _)| own(id).map(|r| r.seq))
+            .max()
+            .unwrap_or(0);
         let mut unsent: Vec<(u64, OpId)> = self
             .entries
             .iter()
-            .filter(|(_, e)| e.unsent)
-            .filter_map(|(id, _)| self.op_ref(id).map(|r| (r.seq, *id)))
+            .filter(|(_, e)| e.unsent && !e.shared)
+            .filter_map(|(id, _)| own(id).map(|r| (r.seq, *id)))
+            .filter(|(seq, _)| *seq > floor)
             .collect();
         unsent.sort();
+        // An operation that creates its epoch seals under it: it is never stale.
         let first_stale = unsent
             .iter()
             .position(|(_, id)| match self.decoded.get(id) {
-                Some(Ok(d)) => d.op.epoch != cur,
+                Some(Ok(d)) => d.op.epoch != cur && d.op.epoch != d.op.opref,
                 _ => false,
             });
         let Some(start) = first_stale else {
@@ -795,14 +813,19 @@ impl<A: Authorizer> Replica<A> {
         enum Intent {
             Secret(SecretBody, u64, OpRef),
             Meta(LockerBody, u64, OpRef),
+            Control(ControlBody),
         }
         let mut intents: Vec<(OpId, Intent)> = Vec::new();
         for id in &suffix {
             let (Some(Ok(d)), Some(o)) = (self.decoded.get(id), self.opened.get(id)) else {
                 continue;
             };
-            if d.control.is_some() {
-                report.dropped_control.push(*id);
+            if let Some(c) = &d.control {
+                if matches!(c, ControlBody::LockerCreate(_)) {
+                    report.dropped_control.push(*id);
+                } else {
+                    intents.push((*id, Intent::Control(c.clone())));
+                }
                 continue;
             }
             match &o.content {
@@ -821,7 +844,21 @@ impl<A: Authorizer> Replica<A> {
         self.recompute();
         for (old, intent) in intents {
             let new = match intent {
-                Intent::Secret(b, lamport, r) => self.rewrite_secret(&b, lamport, &r)?,
+                Intent::Control(c) => match self.reemit_control(c)? {
+                    Some(new) => new,
+                    None => {
+                        report.dropped_control.push(old);
+                        continue;
+                    }
+                },
+                Intent::Secret(b, lamport, r) => match self.rewrite_secret(&b, lamport, &r) {
+                    Ok(new) => new,
+                    Err(SyncError::EditRefused) => {
+                        report.refused.push(old);
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                },
                 Intent::Meta(b, lamport, r) => {
                     let own = Stamp {
                         lamport,
@@ -842,7 +879,52 @@ impl<A: Authorizer> Replica<A> {
         Ok(report)
     }
 
+    /// Emits a removed control operation again on the current state: new envelopes for
+    /// the current readers, new wraps; approvals are carried over (they sign the request,
+    /// not the operation).
+    fn reemit_control(&mut self, c: ControlBody) -> Result<Option<OpId>, SyncError> {
+        let request =
+            |id: Option<Id16>, a: Option<Vec<Approval>>| id.map(|id| (id, a.unwrap_or_default()));
+        let new = match c {
+            ControlBody::LockerCreate(_) => return Ok(None),
+            ControlBody::Rotate { .. } => self.rotate()?,
+            ControlBody::Revoke(r) => self.revoke(r.member, request(r.request_id, r.approvals))?,
+            ControlBody::DeviceRemove { revocation, .. } => self.device_remove(revocation)?,
+            ControlBody::Grant(g) => self.grant(
+                g.member,
+                g.role,
+                g.devices,
+                request(g.request_id, g.approvals),
+            )?,
+            ControlBody::DeviceAdd { cert, .. } => self.device_add(cert)?,
+            ControlBody::EnvelopeAdd { envelopes } => {
+                let wanted: BTreeSet<(Id16, Id16)> =
+                    envelopes.iter().map(|e| (e.member, e.device)).collect();
+                let missing: Vec<DeviceCert> = self
+                    .devices_missing_envelope()
+                    .into_iter()
+                    .filter(|c| wanted.contains(&(c.member, c.device)))
+                    .collect();
+                if missing.is_empty() {
+                    return Ok(None);
+                }
+                self.envelope_add(&missing)?
+            }
+            other => self.emit_control(other, None)?,
+        };
+        Ok(Some(new))
+    }
+
     fn forget(&mut self, id: &OpId) {
+        // The keys of an epoch it created go with it: its re-emission reuses the same
+        // reference with a new key.
+        if let Some(Ok(d)) = self.decoded.get(id) {
+            let creates = d.control.as_ref().is_some_and(ControlBody::creates_epoch);
+            if creates && d.op.epoch == d.op.opref {
+                self.keyring.keys.remove(&d.op.opref);
+                self.keyring.verified.remove(&d.op.opref);
+            }
+        }
         self.entries.remove(id);
         self.decoded.remove(id);
         self.opened.remove(id);
@@ -884,7 +966,6 @@ impl<A: Authorizer> Replica<A> {
         if old.state.1 == own {
             edit.state = Some(old.state.0);
         }
-        let mut removed_values: BTreeMap<u64, ()> = BTreeMap::new();
         for (k, s) in &old.sets {
             for e in &s.elems {
                 if own_dot(&e.dot) {
@@ -903,7 +984,6 @@ impl<A: Authorizer> Replica<A> {
                         .and_then(|x| x.elems.iter().find(|e| e.dot == *d))
                     {
                         edit.remove.push((*k, e.value.clone()));
-                        removed_values.insert(d.idx, ());
                     }
                 }
             }

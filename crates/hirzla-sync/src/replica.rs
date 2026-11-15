@@ -160,10 +160,17 @@ pub(crate) enum Body {
     Stub(Stub),
 }
 
+/// Verified certificates of one device, each with the member key that signed it.
+pub(crate) type CertList = Vec<(DeviceCert, [u8; 48])>;
+
 pub(crate) struct Entry {
     pub(crate) body: Body,
     pub(crate) received_ms: u64,
+    /// Not acknowledged by the relay yet (§ 11.5).
     pub(crate) unsent: bool,
+    /// Left the device by another channel (peer, exchange file) or came back from the
+    /// network: it can no longer be rewritten (§ 7.5).
+    pub(crate) shared: bool,
 }
 
 pub(crate) enum Content {
@@ -249,7 +256,7 @@ pub struct Replica<A: Authorizer> {
     pub(crate) wraps_done: BTreeSet<OpId>,
     // Registry rebuilt from verified control operations.
     pub(crate) member_keys: BTreeMap<Id16, Vec<MemberKeys>>,
-    pub(crate) certs: BTreeMap<(Id16, Id16), Vec<(DeviceCert, [u8; 48])>>,
+    pub(crate) certs: BTreeMap<(Id16, Id16), CertList>,
     // Computed view.
     pub(crate) status: BTreeMap<OpId, OpStatus>,
     pub(crate) causality: Causality,
@@ -399,11 +406,15 @@ impl<A: Authorizer> Replica<A> {
                 continue;
             }
             let id = sha384(&b);
-            match self.entries.get(&id) {
-                Some(Entry {
-                    body: Body::Full(_) | Body::Pruned(_),
-                    ..
-                }) => {
+            match self.entries.get_mut(&id) {
+                Some(
+                    e @ Entry {
+                        body: Body::Full(_) | Body::Pruned(_),
+                        ..
+                    },
+                ) => {
+                    // One of our own operations came back from the network: it is out.
+                    e.shared = true;
                     report.duplicates += 1;
                     continue;
                 }
@@ -428,6 +439,7 @@ impl<A: Authorizer> Replica<A> {
                     body: Body::Full(b),
                     received_ms: now,
                     unsent: false,
+                    shared: false,
                 },
             );
             report.added += 1;
@@ -459,6 +471,7 @@ impl<A: Authorizer> Replica<A> {
                     body: Body::Stub(s),
                     received_ms: now,
                     unsent: false,
+                    shared: false,
                 },
             );
             added = true;
@@ -596,6 +609,18 @@ impl<A: Authorizer> Replica<A> {
         for o in ops {
             if let Some(e) = self.entries.get_mut(o) {
                 e.unsent = false;
+                e.shared = true;
+            }
+        }
+    }
+
+    /// Marks local operations as having left the device by a channel other than the
+    /// relay (peer exchange, exchange file): they stay to push but are never rewritten
+    /// by [`Replica::reissue_stale_unsent`] (§ 7.5).
+    pub fn mark_shared(&mut self, ops: &[OpId]) {
+        for o in ops {
+            if let Some(e) = self.entries.get_mut(o) {
+                e.shared = true;
             }
         }
     }
@@ -638,8 +663,8 @@ impl<A: Authorizer> Replica<A> {
                 Body::Stub(s) => stubs.push((key, *s)),
             }
         }
-        full.sort_by(|a, b| a.0.cmp(&b.0));
-        stubs.sort_by(|a, b| a.0.cmp(&b.0));
+        full.sort_by_key(|a| a.0);
+        stubs.sort_by_key(|a| a.0);
         (
             full.into_iter().map(|(_, b)| b).collect(),
             stubs.into_iter().map(|(_, s)| s).collect(),

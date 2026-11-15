@@ -30,6 +30,10 @@ struct S {
     recipients: BTreeMap<OpRef, BTreeSet<(Id16, Id16)>>,
 }
 
+/// A removal competing in the priority order: (oldest participant, lamport, op), the
+/// operation, the member it removes.
+type Candidate<'a> = ((usize, u64, OpId), &'a OpFacts, Option<Id16>);
+
 impl S {
     fn readers(&self) -> BTreeSet<(Id16, Id16)> {
         self.devices
@@ -174,6 +178,13 @@ impl Ctx<'_> {
         for f in self.input.ops {
             if accepted.contains(&f.op_id) && self.input.causality.precedes(&f.op_id, o) {
                 s.apply(f, self.pos(&f.op_id));
+            }
+        }
+        // A device revocation is signed by the member key: definitive and monotone, even
+        // when the operation that publishes it is not accepted (§ 9.7).
+        for f in self.input.ops {
+            if self.input.causality.precedes(&f.op_id, o) {
+                revoke_device(&mut s, f);
             }
         }
         s
@@ -384,6 +395,12 @@ impl Ctx<'_> {
     }
 }
 
+fn revoke_device(s: &mut S, f: &OpFacts) {
+    if let OpBody::Control(ControlBody::DeviceRemove { revocation, .. }) = &f.body {
+        s.revoked.insert((revocation.member, revocation.device));
+    }
+}
+
 fn quorum(s: &S) -> usize {
     usize::try_from(s.quorum.max(2)).unwrap_or(usize::MAX)
 }
@@ -465,7 +482,7 @@ impl Authorizer for MemoryAuthorizer {
         let mut processed: BTreeSet<OpId> = BTreeSet::new();
         let accepted = loop {
             let a = ctx.replay(&q);
-            let mut candidates: Vec<((usize, u64, OpId), &OpFacts, Option<Id16>)> = Vec::new();
+            let mut candidates: Vec<Candidate<'_>> = Vec::new();
             for f in input.ops {
                 if !a.contains(&f.op_id) || processed.contains(&f.op_id) {
                     continue;
@@ -488,7 +505,7 @@ impl Authorizer for MemoryAuthorizer {
                     .unwrap_or(usize::MAX);
                 candidates.push(((oldest, f.lamport, f.op_id), f, removes.then_some(x)));
             }
-            candidates.sort_by(|a, b| a.0.cmp(&b.0));
+            candidates.sort_by_key(|a| a.0);
             let Some((_, r, removed)) = candidates.first() else {
                 break a;
             };
@@ -570,6 +587,9 @@ impl Authorizer for MemoryAuthorizer {
             if accepted.contains(&f.op_id) {
                 s.apply(f, ctx.pos(&f.op_id));
             }
+        }
+        for f in input.ops {
+            revoke_device(&mut s, f);
         }
         MemoryState { verdicts, s }
     }

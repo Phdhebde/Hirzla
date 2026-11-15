@@ -46,6 +46,9 @@ pub enum DataKind {
 }
 
 /// What an operation does, as far as authorization is concerned.
+// Built once per operation and matched by value in authorizers: boxing would only add
+// indirection to every match.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum OpBody {
     /// A control operation and its clear body.
@@ -101,7 +104,9 @@ pub struct AuthzInput<'a> {
     pub genesis: OpId,
     /// Operations in total order.
     pub ops: &'a [OpFacts],
-    /// Causal graph of these operations (and of nothing else).
+    /// Causal graph of every complete operation of the locker: those of `ops`, plus those
+    /// refused at step 8 and the stubs. Only operations of `ops` have facts; the others
+    /// count for `past` and concurrency, never as authority.
     pub causality: &'a Causality,
 }
 

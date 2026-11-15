@@ -139,4 +139,75 @@ impl World {
         }
         s
     }
+
+    /// Status of `op` on the replicas listed, which must agree.
+    pub fn status_among(&self, op: &OpId, idx: &[usize]) -> OpStatus {
+        let s = self.replicas[idx[0]].status(op).unwrap();
+        for &i in &idx[1..] {
+            assert_eq!(
+                self.replicas[i].status(op),
+                Some(s),
+                "status differs on {i}"
+            );
+        }
+        s
+    }
+
+    /// Sends what replica `from` holds and replica `to` lacks.
+    pub fn pass(&mut self, from: usize, to: usize) {
+        assert_ne!(from, to);
+        let (a, b) = if from < to {
+            let (l, r) = self.replicas.split_at_mut(to);
+            (&l[from], &mut r[0])
+        } else {
+            let (l, r) = self.replicas.split_at_mut(from);
+            (&r[0], &mut l[to])
+        };
+        send(a, b);
+    }
+
+    /// Syncs only the replicas listed.
+    pub fn sync_among(&mut self, idx: &[usize]) {
+        for _ in 0..3 {
+            for &i in idx {
+                for &j in idx {
+                    if i != j {
+                        self.pass(i, j);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Asserts that the replicas listed agree.
+    pub fn assert_converged_among(&self, idx: &[usize]) {
+        let f0 = self.replicas[idx[0]].fingerprint();
+        for &i in &idx[1..] {
+            if self.replicas[i].fingerprint() != f0 {
+                let a = self.replicas[idx[0]].statuses();
+                let b = self.replicas[i].statuses();
+                let diff: Vec<_> = a
+                    .iter()
+                    .filter(|(k, v)| b.get(*k) != Some(*v))
+                    .map(|(k, v)| (k[0], *v, b.get(k).copied()))
+                    .collect();
+                panic!("replica {i} diverges; status differences: {diff:?}");
+            }
+        }
+    }
+
+    /// Adds a replica for a new device of member `m`, published by replica `by`.
+    pub fn add_device(&mut self, m: usize, by: usize) -> usize {
+        let d = self.members[m].device();
+        self.replicas[by].device_add(d.cert().clone()).unwrap();
+        let locker = self.replicas[by].locker_id();
+        let genesis = self.replicas[by].genesis();
+        let mut r = R::join(Arc::clone(&d), MemoryAuthorizer, locker, genesis);
+        r.set_clock(fixed_clock);
+        self.devices.push(d);
+        self.replicas.push(r);
+        let new = self.replicas.len() - 1;
+        self.pass(by, new);
+        new
+    }
 }

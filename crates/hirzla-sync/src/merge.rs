@@ -7,14 +7,14 @@ use hirzla_vault::secret::{self, LockerBody, OrSet, SecretBody, SecretState};
 /// Merges secret heads in a canonical order (by operation identifier), so that the result
 /// does not depend on the order heads were found.
 pub(crate) fn merge_heads(mut heads: Vec<(OpId, &SecretBody)>) -> Option<SecretBody> {
-    heads.sort_by(|a, b| a.0.cmp(&b.0));
+    heads.sort_by_key(|a| a.0);
     let bodies: Vec<SecretBody> = heads.into_iter().map(|(_, b)| b.clone()).collect();
     secret::merge(&bodies).ok().map(canonical)
 }
 
 /// Merges locker metadata heads in canonical order.
 pub(crate) fn merge_meta(mut heads: Vec<(OpId, &LockerBody)>) -> Option<LockerBody> {
-    heads.sort_by(|a, b| a.0.cmp(&b.0));
+    heads.sort_by_key(|a| a.0);
     let bodies: Vec<LockerBody> = heads.into_iter().map(|(_, b)| b.clone()).collect();
     secret::merge_locker(&bodies)
 }
@@ -22,7 +22,7 @@ pub(crate) fn merge_meta(mut heads: Vec<(OpId, &LockerBody)>) -> Option<LockerBo
 /// Sorts set contents so that two equal states compare equal.
 pub(crate) fn canonical(mut b: SecretBody) -> SecretBody {
     for s in b.sets.values_mut() {
-        s.elems.sort_by(|x, y| x.dot.cmp(&y.dot));
+        s.elems.sort_by_key(|x| x.dot);
         s.removed.sort();
         s.removed.dedup();
     }

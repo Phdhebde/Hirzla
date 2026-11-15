@@ -6,7 +6,7 @@ use hirzla_crypto::sym::SymmetricKey;
 use hirzla_crypto::util::sha384;
 use hirzla_vault::cbor::Value;
 use hirzla_vault::model::{
-    Dot, OpRef, Operation, SealedPayload, Stamp, KIND_CONTROL, KIND_SECRET_PUT,
+    Dot, OpId, OpRef, Operation, SealedPayload, Stamp, KIND_CONTROL, KIND_SECRET_PUT,
 };
 use hirzla_vault::secret::{apply_edit, Field, FieldValue, SecretType};
 
@@ -19,8 +19,19 @@ use crate::replica::{OpStatus, PendingReason, RejectReason};
 use crate::testing::{MemoryAuthorizer, TestMember};
 
 /// A valid draft of a new secret by `r`'s device, on `r`'s current state.
-fn secret_draft(r: &R) -> OpDraft {
-    let p = r.prepare().unwrap();
+pub(super) fn secret_draft(r: &R) -> OpDraft {
+    secret_draft_citing(r, None)
+}
+
+/// A creation draft that also cites `extra` (an operation the author cannot open), with
+/// the clock that citation implies.
+pub(super) fn secret_draft_citing(r: &R, extra: Option<(OpId, u64)>) -> OpDraft {
+    let mut p = r.prepare().unwrap();
+    if let Some((op, lamport)) = extra {
+        p.deps.push(op);
+        p.deps.sort_unstable();
+        p.lamport = p.lamport.max(lamport + 1);
+    }
     let stamp = Stamp {
         lamport: p.lamport,
         member: p.opref.member,
@@ -59,7 +70,7 @@ fn secret_draft(r: &R) -> OpDraft {
     }
 }
 
-fn sign_draft(r: &R, draft: &OpDraft) -> (hirzla_vault::model::OpId, Vec<u8>) {
+pub(super) fn sign_draft(r: &R, draft: &OpDraft) -> (hirzla_vault::model::OpId, Vec<u8>) {
     let key = r.epoch_key(&draft.epoch).unwrap();
     seal_and_sign(r.device(), draft, &key).unwrap()
 }

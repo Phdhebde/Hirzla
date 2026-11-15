@@ -47,7 +47,7 @@ impl Causality {
     #[must_use]
     pub(crate) fn build(nodes: &[(OpId, u64, Vec<OpId>)]) -> Self {
         let mut sorted: Vec<&(OpId, u64, Vec<OpId>)> = nodes.iter().collect();
-        sorted.sort_by(|a, b| (a.1, a.0).cmp(&(b.1, b.0)));
+        sorted.sort_by_key(|a| (a.1, a.0));
         let n = sorted.len();
         let index: BTreeMap<OpId, usize> =
             sorted.iter().enumerate().map(|(i, x)| (x.0, i)).collect();

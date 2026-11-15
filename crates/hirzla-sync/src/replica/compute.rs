@@ -163,9 +163,20 @@ impl<A: Authorizer> Replica<A> {
             return;
         };
         let mut ok: Vec<OpId> = Vec::new();
+        // A stub has no dependencies (§ 10.3): the path to the genesis through it is lost.
+        // It is only held when a signed `Compact` of this locker lists it, so an operation
+        // that reaches a stub counts as descending from the genesis (ADR 0017); the check
+        // against foreign creations below still applies.
+        let stubs: Vec<OpId> = complete
+            .iter()
+            .filter(|id| matches!(self.entries.get(*id).map(|e| &e.body), Some(Body::Stub(_))))
+            .copied()
+            .collect();
         for id in self.causality.total_order().to_vec() {
             let is_stub = matches!(self.entries.get(&id).map(|e| &e.body), Some(Body::Stub(_)));
-            let descends = id == genesis || self.causality.precedes(&genesis, &id);
+            let descends = id == genesis
+                || self.causality.precedes(&genesis, &id)
+                || stubs.iter().any(|s| self.causality.precedes(s, &id));
             let foreign = creates
                 .iter()
                 .any(|c| *c != genesis && (*c == id || self.causality.precedes(c, &id)));
@@ -363,7 +374,7 @@ impl<A: Authorizer> Replica<A> {
                 candidates.push((mk, cert.clone()));
             }
         }
-        let mut certs: BTreeMap<(Id16, Id16), Vec<(DeviceCert, [u8; 48])>> = BTreeMap::new();
+        let mut certs: BTreeMap<(Id16, Id16), super::CertList> = BTreeMap::new();
         for (mk, cert) in candidates {
             if self.cert_verifies(&mk, &cert) {
                 let list = certs.entry((cert.member, cert.device)).or_default();
@@ -869,15 +880,15 @@ impl<A: Authorizer> Replica<A> {
                     return Err(RejectReason::TypeRule);
                 }
             }
-            ControlBody::DeviceAdd { cert, .. } => {
-                if !any_key_verifies(&cert.member, &|mk| verify_device_cert(mk, cert).is_ok()) {
-                    return Err(RejectReason::TypeRule);
-                }
+            ControlBody::DeviceAdd { cert, .. }
+                if !any_key_verifies(&cert.member, &|mk| verify_device_cert(mk, cert).is_ok()) =>
+            {
+                return Err(RejectReason::TypeRule);
             }
-            ControlBody::DeviceRemove { revocation, .. } => {
-                if !any_key_verifies(&revocation.member, &|mk| revocation.verify(mk).is_ok()) {
-                    return Err(RejectReason::TypeRule);
-                }
+            ControlBody::DeviceRemove { revocation, .. }
+                if !any_key_verifies(&revocation.member, &|mk| revocation.verify(mk).is_ok()) =>
+            {
+                return Err(RejectReason::TypeRule);
             }
             _ => {}
         }

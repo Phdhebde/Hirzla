@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use hirzla_vault::cbor::{self, array_max, uint, CborError, Fields, Value};
 use hirzla_vault::model::{Id16, OpId, OpRef};
 
-use crate::codec::{encode_public, id, op_id};
+use crate::codec::{encode_public, id, op_id, uint_range};
 use crate::SyncError;
 
 /// Most entries in a version vector.
@@ -43,7 +43,8 @@ impl VectorEntry {
         Ok(VectorEntry {
             member: id(f.req(1)?)?,
             device: id(f.req(2)?)?,
-            seq: uint(f.req(3)?)?,
+            // A zero rank is never encoded (canonical form).
+            seq: uint_range(f.req(3)?, 1..=u64::MAX)?,
         })
     }
 }
