@@ -2,6 +2,7 @@
 name = "hirzla-native-host"
 description = "Native messaging host of the Hirzla browser extension: a client of the core that holds no key."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
