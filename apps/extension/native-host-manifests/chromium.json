@@ -1,0 +1,7 @@
+{
+  "name": "hirzla.native_host",
+  "description": "Hirzla : hôte de messagerie native de l'extension",
+  "path": "CHEMIN_ABSOLU_DE/hirzla-native-host",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://IDENTIFIANT_DE_L_EXTENSION/"]
+}

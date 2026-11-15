@@ -8,7 +8,8 @@
 //! - [`transport`] and [`auth`]: the channel and the authentication of both ends;
 //! - [`service`]: what the core does with a request (vault, lock, automatic lock);
 //! - [`daemon`]: the `hirzla-core` process;
-//! - [`client`]: the client side, used by `hirzla`.
+//! - [`client`]: the client side, used by `hirzla` and `hirzla-native-host`;
+//! - [`origin`]: web origins of the browser operations (version 2).
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +18,7 @@ pub mod client;
 pub mod daemon;
 pub mod events;
 pub mod generator;
+pub mod origin;
 pub mod proto;
 pub mod service;
 pub mod transport;
