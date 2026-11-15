@@ -1,6 +1,6 @@
 # ADR 0032 — Client du serveur dans le noyau et API locale v4
 
-- Statut : proposé (recommandation implémentée, à accepter ou corriger en revue)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

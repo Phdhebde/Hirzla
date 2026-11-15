@@ -1137,7 +1137,7 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 
 ## 15. Fichier annexe du mode Serveur (v1)
 
-Décision : ADR 0032 (proposé). En attendant que le coffre range lui-même les opérations des
+Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
 garde l'état du mode Serveur dans un fichier **à côté** du coffre : `<chemin du coffre>.serveur`
 (par exemple `coffre.hirzla.serveur`). Ce fichier ne change pas le format du coffre :

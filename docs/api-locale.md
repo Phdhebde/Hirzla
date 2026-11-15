@@ -7,8 +7,8 @@ canal : transport, authentification des deux bouts, trames, messages, erreurs, v
 journal, durcissement du processus. Les choix de dépendances et l'emplacement du code `unsafe`
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
-l'ADR 0026 (proposé) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
-l'ADR 0032 (proposé).
+l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
+l'ADR 0032 (accepté).
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -400,7 +400,7 @@ Client du noyau au profil navigateur (§ 3.1), lancé par le navigateur à chaqu
 l'extension. Il traduit le JSON de la messagerie native en requêtes de cette API ; il ne
 détient aucune clé, ne garde aucun état entre deux lancements et n'écrit aucun journal. Son
 protocole JSON, ses refus et son installation sont décrits dans `apps/extension/README.md` ;
-l'encodage JSON par l'ADR 0027 (proposé).
+l'encodage JSON par l'ADR 0027 (accepté).
 
 - Il se connecte au noyau `hirzla-core` situé à côté de lui (aucune variable ne change ce
   chemin), au point de connexion par défaut (ou `HIRZLA_SOCKET`), vérifie le noyau (§ 3.2), fait un aller-retour
@@ -533,7 +533,7 @@ l'autorisation) :
 
 ## 15. Mode Serveur (version 4)
 
-Décisions : ADR 0032 (proposé). Le noyau parle en plus la **version 4**, qui porte les
+Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
 partagés, rôles. Codes : opérations **40 à 49**, erreurs **40 à 49**. Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
