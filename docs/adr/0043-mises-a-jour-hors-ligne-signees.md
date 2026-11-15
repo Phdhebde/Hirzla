@@ -1,6 +1,6 @@
 # ADR 0043 — Mises à jour hors ligne signées
 
-- Statut : proposé (recommandation implémentée sur décision du mainteneur, 2026-11-15)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
