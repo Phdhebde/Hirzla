@@ -15,6 +15,9 @@
 
 pub mod proto;
 
+#[cfg(feature = "fuzzing")]
+mod fuzzing;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};

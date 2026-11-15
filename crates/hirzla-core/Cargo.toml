@@ -13,6 +13,9 @@ workspace = true
 # Delivery build (ADR 0042, 0043; docs/livraison.md): client signatures required and not
 # disableable, only the publisher keys compiled in through HIRZLA_PUBLISHER_KEYS accepted.
 livraison = []
+# Exposes the decoder of the unsealed server mode annex to the fuzz targets (`fuzz/`).
+# Never enabled in a shipped binary.
+fuzzing = []
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }

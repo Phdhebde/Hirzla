@@ -77,7 +77,9 @@ jobs:
       - name: dudect
         run: cargo test --release -p hirzla-crypto -- --ignored dudect --nocapture
 
-  # Short fuzzing of the vault decoders (ADR 0013). Informative: never blocks a merge.
+  # Short fuzzing of every decoder exposed to external data (ADR 0013; inventory in
+  # docs/evaluation/interfaces.md). Informative: never blocks a merge. The core pulls
+  # tss-esapi on Linux, hence tpm2-tss.
   fuzz:
     name: fuzz (informative)
     runs-on: ubuntu-latest
@@ -87,15 +89,22 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install nightly --profile minimal
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
+      - name: tpm2-tss
+        run: sudo -E .github/scripts/install-tpm2-tss.sh
       - name: cargo-fuzz
         run: cargo +nightly install cargo-fuzz --locked
       - name: Fuzz each decoder for 60 seconds
         working-directory: fuzz
         run: |
-          for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60
+          status=0
+          for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload \
+            decode_local_request decode_sync_message decode_operation decode_server_annex \
+            decode_release decode_audit_log decode_recovery_share decode_keylog decode_hornn_grant \
+            parse_csv parse_native_json; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 || status=1
           done
+          exit $status
 
   # TPM 2.0 prototype (ADR 0014) against swtpm, the software TPM. Real chips are tested by
   # hand (docs/keystore-prototypes.md).
