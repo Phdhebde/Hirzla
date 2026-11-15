@@ -249,6 +249,118 @@ pub struct SyncReport {
     pub access: bool,
 }
 
+/// Most alerts in a reply (`docs/api-locale.md` § 15.2).
+pub const MAX_ALERTS: usize = 4096;
+
+/// Why the local key log is suspect (`transparence.md` § 6.7), as `ServerStatus` gives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SuspectReason {
+    /// 1: the recomputed root differs from the signed one.
+    RootMismatch = 1,
+    /// 2: a signed head is smaller than one already verified.
+    SizeDecrease = 2,
+    /// 3: an entry breaks a rule R1 to R5.
+    RuleViolation = 3,
+    /// 4: a peer head does not match the local entries.
+    PeerHead = 4,
+    /// 5: a peer head is larger than what the server serves.
+    Unserved = 5,
+    /// 6: an entry of an inclusion proof differs from the local one.
+    ProofEntry = 6,
+}
+
+impl SuspectReason {
+    const ALL: [SuspectReason; 6] = [
+        SuspectReason::RootMismatch,
+        SuspectReason::SizeDecrease,
+        SuspectReason::RuleViolation,
+        SuspectReason::PeerHead,
+        SuspectReason::Unserved,
+        SuspectReason::ProofEntry,
+    ];
+
+    /// The reason from its code.
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<SuspectReason> {
+        SuspectReason::ALL.into_iter().find(|r| *r as u64 == n)
+    }
+}
+
+/// Kind of an alert about the member's own keys (`transparence.md` § 6.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    /// 1: a key inscribed for the member is not the member's key.
+    ForeignMemberKey = 1,
+    /// 2: a device unknown to the member is inscribed in its name.
+    UnknownOwnDevice = 2,
+    /// 3: a revocation unknown to the member is inscribed in its name.
+    UnknownOwnRevocation = 3,
+}
+
+impl AlertKind {
+    /// The kind from its code.
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<AlertKind> {
+        [
+            AlertKind::ForeignMemberKey,
+            AlertKind::UnknownOwnDevice,
+            AlertKind::UnknownOwnRevocation,
+        ]
+        .into_iter()
+        .find(|k| *k as u64 == n)
+    }
+}
+
+/// An alert about the member's own keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KeyLogAlert {
+    /// Kind.
+    pub kind: AlertKind,
+    /// Rank of the entry in the log.
+    pub index: u64,
+    /// Device concerned (kinds 2 and 3).
+    pub device: Option<Id16>,
+}
+
+/// State of the local key transparency log (`docs/api-locale.md` § 15.2, ADR 0041).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyLogStatus {
+    /// Why the log is suspect, if it is.
+    pub suspect: Option<SuspectReason>,
+    /// Local entries.
+    pub entries: u64,
+    /// Alerts about the member's own keys.
+    pub alerts: Vec<KeyLogAlert>,
+}
+
+/// Why the current member may not do an action in a shared locker (ADR 0041).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refusal {
+    /// 1: the role does not allow it.
+    RoleTooLow = 1,
+    /// 2: a quorum of owners is required.
+    QuorumRequired = 2,
+    /// 3: the last owner can neither leave nor be demoted.
+    LastOwner = 3,
+    /// 4: the server no longer serves the locker to this member.
+    AccessLost = 4,
+}
+
+impl Refusal {
+    /// The refusal from its code.
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<Refusal> {
+        [
+            Refusal::RoleTooLow,
+            Refusal::QuorumRequired,
+            Refusal::LastOwner,
+            Refusal::AccessLost,
+        ]
+        .into_iter()
+        .find(|r| *r as u64 == n)
+    }
+}
+
 /// One member of a shared locker.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MemberInfo {
@@ -262,6 +374,12 @@ pub struct MemberInfo {
     pub fingerprint: String,
     /// Whether its admission carries a verified transparency proof.
     pub proven: bool,
+    /// Roles the current member may change this member's role to.
+    pub change_to: Vec<Role>,
+    /// Why `change_to` is empty, when it is.
+    pub change_refusal: Option<Refusal>,
+    /// Why the current member may not remove this member, if so.
+    pub remove_refusal: Option<Refusal>,
 }
 
 /// A server mode reply. Holds no secret: names of lockers are in erasing buffers.
@@ -275,6 +393,11 @@ pub enum ServerReply {
         server: Option<(String, Id16, String, bool)>,
         /// Shared lockers.
         lockers: Vec<LockerStatus>,
+        /// End of the last successful synchronisation since the vault was opened, wall clock
+        /// milliseconds.
+        last_sync_ms: Option<u64>,
+        /// The local key log (present when joined).
+        keylog: Option<KeyLogStatus>,
     },
     /// 41.
     Identity {
@@ -315,7 +438,16 @@ pub enum ServerReply {
         devices: u64,
     },
     /// 48.
-    Members(Vec<MemberInfo>),
+    Members {
+        /// The current member.
+        me: Id16,
+        /// Members holding a role.
+        members: Vec<MemberInfo>,
+        /// Roles the current member may grant to a new member.
+        grantable: Vec<Role>,
+        /// Why `grantable` is empty, when it is.
+        grant_refusal: Option<Refusal>,
+    },
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
@@ -565,11 +697,121 @@ fn status_from(v: &Value) -> Result<LockerStatus, cbor::CborError> {
     })
 }
 
+fn roles_value(roles: &[Role]) -> Value {
+    Value::Array(roles.iter().map(|r| Value::Uint(r.code())).collect())
+}
+
+fn roles_from(v: &Value) -> Result<Vec<Role>, cbor::CborError> {
+    array_max(v, 6)?
+        .iter()
+        .map(|r| uint(r).and_then(|c| Role::from_code(c).ok_or(cbor::CborError::Malformed)))
+        .collect()
+}
+
+fn refusal_from(v: Option<&Value>) -> Result<Option<Refusal>, cbor::CborError> {
+    v.map(|r| uint(r).and_then(|c| Refusal::from_u64(c).ok_or(cbor::CborError::Malformed)))
+        .transpose()
+}
+
+fn member_value(mi: &MemberInfo) -> Value {
+    let mut e = vec![
+        (1, Value::bytes(&mi.member)),
+        (2, Value::Uint(mi.role.code())),
+        (3, Value::Uint(mi.devices)),
+        (4, Value::text(&mi.fingerprint)),
+        (5, Value::Bool(mi.proven)),
+        (6, roles_value(&mi.change_to)),
+    ];
+    if let Some(r) = mi.change_refusal {
+        e.push((7, Value::Uint(r as u64)));
+    }
+    if let Some(r) = mi.remove_refusal {
+        e.push((8, Value::Uint(r as u64)));
+    }
+    Value::map(e)
+}
+
+fn member_from(v: &Value) -> Result<MemberInfo, cbor::CborError> {
+    let i = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8])?;
+    Ok(MemberInfo {
+        member: fixed::<16>(i.req(1)?)?,
+        role: Role::from_code(uint(i.req(2)?)?).ok_or(cbor::CborError::Malformed)?,
+        devices: uint(i.req(3)?)?,
+        fingerprint: text_max(i.req(4)?, FINGERPRINT_LEN)?.to_owned(),
+        proven: boolean(i.req(5)?)?,
+        change_to: roles_from(i.req(6)?)?,
+        change_refusal: refusal_from(i.opt(7))?,
+        remove_refusal: refusal_from(i.opt(8))?,
+    })
+}
+
+fn keylog_value(k: &KeyLogStatus) -> Value {
+    let mut e = vec![
+        (1, Value::Bool(k.suspect.is_some())),
+        (2, Value::Uint(k.entries)),
+    ];
+    if let Some(r) = k.suspect {
+        e.push((3, Value::Uint(r as u64)));
+    }
+    e.push((
+        4,
+        Value::Array(
+            k.alerts
+                .iter()
+                .map(|a| {
+                    let mut f = vec![(1, Value::Uint(a.kind as u64)), (2, Value::Uint(a.index))];
+                    if let Some(d) = &a.device {
+                        f.push((3, Value::bytes(d)));
+                    }
+                    Value::map(f)
+                })
+                .collect(),
+        ),
+    ));
+    Value::map(e)
+}
+
+fn keylog_from(v: &Value) -> Result<KeyLogStatus, cbor::CborError> {
+    let f = Fields::new(v, &[1, 2, 3, 4])?;
+    let suspect = boolean(f.req(1)?)?;
+    let reason = f
+        .opt(3)
+        .map(|r| uint(r).and_then(|c| SuspectReason::from_u64(c).ok_or(cbor::CborError::Malformed)))
+        .transpose()?;
+    if suspect != reason.is_some() {
+        return Err(cbor::CborError::Malformed);
+    }
+    let mut alerts = Vec::new();
+    for a in array_max(f.req(4)?, MAX_ALERTS)? {
+        let g = Fields::new(a, &[1, 2, 3])?;
+        let kind = AlertKind::from_u64(uint(g.req(1)?)?).ok_or(cbor::CborError::Malformed)?;
+        let device = g.opt(3).map(fixed::<16>).transpose()?;
+        if device.is_some() == (kind == AlertKind::ForeignMemberKey) {
+            return Err(cbor::CborError::Malformed);
+        }
+        alerts.push(KeyLogAlert {
+            kind,
+            index: uint(g.req(2)?)?,
+            device,
+        });
+    }
+    Ok(KeyLogStatus {
+        suspect: reason,
+        entries: uint(f.req(2)?)?,
+        alerts,
+    })
+}
+
 impl ServerReply {
     fn body(&self) -> Option<Value> {
         match self {
             ServerReply::Done => None,
-            ServerReply::Status { server, lockers } => {
+            ServerReply::Status {
+                server,
+                lockers,
+                last_sync_ms,
+                keylog,
+            } => {
                 let mut e = vec![(1, Value::Bool(server.is_some()))];
                 if let Some((url, id, fp, verified)) = server {
                     e.push((2, Value::text(url)));
@@ -578,6 +820,12 @@ impl ServerReply {
                     e.push((5, Value::Bool(*verified)));
                 }
                 e.push((6, Value::Array(lockers.iter().map(status_value).collect())));
+                if let Some(t) = last_sync_ms {
+                    e.push((7, Value::Uint(*t)));
+                }
+                if let Some(k) = keylog {
+                    e.push((8, keylog_value(k)));
+                }
                 Some(Value::map(e))
             }
             ServerReply::Identity {
@@ -630,22 +878,22 @@ impl ServerReply {
                 (1, Value::text(fingerprint)),
                 (2, Value::Uint(*devices)),
             ])),
-            ServerReply::Members(list) => Some(Value::map(vec![(
-                1,
-                Value::Array(
-                    list.iter()
-                        .map(|mi| {
-                            Value::map(vec![
-                                (1, Value::bytes(&mi.member)),
-                                (2, Value::Uint(mi.role.code())),
-                                (3, Value::Uint(mi.devices)),
-                                (4, Value::text(&mi.fingerprint)),
-                                (5, Value::Bool(mi.proven)),
-                            ])
-                        })
-                        .collect(),
-                ),
-            )])),
+            ServerReply::Members {
+                me,
+                members,
+                grantable,
+                grant_refusal,
+            } => {
+                let mut e = vec![
+                    (1, Value::Array(members.iter().map(member_value).collect())),
+                    (2, Value::bytes(me)),
+                    (3, roles_value(grantable)),
+                ];
+                if let Some(r) = grant_refusal {
+                    e.push((4, Value::Uint(*r as u64)));
+                }
+                Some(Value::map(e))
+            }
         }
     }
 
@@ -731,8 +979,13 @@ impl ServerReply {
                 ServerReply::Done
             }
             ServerOp::ServerStatus => {
-                let b = Fields::new(body()?, &[1, 2, 3, 4, 5, 6]).map_err(bad)?;
-                let server = if b.req(1).and_then(boolean).map_err(bad)? {
+                let b = Fields::new(body()?, &[1, 2, 3, 4, 5, 6, 7, 8]).map_err(bad)?;
+                let joined = b.req(1).and_then(boolean).map_err(bad)?;
+                let keylog = b.opt(8).map(keylog_from).transpose().map_err(bad)?;
+                if keylog.is_some() != joined {
+                    return Err(ErrorCode::Malformed);
+                }
+                let server = if joined {
                     Some((
                         text(b.req(2).map_err(bad)?, MAX_SERVER_URL)?,
                         b.req(3).and_then(fixed::<16>).map_err(bad)?,
@@ -752,6 +1005,8 @@ impl ServerReply {
                         .map(status_from)
                         .collect::<Result<_, _>>()
                         .map_err(bad)?,
+                    last_sync_ms: b.opt(7).map(uint).transpose().map_err(bad)?,
+                    keylog,
                 }
             }
             ServerOp::ServerIdentity => {
@@ -809,20 +1064,20 @@ impl ServerReply {
                 }
             }
             ServerOp::LockerMembers => {
-                let b = Fields::new(body()?, &[1]).map_err(bad)?;
-                let mut out = Vec::new();
-                for it in b.req(1).and_then(|x| array_max(x, MAX_LIST)).map_err(bad)? {
-                    let i = Fields::new(it, &[1, 2, 3, 4, 5]).map_err(bad)?;
-                    out.push(MemberInfo {
-                        member: i.req(1).and_then(fixed::<16>).map_err(bad)?,
-                        role: Role::from_code(i.req(2).and_then(uint).map_err(bad)?)
-                            .ok_or(ErrorCode::Malformed)?,
-                        devices: i.req(3).and_then(uint).map_err(bad)?,
-                        fingerprint: text(i.req(4).map_err(bad)?, FINGERPRINT_LEN)?,
-                        proven: i.req(5).and_then(boolean).map_err(bad)?,
-                    });
+                let b = Fields::new(body()?, &[1, 2, 3, 4]).map_err(bad)?;
+                ServerReply::Members {
+                    members: b
+                        .req(1)
+                        .and_then(|x| array_max(x, MAX_LIST))
+                        .map_err(bad)?
+                        .iter()
+                        .map(member_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(bad)?,
+                    me: b.req(2).and_then(fixed::<16>).map_err(bad)?,
+                    grantable: b.req(3).and_then(roles_from).map_err(bad)?,
+                    grant_refusal: refusal_from(b.opt(4)).map_err(bad)?,
                 }
-                ServerReply::Members(out)
             }
         };
         Ok((id, Ok(reply)))
@@ -949,6 +1204,32 @@ mod tests {
             (
                 ServerOp::ServerStatus,
                 ServerReply::Status {
+                    server: None,
+                    lockers: Vec::new(),
+                    last_sync_ms: None,
+                    keylog: None,
+                },
+            ),
+            (
+                ServerOp::ServerStatus,
+                ServerReply::Status {
+                    last_sync_ms: Some(1_763_200_000_000),
+                    keylog: Some(KeyLogStatus {
+                        suspect: Some(SuspectReason::SizeDecrease),
+                        entries: 12,
+                        alerts: vec![
+                            KeyLogAlert {
+                                kind: AlertKind::UnknownOwnDevice,
+                                index: 7,
+                                device: Some([9; 16]),
+                            },
+                            KeyLogAlert {
+                                kind: AlertKind::ForeignMemberKey,
+                                index: 2,
+                                device: None,
+                            },
+                        ],
+                    }),
                     server: Some(("hirzla://h".into(), [4; 16], "A".repeat(20), false)),
                     lockers: vec![LockerStatus {
                         id: [1; 16],
@@ -974,19 +1255,82 @@ mod tests {
             ),
             (
                 ServerOp::LockerMembers,
-                ServerReply::Members(vec![MemberInfo {
-                    member: [5; 16],
-                    role: Role::Owner,
-                    devices: 1,
-                    fingerprint: "B".repeat(20),
-                    proven: true,
-                }]),
+                ServerReply::Members {
+                    me: [5; 16],
+                    members: vec![MemberInfo {
+                        member: [5; 16],
+                        role: Role::Owner,
+                        devices: 1,
+                        fingerprint: "B".repeat(20),
+                        proven: true,
+                        change_to: vec![Role::Manager, Role::Editor],
+                        change_refusal: None,
+                        remove_refusal: Some(Refusal::LastOwner),
+                    }],
+                    grantable: Vec::new(),
+                    grant_refusal: Some(Refusal::AccessLost),
+                },
             ),
         ];
         for (op, r) in replies {
             let f = ServerReply::encode(9, &Ok(r.clone())).unwrap();
             assert_eq!(ServerReply::decode(op, &f).unwrap(), (9, Ok(r)));
         }
+        // A joined status without its log, a suspect log without its reason, a device alert
+        // without its device: refused.
+        let status = |keylog: Option<Value>| {
+            let mut b = vec![
+                (1, Value::Bool(true)),
+                (2, Value::text("hirzla://h:7443")),
+                (3, Value::bytes(&[1; 16])),
+                (4, Value::text(&"A".repeat(20))),
+                (5, Value::Bool(true)),
+                (6, Value::Array(Vec::new())),
+            ];
+            if let Some(k) = keylog {
+                b.push((8, k));
+            }
+            cbor::encode(&Value::map(vec![
+                (1, Value::Uint(SERVER_VERSION)),
+                (2, Value::Uint(1)),
+                (3, Value::Uint(0)),
+                (4, Value::map(b)),
+            ]))
+            .unwrap()
+        };
+        assert!(ServerReply::decode(ServerOp::ServerStatus, &status(None)).is_err());
+        let suspect_without_reason = Value::map(vec![
+            (1, Value::Bool(true)),
+            (2, Value::Uint(3)),
+            (4, Value::Array(Vec::new())),
+        ]);
+        assert!(ServerReply::decode(
+            ServerOp::ServerStatus,
+            &status(Some(suspect_without_reason))
+        )
+        .is_err());
+        let device_alert_without_device = Value::map(vec![
+            (1, Value::Bool(false)),
+            (2, Value::Uint(3)),
+            (
+                4,
+                Value::Array(vec![Value::map(vec![
+                    (1, Value::Uint(2)),
+                    (2, Value::Uint(1)),
+                ])]),
+            ),
+        ]);
+        assert!(ServerReply::decode(
+            ServerOp::ServerStatus,
+            &status(Some(device_alert_without_device))
+        )
+        .is_err());
+        let healthy = Value::map(vec![
+            (1, Value::Bool(false)),
+            (2, Value::Uint(3)),
+            (4, Value::Array(Vec::new())),
+        ]);
+        assert!(ServerReply::decode(ServerOp::ServerStatus, &status(Some(healthy))).is_ok());
         let f = ServerReply::encode(2, &Err(ServerCode::ServerRefused(4))).unwrap();
         assert_eq!(
             ServerReply::decode(ServerOp::ServerSync, &f).unwrap(),
