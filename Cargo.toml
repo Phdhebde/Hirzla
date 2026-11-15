@@ -11,6 +11,8 @@ members = [
     "apps/cli",
     "apps/native-host",
     "apps/server",
+    # Publisher-side signing tool (ADR 0042, 0043): never shipped to workstations.
+    "apps/release-signer",
     # Tauri 2 shell (ADR 0024): in the workspace so that the four commands of CLAUDE.md,
     # the single Cargo.lock and cargo-deny cover it. Linux needs webkit2gtk-4.1 to build it.
     "apps/desktop/src-tauri",

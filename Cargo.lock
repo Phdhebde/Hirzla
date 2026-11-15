@@ -1979,6 +1979,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirzla-release-signer"
+version = "0.0.0"
+dependencies = [
+ "hirzla-core",
+ "hirzla-crypto",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "hirzla-server"
 version = "0.0.0"
 dependencies = [

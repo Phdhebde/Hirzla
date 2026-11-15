@@ -287,6 +287,99 @@ fn another_process_is_refused() {
     }
 }
 
+/// ADR 0042 on Linux: with `--client-signatures required`, the core accepts `hirzla` only
+/// if its executable matches the signed client manifest; a manifest holding another hash
+/// (as for a modified executable) gets it refused, with `signature_not_accepted` logged, and
+/// a core whose manifest is missing refuses to start.
+#[cfg(target_os = "linux")]
+#[test]
+fn signed_client_manifest_is_enforced() {
+    use hirzla_core::release::update::entry_for;
+    use hirzla_core::release::{current_platform, sign, Kind, Manifest, Version};
+    use hirzla_crypto::sign::PublisherSigningKey;
+
+    let key = PublisherSigningKey::generate().unwrap();
+    let start = |dir: &Path, sock: &str, sha_flip: bool| {
+        let mut entry = entry_for("hirzla", &cli_exe(), true).unwrap();
+        if sha_flip {
+            entry.sha384[0] ^= 1;
+        }
+        let manifest = Manifest {
+            version: Version::current(),
+            platform: current_platform(),
+            files: vec![entry],
+        };
+        std::fs::write(
+            dir.join("hirzla-clients.manifest"),
+            sign(Kind::ClientManifest, &manifest, &key).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("editeur.pub"), key.verifying_key().as_bytes()).unwrap();
+        let child = Command::new(core_exe())
+            .args(["--socket", sock, "--log"])
+            .arg(dir.join("core.log"))
+            .arg("--vault")
+            .arg(dir.join("coffre.hirzla"))
+            .args(["--client-signatures", "required", "--publisher-key"])
+            .arg(dir.join("editeur.pub"))
+            .arg("--client-manifest")
+            .arg(dir.join("hirzla-clients.manifest"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        Core(child)
+    };
+    let log_contains = |dir: &Path, what: &str| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        loop {
+            let log = std::fs::read_to_string(dir.join("core.log")).unwrap_or_default();
+            if log.contains(what) {
+                return;
+            }
+            assert!(Instant::now() < deadline, "{what} not logged:\n{log}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    // The genuine command line is accepted.
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start(dir.path(), &sock, false);
+    wait_ready(&sock);
+    log_contains(dir.path(), "event=client_signatures required=1");
+
+    // A manifest that does not match the executable: refused.
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start(dir.path(), &sock, true);
+    log_contains(dir.path(), "event=listening");
+    let err = fails(&hirzla(&sock, &["ls"], None));
+    assert!(!err.is_empty());
+    log_contains(dir.path(), "reason=signature_not_accepted");
+
+    // No manifest: the core does not start.
+    let dir = private_dir();
+    let status = Command::new(core_exe())
+        .args([
+            "--socket",
+            &socket(dir.path()),
+            "--client-signatures",
+            "required",
+        ])
+        .arg("--vault")
+        .arg(dir.path().join("coffre.hirzla"))
+        .arg("--client-manifest")
+        .arg(dir.path().join("absent.manifest"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert!(!status.success());
+}
+
 /// `get` refuses to print a secret on a terminal without `--stdout`; this is checked by the
 /// argument logic, not here (the test has no terminal). Without a clipboard and with a
 /// terminal, the user is told to use `--stdout`.
