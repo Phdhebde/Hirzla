@@ -24,8 +24,10 @@ enum Fate {
     Closed,
 }
 
-fn fate(s: &mut impl Read, sock: &TcpStream, wait: Duration) -> Fate {
-    sock.set_read_timeout(Some(wait)).unwrap();
+/// Reads once from `s`, whose underlying socket must already carry the read
+/// timeout: on Windows a timeout set on a `try_clone` does not apply to the
+/// original handle.
+fn fate(s: &mut impl Read) -> Fate {
     let mut b = [0u8; 64];
     match s.read(&mut b) {
         Ok(0) => Fate::Closed,
@@ -40,8 +42,8 @@ fn raw(addr: SocketAddr) -> TcpStream {
 }
 
 fn fate_raw(t: &mut TcpStream, wait: Duration) -> Fate {
-    let sock = t.try_clone().unwrap();
-    fate(t, &sock, wait)
+    t.set_read_timeout(Some(wait)).unwrap();
+    fate(t)
 }
 
 fn server(device: Limits, admin: Limits) -> (tempfile::TempDir, Server) {
@@ -132,12 +134,14 @@ fn device_that_does_not_authenticate_is_closed() {
     let (_tmp, s) = server(device, Limits::ADMIN);
     // A complete TLS handshake, then nothing: no `Hello`, no `Auth`.
     let mut tls = connect_tls(s.running.addr, SERVER_NAME, &s.device_tls).unwrap();
-    let sock = tls.sock.try_clone().unwrap();
-    assert_eq!(
-        fate(&mut tls, &sock, Duration::from_millis(200)),
-        Fate::Open
-    );
-    assert_eq!(fate(&mut tls, &sock, Duration::from_secs(5)), Fate::Closed);
+    tls.sock
+        .set_read_timeout(Some(Duration::from_millis(200)))
+        .unwrap();
+    assert_eq!(fate(&mut tls), Fate::Open);
+    tls.sock
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    assert_eq!(fate(&mut tls), Fate::Closed);
 }
 
 #[test]
