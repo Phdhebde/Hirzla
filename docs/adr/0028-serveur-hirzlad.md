@@ -140,7 +140,8 @@ utilisateur non privilégiés, restreints sur Ubuntu 24.04.
 
 ### 11. Reste à faire (hors de ce lot)
 
-`Ack`/`Stable` (compaction stable : l'accusé est vérifié puis ignoré) ; effacement des corps
+~~`Ack`/`Stable` (compaction stable : l'accusé est vérifié puis ignoré)~~ (fait, ADR 0040 :
+répertoire de données v2, enregistrements 7 à 10, purge différée) ; effacement des corps
 `late` après 30 jours ; preuves pour une tête antérieure (`size`) ; remontée des journaux d'audit
 des appareils (`evenements.md` § 7.2, message non spécifié) ; export SIEM (ADR 0022) ; quotas et
 limites de débit réglables ; rotation du journal d'audit.

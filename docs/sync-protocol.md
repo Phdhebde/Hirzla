@@ -850,8 +850,19 @@ Ensuite :
 - **Interface d'administration** : port distinct, certificat client, messages 100 à 107
   (`AdminStatus`, `AdminStatusResult`, `AdminUnseal`, `AdminCreateAccount`, `AdminAccount`,
   `AdminCheckpoint`, `AdminCheckpointResult`, `AdminShutdown`), refusés sur le port des postes.
-- `Ack` est vérifié puis ignoré, `Stable` n'est jamais envoyé : la compaction stable reste à
-  faire côté serveur.
+- ~~`Ack` est vérifié puis ignoré, `Stable` n'est jamais envoyé~~ : compaction stable mise en
+  œuvre (ADR 0040). Le serveur enregistre chaque `Ack` d'un appareil lecteur pour une
+  `Compact` connue du casier : un accusé d'un appareil qui ne lit pas le casier est refusé
+  (code 4) et ne compte pas ; un accusé pour une `Compact` inconnue est ignoré. La `Compact`
+  devient stable quand tous les appareils attendus ont accusé : appareils actifs, non révoqués
+  (dans le casier et au registre), des membres dont le rôle lit le casier, hors ceux qui ne se
+  sont pas authentifiés depuis plus de 90 jours. Le serveur envoie alors `Stable` à l'appareil
+  qui accuse, et le renvoie à tout appareil qui accuse de nouveau une `Compact` déjà stable :
+  un poste accuse à chaque synchronisation les `Compact` appliquées dont il n'a pas reçu la
+  stabilité. `Stable` n'est pas poussé aux autres sessions ouvertes.
+- **Après `Stable`**, le serveur sert la souche (`OpItem` clé 3) au lieu de l'opération pour
+  chaque élément de `prune` qui est une opération de données du même casier, non `late`, reçue
+  avant la `Compact`. Il efface les corps plus tard, en réécrivant son journal (ADR 0040).
 
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
@@ -867,6 +878,7 @@ Ensuite :
 | Opérations en quarantaine (`late`) | Son propre filtrage | Limiter la diffusion | — |
 | Qu'une action à plusieurs a eu lieu, et qui l'a approuvée | Accords joints en clair | Vérifier le quorum | Les accords ne circulent pas avant publication (§ 7.7) |
 | Destinataire, taille et heure des paquets de la boîte aux lettres ; identifiant et adresse IP d'un appareil en cours d'enrôlement | `MailboxPut`, `MailboxGet` (§ 11.9) | Acheminer l'enrôlement et les accords | Paquets chiffrés pour le destinataire, gardés 10 minutes, en mémoire seulement |
+| Quels appareils ont accusé quelle `Compact` ; jour de la dernière authentification de chaque appareil | `Ack`, session (§ 10.2, ADR 0040) | Décider de la stabilité, écarter les appareils inactifs | Le `CompactPast` reste scellé ; dernière authentification gardée au jour près |
 
 Il n'apprend **pas** : les titres, adresses, noms d'utilisateur, valeurs, notes, noms de
 casiers, types de secrets, le secret visé par une opération (`secret_id` scellé, `block_id`
