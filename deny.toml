@@ -13,6 +13,16 @@ confidence-threshold = 0.9
 crate = "target-lexicon"
 allow = ["Apache-2.0 WITH LLVM-exception"]
 
+# clipboard-win and its dependency error-code: Windows clipboard of arboard (ADR 0016),
+# Boost Software License 1.0 (permissive, OSI-approved). Allowed for these crates only.
+[[licenses.exceptions]]
+crate = "clipboard-win"
+allow = ["BSL-1.0"]
+
+[[licenses.exceptions]]
+crate = "error-code"
+allow = ["BSL-1.0"]
+
 # Workspace crates are `publish = false` and the project licence is not chosen yet:
 # only third-party crates are subject to the allow list above.
 [licenses.private]
