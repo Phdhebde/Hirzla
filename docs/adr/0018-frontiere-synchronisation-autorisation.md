@@ -1,6 +1,6 @@
 # ADR 0018 — Frontière entre synchronisation et autorisation, ancrage de la genèse
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
@@ -114,3 +114,11 @@ une époque en certifie la clé ; une clé reçue autrement reste une candidate.
   convergence, et un relais choisit la genèse.
 - **Plus petit `op_id` retenu parmi plusieurs `LockerCreate`** : déterministe, mais un
   attaquant peut fabriquer une genèse de plus petit identifiant et capturer le casier.
+
+## Décision du mainteneur (2026-11-15)
+
+Accepté. Les opérations de contrôle et le calcul d'autorisation (§ 9.4) ont aussi été écrits
+dans `hirzla-access` (étape 10). Le lot d'intégration garde une seule définition de
+`ControlBody`, dans `hirzla-access`, que `hirzla-sync` réutilise ; `hirzla-sync` dépend
+donc de `hirzla-access`, conformément au sens des dépendances de `CLAUDE.md`, et le trait
+`Authorizer` est implémenté par un adaptateur au-dessus de `hirzla_access::authz`.

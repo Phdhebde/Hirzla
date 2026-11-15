@@ -1,6 +1,6 @@
 # ADR 0017 — Souches et passé causal après compaction
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
@@ -65,3 +65,10 @@ Proposition, **non implémentée** dans le format :
   ne serait élaguable, puisque chaque nouvelle version cite ses parents.
 - **Envoyer à l'appareil entrant les opérations complètes depuis un autre poste** : le corps
   n'existe plus nulle part après une compaction stable.
+
+## Décision du mainteneur (2026-11-15)
+
+Accepté : la `Compact` portera, scellé, le passé causal des opérations qu'elle élague. Rien
+n'est encore déployé, le changement de format du protocole se fait donc maintenant, avant
+toute version publiée, dans le lot d'intégration de `hirzla-sync` et `hirzla-access`. D'ici
+là, l'élagage reste désactivé en mode Serveur.
