@@ -1897,7 +1897,6 @@ name = "hirzla-core"
 version = "0.0.0"
 dependencies = [
  "hirzla-access",
- "hirzla-audit",
  "hirzla-crypto",
  "hirzla-keystore",
  "hirzla-server",

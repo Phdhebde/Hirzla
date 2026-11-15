@@ -407,7 +407,7 @@ impl std::fmt::Debug for ServerRequest {
 }
 
 /// State of one shared locker (`docs/api-locale.md` § 15.2).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct LockerStatus {
     /// Locker.
     pub id: Id16,
@@ -427,6 +427,20 @@ pub struct LockerStatus {
     pub access: bool,
     /// Writes frozen: a removal announced in the key log was not received (ADR 0045).
     pub frozen: bool,
+}
+
+impl std::fmt::Debug for LockerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the name of the locker: it is confidential metadata.
+        f.debug_struct("LockerStatus")
+            .field("role", &self.role)
+            .field("cursor", &self.cursor)
+            .field("unsent", &self.unsent)
+            .field("pending", &self.pending)
+            .field("quarantined", &self.quarantined)
+            .field("access", &self.access)
+            .finish_non_exhaustive()
+    }
 }
 
 /// What one synchronisation did for one locker.
@@ -2108,5 +2122,21 @@ mod tests {
             ServerReply::decode(ServerOp::ServerSync, &f).unwrap(),
             (2, Err(ServerCode::ServerRefused(4)))
         );
+    }
+
+    #[test]
+    fn debug_never_shows_locker_names() {
+        let locker = LockerStatus {
+            id: [1; 16],
+            name: Some(Zeroizing::new("secret-casier".to_owned())),
+            role: None,
+            cursor: 0,
+            unsent: 0,
+            pending: 0,
+            quarantined: 0,
+            access: true,
+        };
+        let d = format!("{locker:?}");
+        assert!(!d.contains("secret"), "{d}");
     }
 }

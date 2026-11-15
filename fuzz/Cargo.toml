@@ -1,6 +1,8 @@
-# Fuzz targets of hirzla-vault (ADR 0013). Outside the workspace: needs nightly and cargo-fuzz.
+# Fuzz targets of every decoder exposed to external data (ADR 0013; inventory in
+# docs/evaluation/interfaces.md). Outside the workspace: needs nightly and cargo-fuzz.
 #   cargo install cargo-fuzz
 #   cargo +nightly fuzz run decode_secret_body
+# The core pulls tss-esapi on Linux: tpm2-tss must be installed (.github/scripts).
 [package]
 name = "hirzla-vault-fuzz"
 version = "0.0.0"
@@ -12,7 +14,16 @@ cargo-fuzz = true
 
 [dependencies]
 hirzla-vault = { path = "../crates/hirzla-vault", features = ["fuzzing"] }
+hirzla-crypto = { path = "../crates/hirzla-crypto" }
+hirzla-access = { path = "../crates/hirzla-access" }
+hirzla-audit = { path = "../crates/hirzla-audit" }
+hirzla-sync = { path = "../crates/hirzla-sync", features = ["net"] }
+hirzla-core = { path = "../crates/hirzla-core", features = ["fuzzing"] }
 libfuzzer-sys = "0.4"
+# For the modules compiled here from source without their crate (`parse_csv`,
+# `parse_native_json`): already in the workspace graph, same versions.
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 # Standalone: not a member of the main workspace.
 [workspace]
@@ -48,6 +59,83 @@ bench = false
 [[bin]]
 name = "read_kdbx_payload"
 path = "fuzz_targets/read_kdbx_payload.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_local_request"
+path = "fuzz_targets/decode_local_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_sync_message"
+path = "fuzz_targets/decode_sync_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_operation"
+path = "fuzz_targets/decode_operation.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_server_annex"
+path = "fuzz_targets/decode_server_annex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_release"
+path = "fuzz_targets/decode_release.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_audit_log"
+path = "fuzz_targets/decode_audit_log.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_csv"
+path = "fuzz_targets/parse_csv.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_native_json"
+path = "fuzz_targets/parse_native_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_recovery_share"
+path = "fuzz_targets/decode_recovery_share.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_keylog"
+path = "fuzz_targets/decode_keylog.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_hornn_grant"
+path = "fuzz_targets/decode_hornn_grant.rs"
 test = false
 doc = false
 bench = false
