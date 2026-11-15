@@ -1,6 +1,6 @@
 # ADR 0022 — Transport syslog sur TLS vers le SIEM
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

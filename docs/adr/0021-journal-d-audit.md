@@ -1,6 +1,6 @@
 # ADR 0021 — Journal d'audit : chaîne, gardiens, points de contrôle et usage des secrets
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
