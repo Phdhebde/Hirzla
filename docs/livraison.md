@@ -66,8 +66,20 @@ cargo tauri build --config tauri.livraison.conf.json --features livraison
 ```
 
 La fonctionnalité `livraison` de l'application, de la ligne de commande et de l'hôte natif
-fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : même
-éditeur sous Windows et macOS, empreinte du manifeste des clients sous Linux.
+fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : empreinte
+du manifeste des clients (§ 7), sur les trois systèmes.
+
+**Mode de signature** (ADR 0063 § 1), fixé à la compilation, jamais deviné à l'exécution :
+
+- `manifeste`, le défaut, sans rien ajouter aux commandes ci-dessus : le noyau et ses
+  clients se vérifient par le manifeste des clients signé par la clé d'éditeur, sous Linux,
+  Windows et macOS, et ignorent toute signature de système ;
+- `systeme`, seulement si l'éditeur dispose d'un certificat Authenticode ou d'un Developer
+  ID Apple : ajouter la fonctionnalité `signature-systeme` aux **quatre** exécutables
+  (`--features hirzla-core/signature-systeme,hirzla-cli/signature-systeme` puis
+  `--features livraison,signature-systeme` pour l'application ; de même pour l'hôte natif).
+  Le contrôle devient « même éditeur au sens du système » (§ 3, § 4) ; refusé sous Linux.
+  Un noyau et des clients compilés dans des modes différents ne se reconnaissent pas.
 
 Le flux `.github/workflows/livraison.yml` (lancé à la main) fait ces étapes sur les trois
 systèmes et publie les installeurs comme artefacts. La compilation Cargo elle-même ne
@@ -111,6 +123,13 @@ pour un paquet livré, `excluded` pour un outil de développement.
 
 ## 3. macOS : signature et notarisation
 
+Sans compte Apple Developer (cas par défaut, ADR 0063 § 5), seule l'étape 2 s'applique, avec
+une signature **ad hoc** (`codesign -s - -o runtime`) ; Gatekeeper avertit à la première
+ouverture, le produit fonctionne : le noyau et ses clients se vérifient par le manifeste
+(§ 7). Toute signature, ad hoc comprise, **modifie les exécutables** : le manifeste des
+clients est produit après elle (§ 7). Les étapes 1, 3 et 4 supposent un compte Apple
+Developer ; le mode `systeme` (§ 2) n'a de sens qu'avec lui.
+
 1. **Certificat** « Developer ID Application » du compte Apple Developer de l'éditeur, exporté
    en `.p12`. En CI : secrets `APPLE_CERTIFICATE` (le `.p12` en base64),
    `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (« Developer ID Application : … »).
@@ -135,6 +154,14 @@ pour un paquet livré, `excluded` pour un outil de développement.
    La deuxième commande ne doit afficher aucun `get-task-allow`.
 
 ## 4. Windows : signature Authenticode
+
+Facultative (ADR 0063 § 4) : sans certificat, l'installeur n'est pas signé, SmartScreen
+avertit à l'installation, et le produit fonctionne, le noyau et ses clients se vérifiant par
+le manifeste (§ 7). Si un certificat est obtenu (SignPath Foundation ou autorité
+commerciale), la signature Authenticode **modifie les exécutables** : signer d'abord
+`hirzla-core.exe`, `hirzla.exe`, `hirzla-desktop.exe` et `hirzla-native-host.exe`, produire
+ensuite le manifeste (§ 7), puis construire et signer le MSI sans signer de nouveau les
+exécutables.
 
 1. **Certificat** de signature de code (validation étendue de préférence, pour la réputation
    SmartScreen), gardé sur un module matériel (jeton USB ou HSM en nuage) : la clé privée ne
@@ -168,9 +195,11 @@ pour un paquet livré, `excluded` pour un outil de développement.
 
 - [ ] Les trois exécutables de chaque installeur sont dans le même répertoire, et
       `hirzla status` comme l'application se connectent au noyau installé.
-- [ ] Le journal du noyau installé montre `event=client_signatures required=1`.
-- [ ] Sous Linux, `hirzla-clients.manifest` est installé à côté du noyau et
-      `hirzla-signer verifier` l'accepte.
+- [ ] Le journal du noyau installé montre `event=client_signatures required=1
+      kind=manifeste` (`kind=systeme` seulement pour une version compilée en mode `systeme`).
+- [ ] Sur **chaque** système, `hirzla-clients.manifest` de la bonne plateforme est installé
+      à côté du noyau et `hirzla-signer verifier` l'accepte ; ses empreintes sont celles des
+      exécutables **installés** (après toute signature de système).
 - [ ] Signatures vérifiées sur un poste propre de chaque système (§ 3, § 4, § 5).
 - [ ] Sous macOS, aucun droit `get-task-allow` ; sous Linux, `hirzla status` montre
       « Traçage interdit : appliqué ».
@@ -194,15 +223,30 @@ plusieurs clés séparées par des virgules : une rotation publie d'abord une ve
 l'ancienne et la nouvelle clé.
 
 Le noyau d'une version de livraison vérifie la signature de chaque client (`docs/api-locale.md`
-§ 3.1) : Authenticode sous Windows et signature Apple sous macOS (§ 3 et § 4 : le noyau et ses
-clients doivent être signés par le **même** certificat ou la même équipe), **manifeste des
-clients** sous Linux. Ce manifeste est produit **après** la dernière transformation des
-exécutables (aucun `strip` ensuite) et installé à côté de `hirzla-core` :
+§ 3.1) par le **manifeste des clients**, sur Linux, Windows et macOS (mode `manifeste`,
+ADR 0063 § 1). En mode `systeme` seulement (§ 2), il exige à la place Authenticode sous
+Windows et la signature Apple sous macOS (§ 3 et § 4 : le noyau et ses clients signés par le
+**même** certificat ou la même équipe).
+
+Un manifeste est produit **pour chaque plateforme livrée**, **après** la dernière
+transformation des exécutables (aucun `strip` ni signature de système ensuite), et installé à
+côté de `hirzla-core`. Les noms sont ceux des fichiers installés, avec `.exe` sous Windows :
 
 ```sh
-hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 \
+hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme linux-x86_64 \
+  --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
+hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme windows-x86_64 \
+  --sortie hirzla-clients.manifest \
+  hirzla.exe hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe
+hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme macos-aarch64 \
   --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
 ```
+
+Le noyau refuse un manifeste d'une autre plateforme que la sienne. Sous Linux, il hache
+l'image réellement lancée par le client (`/proc/<pid>/exe`) ; sous Windows et macOS, le
+fichier au chemin que le système donne pour le processus (`QueryFullProcessImageNameW`,
+`proc_pidpath`), d'où un risque résiduel de remplacement du fichier entre lancement et
+vérification, déclaré dans la cible de sécurité (§ 8.1, M7).
 
 Format, identique à l'enveloppe du § 8 avec le type `C` : en-tête, manifeste CBOR des
 exécutables (nom, taille, SHA-384), signature hybride. Le noyau refuse de démarrer si le
@@ -270,11 +314,22 @@ paquets. La version de l'espace de travail Cargo doit être relevée à chaque l
 ## 9. Points ouverts
 
 1. ~~Le noyau compare les **chemins** des clients, pas leurs signatures~~ : signature des
-   clients vérifiée par le noyau (ADR 0042, § 7). Reste : la vérification de la signature du
-   noyau par ses clients, et l'exécution sur des postes réels signés.
-2. Identifiant d'application `app.hirzla.desktop` et éditeur « Hirzla » : à remplacer par le
+   clients vérifiée par le noyau (ADR 0042, § 7), du noyau par ses clients (ADR 0055), par le
+   manifeste sur les trois systèmes (ADR 0063 § 1). Reste : l'essai sur des postes installés
+   sous Windows et macOS (les tests de CI tournent sur les trois systèmes, hors installeur).
+2. **macOS, manifeste dans `Hirzla.app`** : le sceau du paquet d'application couvre tout
+   fichier de `Contents/`, et la signature de l'exécutable principal (`hirzla-desktop`)
+   contient l'empreinte de ce sceau. Un manifeste posé à côté du noyau
+   (`Contents/MacOS/`) devrait donc contenir l'empreinte d'un `hirzla-desktop` dont la
+   signature dépend du manifeste : impossible. `hirzla-core`, `hirzla` et
+   `hirzla-native-host`, signés chacun avant le paquet, ne sont pas touchés. À trancher par
+   un ADR avant la première livraison macOS : manifeste installé hors du paquet (paquet
+   d'installation `.pkg` qui le pose dans un répertoire réservé à l'administrateur, chemin
+   lu par le noyau sous macOS), ou autre emplacement. D'ici là, une livraison macOS ne peut
+   pas faire vérifier `hirzla-desktop` par le noyau.
+3. Identifiant d'application `app.hirzla.desktop` et éditeur « Hirzla » : à remplacer par le
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
-3. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
+4. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
    (ADR 0043, § 8) en plus des outils de déploiement du parc et des dépôts de paquets.
    Reste : brancher la production du manifeste et du paquet dans `livraison.yml` une fois la
    clé d'éditeur créée et `HIRZLA_PUBLISHER_KEYS` renseignée.

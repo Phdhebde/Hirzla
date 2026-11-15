@@ -1,6 +1,7 @@
 //! Documents signed by the publisher key (ADR 0042, 0043; `docs/livraison.md` § 7 and § 8):
-//! the manifest of the client executables, checked by the core on Linux, and the offline
-//! update package, checked and applied by `hirzla mise-a-jour`.
+//! the manifest of the client executables, checked by the core and its clients on every
+//! system (ADR 0055, 0063), and the offline update package, checked and applied by
+//! `hirzla mise-a-jour`.
 //!
 //! Both share one envelope:
 //!

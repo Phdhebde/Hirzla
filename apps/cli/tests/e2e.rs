@@ -287,20 +287,24 @@ fn another_process_is_refused() {
     }
 }
 
-/// ADR 0042 on Linux: with `--client-signatures required`, the core accepts `hirzla` only
-/// if its executable matches the signed client manifest; a manifest holding another hash
-/// (as for a modified executable) gets it refused, with `signature_not_accepted` logged, and
-/// a core whose manifest is missing refuses to start.
-#[cfg(target_os = "linux")]
+/// ADR 0042, 0063 § 1, on Linux, Windows and macOS: with `--client-signatures required`,
+/// the core accepts `hirzla` only if its executable matches the signed client manifest; a
+/// manifest holding another hash (as for a modified executable) gets it refused, with
+/// `signature_not_accepted` logged, and a core whose manifest is missing refuses to start.
 #[test]
+#[cfg_attr(
+    feature = "signature-systeme",
+    ignore = "built for the system signature (ADR 0063)"
+)]
 fn signed_client_manifest_is_enforced() {
     use hirzla_core::release::update::entry_for;
     use hirzla_core::release::{current_platform, sign, Kind, Manifest, Version};
     use hirzla_crypto::sign::PublisherSigningKey;
 
     let key = PublisherSigningKey::generate().unwrap();
+    let cli_name = format!("hirzla{}", std::env::consts::EXE_SUFFIX);
     let start = |dir: &Path, sock: &str, sha_flip: bool| {
-        let mut entry = entry_for("hirzla", &cli_exe(), true).unwrap();
+        let mut entry = entry_for(&cli_name, &cli_exe(), true).unwrap();
         if sha_flip {
             entry.sha384[0] ^= 1;
         }
@@ -348,7 +352,10 @@ fn signed_client_manifest_is_enforced() {
     let sock = socket(dir.path());
     let _core = start(dir.path(), &sock, false);
     wait_ready(&sock);
-    log_contains(dir.path(), "event=client_signatures required=1");
+    log_contains(
+        dir.path(),
+        "event=client_signatures required=1 kind=manifeste",
+    );
 
     // A manifest that does not match the executable: refused.
     let dir = private_dir();
@@ -378,6 +385,71 @@ fn signed_client_manifest_is_enforced() {
         .status()
         .unwrap();
     assert!(!status.success());
+}
+
+/// ADR 0055, 0063 § 1, on Linux, Windows and macOS: a client checks the running core against
+/// the signed manifest before it sends anything. The genuine core is accepted; a manifest
+/// holding another hash for it, or naming no core, gets it refused.
+#[test]
+#[cfg_attr(
+    feature = "signature-systeme",
+    ignore = "built for the system signature (ADR 0063)"
+)]
+fn client_checks_the_running_core_against_the_manifest() {
+    use hirzla_core::auth::ServerRefusal;
+    use hirzla_core::codesign::{CoreSignature, SignatureMode};
+    use hirzla_core::release::update::entry_for;
+    use hirzla_core::release::{current_platform, sign, Kind, Manifest, PublisherKeys, Version};
+    use hirzla_crypto::sign::PublisherSigningKey;
+
+    let key = PublisherSigningKey::generate().unwrap();
+    let keys = PublisherKeys::new(vec![key.verifying_key().clone()]);
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let ep = Endpoint::parse(std::ffi::OsStr::new(&sock)).unwrap();
+    let policy = |entries: Vec<hirzla_core::release::FileEntry>| {
+        let mut files = entries;
+        // With `.exe`, `hirzla-core.exe` sorts before `hirzla.exe`.
+        files.sort_by(|a, b| a.name.cmp(&b.name));
+        let manifest = Manifest {
+            version: Version::current(),
+            platform: current_platform(),
+            files,
+        };
+        let path = dir.path().join("hirzla-clients.manifest");
+        std::fs::write(&path, sign(Kind::ClientManifest, &manifest, &key).unwrap()).unwrap();
+        CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap()
+    };
+    let core_name = format!("hirzla-core{suffix}");
+    let cli_name = format!("hirzla{suffix}");
+
+    // The genuine core, next to the genuine command line.
+    let good = policy(vec![
+        entry_for(&core_name, &core_exe(), true).unwrap(),
+        entry_for(&cli_name, &cli_exe(), true).unwrap(),
+    ]);
+    assert!(Client::connect_with(&ep, Some(&core_exe()), &good).is_ok());
+
+    // Another hash for the core.
+    let mut modified = entry_for(&core_name, &core_exe(), true).unwrap();
+    modified.sha384[0] ^= 1;
+    let bad = policy(vec![modified]);
+    match Client::connect_with(&ep, Some(&core_exe()), &bad) {
+        Err(ClientError::UntrustedCore(r)) => assert_eq!(r, ServerRefusal::SignatureNotAccepted),
+        Err(e) => panic!("unexpected error {e:?}"),
+        Ok(_) => panic!("a core that does not match the manifest was accepted"),
+    }
+
+    // A manifest that names no core.
+    let none = policy(vec![entry_for(&cli_name, &cli_exe(), true).unwrap()]);
+    match Client::connect_with(&ep, Some(&core_exe()), &none) {
+        Err(ClientError::UntrustedCore(r)) => assert_eq!(r, ServerRefusal::SignatureNotAccepted),
+        Err(e) => panic!("unexpected error {e:?}"),
+        Ok(_) => panic!("a core absent from the manifest was accepted"),
+    }
 }
 
 /// `get` refuses to print a secret on a terminal without `--stdout`; this is checked by the

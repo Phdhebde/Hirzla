@@ -56,7 +56,8 @@ façon (`SignatureMode`, clés d'éditeur compilées, manifeste à côté du noy
 - Le code Windows et macOS réutilise `code_signature*` sans nouveau bloc `unsafe` ; il doit
   être essayé sur des postes réels avec des binaires signés, comme celui de l'ADR 0042.
 - Tests : `core_signature_off_accepts_without_looking`,
-  `linux_client_checks_the_core_against_the_manifest` (`codesign.rs`).
+  `linux_client_checks_the_core_against_the_manifest` (`codesign.rs`), devenu
+  `client_checks_the_core_against_the_manifest`, sur les trois systèmes (ADR 0063).
 
 ## Alternatives écartées
 

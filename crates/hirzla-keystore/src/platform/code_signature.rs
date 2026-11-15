@@ -1,7 +1,9 @@
 //! Code signature of executables (ADR 0042): Authenticode on Windows, Apple code signing on
-//! macOS. The core uses it to check that a client is signed by the same publisher as the
-//! core itself, on top of the allow list of paths. Linux has no common code signing for
-//! executables: the core checks a signed manifest of hashes there (`hirzla_core::codesign`).
+//! macOS. A core built for the system signature (`hirzla-core` feature `signature-systeme`,
+//! ADR 0063 § 1) uses it to check that a client is signed by the same publisher as the core
+//! itself, on top of the allow list of paths. By default, every build checks instead the
+//! client manifest signed by the publisher key, on every system (`hirzla_core::codesign`);
+//! Linux has no common code signing for executables at all.
 //!
 //! No check reaches the network: no revocation download, no OCSP (rule 7 of `CLAUDE.md`).
 

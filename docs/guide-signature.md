@@ -117,18 +117,35 @@ avertissement, il faut un compte Apple Developer (99 USD par an), puis suivre
    (`v1.0.0`).
 2. Sur GitHub › *Actions* › *Livraison* › *Run workflow*, sur l'étiquette. Téléchargez les
    artefacts (installeurs, SBOM, attestations).
-3. Sur le poste de signature, réseau débranché, signez le manifeste des clients et, si besoin,
-   le paquet de mise à jour hors ligne (`livraison.md` § 7 et § 8) :
+3. Sur le poste de signature, réseau débranché, signez **un manifeste des clients par
+   système livré** et, si besoin, le paquet de mise à jour hors ligne (`livraison.md` § 7 et
+   § 8). Le noyau vérifie ses clients par ce manifeste sous Linux, Windows et macOS : sans
+   lui, il ne démarre pas. Placez les exécutables de chaque système dans un dossier à part
+   (sous Windows, ils portent `.exe`), puis, dans chaque dossier :
 
    ```sh
+   # Linux
    hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
-     --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
+     --plateforme linux-x86_64 --sortie hirzla-clients.manifest \
+     hirzla hirzla-core hirzla-desktop hirzla-native-host
+   # Windows
+   hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
+     --plateforme windows-x86_64 --sortie hirzla-clients.manifest \
+     hirzla.exe hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe
+   # macOS (Apple Silicon)
+   hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
+     --plateforme macos-aarch64 --sortie hirzla-clients.manifest \
+     hirzla hirzla-core hirzla-desktop hirzla-native-host
    ```
+
+   Les exécutables doivent être ceux qui seront installés, **après** toute signature de
+   système (SignPath sous Windows, signature ad hoc sous macOS) : une signature modifie le
+   fichier, et un manifeste fait avant ne correspondrait plus.
 
 4. Calculez et signez les empreintes :
 
    ```sh
-   sha256sum Hirzla_* *.cdx.json hirzla-clients.manifest > SHA256SUMS
+   sha256sum Hirzla_* *.cdx.json */hirzla-clients.manifest > SHA256SUMS
    gpg --detach-sign --armor SHA256SUMS        # produit SHA256SUMS.asc
    ```
 

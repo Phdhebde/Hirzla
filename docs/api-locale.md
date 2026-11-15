@@ -91,20 +91,40 @@ noyau d'après son exécutable, jamais d'après un message :
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
 | navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
-**Signature du client** (ADR 0042). En plus du chemin, le noyau peut exiger que l'exécutable
-du client soit signé par **le même éditeur que lui** : Authenticode (`WinVerifyTrust`, sans
-réseau ni révocation en ligne, même émetteur et même sujet de certificat que le noyau) sous
-Windows ; signature de code Apple (`SecCodeCheckValidity` dynamique, exigence
-`anchor apple generic`, même identifiant d'équipe que le noyau) sous macOS ; sous Linux,
-empreinte SHA-384 de l'exécutable réellement lancé (`/proc/<pid>/exe`) égale à celle du
-**manifeste des clients** signé par la clé d'éditeur (`hirzla-clients.manifest` à côté du
-noyau, `docs/livraison.md` § 7). Option `--client-signatures required|off` : `off` par défaut en
-développement ; `required` imposé et non désactivable dans une version de livraison. En
-développement, `--publisher-key FICHIER` et `--client-manifest FICHIER` désignent la clé
-publique d'éditeur et le manifeste ; une version de livraison n'admet que ses clés compilées.
-En mode `required`, un noyau qui ne peut établir sa propre signature (Windows, macOS) ou
-vérifier le manifeste (Linux) **refuse de démarrer**. Un client refusé pour sa signature reçoit
-`Unauthorized` comme les autres, motif journalisé `signature_not_accepted`.
+**Signature du client** (ADR 0042, 0063). En plus du chemin, le noyau peut exiger que
+l'exécutable du client soit signé. Ce qui est vérifié est **fixé à la compilation**, jamais
+deviné à l'exécution (ADR 0063 § 1) :
+
+| Mode | Compilation | Contrôle |
+| --- | --- | --- |
+| `manifeste` | défaut de toute version, dont la livraison | empreinte SHA-384 (taille comprise, comparée à temps constant) de l'exécutable du client égale à celle du **manifeste des clients** signé par la clé d'éditeur hybride (`hirzla-clients.manifest` à côté du noyau, `docs/livraison.md` § 7), sur les trois systèmes |
+| `systeme` | fonctionnalité Cargo `signature-systeme` (noyau et clients), seulement pour un éditeur titulaire d'un certificat | **même éditeur que le noyau** au sens du système : Authenticode (`WinVerifyTrust`, sans réseau ni révocation en ligne, même émetteur et même sujet de certificat) sous Windows ; signature de code Apple (`SecCodeCheckValidity` dynamique, exigence `anchor apple generic`, même identifiant d'équipe) sous macOS ; refusé sous Linux |
+
+Un noyau compilé en mode `manifeste` ignore la signature de système, présente ou non. Le
+fichier haché en mode `manifeste` :
+
+| Système | Fichier haché |
+| --- | --- |
+| Linux | `/proc/<pid>/exe`, l'image réellement lancée (un chemin remplacé depuis ne change rien) |
+| Windows | le fichier au chemin rendu par `QueryFullProcessImageNameW` (celui de la liste d'autorisation) |
+| macOS | le fichier au chemin rendu par `proc_pidpath` (idem) |
+
+Sous Windows et macOS, un fichier remplacé entre le lancement et la vérification n'est pas
+détecté : risque résiduel déclaré (`docs/cible-de-securite.md` § 8.1, M7), qui suppose
+d'écrire dans le répertoire d'installation. Le manifeste doit porter la plateforme du noyau
+(`linux-x86_64`, `windows-x86_64`, `macos-aarch64`…) et nommer le client sous son nom de
+fichier exact (`hirzla.exe` sous Windows) ; sinon le client est refusé, ou le noyau ne démarre
+pas.
+
+Option `--client-signatures required|off` : `off` par défaut en développement ; `required`
+imposé et non désactivable dans une version de livraison. En développement,
+`--publisher-key FICHIER` et `--client-manifest FICHIER` désignent la clé publique d'éditeur et
+le manifeste ; une version de livraison n'admet que ses clés compilées. En mode `required`, un
+noyau qui ne peut vérifier le manifeste (mode `manifeste` : absent, altéré, d'une autre
+plateforme, sans clé) ou établir sa propre signature (mode `systeme`) **refuse de démarrer**.
+Le journal du noyau porte le mode au démarrage (`event=client_signatures required=1
+kind=manifeste`). Un client refusé pour sa signature reçoit `Unauthorized` comme les autres,
+motif journalisé `signature_not_accepted`.
 
 Un exécutable présent dans les deux listes a le profil navigateur. Une opération hors profil
 reçoit `Unauthorized` avec l'identifiant de la requête ; la connexion reste ouverte et le refus
@@ -123,10 +143,13 @@ avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`,
 Symétriquement, le client vérifie que le processus à l'écoute tourne sous son compte et que
 son exécutable est le noyau attendu (`hirzla-core` à côté du client, ou `--core CHEMIN`). Sous
 Unix, il vérifie aussi le répertoire de la socket (§ 2.1). Dans une version de livraison, il
-vérifie enfin la **signature du noyau** (ADR 0055) : même éditeur que lui sous Windows et
-macOS ; sous Linux, empreinte du noyau installé dans le manifeste des clients signé (le
-système cache au client l'exécutable du noyau durci, voir § 3.3). En cas d'échec il ne parle
-pas : il n'envoie pas le mot de passe maître à un faux noyau.
+vérifie enfin la **signature du noyau** (ADR 0055), dans le mode compilé (§ 3.1) : en mode
+`manifeste`, empreinte de `hirzla-core` (`hirzla-core.exe` sous Windows) dans le manifeste
+des clients signé installé à côté du noyau attendu, sur les trois systèmes ; le fichier haché
+est sous Windows et macOS l'exécutable que le système nomme pour le processus du noyau, sous
+Linux le noyau installé (le système cache au client l'exécutable du noyau durci, voir § 3.3).
+En mode `systeme`, même éditeur que lui. En cas d'échec il ne parle pas : il n'envoie pas le
+mot de passe maître à un faux noyau.
 
 ### 3.3 Limites, dites franchement
 
@@ -328,7 +351,7 @@ identifiant de secret, ni chemin).
 | `listening` | — |
 | `connection_accepted` | `pid` |
 | `connection_refused` | `pid`, `reason` (`other_user`, `unknown_peer`, `executable_not_allowed`, `busy`, `signature_not_accepted`) |
-| `client_signatures` | `required` (`1` ou `0`, ADR 0042) |
+| `client_signatures` | `required` (`1` ou `0`, ADR 0042), `kind` (`manifeste` ou `systeme`, ADR 0063) |
 | `request` | `op`, `result` (`ok` ou nom de l'erreur) |
 | `bad_message` | — |
 | `vault_created`, `unlocked`, `stopped` | — |
