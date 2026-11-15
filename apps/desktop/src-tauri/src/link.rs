@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
+use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningReport;
 
@@ -75,6 +76,18 @@ fn is_idempotent(op: Op) -> bool {
     matches!(
         op,
         Op::Status | Op::List | Op::Read | Op::Generate | Op::Lock
+    )
+}
+
+/// Self-mode requests that may be sent again on a new connection.
+fn is_idempotent_self(op: SelfOp) -> bool {
+    matches!(
+        op,
+        SelfOp::SystemEvent
+            | SelfOp::GetSettings
+            | SelfOp::History
+            | SelfOp::ReadVersion
+            | SelfOp::RecoveryStatus
     )
 }
 
@@ -191,6 +204,37 @@ impl CoreLink {
         }
     }
 
+    /// Sends one Self-mode request (`docs/api-locale.md` § 16, version 5), with the same
+    /// reconnection rule as [`CoreLink::call`].
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`DesktopError::from_self`].
+    pub fn call_self(&mut self, request: &SelfRequest) -> Result<SelfReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_self(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err((code, retry_after_s))) => {
+                    if code != SelfCode::General(ErrorCode::Unauthorized) {
+                        self.client = Some(client);
+                    }
+                    return Err(DesktopError::from_self(code, retry_after_s));
+                }
+                Err(ClientError::Io(_)) if !retried && is_idempotent_self(request.op()) => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     /// The state of the core.
     ///
     /// # Errors
@@ -238,5 +282,12 @@ mod tests {
         assert!(!is_idempotent(Op::Init));
         assert!(!is_idempotent(Op::Unlock));
         assert!(!is_idempotent(Op::Shutdown));
+        assert!(is_idempotent_self(SelfOp::GetSettings));
+        assert!(is_idempotent_self(SelfOp::History));
+        assert!(!is_idempotent_self(SelfOp::ChangePassword));
+        assert!(!is_idempotent_self(SelfOp::RecoveryCreate));
+        assert!(!is_idempotent_self(SelfOp::RecoveryUnlock));
+        assert!(!is_idempotent_self(SelfOp::ImportKdbx));
+        assert!(!is_idempotent_self(SelfOp::RestoreVersion));
     }
 }

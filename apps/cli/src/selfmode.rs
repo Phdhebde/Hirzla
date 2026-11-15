@@ -182,7 +182,7 @@ pub fn history(session: &Session<'_>, name: Option<&str>, id: Option<&str>) -> R
             "{:>3}  {}  {}{}  modifié : {}{}",
             i + 1,
             date(v.wall_ms),
-            v.title,
+            v.title.as_str(),
             state,
             if changed.is_empty() {
                 "état".to_owned()

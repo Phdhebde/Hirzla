@@ -178,9 +178,9 @@ pub struct VersionInfo {
     /// State: 0 active, 1 trash, 2 purged.
     pub state: u64,
     /// Title.
-    pub title: String,
+    pub title: Zeroizing<String>,
     /// User name, if any.
-    pub username: Option<String>,
+    pub username: Option<Zeroizing<String>>,
     /// Fields present, by number (`docs/format.md` § 8).
     pub fields: Vec<u64>,
     /// Fields that differ from the previous version (all present fields for the first).
@@ -662,11 +662,11 @@ fn version_from(v: &Value) -> Result<VersionInfo, cbor::CborError> {
         state: f.req(4).and_then(uint)?,
         title: f
             .req(5)
-            .and_then(|t| text_max(t, MAX_INDEX_TEXT))?
-            .to_owned(),
+            .and_then(|t| text_max(t, MAX_INDEX_TEXT))
+            .map(|t| Zeroizing::new(t.to_owned()))?,
         username: f
             .opt(6)
-            .map(|t| text_max(t, MAX_INDEX_TEXT).map(str::to_owned))
+            .map(|t| text_max(t, MAX_INDEX_TEXT).map(|t| Zeroizing::new(t.to_owned())))
             .transpose()?,
         fields: f.req(7).and_then(uints_from)?,
         changed: f.req(8).and_then(uints_from)?,

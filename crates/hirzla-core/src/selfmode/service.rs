@@ -203,7 +203,7 @@ impl Core {
         for (i, v) in versions.iter().enumerate().take(MAX_VERSIONS) {
             let older = versions.get(i + 1);
             let text = |f| match v.body.fields.get(&f).map(|e| &e.value) {
-                Some(FieldValue::Text(t)) => Some(t.as_str().to_owned()),
+                Some(FieldValue::Text(t)) => Some(zeroize::Zeroizing::new(t.as_str().to_owned())),
                 _ => None,
             };
             // A field counts as changed when the write that set it differs: no value is

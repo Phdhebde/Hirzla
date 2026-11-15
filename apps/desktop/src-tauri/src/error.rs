@@ -3,6 +3,7 @@
 
 use hirzla_core::client::ClientError;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
+use hirzla_core::selfmode::proto::SelfCode;
 use serde::ser::SerializeStruct;
 
 /// An error of the desktop application, as the web view receives it.
@@ -85,6 +86,30 @@ impl DesktopError {
             DesktopError::Clipboard => "Le presse-papiers n'est pas disponible.".into(),
             DesktopError::Import(what) => (*what).to_owned(),
             DesktopError::Cancelled => "Opération annulée.".into(),
+        }
+    }
+
+    /// A refusal of a Self-mode request (`docs/api-locale.md` § 16).
+    #[must_use]
+    pub fn from_self(code: SelfCode, retry_after_s: Option<u64>) -> DesktopError {
+        match code {
+            SelfCode::General(code) => DesktopError::Refused(ErrorReply {
+                code,
+                retry_after_s,
+                versions: Vec::new(),
+            }),
+            SelfCode::ImportUnsupported => DesktopError::Import(
+                "Base KeePass non prise en charge : seules les bases KDBX 4 (Argon2d ou \
+                 Argon2id, AES-256 ou ChaCha20) protégées par un mot de passe seul sont \
+                 importées.",
+            ),
+            SelfCode::ImportKeyRejected => {
+                DesktopError::Import("Mot de passe de la base KeePass incorrect, ou base altérée.")
+            }
+            SelfCode::ImportMalformed => DesktopError::Import(
+                "Fichier refusé : ce n'est pas une base KeePass lisible, ou elle est altérée ou \
+                 trop grande.",
+            ),
         }
     }
 
@@ -177,6 +202,22 @@ mod tests {
         let json = serde_json::to_value(DesktopError::Mismatch).unwrap();
         assert_eq!(json["code"], "mismatch");
         assert!(json["retry_after_s"].is_null());
+    }
+
+    #[test]
+    fn self_mode_refusals_keep_the_delay_and_name_the_import_cause() {
+        let e = DesktopError::from_self(SelfCode::General(ErrorCode::Throttled), Some(4));
+        assert_eq!(e.retry_after_s(), Some(4));
+        for code in [
+            SelfCode::ImportUnsupported,
+            SelfCode::ImportKeyRejected,
+            SelfCode::ImportMalformed,
+        ] {
+            let e = DesktopError::from_self(code, None);
+            assert_eq!(e.code(), "import");
+            assert!(e.message().contains("KeePass"));
+            assert!(e.message().ends_with('.'));
+        }
     }
 
     #[test]

@@ -1934,6 +1934,7 @@ name = "hirzla-desktop"
 version = "0.0.0"
 dependencies = [
  "arboard",
+ "gio",
  "hirzla-core",
  "hirzla-crypto",
  "hirzla-keystore",

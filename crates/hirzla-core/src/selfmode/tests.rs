@@ -327,7 +327,7 @@ fn trash_history_and_restore() {
     };
     assert_eq!(versions.len(), 2);
     assert!(versions[0].lamport > versions[1].lamport);
-    assert_eq!(versions[0].title, "Banque");
+    assert_eq!(versions[0].title.as_str(), "Banque");
     // Only the password was rewritten; the first version shows all its fields.
     assert_eq!(versions[0].changed, vec![Field::Password as u64]);
     assert_eq!(versions[1].changed, versions[1].fields);
