@@ -33,10 +33,15 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
       # The Argon2 C reference (argon2-kdf, test-only, not built on Windows) runs bindgen,
-      # which needs libclang. macOS runners have it through Xcode.
-      - name: libclang
+      # which needs libclang. macOS runners have it through Xcode. strace: the test that
+      # hirzlad opens no outbound connection traces the binary (ADR 0028, point 10).
+      # The desktop application (Tauri 2, ADR 0024) needs WebKitGTK 4.1 and GTK 3 on Linux;
+      # Windows (WebView2) and macOS (WKWebView) need nothing more to build it.
+      - name: Linux libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev
+        run: >-
+          sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev strace
+          libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       # tpm2-tss >= 4.1.3 for tss-esapi (ADR 0014): built from its release tarball, pinned by
       # SHA-256 (Ubuntu ships 4.0.1). Found by pkg-config; nothing is downloaded by cargo.
       - name: tpm2-tss
@@ -52,7 +57,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace
+        env:
+          # Linux: the outbound-connection test of hirzlad must run, not skip.
+          HIRZLA_REQUIRE_STRACE: ${{ runner.os == 'Linux' && '1' || '0' }}
+        run: cargo test --workspace --no-fail-fast
 
   # dudect-style timing test of the Shamir arithmetic (ADR 0012). Shared runners are noisy:
   # the result is informative and never blocks a merge.
@@ -114,12 +122,93 @@ jobs:
           cargo test -p hirzla-keystore --test tpm2_prototype --
           --ignored --nocapture --test-threads=1
 
+  # Interface of the desktop application: type check of the JavaScript (no build step, the
+  # checked files are the shipped ones) and fingerprints of the embedded fonts.
+  desktop-ui:
+    name: desktop interface
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install (locked)
+        run: npm ci --ignore-scripts
+      - name: Type check
+        run: npm run check
+      - name: Embedded fonts match their fingerprints
+        working-directory: apps/desktop/ui/fonts
+        run: sha256sum -c SHA256SUMS
+
+  # Browser extension (step 8): unit tests of its decisions, then the real extension in
+  # Chromium (Playwright, new headless mode) against the real native host and core.
+  extension:
+    name: browser extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/extension
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
+      - name: tpm2-tss
+        working-directory: .
+        run: sudo -E .github/scripts/install-tpm2-tss.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dependencies (locked)
+        run: npm ci --ignore-scripts
+      - name: Unit tests
+        run: npm test
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Core, command line and native host
+        working-directory: .
+        run: cargo build -p hirzla-core -p hirzla-cli -p hirzla-native-host
+      - name: End-to-end tests
+        run: npm run test:e2e
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Go SDK of the Hornn agent gateway (step 13): no cryptography, no dependency.
+  go-sdk:
+    name: Go SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: sdk/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+      - name: Tests
+        run: go test -race ./...
+      - name: No dependency
+        run: test "$(go list -m all | wc -l)" -eq 1
 
   secrets:
     name: no tracked secrets

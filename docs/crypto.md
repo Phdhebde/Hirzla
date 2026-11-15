@@ -15,7 +15,7 @@ post-quantique normalisé : il faut casser les deux. Le symétrique est en 256 b
 | Signature des racines et des versions | SLH-DSA-SHA2-256s | FIPS 205 |
 | Chiffrement authentifié | AES-256-GCM, une clé par version de secret | SP 800-38D |
 | Enveloppe de clés | AES-256-KW avec remplissage | RFC 5649 |
-| Hachage | SHA-384, SHA-512 ; SHA3-256 pour le journal | FIPS 180-4, 202 |
+| Hachage | SHA-384, SHA-512 ; SHA3-256 pour le journal d'audit (`docs/evenements.md`) | FIPS 180-4, 202 |
 | Dérivation | HKDF-SHA-512, contexte et destinataire liés | RFC 5869 |
 | Mot de passe | Argon2id, 64 Mio minimum, calibré par poste | RFC 9106 |
 | Partage de secret | Shamir sur GF(2^8), parts authentifiées | — |
@@ -86,8 +86,9 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 | Rôle | Étiquettes |
 | --- | --- |
 | Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
-| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share` |
-| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt` |
+| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share`, `hirzla/v1/device-audit-checkpoint` |
+| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt`, `hirzla/v1/audit-checkpoint`, `hirzla/v1/keylog-head` |
+| Plan de contrôle Hornn (vérifiée seulement) | `hirzla/v1/hornn-session-grant` (`integration-hornn.md` § 3.3, ADR 0031) |
 
 - Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
   clé publique attendue, à temps constant.

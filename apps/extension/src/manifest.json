@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Hirzla",
+  "short_name": "Hirzla",
+  "version": "0.0.0",
+  "description": "Remplit vos identifiants Hirzla sur le site exact où vous les avez enregistrés, à votre demande.",
+  "minimum_chrome_version": "120",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "extension@hirzla.invalid",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "action": {
+    "default_title": "Hirzla",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/hirzla-16.png",
+      "32": "icons/hirzla-32.png"
+    }
+  },
+  "icons": {
+    "16": "icons/hirzla-16.png",
+    "32": "icons/hirzla-32.png",
+    "48": "icons/hirzla-48.png",
+    "128": "icons/hirzla-128.png"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Alt+Shift+H"
+      },
+      "description": "Ouvrir Hirzla sur cette page"
+    }
+  },
+  "content_security_policy": {
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
+  }
+}

@@ -99,12 +99,15 @@ pub struct SecretVersion {
 pub struct Vault {
     conn: Connection,
     vault_id: Id16,
+    /// Kept to wrap it under a new unlock method (password change, recovery kit).
+    device_key: SymmetricKey,
     dev_wrap: SymmetricKey,
     identity: Identity,
     device_kem: kem::PrivateKey,
     device_sign: DeviceSigningKey,
     device_vk: VerifyingKey,
     shards: BTreeMap<Id16, IndexShard>,
+    settings: Settings,
 }
 
 // -----------------------------------------------------------------------------------------
@@ -216,8 +219,15 @@ fn nfc(password: &str) -> Result<Password, VaultError> {
     if password.is_empty() {
         return Err(VaultError::InvalidInput);
     }
-    let normalized = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(password);
-    Ok(Password::from_slice(normalized.as_bytes()))
+    match icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(password) {
+        std::borrow::Cow::Borrowed(same) => Ok(Password::from_slice(same.as_bytes())),
+        // The normaliser allocated a copy of the password: wipe it once copied.
+        std::borrow::Cow::Owned(mut copy) => {
+            let pwd = Password::from_slice(copy.as_bytes());
+            zeroize::Zeroize::zeroize(&mut copy);
+            Ok(pwd)
+        }
+    }
 }
 
 fn split_private(encoded: &[u8], first: usize) -> Result<(&[u8], &[u8]), VaultError> {
@@ -443,12 +453,14 @@ impl Vault {
         let mut vault = Vault {
             conn,
             vault_id,
+            device_key,
             dev_wrap,
             identity,
             device_kem,
             device_sign,
             device_vk,
             shards: BTreeMap::new(),
+            settings: Settings::default(),
         };
         vault.create_locker_with_id(personal_locker, &options.personal_locker_name, true)?;
         Ok(vault)
@@ -461,7 +473,12 @@ impl Vault {
     /// [`VaultError::NotAVault`], [`VaultError::UnsupportedVersion`], [`VaultError::Corrupt`],
     /// [`VaultError::Unlock`], [`VaultError::Unsupported`] (no password method), or storage.
     pub fn open(path: &Path, password: &str) -> Result<Vault, VaultError> {
-        let conn = store::open(path)?;
+        let pwd = nfc(password)?;
+        Self::open_with(path, |header| unlock_device_key(header, &pwd))
+    }
+
+    /// Reads and decodes the clear header (§ 5.4).
+    fn read_header(conn: &Connection) -> Result<(Vec<u8>, Vec<u8>, Header), VaultError> {
         let (body, auth): (Vec<u8>, Vec<u8>) = conn
             .query_row("SELECT body, auth FROM header WHERE id = 1", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -472,8 +489,18 @@ impl Vault {
             HeaderError::UnsupportedVersion => VaultError::UnsupportedVersion,
             HeaderError::Malformed => VaultError::Corrupt,
         })?;
-        let pwd = nfc(password)?;
-        let device_key = unlock_device_key(&header, &pwd)?;
+        Ok((body, auth, header))
+    }
+
+    /// Opens the vault with the device key obtained by `unlock` from the header (one unlock
+    /// method), then runs steps 7 and 8 of § 5.3 and unseals the index fragments.
+    fn open_with(
+        path: &Path,
+        unlock: impl FnOnce(&Header) -> Result<SymmetricKey, VaultError>,
+    ) -> Result<Vault, VaultError> {
+        let conn = store::open(path)?;
+        let (body, auth, header) = Self::read_header(&conn)?;
+        let device_key = unlock(&header)?;
         let vault_id = header.vault_id;
         let dev_wrap = kdf::derive_key(&device_key, &vault_id, KdfLabel::DeviceWrap)?;
 
@@ -537,7 +564,7 @@ impl Vault {
         // Settings must be readable.
         let settings_box: Vec<u8> =
             conn.query_row("SELECT box FROM settings WHERE id = 1", [], |r| r.get(0))?;
-        Settings::decode(&unseal_padded(
+        let settings = Settings::decode(&unseal_padded(
             &dev_wrap,
             &aad_vault("hirzla/v1/settings", &vault_id)?,
             &settings_box,
@@ -566,12 +593,14 @@ impl Vault {
         let mut vault = Vault {
             conn,
             vault_id,
+            device_key,
             dev_wrap,
             identity,
             device_kem,
             device_sign,
             device_vk,
             shards,
+            settings,
         };
         vault.refresh_index()?;
         if !vault.shards.contains_key(&vault.identity.personal_locker) {
@@ -727,6 +756,12 @@ impl Vault {
     #[must_use]
     pub fn personal_locker(&self) -> Id16 {
         self.identity.personal_locker
+    }
+
+    /// The local settings (§ 5.6), as unsealed and checked at opening.
+    #[must_use]
+    pub fn settings(&self) -> Settings {
+        self.settings
     }
 
     // -------------------------------------------------------------------------------------
@@ -1585,6 +1620,14 @@ impl Vault {
     }
 }
 
+mod keys;
+mod restore;
+
+pub use keys::{
+    recovery_params, RecoveryKit, RecoveryShare, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S,
+    MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
+};
+
 #[cfg(test)]
 pub(crate) mod test_hooks {
     //! Internal access for the tests of `tests.rs`.
@@ -1612,3 +1655,6 @@ pub(crate) mod test_hooks {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_keys;

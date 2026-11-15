@@ -1,10 +1,159 @@
 //! `hirzlad` — the blind server. It relays, orders and stores encrypted operations,
 //! serves the key directory and keeps the audit log. It never holds a secret key
 //! that could decrypt a user secret.
+//!
+//! ```text
+//! hirzlad init  --data DIR --threshold T --shares N --shares-out DIR
+//! hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM
+//!               --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+//! ```
+//!
+//! One self-contained binary: no runtime dependency, no configuration service, no outbound
+//! connection. `serve` starts sealed; custodians hand their shares over the administration
+//! port until the quorum unseals the root key.
 
 #![forbid(unsafe_code)]
 
-fn main() -> std::process::ExitCode {
-    eprintln!("hirzlad: not implemented yet");
-    std::process::ExitCode::from(2)
+use std::collections::BTreeMap;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+
+use hirzla_server::net::{self, Config};
+use hirzla_server::seal::ShamirSeal;
+use hirzla_server::store::Store;
+use hirzla_server::{tls, ServerError};
+
+const USAGE: &str = "usage:
+  hirzlad init  --data DIR --threshold T --shares N --shares-out DIR
+  hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM \\
+                --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+  hirzlad --version";
+
+fn hex(b: &[u8]) -> String {
+    const D: &[u8; 16] = b"0123456789abcdef";
+    let mut s = String::with_capacity(b.len() * 2);
+    for x in b {
+        s.push(char::from(D[usize::from(x >> 4)]));
+        s.push(char::from(D[usize::from(x & 15)]));
+    }
+    s
+}
+
+fn options(args: &[String]) -> Result<BTreeMap<String, String>, ServerError> {
+    let mut m = BTreeMap::new();
+    let mut it = args.iter();
+    while let Some(k) = it.next() {
+        let Some(name) = k.strip_prefix("--") else {
+            return Err(ServerError::Config("unexpected argument"));
+        };
+        let v = it.next().ok_or(ServerError::Config("missing value"))?;
+        if m.insert(name.to_owned(), v.clone()).is_some() {
+            return Err(ServerError::Config("repeated option"));
+        }
+    }
+    Ok(m)
+}
+
+fn get<'a>(o: &'a BTreeMap<String, String>, k: &'static str) -> Result<&'a str, ServerError> {
+    o.get(k)
+        .map(String::as_str)
+        .ok_or(ServerError::Config("missing option"))
+}
+
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), ServerError> {
+    let mut o = OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    let mut f = o.open(path)?;
+    f.write_all(bytes)?;
+    f.sync_all()?;
+    Ok(())
+}
+
+fn init(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
+    let dir = PathBuf::from(get(o, "data")?);
+    let out = PathBuf::from(get(o, "shares-out")?);
+    let threshold: u8 = get(o, "threshold")?
+        .parse()
+        .map_err(|_| ServerError::Config("threshold"))?;
+    let count: u8 = get(o, "shares")?
+        .parse()
+        .map_err(|_| ServerError::Config("shares"))?;
+    let setup = ShamirSeal::generate(threshold, count)?;
+    let header = Store::init(&dir, &setup.seal, Some(setup.dealer.clone()))?;
+    std::fs::create_dir_all(&out)?;
+    for s in &setup.shares {
+        write_private(&out.join(format!("share-{}.bin", s.index())), s.as_bytes())?;
+    }
+    report(&format!(
+        "server_id {}\nserver_key_fingerprint {}\nshares {count}, threshold {threshold}: hand one to each custodian, then delete {}",
+        hex(&header.server_id),
+        hex(&hirzla_crypto::util::sha384(header.server_key.as_bytes())),
+        out.display()
+    ));
+    Ok(())
+}
+
+fn addr(o: &BTreeMap<String, String>, k: &'static str) -> Result<SocketAddr, ServerError> {
+    // Addresses only: a name would need a resolver, that is an outbound request.
+    get(o, k)?
+        .parse()
+        .map_err(|_| ServerError::Config("an address is IP:port, never a name"))
+}
+
+fn serve(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
+    let device_tls = tls::device_server_config(
+        tls::load_certs(Path::new(get(o, "cert")?))?,
+        tls::load_key(Path::new(get(o, "key")?))?,
+    )?;
+    let admin_tls = tls::admin_server_config(
+        tls::load_certs(Path::new(get(o, "admin-cert")?))?,
+        tls::load_key(Path::new(get(o, "admin-key")?))?,
+        tls::roots(tls::load_certs(Path::new(get(o, "admin-client-ca")?))?)?,
+    )?;
+    let running = net::start(Config {
+        data_dir: PathBuf::from(get(o, "data")?),
+        listen: addr(o, "listen")?,
+        admin_listen: addr(o, "admin-listen")?,
+        tls: device_tls,
+        admin_tls,
+    })?;
+    report(&format!(
+        "listening {} admin {} (sealed)",
+        running.addr, running.admin_addr
+    ));
+    running.wait();
+    Ok(())
+}
+
+/// Operator output: to standard error, so that standard output stays free for scripting.
+fn report(s: &str) {
+    eprintln!("hirzlad: {s}");
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.first().map(String::as_str) {
+        Some("--version") => {
+            report(env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Some("init") => options(&args[1..]).and_then(|o| init(&o)),
+        Some("serve") => options(&args[1..]).and_then(|o| serve(&o)),
+        _ => Err(ServerError::Config("unknown command")),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            report(&format!("{e}\n{USAGE}"));
+            ExitCode::from(2)
+        }
+    }
 }

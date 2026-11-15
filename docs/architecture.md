@@ -85,8 +85,13 @@ Un coffre Self se rattache à un serveur en une opération. Le format et le noya
 
 ## Flux : session Hornn
 
-1. Hornn signe une autorisation de session de 60 secondes.
-2. L'agent gateway, membre machine du casier, déchiffre lui-même l'identifiant avec son noyau Hirzla.
+Spécifié dans `integration-hornn.md`.
+
+1. Hornn signe une autorisation de session hybride de 60 secondes, à usage unique, destinée au
+   membre machine de la gateway et nommant l'utilisateur (souvent `BlindUser`), le casier et le
+   secret.
+2. L'agent gateway, membre machine du casier, la présente à son noyau Hirzla, qui la vérifie et
+   déchiffre lui-même l'identifiant. L'utilisateur ne le reçoit jamais.
 3. Il ouvre la connexion, efface le secret, journalise l'usage.
 4. À la fermeture, l'agent de rotation change le mot de passe et publie la nouvelle version.
 

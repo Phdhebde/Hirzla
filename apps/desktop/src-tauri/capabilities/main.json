@@ -1,0 +1,21 @@
+{
+  "identifier": "main",
+  "description": "Ce que la fenêtre principale peut demander : les commandes de l'application, rien d'autre (ni fichiers, ni réseau, ni greffon).",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-status",
+    "allow-create-vault",
+    "allow-unlock",
+    "allow-lock",
+    "allow-list-secrets",
+    "allow-reveal-field",
+    "allow-copy-field",
+    "allow-create-secret",
+    "allow-update-secret",
+    "allow-delete-secret",
+    "allow-generate-password",
+    "allow-copy-generated",
+    "allow-import-csv"
+  ]
+}

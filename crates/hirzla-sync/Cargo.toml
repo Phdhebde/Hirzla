@@ -9,7 +9,20 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# In-memory relay and identities for tests (here and in dependent crates).
+# Never enabled in a shipped binary.
+test-support = []
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 hirzla-vault = { path = "../hirzla-vault" }
+# Control bodies and the authorization state of § 9.4 (ADR 0018, decision of the
+# maintainer): `access ← sync`, one definition of `ControlBody`.
 hirzla-access = { path = "../hirzla-access" }
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+# Already in the workspace (hirzla-vault): property tests of the merge and delivery orders.
+proptest = "1.12.0"

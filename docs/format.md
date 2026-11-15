@@ -142,6 +142,9 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/server-auth` | Signature du serveur à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/device-auth` | Signature de l'appareil à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/receipt` | Signature d'un accusé de réception du serveur | `sync-protocol.md` |
+| `hirzla/v1/keylog-head` | Signature d'une tête du registre de transparence | `transparence.md` |
+| `hirzla/v1/recovery-kit` | AAD, kit de récupération (clé privée du membre) | `roles.md` |
+| `hirzla/v1/recovery-parcel` | Contexte KEM et AAD, colis d'une part de récupération | `roles.md` |
 
 Une étiquette n'a qu'un seul usage. Toute nouvelle étiquette s'ajoute à ce registre.
 
@@ -244,7 +247,7 @@ l'étiquette. Chaque clé a un rôle et ne signe que ses domaines (ADR 0011) :
 | --- | --- |
 | Clé du membre | `device-cert`, `device-revoke` |
 | Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol` |
-| Clé du serveur | `server-auth`, `receipt` |
+| Clé du serveur | `server-auth`, `receipt`, `keylog-head` |
 
 ### 3.5 Clés privées
 
@@ -678,7 +681,7 @@ secret.
 | 2 | `lamport` | `uint` | `1 + max(lamport des deps)`, ou 1 sans dépendance |
 | 3 | `deps` | `array<OpId>` | Trié, 1 à 256 éléments, contient `prev` s'il existe. Vide seulement pour `LockerCreate` |
 | 4 | `wall_ms` | `uint` | Heure murale de l'auteur en millisecondes. Indicatif, jamais utilisé pour décider |
-| 5 | `content` | `SecretBody`, `LockerBody`, ou absent | Selon `kind`. Absent si `kind = 0` |
+| 5 | `content` | `SecretBody`, `LockerBody`, `CompactPast`, ou absent | Selon `kind`. Si `kind = 0`, absent, sauf pour une `Compact` qui porte obligatoirement son `CompactPast` (`sync-protocol.md` § 10.2, ADR 0017) |
 
 ### 7.3 Version de secret (`SecretBody`)
 

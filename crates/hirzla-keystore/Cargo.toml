@@ -14,6 +14,11 @@ hirzla-crypto = { path = "../hirzla-crypto" }
 thiserror = "2.0"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
+# ADR 0015. Process hardening, peer credentials of the local channel and terminal echo
+# (`platform`). Already in the dependency graph; now a direct dependency on Unix.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2.191"
+
 # ADR 0014. TPM 2.0 through tpm2-tss (>= 4.1.3, found by pkg-config, see
 # .github/scripts/install-tpm2-tss.sh; no
 # source download at build time). Windows is not built yet: no released tss-esapi opens the
@@ -32,4 +37,16 @@ security-framework-sys = "2.17.0"
 # ADR 0014, decision 6. DPAPI (CryptProtectData, user scope): a factor always combined with
 # the master password, until a released tss-esapi opens the TPM on Windows.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+# ADR 0015: the named pipe of the local channel, the identity of its peer, the process DACL
+# and console input without echo (`platform`).
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Security_Authorization",
+    "Win32_Security_Cryptography",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Console",
+    "Win32_System_IO",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
