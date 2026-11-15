@@ -12,6 +12,11 @@ use std::time::{Duration, Instant};
 use hirzla_keystore::platform::{self, HardeningReport};
 use zeroize::Zeroizing;
 
+use hirzla_access::hornn::HornnTrust;
+use hirzla_vault::model::Id16;
+
+use crate::agent::proto::{is_agent_request, AgentReply, AgentRequest};
+use crate::agent::service::{AgentConfig, AgentService};
 use crate::auth::{authorize_client, AllowList};
 use crate::events::{Event, Log, Refusal};
 use crate::proto::{
@@ -46,10 +51,14 @@ pub struct Options {
     pub allow: Option<Vec<PathBuf>>,
     /// Automatic lock delay overriding the vault's setting.
     pub auto_lock: Option<Duration>,
+    /// Agent profile (`docs/integration-hornn.md`): Hornn's issuer and the file of its
+    /// hybrid verification key. Both or neither.
+    pub hornn: Option<(Id16, PathBuf)>,
 }
 
 const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
-[--allow-exe EXÉCUTABLE]... [--auto-lock SECONDES]";
+[--allow-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
+[--hornn-issuer HEX --hornn-key FICHIER]";
 
 /// The default vault file: `$XDG_DATA_HOME/hirzla/coffre.hirzla` (or
 /// `~/.local/share/hirzla/…`) on Linux, `~/Library/Application Support/Hirzla/coffre.hirzla`
@@ -84,6 +93,8 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
     let mut auto_lock = None;
+    let mut hornn_issuer: Option<Id16> = None;
+    let mut hornn_key: Option<PathBuf> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         let mut value = |name: &str| {
@@ -108,6 +119,14 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
                     })?;
                 auto_lock = Some(Duration::from_secs(s));
             }
+            Some("--hornn-issuer") => {
+                let v = value("--hornn-issuer")?;
+                hornn_issuer =
+                    Some(v.to_str().and_then(parse_id16).ok_or_else(|| {
+                        "--hornn-issuer attend 32 chiffres hexadécimaux.".to_owned()
+                    })?);
+            }
+            Some("--hornn-key") => hornn_key = Some(PathBuf::from(value("--hornn-key")?)),
             Some("--help") | Some("-h") => return Err(USAGE.to_owned()),
             _ => return Err(format!("argument inconnu. {USAGE}")),
         }
@@ -120,13 +139,37 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let vault = vault.or_else(default_vault_path).ok_or_else(|| {
         "impossible de déterminer l'emplacement du coffre ; utilisez --vault.".to_owned()
     })?;
+    let hornn = match (hornn_issuer, hornn_key) {
+        (Some(i), Some(k)) => Some((i, k)),
+        (None, None) => None,
+        _ => return Err("--hornn-issuer et --hornn-key vont ensemble.".to_owned()),
+    };
     Ok(Options {
         endpoint,
         vault,
         log,
         allow,
         auto_lock,
+        hornn,
     })
+}
+
+fn parse_id16(s: &str) -> Option<Id16> {
+    if s.len() != 32 || !s.is_ascii() {
+        return None;
+    }
+    let mut out = [0u8; 16];
+    for (i, o) in out.iter_mut().enumerate() {
+        *o = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).ok()?;
+    }
+    Some(out)
+}
+
+/// Loads Hornn's pinned identity: the key file holds the encoded hybrid verification key
+/// (2 691 bytes, `docs/format.md` § 3.1), raw. Public data.
+fn load_hornn(issuer: Id16, key: &PathBuf) -> Result<HornnTrust, String> {
+    let bytes = std::fs::read(key).map_err(|_| "impossible de lire la clé de Hornn.".to_owned())?;
+    HornnTrust::new(issuer, &bytes).map_err(|_| "clé de Hornn invalide.".to_owned())
 }
 
 fn open_log(path: Option<&PathBuf>) -> std::io::Result<Box<dyn std::io::Write + Send>> {
@@ -197,6 +240,22 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             AllowList::default_for(&me)
         }
     };
+    let agent = match &options.hornn {
+        None => None,
+        Some((issuer, key)) => {
+            let started_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+            Some(Arc::new(Mutex::new(AgentService::new(
+                AgentConfig {
+                    trust: load_hornn(*issuer, key)?,
+                    started_ms,
+                    transport: None,
+                },
+                Arc::clone(log),
+            ))))
+        }
+    };
     let mut listener = Listener::bind(&options.endpoint).map_err(|e| match e {
         crate::transport::TransportError::InUse => {
             "un noyau est déjà à l'écoute sur ce point de connexion.".to_owned()
@@ -263,8 +322,9 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         let log = Arc::clone(log);
         let active = Arc::clone(&active);
         let endpoint = Arc::clone(&endpoint);
+        let agent = agent.clone();
         std::thread::spawn(move || {
-            serve(conn, &core, &log, &endpoint);
+            serve(conn, &core, agent.as_deref(), &log, &endpoint);
             active.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -302,7 +362,41 @@ fn refuse(mut conn: Connection, code: ErrorCode) {
     conn.finish();
 }
 
-fn serve(mut conn: Connection, core: &Mutex<Core>, log: &Log, endpoint: &Endpoint) {
+/// Answers an agent request (`docs/api-locale.md` § 13). Returns `false` if the connection
+/// must close.
+fn serve_agent(
+    conn: &mut Connection,
+    agent: &Mutex<AgentService>,
+    log: &Log,
+    frame: &[u8],
+) -> bool {
+    let (id, result) = match AgentRequest::decode(frame) {
+        Ok((id, request)) => (
+            id,
+            agent
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = AgentReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
+fn serve(
+    mut conn: Connection,
+    core: &Mutex<Core>,
+    agent: Option<&Mutex<AgentService>>,
+    log: &Log,
+    endpoint: &Endpoint,
+) {
     let _ = conn.set_read_timeout(Some(IDLE_TIMEOUT));
     loop {
         let frame = match read_frame(&mut conn) {
@@ -316,6 +410,14 @@ fn serve(mut conn: Connection, core: &Mutex<Core>, log: &Log, endpoint: &Endpoin
             }
             Err(FrameError::Closed | FrameError::Io(_)) => break,
         };
+        if let Some(agent) = agent {
+            if is_agent_request(&frame) {
+                if serve_agent(&mut conn, agent, log, &frame) {
+                    continue;
+                }
+                break;
+            }
+        }
         let (id, result, shutdown) = match Request::decode(&frame) {
             Ok((id, request)) => {
                 let shutdown = request.op() == Op::Shutdown;
@@ -379,6 +481,35 @@ mod tests {
         assert_eq!(o.vault, PathBuf::from("/tmp/v.hirzla"));
         assert_eq!(o.allow.unwrap().len(), 2);
         assert_eq!(o.auto_lock, Some(Duration::from_secs(5)));
+        assert!(o.hornn.is_none());
+    }
+
+    #[test]
+    fn parses_the_agent_profile() {
+        let o = parse_args(args(&[
+            "--vault",
+            "v",
+            "--hornn-issuer",
+            "000102030405060708090a0b0c0d0e0f",
+            "--hornn-key",
+            "hornn.key",
+        ]))
+        .unwrap();
+        let (issuer, key) = o.hornn.unwrap();
+        assert_eq!(issuer[15], 15);
+        assert_eq!(key, PathBuf::from("hornn.key"));
+        assert!(parse_args(args(&["--vault", "v", "--hornn-issuer", "00"])).is_err());
+        assert!(parse_args(args(&["--vault", "v", "--hornn-key", "k"])).is_err());
+        assert!(parse_args(args(&[
+            "--vault",
+            "v",
+            "--hornn-key",
+            "k",
+            "--hornn-issuer",
+            "zz0102030405060708090a0b0c0d0e0f"
+        ]))
+        .is_err());
+        assert!(load_hornn([0; 16], &PathBuf::from("/nonexistent/hornn.key")).is_err());
     }
 
     #[test]

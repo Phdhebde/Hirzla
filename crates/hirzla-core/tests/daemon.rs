@@ -284,3 +284,57 @@ fn second_core_on_the_same_endpoint_fails() {
         .unwrap();
     assert!(!status.success());
 }
+
+#[cfg(unix)]
+#[test]
+fn the_agent_profile_answers_over_the_real_channel() {
+    use hirzla_core::agent::proto::{AgentCode, AgentReply, AgentRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "agent");
+    let hornn = hirzla_crypto::sign::HornnSigningKey::generate().unwrap();
+    let key = dir.path().join("hornn.key");
+    std::fs::write(&key, hornn.verifying_key().as_bytes()).unwrap();
+    let me = std::env::current_exe().unwrap();
+    let key_arg = key.to_str().unwrap().to_owned();
+    let _core = start(
+        dir.path(),
+        &ep,
+        &me,
+        &[
+            "--hornn-issuer",
+            "0f0e0d0c0b0a09080706050403020100",
+            "--hornn-key",
+            &key_arg,
+        ],
+    );
+    let mut c = connect(&ep);
+    // The general operations still answer.
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let Ok(AgentReply::Status {
+        identity, issuer, ..
+    }) = c.call_agent(&AgentRequest::AgentStatus).unwrap()
+    else {
+        panic!()
+    };
+    assert!(identity.is_none());
+    assert_eq!(issuer[0], 0x0f);
+    assert!(matches!(
+        c.call_agent(&AgentRequest::SessionOpen { grant: vec![1] })
+            .unwrap(),
+        Err(AgentCode::NotEnrolled)
+    ));
+    let Ok(AgentReply::Enrolled { control_code, .. }) =
+        c.call_agent(&AgentRequest::AgentEnrol).unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(control_code.len(), 20);
+    assert!(matches!(
+        c.call_agent(&AgentRequest::SessionOpen { grant: vec![1] })
+            .unwrap(),
+        Err(AgentCode::GrantRefused(1))
+    ));
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=agent_request op=session_open result=malformed"));
+    assert!(!log.contains(&control_code));
+}

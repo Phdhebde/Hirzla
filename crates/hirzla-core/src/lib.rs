@@ -8,10 +8,12 @@
 //! - [`transport`] and [`auth`]: the channel and the authentication of both ends;
 //! - [`service`]: what the core does with a request (vault, lock, automatic lock);
 //! - [`daemon`]: the `hirzla-core` process;
-//! - [`client`]: the client side, used by `hirzla`.
+//! - [`client`]: the client side, used by `hirzla`;
+//! - [`agent`]: the machine member of a Hornn agent (`docs/integration-hornn.md`).
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod auth;
 pub mod client;
 pub mod daemon;

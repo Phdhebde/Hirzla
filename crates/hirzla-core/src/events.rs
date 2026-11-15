@@ -8,6 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use hirzla_keystore::platform::HardeningReport;
 
+use crate::agent::proto::AgentOp;
 use crate::proto::{ErrorCode, Op};
 
 /// Why a connection was refused.
@@ -96,6 +97,14 @@ pub enum Event {
     },
     /// The core stops.
     Stopped,
+    /// An agent request was answered (`docs/api-locale.md` § 13). `result` is `ok`, the
+    /// name of the error, or the reason a grant was refused: fixed words only.
+    AgentRequest {
+        /// Operation.
+        op: AgentOp,
+        /// Outcome.
+        result: &'static str,
+    },
 }
 
 impl Event {
@@ -140,6 +149,9 @@ impl Event {
                 }
             ),
             Event::Stopped => write!(out, "event=stopped"),
+            Event::AgentRequest { op, result } => {
+                write!(out, "event=agent_request op={} result={result}", op.name())
+            }
         };
     }
 
@@ -236,6 +248,18 @@ mod tests {
                     op,
                     error: ErrorCode::from_u64(c),
                 });
+            }
+        }
+        for n in 20..=27 {
+            let op = AgentOp::from_u64(n).unwrap_or(AgentOp::AgentStatus);
+            for result in [
+                "ok",
+                "grant_refused",
+                "replayed",
+                "bad_signature",
+                "not_enrolled",
+            ] {
+                events.push(Event::AgentRequest { op, result });
             }
         }
         for e in events {
