@@ -11,6 +11,7 @@ mod clipboard;
 mod selfmode;
 mod server;
 mod term;
+mod update;
 
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
@@ -358,6 +359,10 @@ fn deliver(secret: &str, stdout: bool, clear_s: u64) -> Result<(), String> {
 // -----------------------------------------------------------------------------------------
 
 fn run(args: &Args) -> Result<(), String> {
+    // Offline updates touch neither the core nor the network (ADR 0043).
+    if let Command::Update(command) = &args.command {
+        return update::run(command);
+    }
     let session = Session::new(args)?;
     match &args.command {
         Command::Init { kdf } => {
@@ -552,7 +557,7 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Passwd => selfmode::change_password(&session),
         Command::Settings(change) => selfmode::settings(&session, change),
         Command::Recovery(what) => selfmode::recovery(&session, what),
-        Command::ClipboardHelper { .. } => Ok(()),
+        Command::ClipboardHelper { .. } | Command::Update(_) => Ok(()),
     }
 }
 

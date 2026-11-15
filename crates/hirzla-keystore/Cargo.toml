@@ -29,6 +29,7 @@ tss-esapi = "=7.7.0"
 # ADR 0014. Secure Enclave, only ever combined with the master password (decision 1).
 # OSX_10_15: the data protection keychain, the only one that holds enclave keys.
 # security-framework-sys: `SecKeyCreateWithData`, which has no safe wrapper.
+# ADR 0042: code signing of the core's clients (`SecCode`, `SecRequirement`), same crates.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10.1"
 security-framework = { version = "3.7.0", features = ["OSX_10_15"] }
@@ -40,12 +41,17 @@ security-framework-sys = "2.17.0"
 # ADR 0015: the named pipe of the local channel, the identity of its peer, the process DACL
 # and console input without echo (`platform`). ADR 0033: suspend and session-lock
 # notifications (Graphics_Gdi, LibraryLoader, Power, RemoteDesktop, UI_WindowsAndMessaging).
+# ADR 0042: Authenticode of the core's clients (Security_WinTrust; Cryptography_Catalog and
+# Cryptography_Sip only gate the WTHelper* bindings).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
+    "Win32_Security_Cryptography_Catalog",
+    "Win32_Security_Cryptography_Sip",
+    "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_IO",

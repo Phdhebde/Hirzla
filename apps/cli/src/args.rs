@@ -59,6 +59,15 @@ Mode Serveur :
                           Retire un membre du casier.
   stop                    Verrouille le coffre et arrête le noyau.
 
+Mises à jour hors ligne (sans réseau ni noyau) :
+  mise-a-jour verifier FICHIER
+                          Vérifie un paquet de mise à jour signé et affiche son contenu.
+  mise-a-jour appliquer FICHIER [--repertoire DOSSIER]
+                          Vérifie puis installe le paquet dans DOSSIER (par défaut, celui
+                          de hirzla). Arrêtez le noyau et l'application avant. Refuse une
+                          version égale ou antérieure à celle installée.
+                          --cle-editeur FICHIER : clé publique d'éditeur (développement).
+
 Options globales :
   --socket POINT          Point de connexion du noyau (ou HIRZLA_SOCKET).
   --core EXÉCUTABLE       Exécutable du noyau attendu (par défaut : hirzla-core à côté
@@ -106,6 +115,20 @@ pub enum LockerCommand {
     Remove {
         locker: String,
         member: String,
+    },
+}
+
+/// An offline update command (ADR 0043).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateCommand {
+    Verify {
+        file: PathBuf,
+        key: Option<PathBuf>,
+    },
+    Apply {
+        file: PathBuf,
+        dir: Option<PathBuf>,
+        key: Option<PathBuf>,
     },
 }
 
@@ -168,6 +191,7 @@ pub enum Command {
     Stop,
     Server(ServerCommand),
     Locker(LockerCommand),
+    Update(UpdateCommand),
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
@@ -236,6 +260,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--sortie",
         "--ac",
         "--empreinte",
+        "--repertoire",
+        "--cle-editeur",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -276,6 +302,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte"],
+        "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
         "history" => &["--id", "--version", "--champ", "--stdout"],
         "restore" => &["--id", "--version"],
@@ -589,6 +616,31 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             };
             Command::Locker(sub_command)
         }
+        "mise-a-jour" => {
+            max_positional(2)?;
+            let usage = "« mise-a-jour » attend verifier FICHIER ou appliquer FICHIER.";
+            let file = positional
+                .get(1)
+                .map(PathBuf::from)
+                .ok_or_else(|| usage.to_owned())?;
+            let key = one("--cle-editeur")?.map(PathBuf::from);
+            match positional.first().map(String::as_str) {
+                Some("verifier") => {
+                    if has("--repertoire") {
+                        return Err(
+                            "option inconnue pour « mise-a-jour verifier » : --repertoire".into(),
+                        );
+                    }
+                    Command::Update(UpdateCommand::Verify { file, key })
+                }
+                Some("appliquer") => Command::Update(UpdateCommand::Apply {
+                    file,
+                    dir: one("--repertoire")?.map(PathBuf::from),
+                    key,
+                }),
+                _ => return Err(usage.to_owned()),
+            }
+        }
         "gen" => {
             max_positional(1)?;
             let length = positional
@@ -727,6 +779,47 @@ mod tests {
                 kdf: Some((65536, 3, 1))
             }
         );
+    }
+
+    #[test]
+    fn parses_update_commands() {
+        assert_eq!(
+            p(&["mise-a-jour", "verifier", "p.hirzla-maj"])
+                .unwrap()
+                .command,
+            Command::Update(UpdateCommand::Verify {
+                file: "p.hirzla-maj".into(),
+                key: None
+            })
+        );
+        assert_eq!(
+            p(&[
+                "mise-a-jour",
+                "appliquer",
+                "p",
+                "--repertoire",
+                "/opt/hirzla",
+                "--cle-editeur",
+                "k.pub"
+            ])
+            .unwrap()
+            .command,
+            Command::Update(UpdateCommand::Apply {
+                file: "p".into(),
+                dir: Some("/opt/hirzla".into()),
+                key: Some("k.pub".into())
+            })
+        );
+        for bad in [
+            &["mise-a-jour"][..],
+            &["mise-a-jour", "verifier"],
+            &["mise-a-jour", "installer", "p"],
+            &["mise-a-jour", "verifier", "p", "q"],
+            &["mise-a-jour", "verifier", "p", "--repertoire", "d"],
+            &["mise-a-jour", "appliquer", "p", "--force"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

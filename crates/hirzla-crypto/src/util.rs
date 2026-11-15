@@ -2,7 +2,7 @@
 //! SHA-384, SHA3-256, random bytes and constant-time comparison.
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
-use aws_lc_rs::digest::{digest, SHA384, SHA3_256};
+use aws_lc_rs::digest::{digest, Context, SHA384, SHA3_256};
 
 use crate::Error;
 
@@ -15,6 +15,43 @@ pub fn sha384(data: &[u8]) -> [u8; SHA384_LEN] {
     let mut out = [0u8; SHA384_LEN];
     out.copy_from_slice(digest(&SHA384, data).as_ref());
     out
+}
+
+/// SHA-384 computed over data given in pieces, for files too large to hold in memory
+/// (update packages, executables: ADR 0042, 0043).
+pub struct Sha384(Context);
+
+impl Sha384 {
+    /// An empty hash.
+    #[must_use]
+    pub fn new() -> Self {
+        Sha384(Context::new(&SHA384))
+    }
+
+    /// Appends `data`.
+    pub fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    /// The digest of everything appended.
+    #[must_use]
+    pub fn finish(self) -> [u8; SHA384_LEN] {
+        let mut out = [0u8; SHA384_LEN];
+        out.copy_from_slice(self.0.finish().as_ref());
+        out
+    }
+}
+
+impl Default for Sha384 {
+    fn default() -> Self {
+        Sha384::new()
+    }
+}
+
+impl core::fmt::Debug for Sha384 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("Sha384")
+    }
 }
 
 /// Length of a SHA3-256 digest.
@@ -66,6 +103,23 @@ mod tests {
             sha384(b"abc").to_vec(),
             hex("cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7")
         );
+    }
+
+    #[test]
+    fn incremental_sha384_matches_one_shot() {
+        // FIPS 180-4 two-block example, fed in uneven pieces.
+        let msg = b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq";
+        let mut h = Sha384::new();
+        for piece in msg.chunks(7) {
+            h.update(piece);
+        }
+        let d = h.finish();
+        assert_eq!(d, sha384(msg));
+        assert_eq!(
+            d.to_vec(),
+            hex("3391fdddfc8dc7393707a65b1b4709397cf8b1d162af05abfe8f450de5f36bc6b0455a8520bc4e6f5fe95b1fe3c8452b")
+        );
+        assert_eq!(Sha384::new().finish(), sha384(b""));
     }
 
     #[test]

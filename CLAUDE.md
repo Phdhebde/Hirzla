@@ -54,6 +54,7 @@ Dans ces cas : propose un ADR (copie `docs/adr/0000-modele.md`), n'implémente p
 | `apps/desktop` | Application Tauri 2. |
 | `apps/extension` | Extension navigateur. |
 | `apps/native-host` | `hirzla-native-host`, hôte de messagerie native de l'extension (client du noyau, profil navigateur). |
+| `apps/release-signer` | `hirzla-signer`, outil de l'éditeur : clé d'éditeur, manifeste des clients, paquets de mise à jour (jamais livré aux postes, ADR 0043). |
 | `sdk/go` | Client pour l'agent gateway Hornn. |
 | `docs/` | Spécifications, ADR, cible de sécurité. |
 | `brand/` | Logo, couleurs, typographies. |
