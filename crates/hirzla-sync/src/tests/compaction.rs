@@ -302,3 +302,58 @@ fn stub_listed_only_by_a_rejected_compact_is_refused() {
         Some(OpStatus::Rejected(_))
     ));
 }
+
+/// Strict decoding of the past a `Compact` carries (§ 10.2): one negative test per refusal.
+#[test]
+fn compact_past_decoding_is_strict() {
+    use crate::compact::{compact_past_value, decode_compact_past, PrunedPast};
+    let (w, _, versions) = history();
+    let good = w.replicas[0].past_of(&versions[1]).unwrap();
+    let ok = compact_past_value(core::slice::from_ref(&good)).unwrap();
+    assert_eq!(
+        decode_compact_past(&ok, &[versions[1]]).unwrap(),
+        vec![good.clone()]
+    );
+    // Identifiers that differ from `prune`, or a missing entry.
+    assert!(decode_compact_past(&ok, &[versions[2]]).is_err());
+    assert!(decode_compact_past(&ok, &[versions[1], versions[2]]).is_err());
+    let refused = |p: PrunedPast| {
+        let v = p.to_value().unwrap();
+        PrunedPast::from_value(&v).is_err()
+    };
+    // `prev` absent while `seq > 1`, or present with `seq = 1`.
+    assert!(refused(PrunedPast {
+        prev: None,
+        ..good.clone()
+    }));
+    let mut first = good.clone();
+    first.opref.seq = 1;
+    assert!(refused(first));
+    // Lamport 0, no dependency.
+    assert!(refused(PrunedPast {
+        lamport: 0,
+        ..good.clone()
+    }));
+    assert!(refused(PrunedPast {
+        deps: Vec::new(),
+        ..good.clone()
+    }));
+    // A `LockerMetaPut` that names a secret, an unknown kind, an unknown key.
+    let whole = good.to_value().unwrap();
+    let Value::Map(entries) = &whole else {
+        panic!("map");
+    };
+    let with = |k: u64, val: Value| {
+        let mut e: Vec<(Value, Value)> = entries
+            .iter()
+            .filter(|(key, _)| *key != Value::Uint(k))
+            .cloned()
+            .collect();
+        e.push((Value::Uint(k), val));
+        e.sort_by_key(|(key, _)| hirzla_vault::cbor::encode(key).unwrap().to_vec());
+        PrunedPast::from_value(&Value::Map(e)).is_err()
+    };
+    assert!(with(7, Value::Uint(2)));
+    assert!(with(7, Value::Uint(3)));
+    assert!(with(11, Value::Uint(0)));
+}
