@@ -217,8 +217,15 @@ fn nfc(password: &str) -> Result<Password, VaultError> {
     if password.is_empty() {
         return Err(VaultError::InvalidInput);
     }
-    let normalized = icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(password);
-    Ok(Password::from_slice(normalized.as_bytes()))
+    match icu_normalizer::ComposingNormalizerBorrowed::new_nfc().normalize(password) {
+        std::borrow::Cow::Borrowed(same) => Ok(Password::from_slice(same.as_bytes())),
+        // The normaliser allocated a copy of the password: wipe it once copied.
+        std::borrow::Cow::Owned(mut copy) => {
+            let pwd = Password::from_slice(copy.as_bytes());
+            zeroize::Zeroize::zeroize(&mut copy);
+            Ok(pwd)
+        }
+    }
 }
 
 fn split_private(encoded: &[u8], first: usize) -> Result<(&[u8], &[u8]), VaultError> {
