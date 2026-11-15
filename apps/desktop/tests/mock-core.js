@@ -7,20 +7,112 @@
   const L = "6a1f0c2e9b8d4f17a3c5e0d2b4f6a8c1";
   const W = "0b3d5f7a9c1e2a4b6c8d0e2f4a6b8c0d";
   const id = (n) => n.toString(16).padStart(32, "0");
+  const C = "c4a9e2f07d1b5c3e8a6f0b2d4e6a8c0f";
   const entries = [
     { locker: L, id: id(1), kind: "password", title: "Banque Populaire", username: "m.durand", hosts: ["banquepopulaire.fr"], tags: ["finances"], favorite: true, trash: false },
     { locker: L, id: id(2), kind: "password", title: "Messagerie Proton", username: "marie.durand@proton.me", hosts: ["account.proton.me"], tags: [], favorite: true, trash: false },
     { locker: L, id: id(3), kind: "note", title: "Codes de secours GitLab", username: null, hosts: [], tags: ["secours"], favorite: false, trash: false },
     { locker: L, id: id(4), kind: "password", title: "Impots.gouv.fr", username: "1 23 45 678 901 234", hosts: ["impots.gouv.fr"], tags: ["administration"], favorite: false, trash: false },
-    { locker: W, id: id(5), kind: "password", title: "Routeur du bureau", username: "admin", hosts: ["192.168.1.1"], tags: ["réseau"], favorite: false, trash: false },
+    { locker: L, id: id(5), kind: "password", title: "Routeur de la maison", username: "admin", hosts: ["192.168.1.1"], tags: ["réseau"], favorite: false, trash: false },
     { locker: W, id: id(6), kind: "ssh_key", title: "Serveur de sauvegarde", username: null, hosts: [], tags: ["infra"], favorite: false, trash: false },
     { locker: L, id: id(7), kind: "password", title: "Wi-Fi maison", username: null, hosts: [], tags: [], favorite: false, trash: false },
     { locker: L, id: id(8), kind: "password", title: "Ancien forum", username: "mdurand", hosts: ["forum.example"], tags: [], favorite: false, trash: true },
+    { locker: W, id: id(9), kind: "password", title: "Console du NAS", username: "atelier", hosts: ["nas.atelier.lan"], tags: ["infra"], favorite: false, trash: false },
+    { locker: W, id: id(10), kind: "password", title: "Portail fournisseur", username: "commandes@atelier-durand.fr", hosts: ["pro.fournisseur.example"], tags: [], favorite: false, trash: false },
+    { locker: C, id: id(11), kind: "password", title: "Banque — compte professionnel", username: "ATELIER-DURAND", hosts: ["entreprises.banque.example"], tags: ["finances"], favorite: false, trash: false },
+    { locker: C, id: id(12), kind: "password", title: "Logiciel de paie", username: "m.durand", hosts: ["paie.example"], tags: [], favorite: false, trash: false },
   ];
-  const lockers = [
-    { id: L, name: "Personnel", personal: true },
-    { id: W, name: "Atelier", personal: false },
+  // Server mode: a joined server and its shared lockers (all made up). The captures change
+  // this state through window.__HIRZLA_MOCK_SERVER__.
+  const S = Object.assign(
+    { joined: false, verified: false, synced: false, ca: false, lastSync: null, failSync: null, unreachable: false, suspect: false, alerts: [], lost: false },
+    cfg.server || {},
+  );
+  window.__HIRZLA_MOCK_SERVER__ = S;
+  const FP = "M7QKXR4PZD2VNBTL6WEA";
+  const ME = "4be19c07a3d25f8e6b1c0d9e7f2a4b6c";
+  const shared = [
+    { id: W, name: "Atelier", role: "owner", unsent: 0, pending: 0, quarantined: 0 },
+    { id: C, name: "Comptabilité", role: "reader", unsent: 0, pending: 0, quarantined: 0 },
   ];
+  const others = {
+    paul: "8d0f2a6c4e1b3d5f7a9c0e2b4d6f8a1c",
+    lea: "2c7e9a1b3d5f0c8e6a4b2d0f9e7c5a3b",
+    karim: "e5a3c1f9d7b5a3e1c9f7d5b3a1e9c7f5",
+    claire: "a0b2c4d6e8f0a2b4c6d8e0f2a4b6c8d0",
+  };
+  const FPS = {
+    [ME]: "QH3VZK7N2RBXW5TMJ4DC",
+    [others.paul]: "T4NWQ2ZK7HXB5RMD3VCJ",
+    [others.lea]: "B6XJ3MQT7ZVN2KWR4PHD",
+    [others.karim]: "R2HV7KQB4XZT6NMW3JDC",
+    [others.claire]: "W5ZTD3KN7QXR2HVB6MJC",
+  };
+  const fpOf = (m) => FPS[m] || "N3KQ7XZB2TVW5RMH4DJC";
+  const roster = {
+    [W]: [
+      { member: ME, role: "owner", devices: 2, proven: true },
+      { member: others.paul, role: "manager", devices: 1, proven: true },
+      { member: others.lea, role: "editor", devices: 1, proven: true },
+      { member: others.karim, role: "reader", devices: 1, proven: false },
+    ],
+    [C]: [
+      { member: others.claire, role: "owner", devices: 2, proven: true },
+      { member: ME, role: "reader", devices: 2, proven: true },
+      { member: others.paul, role: "editor", devices: 1, proven: true },
+    ],
+  };
+  const READERS = ["owner", "manager", "editor", "reader"];
+  const ROLES = ["owner", "manager", "editor", "reader", "blind_user", "auditor"];
+  const norm = (f) => (f || "").replace(/[\s-]/g, "").toUpperCase();
+  const lockerList = () => {
+    const base = [{ id: L, name: "Personnel", personal: true }];
+    if (S.joined && S.verified && S.synced) {
+      for (const l of shared) base.push({ id: l.id, name: l.name, personal: false });
+    }
+    return base;
+  };
+  const membersOf = (locker) => {
+    const list = roster[locker] || [];
+    const mine = list.find((m) => m.member === ME);
+    const lost = locker === C && S.lost;
+    const owners = list.filter((m) => m.role === "owner").length;
+    const owner = !!mine && mine.role === "owner";
+    const manager = !!mine && mine.role === "manager";
+    return {
+      me: ME,
+      grantable: lost ? [] : owner ? ROLES.slice() : manager ? ROLES.slice(2) : [],
+      grant_refusal: lost ? "access_lost" : owner || manager ? null : "role",
+      members: list.map((m) => {
+        const self = m.member === ME;
+        let change_to = [];
+        let change_refusal = null;
+        let remove_refusal = null;
+        if (lost) {
+          change_refusal = "access_lost";
+          remove_refusal = "access_lost";
+        } else if (owner) {
+          if (self && owners === 1) {
+            change_refusal = "last_owner";
+            remove_refusal = "last_owner";
+          } else {
+            change_to = ROLES.filter((r) => r !== m.role && (!READERS.includes(m.role) || READERS.includes(r)));
+          }
+        } else {
+          change_refusal = "role";
+          remove_refusal = self ? null : "role";
+        }
+        return { member: m.member, me: self, role: m.role, devices: m.devices, fingerprint: fpOf(m.member), proven: m.proven, change_to, change_refusal, remove_refusal };
+      }),
+    };
+  };
+  const SERVER_MSG = {
+    fingerprint_mismatch: "Empreinte inattendue : elle ne correspond pas à la clé présentée. Rien n'a été enregistré ni envoyé. Vérifiez l'empreinte auprès de son détenteur par un autre canal ; si elle est exacte, quelqu'un s'interpose peut-être entre vous et le serveur.",
+    server_unreachable: "Serveur injoignable, ou connexion sécurisée impossible. Vérifiez l'adresse et le réseau, puis réessayez. Vos secrets restent disponibles sur ce poste.",
+    access_lost: "Accès perdu : le serveur ne vous sert plus ce casier. Demandez l'accès à son propriétaire.",
+    keylog_rejected: "Registre des clés suspect : la clé de ce membre n'est pas prouvée par le registre de transparence, ou le serveur présente un registre incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité.",
+    invalid: "Choisissez d'abord le certificat de l'autorité du site.",
+  };
   const values = {
     password: "c7#Lq9vT!m2Rz@4wXe",
     notes: "Compte joint ouvert en 2019. Conseiller : agence de Lyon.",
@@ -59,7 +151,9 @@
       if (state !== "unlocked") return refuse("locked", "Le coffre est verrouillé.");
       const q = (a.query || "").toLowerCase();
       const hit = (e) => !q || [e.title, e.username || "", ...e.hosts, ...e.tags].some((t) => t.toLowerCase().includes(q));
-      return { entries: entries.filter((e) => (a.trash || !e.trash) && hit(e)), lockers };
+      const lockers = lockerList();
+      const shown = (e) => lockers.some((l) => l.id === e.locker);
+      return { entries: entries.filter((e) => shown(e) && (a.trash || !e.trash) && hit(e)), lockers };
     },
     reveal_field: (a) => {
       if (a.field === "notes" && a.target.id !== id(1) && a.target.id !== id(3)) return refuse("not_found", "Secret ou champ introuvable.");
@@ -67,7 +161,7 @@
     },
     copy_field: () => 30,
     create_secret: (a) => {
-      const e = { locker: L, id: id(entries.length + 1), kind: a.secret.kind, title: a.secret.title, username: a.secret.username || null, hosts: [], tags: a.secret.tags || [], favorite: !!a.secret.favorite, trash: false };
+      const e = { locker: a.secret.locker || L, id: id(entries.length + 1), kind: a.secret.kind, title: a.secret.title, username: a.secret.username || null, hosts: [], tags: a.secret.tags || [], favorite: !!a.secret.favorite, trash: false };
       entries.push(e);
       return { locker: e.locker, id: e.id };
     },
@@ -115,6 +209,68 @@
     import_kdbx: (a) => {
       if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
       return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
+    },
+    server_status: () => {
+      if (!S.joined) return { joined: false, url: null, server_id: null, fingerprint: null, verified: false, last_sync_ms: null, keylog: null, lockers: [] };
+      return {
+        joined: true,
+        url: "hirzla://coffre.atelier-durand.fr:7443",
+        server_id: "5e0c7a91b3d24f68a0c1e2d3f4a5b6c7",
+        fingerprint: FP,
+        verified: S.verified,
+        last_sync_ms: S.lastSync,
+        keylog: { suspect: S.suspect, reason: S.suspect ? "shorter" : null, entries: 148, alerts: S.alerts },
+        lockers: S.verified && S.synced ? shared.map((l) => ({ ...l, access: !(l.id === C && S.lost) })) : [],
+      };
+    },
+    server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB" }),
+    export_server_identity: () => "hirzla-membre-4be19c07.hirzla-membre",
+    choose_server_ca: () => {
+      S.ca = true;
+      return "ac-atelier-durand.pem";
+    },
+    server_join: (a) => {
+      if (!S.ca) return refuse("invalid", SERVER_MSG.invalid);
+      if (S.unreachable) return refuse("server_unreachable", SERVER_MSG.server_unreachable);
+      if (a.fingerprint && norm(a.fingerprint) !== FP) return refuse("fingerprint_mismatch", SERVER_MSG.fingerprint_mismatch);
+      S.joined = true;
+      S.verified = !!a.fingerprint;
+      S.ca = false;
+      return { fingerprint: FP, verified: S.verified, account: true };
+    },
+    server_confirm: (a) => {
+      if (norm(a.fingerprint) !== FP) return refuse("fingerprint_mismatch", SERVER_MSG.fingerprint_mismatch);
+      S.verified = true;
+      return true;
+    },
+    server_sync: () => {
+      if (S.failSync) return refuse(S.failSync, SERVER_MSG[S.failSync]);
+      S.synced = true;
+      S.lastSync = Date.now();
+      return shared.map((l, i) => ({ locker: l.id, received: i === 0 ? 3 : 1, sent: i === 0 ? 1 : 0, refused: 0, access: !(l.id === C && S.lost) }));
+    },
+    create_shared_locker: (a) => {
+      if (S.suspect) return refuse("keylog_rejected", SERVER_MSG.keylog_rejected);
+      const lid = id(0xabc000 + shared.length);
+      shared.push({ id: lid, name: a.name, role: "owner", unsent: 0, pending: 0, quarantined: 0 });
+      roster[lid] = [{ member: ME, role: "owner", devices: 2, proven: true }];
+      return lid;
+    },
+    locker_members: (a) => membersOf(a.locker),
+    grant_role: (a) => {
+      if (S.suspect) return refuse("keylog_rejected", SERVER_MSG.keylog_rejected);
+      const m = norm(a.member).toLowerCase();
+      if (!/^[0-9a-f]{32}$/.test(m)) return refuse("invalid", "Identifiant du membre non valide : 32 chiffres hexadécimaux.");
+      const list = roster[a.locker] || [];
+      const got = list.find((x) => x.member === m);
+      if (got) got.role = a.role;
+      else list.push({ member: m, role: a.role, devices: 1, proven: true });
+      return fpOf(m);
+    },
+    revoke_role: (a) => {
+      const list = roster[a.locker] || [];
+      const i = list.findIndex((x) => x.member === a.member);
+      if (i >= 0) list.splice(i, 1);
     },
   };
   window.__TAURI__ = {

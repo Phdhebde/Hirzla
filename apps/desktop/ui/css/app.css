@@ -170,8 +170,8 @@ textarea.saisie { resize: vertical; }
 .coffre {
   height: 100%; display: grid;
   grid-template-columns: 232px minmax(0, 1fr);
-  grid-template-rows: 60px minmax(0, 1fr);
-  grid-template-areas: "barre barre" "nav vue";
+  grid-template-rows: 60px auto minmax(0, 1fr);
+  grid-template-areas: "barre barre" "bandeau bandeau" "nav vue";
 }
 .barre {
   grid-area: barre; display: flex; align-items: center; gap: 16px; padding: 0 16px;
@@ -283,6 +283,56 @@ textarea.saisie { resize: vertical; }
 .dialogue::backdrop { background: rgba(27, 32, 35, 0.55); }
 .dialogue form { display: flex; flex-direction: column; gap: 14px; padding: 24px; }
 
+/* Server mode. */
+.etat-neutre { background: transparent; color: var(--hz-texte-secondaire); border: 1px solid var(--hz-bordure); }
+.etat-alerte { background: var(--hz-alerte-fond); color: var(--hz-alerte); }
+.etat-gauche { align-self: flex-start; }
+.etat-bouton { font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+.etat-bouton:hover { border-color: var(--hz-texte-secondaire); }
+.barre .etat + .etat-bouton { margin-left: 0; }
+.bandeau {
+  grid-area: bandeau; display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+  background: var(--hz-alerte-fond); color: var(--hz-alerte); border-bottom: 1px solid var(--hz-bordure);
+}
+.bandeau .forme-triangle { flex: none; }
+.bandeau-texte { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
+.bandeau-titre { font-weight: 600; }
+.bandeau .bouton-secondaire { color: var(--hz-alerte); border-color: currentColor; }
+.bandeau .bouton-secondaire:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+.nav-action { color: var(--hz-texte-secondaire); font-size: 13px; }
+.nav-lien .marque-partage {
+  flex: none; font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 1px 6px; border-radius: 999px; border: 1px solid var(--hz-glacier); color: var(--hz-texte-secondaire);
+}
+.nav-lien .forme-triangle { color: var(--hz-alerte); }
+.nav-lien .nom-casier { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entete-casier {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 16px 10px;
+  font-size: 13px;
+}
+.empreinte {
+  font-family: var(--hz-font-mono); font-size: 22px; letter-spacing: 0.08em; padding: 14px 16px;
+  border-radius: var(--hz-rayon-petit); border: 1px solid var(--hz-glacier); background: var(--hz-fond);
+  text-align: center; overflow-wrap: anywhere;
+}
+.alertes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.alertes:empty { display: none; }
+.alertes .alerte { flex-direction: column; gap: 4px; }
+.alertes .alerte-titre { display: flex; gap: 10px; align-items: baseline; font-weight: 600; }
+.tableau td .bouton { margin: 2px 0; }
+.tableau .refus { display: block; font-size: 12px; color: var(--hz-texte-secondaire); max-width: 34ch; }
+.tableau .mono { font-size: 13px; }
+.tableau .vous { font-weight: 600; }
+.tableau .preuve-absente { color: var(--hz-alerte); font-size: 12px; display: block; }
+:root[data-theme="dark"] .tableau .preuve-absente { color: #F0A39F; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .tableau .preuve-absente { color: #F0A39F; } }
+.tableau select.saisie { min-height: 32px; padding: 4px 8px; width: auto; }
+.dialogue-large { width: min(860px, calc(100% - 32px)); }
+.ajout-membre { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+.ajout-membre legend { padding: 0 4px; }
+.ajout-membre:disabled .saisie { opacity: 0.6; }
+.grille-ajout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 12px; }
+
 /* Announcements (toasts). */
 .annonces {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 10;
@@ -299,6 +349,7 @@ textarea.saisie { resize: vertical; }
   .barre .logotype { display: none; }
   .champ-fiche { grid-template-columns: minmax(0, 1fr); }
   .champ-fiche .actions-champ { justify-content: flex-start; }
+  .grille-ajout { grid-template-columns: minmax(0, 1fr); }
 }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }

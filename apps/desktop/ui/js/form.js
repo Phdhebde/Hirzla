@@ -3,7 +3,7 @@
 // change one, the user types or generates a new value; left empty, it stays as it is.
 
 import { api } from "./api.js";
-import { announce, byId, showError } from "./dom.js";
+import { announce, byId, h, showError } from "./dom.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
 
@@ -28,6 +28,9 @@ export class SecretForm {
     this.tags = /** @type {HTMLInputElement} */ (byId("secret-etiquettes"));
     this.notes = /** @type {HTMLTextAreaElement} */ (byId("secret-notes"));
     this.favorite = /** @type {HTMLInputElement} */ (byId("secret-favori"));
+    this.locker = /** @type {HTMLSelectElement} */ (byId("secret-casier"));
+    /** @type {{ id: string, name: string, personal: boolean }[]} Lockers a new secret may go to. */
+    this.lockers = [];
     this.error = byId("secret-erreur");
     this.saving = false;
 
@@ -52,6 +55,15 @@ export class SecretForm {
     byId("secret-mdp-generer").addEventListener("click", () => void this.generate());
   }
 
+  /**
+   * Lockers a new secret may be created in: the personal one, and the shared ones where the
+   * member writes.
+   * @param {{ id: string, name: string, personal: boolean }[]} lockers
+   */
+  setLockers(lockers) {
+    this.lockers = lockers;
+  }
+
   /** @returns {"password" | "note"} */
   kind() {
     const checked = /** @type {HTMLInputElement | null} */ (
@@ -69,12 +81,23 @@ export class SecretForm {
       const hide = !!this.editing || (isNote && el.getAttribute("data-pour") === "password");
       /** @type {HTMLElement} */ (el).hidden = hide;
     }
+    // A choice of locker only when there is one to make.
+    byId("secret-casier-champ").hidden = !!this.editing || this.lockers.length < 2;
   }
 
-  /** @param {Entry | null} entry  null: a new secret. */
-  open(entry) {
+  /**
+   * @param {Entry | null} entry  null: a new secret.
+   * @param {string | null} [locker]  Locker proposed for a new secret.
+   */
+  open(entry, locker = null) {
     this.clear();
     this.editing = entry;
+    this.locker.replaceChildren(
+      ...this.lockers.map((l) =>
+        h("option", { value: l.id, text: l.personal ? `${l.name} (personnel)` : `${l.name} (partagé)` }),
+      ),
+    );
+    if (locker && this.lockers.some((l) => l.id === locker)) this.locker.value = locker;
     byId("dialogue-secret-titre").textContent = entry ? "Modifier le secret" : "Nouveau secret";
     byId("secret-type-groupe").hidden = !!entry;
     byId("secret-mdp-aide").hidden = !entry;
@@ -154,10 +177,11 @@ export class SecretForm {
         announce("Secret modifié.");
       } else {
         const kind = this.kind();
+        const target = this.lockers.find((l) => l.id === this.locker.value);
         /** @type {Record<string, unknown>} */
         const secret = {
           kind,
-          locker: null,
+          locker: target && !target.personal ? target.id : null,
           title,
           notes: this.notes.value || null,
           tags: this.tags.value.split(",").map((t) => t.trim()).filter(Boolean),

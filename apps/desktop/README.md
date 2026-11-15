@@ -1,9 +1,10 @@
 # Application de poste
 
-Application Tauri 2 pour Windows, Linux et macOS, mode Self (étape 7 de `PROMPTS.md`).
+Application Tauri 2 pour Windows, Linux et macOS, modes Self et Serveur (étape 7 de
+`PROMPTS.md`).
 Décisions : ADR 0024 (coquille et interface), ADR 0025 (import KeePass), ADR 0033
 (verrouillage à la mise en veille et au verrouillage de session), ADR 0034 (kit de
-recouvrement). Livraison : `docs/livraison.md`.
+recouvrement), ADR 0041 (écrans du mode Serveur). Livraison : `docs/livraison.md`.
 
 L'application est un **client du noyau**, comme la ligne de commande : elle ne détient
 aucune clé. Son processus Rust parle à `hirzla-core` par le canal local authentifié
@@ -17,6 +18,17 @@ du mot de passe maître, historique des versions et restauration, sortie de corb
 recouvrement à quorum (création, ouverture du coffre avec les parts, retrait) et import
 KeePass KDBX 4 lu par le noyau. Les fichiers (base KeePass, parts) sont choisis par le
 sélecteur du système, ouvert par le processus Rust : la vue web ne reçoit que des noms.
+
+Fonctions du mode Serveur (API locale version 4, `docs/api-locale.md` § 15, ADR 0041),
+dans `src-tauri/src/servermode.rs` et `ui/js/server.js` : rejoindre un serveur (adresse,
+certificat de l'AC du site choisi par le sélecteur du système, empreinte de l'invitation),
+confirmer son empreinte comparée hors bande, exporter sa clé publique de membre pour
+l'administrateur, synchroniser, état de la connexion et de la dernière synchronisation,
+casiers partagés (marqués « Partagé » dans la liste), création d'un casier partagé, membres
+et rôles. Les droits affichés (boutons actifs ou désactivés, avec leur motif) sont ceux que
+le noyau calcule : l'interface ne recopie pas les règles de `roles.md`. Un registre de
+transparence suspect, une alerte sur vos clés, un accès perdu ou une empreinte à confirmer
+s'affichent dans un bandeau du coffre ouvert.
 
 Sous Linux, l'application écoute logind et l'économiseur d'écran sur D-Bus
 (`src-tauri/src/events.rs`) et signale la mise en veille et le verrouillage de session au

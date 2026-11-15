@@ -8,7 +8,7 @@ journal, durcissement du processus. Les choix de dépendances et l'emplacement d
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
-l'ADR 0032 (accepté) ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
+l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.

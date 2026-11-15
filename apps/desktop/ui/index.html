@@ -99,8 +99,22 @@
                spellcheck="false" maxlength="256">
       </div>
       <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span>Coffre ouvert</p>
+      <button id="etat-serveur" class="etat etat-neutre etat-bouton" type="button" hidden
+              title="Voir l'état de la connexion au serveur"></button>
+      <button id="bouton-synchroniser" class="bouton bouton-secondaire" type="button" hidden>Synchroniser</button>
       <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)">Verrouiller</button>
     </header>
+
+    <!-- Server mode alerts: suspect key log, alerts about your keys, lost access, unconfirmed
+         fingerprint. Hidden in Self mode. -->
+    <div id="bandeau-serveur" class="bandeau" role="alert" hidden>
+      <span class="forme forme-triangle" aria-hidden="true"></span>
+      <div class="bandeau-texte">
+        <p id="bandeau-titre" class="bandeau-titre"></p>
+        <p id="bandeau-detail"></p>
+      </div>
+      <button id="bandeau-voir" class="bouton bouton-secondaire bouton-petit" type="button">Voir le détail</button>
+    </div>
 
     <nav class="navigation" aria-label="Sections">
       <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)">Nouveau secret</button>
@@ -111,9 +125,11 @@
       </ul>
       <h2 class="nav-titre" id="titre-casiers">Casiers</h2>
       <ul id="liste-casiers" class="nav-liste" aria-labelledby="titre-casiers"></ul>
+      <button id="bouton-casier-partage" class="nav-lien nav-action" type="button" hidden>Nouveau casier partagé…</button>
       <h2 class="nav-titre">Outils</h2>
       <ul class="nav-liste">
         <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)">Générateur</button></li>
+        <li><button class="nav-lien" type="button" data-vue="serveur">Serveur</button></li>
         <li><button class="nav-lien" type="button" data-vue="reglages">Réglages</button></li>
       </ul>
     </nav>
@@ -124,6 +140,10 @@
         <div class="entete-liste">
           <h1 id="liste-titre" class="titre-section" tabindex="-1">Tous les secrets</h1>
           <span id="liste-compte" class="texte-secondaire"></span>
+        </div>
+        <div id="liste-casier-partage" class="entete-casier" hidden>
+          <p id="liste-casier-role" class="texte-secondaire"></p>
+          <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button">Membres et rôles</button>
         </div>
         <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
         <p id="liste-vide" class="vide" hidden></p>
@@ -180,6 +200,139 @@
           <p></p>
         </div>
       </form>
+    </main>
+
+    <!-- Server mode (local API version 4, ADR 0032 and 0041). -->
+    <main id="vue-serveur" class="vue vue-page" data-vue="serveur" hidden>
+      <h1 class="titre-section" tabindex="-1">Serveur</h1>
+
+      <!-- Not joined: Self mode. -->
+      <section id="serveur-rejoindre" class="carte" aria-labelledby="serveur-rejoindre-titre" hidden>
+        <h2 id="serveur-rejoindre-titre" class="titre-carte">Rejoindre un serveur</h2>
+        <p class="texte-secondaire">Ce coffre fonctionne seul (mode Self). Relié au serveur <span class="mono">hirzlad</span>
+          de votre organisation, il synchronise vos casiers partagés. Le serveur est aveugle : il transporte des
+          opérations scellées sur ce poste et ne reçoit jamais un secret en clair ni une clé capable d'en desceller un.</p>
+        <form id="form-rejoindre" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Adresse du serveur</span>
+            <input id="rejoindre-adresse" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                   maxlength="2048" placeholder="hirzla://coffre.exemple.fr" aria-describedby="rejoindre-adresse-aide">
+          </label>
+          <p id="rejoindre-adresse-aide" class="aide">Telle que l'indique votre invitation. Port 7443 par défaut.</p>
+          <div class="champ">
+            <span class="champ-libelle" id="rejoindre-ac-libelle">Certificat de l'autorité du site</span>
+            <div class="ligne-actions">
+              <button id="rejoindre-ac" class="bouton bouton-secondaire" type="button" aria-describedby="rejoindre-ac-libelle">Choisir le fichier…</button>
+              <span id="rejoindre-ac-nom" class="mono"></span>
+            </div>
+            <p class="aide">Fichier PEM remis avec l'invitation : il permet d'ouvrir une connexion chiffrée vers le
+              serveur, pas de lui faire confiance.</p>
+          </div>
+          <label class="champ">
+            <span class="champ-libelle">Empreinte du serveur (facultative)</span>
+            <input id="rejoindre-empreinte" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                   maxlength="64" placeholder="ABCDE FGHIJ KLMNO PQRST" aria-describedby="rejoindre-empreinte-aide">
+          </label>
+          <p id="rejoindre-empreinte-aide" class="aide">Si votre invitation la donne, saisissez-la : le noyau la
+            compare à la clé du serveur avant de lui envoyer quoi que ce soit. Sinon, vous la comparerez à l'étape
+            suivante.</p>
+          <div id="rejoindre-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="rejoindre-envoyer" class="bouton bouton-principal" type="submit">Rejoindre le serveur</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Joined, fingerprint not confirmed yet. -->
+      <section id="serveur-confirmer" class="carte" aria-labelledby="serveur-confirmer-titre" hidden>
+        <h2 id="serveur-confirmer-titre" class="titre-carte">Confirmer l'empreinte du serveur</h2>
+        <p class="etat etat-ouvert etat-gauche"><span class="forme forme-rond" aria-hidden="true"></span>Empreinte non vérifiée</p>
+        <p class="texte-secondaire">L'empreinte résume la clé que ce serveur a présentée. Comparez-la, caractère par
+          caractère, avec celle que l'administrateur vous a transmise par un autre canal : de vive voix, par téléphone
+          ou sur papier. Si elles diffèrent, quelqu'un s'interpose peut-être entre vous et le serveur : ne confirmez
+          pas, et prévenez l'administrateur.</p>
+        <p id="confirmer-empreinte" class="empreinte"></p>
+        <p id="confirmer-adresse" class="aide"></p>
+        <form id="form-confirmer" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Recopiez l'empreinte transmise par l'administrateur</span>
+            <input id="confirmer-saisie" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                   maxlength="64" placeholder="ABCDE FGHIJ KLMNO PQRST">
+          </label>
+          <p class="aide">Rien n'est envoyé au serveur avant cette confirmation. Les espaces et les tirets sont ignorés.</p>
+          <div id="confirmer-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button class="bouton bouton-principal" type="submit">Confirmer l'empreinte</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- Joined and confirmed. -->
+      <section id="serveur-connexion" class="carte" aria-labelledby="serveur-connexion-titre" hidden>
+        <h2 id="serveur-connexion-titre" class="titre-carte">Connexion</h2>
+        <p id="connexion-etat" class="etat etat-gauche"></p>
+        <dl class="tableau-etat">
+          <dt>Adresse</dt><dd id="connexion-adresse" class="mono"></dd>
+          <dt>Empreinte</dt><dd id="connexion-empreinte" class="mono"></dd>
+          <dt>Dernière synchronisation</dt><dd id="connexion-synchro"></dd>
+        </dl>
+        <div id="connexion-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+        <div id="connexion-resultat" class="encadre" role="status" hidden></div>
+        <div class="ligne-actions">
+          <button id="connexion-synchroniser" class="bouton bouton-principal" type="button">Synchroniser</button>
+        </div>
+        <p class="aide">Le noyau ne se connecte au serveur que pendant une synchronisation ou une action de partage.
+          Hors ligne, vos casiers restent lisibles et modifiables sur ce poste ; les modifications partent à la
+          synchronisation suivante.</p>
+      </section>
+
+      <section id="serveur-registre" class="carte" aria-labelledby="serveur-registre-titre" hidden>
+        <h2 id="serveur-registre-titre" class="titre-carte">Registre de transparence des clés</h2>
+        <p class="texte-secondaire">Le serveur tient un registre public et vérifiable des clés des membres. Le noyau
+          le relit à chaque synchronisation et refuse de partager un casier avec une clé qui n'y est pas inscrite.</p>
+        <p id="registre-etat" class="etat etat-gauche"></p>
+        <p id="registre-detail"></p>
+        <ul id="registre-alertes" class="alertes"></ul>
+      </section>
+
+      <section id="serveur-casiers" class="carte" aria-labelledby="serveur-casiers-titre" hidden>
+        <h2 id="serveur-casiers-titre" class="titre-carte">Casiers partagés</h2>
+        <table class="tableau">
+          <thead><tr><th scope="col">Casier</th><th scope="col">Votre rôle</th><th scope="col">État</th><th scope="col"><span class="visuellement-cache">Actions</span></th></tr></thead>
+          <tbody id="casiers-lignes"></tbody>
+        </table>
+        <p id="casiers-vide" class="texte-secondaire" hidden>Aucun casier partagé. Créez-en un, ou demandez à un
+          propriétaire de vous en ouvrir l'accès, puis synchronisez.</p>
+        <div class="ligne-actions">
+          <button id="casiers-nouveau" class="bouton bouton-secondaire" type="button">Nouveau casier partagé…</button>
+        </div>
+      </section>
+
+      <section id="serveur-identite" class="carte" aria-labelledby="serveur-identite-titre">
+        <h2 id="serveur-identite-titre" class="titre-carte">Votre identité</h2>
+        <p id="identite-texte" class="texte-secondaire">L'administrateur du serveur crée votre compte à partir de votre
+          clé publique de membre. Elle ne permet de desceller aucun secret.</p>
+        <dl class="tableau-etat">
+          <dt>Membre</dt><dd id="identite-membre" class="mono"></dd>
+          <dt>Empreinte de votre clé</dt><dd id="identite-empreinte" class="mono"></dd>
+          <dt>Poste</dt><dd id="identite-poste" class="mono"></dd>
+          <dt>Code de contrôle du poste</dt><dd id="identite-code" class="mono"></dd>
+        </dl>
+        <div class="ligne-actions">
+          <button id="identite-exporter" class="bouton bouton-secondaire" type="button">Enregistrer votre clé publique…</button>
+        </div>
+        <p class="aide">Transmettez le fichier à l'administrateur, et lisez-lui l'empreinte de votre clé par un autre
+          canal : il la compare avant de créer le compte.</p>
+      </section>
     </main>
 
     <!-- Settings. -->
@@ -330,6 +483,10 @@
         <span class="champ-libelle">Titre</span>
         <input id="secret-titre" class="saisie" type="text" required maxlength="1024" autocomplete="off">
       </label>
+      <label class="champ" id="secret-casier-champ" data-creation hidden>
+        <span class="champ-libelle">Casier</span>
+        <select id="secret-casier" class="saisie"></select>
+      </label>
       <label class="champ" data-pour="password">
         <span class="champ-libelle">Identifiant</span>
         <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
@@ -405,6 +562,70 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
         <button id="kdbx-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- New shared locker. -->
+  <dialog id="dialogue-casier" class="dialogue dialogue-etroit" aria-labelledby="casier-titre">
+    <form id="form-casier" method="dialog" novalidate>
+      <h2 id="casier-titre" class="titre-carte">Nouveau casier partagé</h2>
+      <p class="texte-secondaire">Le casier est créé sur ce poste, scellé pour vos seuls appareils, puis envoyé au
+        serveur, qui n'en voit pas le contenu. Vous en êtes le propriétaire : vous y ajouterez ensuite des membres.</p>
+      <label class="champ">
+        <span class="champ-libelle">Nom du casier</span>
+        <input id="casier-nom" class="saisie" type="text" maxlength="256" autocomplete="off">
+      </label>
+      <div id="casier-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="casier-creer" class="bouton bouton-principal" type="submit">Créer le casier</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Members and roles of a shared locker. -->
+  <dialog id="dialogue-membres" class="dialogue dialogue-large" aria-labelledby="membres-titre">
+    <form id="form-membres" method="dialog" novalidate>
+      <h2 id="membres-titre" class="titre-carte">Membres</h2>
+      <p id="membres-role" class="texte-secondaire"></p>
+      <div id="membres-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <table class="tableau tableau-membres">
+        <thead><tr><th scope="col">Membre</th><th scope="col">Rôle</th><th scope="col">Empreinte de sa clé</th><th scope="col"><span class="visuellement-cache">Actions</span></th></tr></thead>
+        <tbody id="membres-lignes"></tbody>
+      </table>
+      <fieldset id="membres-ajout" class="encadre ajout-membre">
+        <legend class="champ-libelle">Ajouter un membre</legend>
+        <div class="grille-ajout">
+          <label class="champ">
+            <span class="champ-libelle">Identifiant du membre</span>
+            <input id="ajout-membre" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                   maxlength="64" placeholder="32 chiffres hexadécimaux">
+          </label>
+          <label class="champ">
+            <span class="champ-libelle">Rôle</span>
+            <select id="ajout-role" class="saisie"></select>
+          </label>
+        </div>
+        <label class="champ">
+          <span class="champ-libelle">Empreinte de sa clé (recommandée)</span>
+          <input id="ajout-empreinte" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                 maxlength="64" placeholder="ABCDE FGHIJ KLMNO PQRST">
+        </label>
+        <p id="ajout-aide" class="aide">Le noyau vérifie que la clé du membre est inscrite au registre de transparence ;
+          l'empreinte, obtenue du membre lui-même, ajoute une comparaison hors bande.</p>
+        <div class="ligne-actions">
+          <button id="ajout-envoyer" class="bouton bouton-principal" type="button">Ajouter</button>
+        </div>
+      </fieldset>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" value="ok">Fermer</button>
       </div>
     </form>
   </dialog>
