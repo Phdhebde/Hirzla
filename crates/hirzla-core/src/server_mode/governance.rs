@@ -239,7 +239,22 @@ pub(super) fn auto_reject(s: &mut Shared, now: u64) {
         .replica
         .due_auto_rejects_since(now, &s.sync.quarantine_seen);
     if !due.is_empty() {
-        let _ = s.replica.quarantine_reject(due, true);
+        let _ = with_epoch(s, |r| r.quarantine_reject(due.clone(), true));
+    }
+}
+
+/// Emits a decision; after concurrent removals no epoch excludes every removed member
+/// (`sync-protocol.md` § 9.1), so a rotation comes first, then the decision again.
+fn with_epoch(
+    s: &mut Shared,
+    mut f: impl FnMut(&mut super::SharedReplica) -> Result<OpId, hirzla_sync::SyncError>,
+) -> Result<OpId, hirzla_sync::SyncError> {
+    match f(&mut s.replica) {
+        Err(hirzla_sync::SyncError::NoCurrentEpoch) => {
+            s.replica.rotate()?;
+            f(&mut s.replica)
+        }
+        other => other,
     }
 }
 
@@ -782,9 +797,9 @@ impl ServerMode {
         let mut client = self.session()?;
         let s = self.shared_mut(&locker)?;
         if accept {
-            s.replica.quarantine_accept(ops).map_err(emit)?;
+            with_epoch(s, |r| r.quarantine_accept(ops.clone())).map_err(emit)?;
         } else {
-            s.replica.quarantine_reject(ops, false).map_err(emit)?;
+            with_epoch(s, |r| r.quarantine_reject(ops.clone(), false)).map_err(emit)?;
         }
         self.publish(vault, &mut client, &locker)?;
         let _ = client.bye();

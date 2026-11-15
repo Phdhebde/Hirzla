@@ -1552,6 +1552,15 @@ impl Core {
         }
     }
 
+    /// Misbehaviour of a compromised server, for the tests: inscribes the removal of `member`
+    /// from `locker` in the key log, as if by the `Revoke` `op_id`, without the operation in
+    /// the journal (a removal withheld, `transparence.md` § 6.5). In memory only.
+    #[doc(hidden)]
+    pub fn inscribe_withheld_removal_for_tests(&mut self, locker: Id16, member: Id16, op_id: OpId) {
+        let now = (self.clock)();
+        let _ = self.keylog.append_locker_revoke(locker, member, op_id, now);
+    }
+
     /// Operations of a locker served as stubs after a stable compaction (tests,
     /// administration).
     #[must_use]
