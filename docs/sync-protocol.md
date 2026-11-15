@@ -1169,3 +1169,15 @@ l'implémentation ; les suivants restent ouverts.
     réseau validée.
 36. **« Instantanés chiffrés » (`PROMPTS.md`, étape 9)** : non retenus ; l'implémentation suit
     la compaction par élagage du § 10.
+
+### Ajouts du lot gouvernance (ADR 0044 à 0048)
+
+37. **`Stable` poussé aux sessions ouvertes** : `hirzlad` ne répond toujours `Stable` qu'à
+    l'appareil qui accuse ; les autres postes l'apprennent à leur synchronisation suivante,
+    au plus tard après l'intervalle de synchronisation de fond (ADR 0048). Un envoi spontané
+    demande un message serveur vers client hors requête, non spécifié.
+38. **Rétention des opérations `late` fixe** : 30 jours (ADR 0047), comptés depuis la première
+    réception par `hirzlad`. Un réglage par l'administrateur n'est pas prévu.
+39. **Rotation avant une décision de quarantaine** : quand des retraits concurrents laissent
+    le casier sans époque courante, le noyau fait tourner la clé (`Rotate`) avant d'émettre
+    `QuarantineAccept`, `QuarantineReject` ou le rejet automatique (ADR 0045).

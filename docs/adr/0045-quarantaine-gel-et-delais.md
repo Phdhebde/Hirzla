@@ -87,6 +87,20 @@ Quatre types d'alerte de plus dans l'état du registre (`api-locale.md` § 15.2)
 3) : 4 révocation retenue (casier), 5 révocation non inscrite (casier), 6 inscription retenue
 (appareil), 7 opération retenue (casier). Le rang n'est présent que pour les types 1 à 4.
 
+### 6. Rotation avant une décision
+
+Deux retraits concurrents laissent le casier sans époque courante (`NoCurrentEpoch`) jusqu'à
+la prochaine `Rotate`. Avant d'émettre `QuarantineAccept`, `QuarantineReject` ou le rejet
+automatique, le noyau fait donc tourner la clé si aucune époque n'est courante, puis émet la
+décision sur la nouvelle époque. Sans cela, la quarantaine née de ces retraits ne pourrait pas
+être tranchée. Décision prise pendant l'implémentation, à confirmer.
+
+### 7. Écrans
+
+`hirzla quarantine list|accept|reject` et la fenêtre « Quarantaine » de l'application
+(bouton sur la ligne du casier) ; casier gelé signalé par le bandeau et l'état « Écritures
+gelées » de la ligne, ses secrets passant en lecture seule.
+
 ## Conséquences
 
 - Un `Owner` voit et juge les opérations en quarantaine depuis la ligne de commande et
