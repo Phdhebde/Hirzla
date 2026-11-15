@@ -76,6 +76,31 @@ de construction qui télécharge.
 
 Chaque livraison publie aussi un fichier `SHA256SUMS` des installeurs, signé (§ 5).
 
+### Compilation reproductible et nomenclature (ADR 0056)
+
+Les exécutables Linux se compilent de façon reproductible : deux compilations de la même
+étiquette, dans deux répertoires différents, donnent les mêmes octets. Réglages, à appliquer à
+l'étape 1 ci-dessus :
+
+```sh
+export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+export RUSTFLAGS="--remap-path-prefix=$PWD=/hirzla --remap-path-prefix=$PWD/target=/target \
+  --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+export CFLAGS="-ffile-prefix-map=$PWD=/hirzla -ffile-prefix-map=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+export CXXFLAGS="$CFLAGS"
+cargo fetch --locked && cargo build --release --locked --offline …
+```
+
+`.github/scripts/reproducible-build.sh` fait deux compilations et les compare ; le job de CI
+« reproducible build (Linux) » le lance à chaque demande de fusion. Les paquets d'installation
+eux-mêmes ne sont pas reproductibles (dates écrites par Tauri et les outils de paquet) : ce
+sont les exécutables, identifiés par le manifeste des clients signé (§ 7), qui le sont.
+
+Chaque livraison publie la **nomenclature logicielle** (SBOM, CycloneDX 1.5) de chaque
+exécutable, produite hors ligne par `.github/scripts/sbom.py PAQUET --target TRIPLET`
+(bibliothèque standard de Python, aucun outil à installer). Elle est déterministe : la
+régénérer depuis l'étiquette donne le même fichier.
+
 ## 3. macOS : signature et notarisation
 
 1. **Certificat** « Developer ID Application » du compte Apple Developer de l'éditeur, exporté

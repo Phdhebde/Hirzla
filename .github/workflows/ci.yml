@@ -175,6 +175,35 @@ jobs:
       - name: End-to-end tests
         run: npm run test:e2e
 
+  # Reproducible build of the Linux executables and their bills of materials (ADR 0056):
+  # two builds of the same commit in two directories must give identical binaries. No tool
+  # beyond the toolchain and Python's standard library; nothing downloaded after the fetch.
+  reproducible:
+    name: reproducible build (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: Crates of Cargo.lock
+        run: cargo fetch --locked
+      - name: Two builds, compared
+        run: .github/scripts/reproducible-build.sh "$RUNNER_TEMP/repro"
+      - name: Bills of materials (CycloneDX)
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          mkdir -p sbom
+          for p in hirzla-core hirzla-cli hirzla-server hirzla-native-host hirzla-desktop; do
+            .github/scripts/sbom.py "$p" --target x86_64-unknown-linux-gnu --output "sbom/$p.cdx.json"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-linux-x86_64
+          path: sbom/*.cdx.json
+          if-no-files-found: error
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
