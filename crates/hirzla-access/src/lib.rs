@@ -11,6 +11,7 @@
 //! | [`approval`] | Multi-owner approvals (§ 7.7) and the local export gate |
 //! | [`authz`] | Authorisation state (§ 9.4): accepted, quarantined, rejected; `S(X)` |
 //! | [`group`] | Groups: what to grant or revoke when a membership changes |
+//! | [`hornn`] | Session grants signed by Hornn, single use, `BlindUser` use (`integration-hornn.md`) |
 //! | [`keylog`] | Key transparency log: RFC 9162 tree, signed heads, proofs, monitor |
 //! | [`revocation`] | After a removal: recipients, exposed secrets, reseal plan |
 //! | [`recovery`] | Recovery of the member key through trustees |
@@ -24,6 +25,7 @@ pub mod authz;
 pub mod control;
 mod error;
 pub mod group;
+pub mod hornn;
 pub mod keylog;
 pub mod recovery;
 pub mod revocation;

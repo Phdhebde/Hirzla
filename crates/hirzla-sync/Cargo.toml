@@ -10,15 +10,16 @@ publish.workspace = true
 workspace = true
 
 [features]
-# In-memory authorizer, relay and identities for tests (here and in dependent crates).
+# In-memory relay and identities for tests (here and in dependent crates).
 # Never enabled in a shipped binary.
 test-support = []
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 hirzla-vault = { path = "../hirzla-vault" }
-# No dependency on hirzla-access (ADR 0018): authorization decisions go through the
-# `Authorizer` trait of this crate.
+# Control bodies and the authorization state of § 9.4 (ADR 0018, decision of the
+# maintainer): `access ← sync`, one definition of `ControlBody`.
+hirzla-access = { path = "../hirzla-access" }
 thiserror = "2.0"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 

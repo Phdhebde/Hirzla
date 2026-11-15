@@ -7,14 +7,15 @@ use hirzla_vault::secret::{
 };
 
 use super::support::*;
-use crate::codec::RoleCode;
+use crate::authz::AccessAuthorizer;
 use crate::replica::OpStatus;
-use crate::testing::{MemoryAuthorizer, TestMember};
+use crate::testing::TestMember;
 use crate::SyncError;
+use hirzla_access::Role;
 
 #[test]
 fn create_write_and_share() {
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Reader]);
+    let mut w = World::new(&[Role::Editor, Role::Reader]);
     for r in &w.replicas {
         assert_eq!(r.locker_meta().unwrap().name(), "Équipe");
         assert!(r.current_epoch().is_some());
@@ -48,7 +49,7 @@ fn create_write_and_share() {
 
 #[test]
 fn concurrent_writes_keep_the_loser_in_history() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("Banque", "v0"))
         .unwrap();
@@ -86,7 +87,7 @@ fn concurrent_writes_keep_the_loser_in_history() {
 
 #[test]
 fn locker_metadata_merges() {
-    let mut w = World::new(&[RoleCode::Manager]);
+    let mut w = World::new(&[Role::Manager]);
     w.replicas[0]
         .put_locker_meta(vec![(LockerField::Description, FieldValue::text("a"))])
         .unwrap();
@@ -105,9 +106,9 @@ fn personal_locker_and_second_device() {
     let alice = TestMember::new();
     let d1 = alice.device();
     let d2 = alice.device();
-    let mut r1 = R::create_locker(Arc::clone(&d1), MemoryAuthorizer, true, "Personnel").unwrap();
+    let mut r1 = R::create_locker(Arc::clone(&d1), AccessAuthorizer, true, "Personnel").unwrap();
     r1.device_add(d2.cert().clone()).unwrap();
-    let mut r2 = R::join(Arc::clone(&d2), MemoryAuthorizer, r1.locker_id(), None);
+    let mut r2 = R::join(Arc::clone(&d2), AccessAuthorizer, r1.locker_id(), None);
     send(&r1, &mut r2);
     assert_eq!(r2.genesis(), r1.genesis(), "the only creation is pinned");
     let (id, _) = r2
@@ -131,7 +132,7 @@ fn personal_locker_and_second_device() {
     let g = r1
         .grant(
             bob.keys.clone(),
-            RoleCode::Reader,
+            Role::Reader,
             vec![bob.device().cert().clone()],
             None,
         )
@@ -143,7 +144,7 @@ fn personal_locker_and_second_device() {
 fn unjoined_device_without_envelope_waits() {
     let w = World::new(&[]);
     let outsider = TestMember::new().device();
-    let mut r = R::join(outsider, MemoryAuthorizer, w.replicas[0].locker_id(), None);
+    let mut r = R::join(outsider, AccessAuthorizer, w.replicas[0].locker_id(), None);
     send(&w.replicas[0], &mut r);
     assert!(r
         .statuses()
@@ -158,7 +159,7 @@ fn unjoined_device_without_envelope_waits() {
 
 #[test]
 fn trash_restore_purge() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "p"))
         .unwrap();

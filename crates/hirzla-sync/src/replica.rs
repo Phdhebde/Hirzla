@@ -12,18 +12,21 @@ mod emit;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use hirzla_access::keylog::{KeyLogHead, KeyLogProof};
 use hirzla_crypto::sym::SymmetricKey;
 use hirzla_crypto::util::sha384;
 use hirzla_vault::model::{
     DeviceCert, Id16, MemberKeys, OpId, OpRef, Operation, MAX_OPERATION_LEN,
 };
-use hirzla_vault::secret::{LockerBody, SecretBody, SecretType};
+use hirzla_vault::secret::{LockerBody, SecretBody};
 
-use crate::authz::{AuthorizationState, Authorizer, DataKind};
+use crate::authz::{AuthorizationState, Authorizer};
 use crate::causal::Causality;
 use crate::codec::copy_key;
+use crate::compact::PrunedPast;
 use crate::control::ControlBody;
 use crate::device::LocalDevice;
+use crate::keylog::{KeyLogTrust, RecipientGate};
 use crate::wire::{Stub, Vector};
 use crate::SyncError;
 
@@ -89,6 +92,13 @@ pub enum RejectReason {
     RequestIdReused,
     /// Step 8: an approval does not verify.
     BadApproval,
+    /// Step 8, Server mode: the `keylog_proof` does not verify (`transparence.md` § 6.3).
+    KeyLogProof,
+    /// Step 8: the causal past a `Compact` carries differs from an operation held (ADR 0017).
+    CausalPastMismatch,
+    /// § 10.3: a stub whose `ref` or `prev` differ from the `Compact` that lists it, or that
+    /// two `Compact` describe differently (ADR 0017).
+    StubMismatch,
     /// Step 8: a version contradicts its parents (§ 8.1).
     InvalidVersion,
     /// § 10.3: a stub that no `Compact` held by the replica lists.
@@ -137,26 +147,11 @@ impl OpStatus {
     }
 }
 
-/// What the replica keeps of a data operation it pruned itself (ADR 0017): enough to
-/// rebuild the causal graph, the heads and the authorization, never the content.
-#[derive(Clone)]
-pub(crate) struct PrunedMeta {
-    pub(crate) opref: OpRef,
-    pub(crate) prev: Option<OpId>,
-    pub(crate) lamport: u64,
-    pub(crate) deps: Vec<OpId>,
-    pub(crate) epoch: OpRef,
-    pub(crate) kind: DataKind,
-    pub(crate) author_cert: DeviceCert,
-    pub(crate) author_member_key: [u8; 48],
-    /// `secret_id`, type and parents of a `SecretPut`; parents of a `LockerMetaPut`.
-    pub(crate) secret: Option<(Id16, SecretType)>,
-    pub(crate) parents: Vec<OpId>,
-}
-
+/// What the replica holds of an operation. A pruned operation keeps its causal past, the
+/// same [`PrunedPast`] the `Compact` that pruned it carries (ADR 0017), never its content.
 pub(crate) enum Body {
     Full(Vec<u8>),
-    Pruned(Box<PrunedMeta>),
+    Pruned(Box<PrunedPast>),
     Stub(Stub),
 }
 
@@ -177,6 +172,8 @@ pub(crate) enum Content {
     None,
     Secret(SecretBody),
     Meta(LockerBody),
+    /// The causal past carried by a `Compact` (ADR 0017), one entry per pruned operation.
+    CompactPast(Vec<PrunedPast>),
     Invalid,
 }
 
@@ -266,6 +263,14 @@ pub struct Replica<A: Authorizer> {
     pub(crate) meta: Option<(Vec<OpId>, LockerBody)>,
     pub(crate) vector: Vector,
     pub(crate) ambiguous_genesis: bool,
+    /// Causal past of the stubs, from the `Compact` that lists them (ADR 0017).
+    pub(crate) stub_pasts: BTreeMap<OpId, PrunedPast>,
+    // Key transparency (`transparence.md` § 6).
+    pub(crate) keylog: Option<KeyLogTrust>,
+    /// Result of the proof check per operation: `true` proven, `false` without proof.
+    pub(crate) proof_checked: BTreeMap<OpId, Result<bool, ()>>,
+    pub(crate) gate: Option<Arc<dyn RecipientGate>>,
+    pub(crate) frozen: bool,
 }
 
 /// What an ingestion did.
@@ -314,7 +319,106 @@ impl<A: Authorizer> Replica<A> {
             meta: None,
             vector: Vector::default(),
             ambiguous_genesis: false,
+            stub_pasts: BTreeMap::new(),
+            keylog: None,
+            proof_checked: BTreeMap::new(),
+            gate: None,
+            frozen: false,
         }
+    }
+
+    /// Server mode: checks the `keylog_proof` of `LockerCreate` and `Grant` against this log
+    /// (`transparence.md` § 6.3). Every replica of a locker pins the same server key, so the
+    /// verdicts stay the same everywhere.
+    pub fn set_keylog_trust(&mut self, trust: Option<KeyLogTrust>) {
+        self.keylog = trust;
+        self.proof_checked.clear();
+        self.recompute();
+    }
+
+    /// Checks every recipient of an envelope this replica builds (`transparence.md` § 6.2).
+    pub fn set_recipient_gate(&mut self, gate: Option<Arc<dyn RecipientGate>>) {
+        self.gate = gate;
+    }
+
+    /// Freezes (or unfreezes) data writes in the locker (`transparence.md` § 6.5).
+    pub fn set_writes_frozen(&mut self, frozen: bool) {
+        self.frozen = frozen;
+    }
+
+    /// Whether data writes are frozen.
+    #[must_use]
+    pub fn writes_frozen(&self) -> bool {
+        self.frozen
+    }
+
+    /// Members whose applied `LockerCreate` or `Grant` carries no transparency proof
+    /// (« inscription non prouvée », `transparence.md` § 6.3), and none that does. Empty
+    /// without [`KeyLogTrust`].
+    #[must_use]
+    pub fn unproven_members(&self) -> BTreeSet<Id16> {
+        let mut proven = BTreeSet::new();
+        let mut unproven = BTreeSet::new();
+        for (id, r) in &self.proof_checked {
+            if self.status.get(id) != Some(&OpStatus::Applied) {
+                continue;
+            }
+            let member = match self.decoded.get(id) {
+                Some(Ok(d)) => match &d.control {
+                    Some(ControlBody::LockerCreate(c)) => c.creator.member,
+                    Some(ControlBody::Grant(g)) => g.member.member,
+                    _ => continue,
+                },
+                _ => continue,
+            };
+            match r {
+                Ok(true) => {
+                    proven.insert(member);
+                }
+                Ok(false) => {
+                    unproven.insert(member);
+                }
+                Err(()) => {}
+            }
+        }
+        unproven.difference(&proven).copied().collect()
+    }
+
+    /// Transparency proofs of the applied operations, for the core to compare with its local
+    /// log (`KeyLogMonitor::compare_proof`, end of `transparence.md` § 6.3).
+    #[must_use]
+    pub fn keylog_proofs(&self) -> Vec<KeyLogProof> {
+        self.applied_controls()
+            .filter_map(|c| match c {
+                ControlBody::LockerCreate(x) => x.keylog_proof.clone(),
+                ControlBody::Grant(g) => g.keylog_proof.clone(),
+                _ => None,
+            })
+            .filter_map(|b| KeyLogProof::decode(&b).ok())
+            .collect()
+    }
+
+    /// Heads carried by the applied `Checkpoint` operations, for the core to compare with its
+    /// log (`KeyLogMonitor::observe_peer_head`, `transparence.md` § 6.6).
+    #[must_use]
+    pub fn checkpoints(&self) -> Vec<KeyLogHead> {
+        self.applied_controls()
+            .filter_map(|c| match c {
+                ControlBody::Checkpoint(h) => Some(h.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn applied_controls(&self) -> impl Iterator<Item = &ControlBody> {
+        self.causality
+            .total_order()
+            .iter()
+            .filter(|id| self.status.get(*id) == Some(&OpStatus::Applied))
+            .filter_map(|id| match self.decoded.get(id) {
+                Some(Ok(d)) => d.control.as_ref(),
+                _ => None,
+            })
     }
 
     /// A replica of a locker this device joins (added by a `Grant` or a `DeviceAdd`).
@@ -454,7 +558,9 @@ impl<A: Authorizer> Replica<A> {
     }
 
     /// Receives stubs of pruned operations (§ 10.3). A stub only counts if a `Compact`
-    /// held by the replica lists it; a full operation always wins over its stub.
+    /// held by the replica lists it; a full operation always wins over its stub. A stub not
+    /// accepted (yet) is replaced by a newer one: a relay must not be able to pin a wrong
+    /// `ref` for good.
     pub fn ingest_stubs<I>(&mut self, stubs: I)
     where
         I: IntoIterator<Item = Stub>,
@@ -462,8 +568,12 @@ impl<A: Authorizer> Replica<A> {
         let now = (self.clock)();
         let mut added = false;
         for s in stubs {
-            if self.entries.contains_key(&s.op_id) {
-                continue;
+            if let Some(e) = self.entries.get(&s.op_id) {
+                let replaceable = matches!(&e.body, Body::Stub(old) if *old != s)
+                    && self.status.get(&s.op_id) != Some(&OpStatus::Pruned);
+                if !replaceable {
+                    continue;
+                }
             }
             self.entries.insert(
                 s.op_id,

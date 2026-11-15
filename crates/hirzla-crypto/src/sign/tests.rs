@@ -125,6 +125,48 @@ fn each_role_signs_and_verifies_its_domains() {
 }
 
 #[test]
+fn hornn_key_signs_only_session_grants() {
+    let hornn = HornnSigningKey::generate().unwrap();
+    let sig = hornn.sign(HornnDomain::SessionGrant, MSG).unwrap();
+    hornn
+        .verifying_key()
+        .verify(Domain::HornnSessionGrant, MSG, &sig)
+        .unwrap();
+    for d in [Domain::Operation, Domain::ServerAuth, Domain::DeviceAuth] {
+        assert_eq!(
+            hornn.verifying_key().verify(d, MSG, &sig),
+            Err(Error::InvalidSignature)
+        );
+    }
+    // Both halves are required for a grant too: ECDSA of the grant with the ML-DSA of
+    // another message, and the reverse.
+    let other = hornn
+        .sign(HornnDomain::SessionGrant, b"other grant")
+        .unwrap();
+    for bytes in [
+        [&sig.as_bytes()[..98], &other.as_bytes()[98..]].concat(),
+        [&other.as_bytes()[..98], &sig.as_bytes()[98..]].concat(),
+    ] {
+        let s = Signature::from_bytes(&bytes).unwrap();
+        assert_eq!(
+            hornn
+                .verifying_key()
+                .verify(Domain::HornnSessionGrant, MSG, &s),
+            Err(Error::InvalidSignature)
+        );
+    }
+    // A device cannot produce a grant.
+    let device = DeviceSigningKey::generate().unwrap();
+    let op = device.sign(DeviceDomain::Operation, MSG).unwrap();
+    assert_eq!(
+        device
+            .verifying_key()
+            .verify(Domain::HornnSessionGrant, MSG, &op),
+        Err(Error::InvalidSignature)
+    );
+}
+
+#[test]
 fn member_key_certifies_a_device() {
     let member = MemberSigningKey::generate().unwrap();
     let device = DeviceSigningKey::generate().unwrap();
@@ -165,6 +207,7 @@ fn signature_does_not_verify_in_another_domain_or_for_another_message() {
         Domain::KeyLogHead,
         Domain::AuditCheckpoint,
         Domain::DeviceAuditCheckpoint,
+        Domain::HornnSessionGrant,
     ] {
         assert_eq!(
             vk.verify(d, MSG, &sig),
@@ -199,8 +242,13 @@ fn domain_labels_are_distinct_and_prefix_free() {
         Domain::KeyLogHead,
         Domain::AuditCheckpoint,
         Domain::DeviceAuditCheckpoint,
+        Domain::HornnSessionGrant,
     ];
     assert_eq!(Domain::KeyLogHead.label(), b"hirzla/v1/keylog-head");
+    assert_eq!(
+        Domain::HornnSessionGrant.label(),
+        b"hirzla/v1/hornn-session-grant"
+    );
     for a in all {
         assert!(a.label().is_ascii() && !a.label().contains(&0));
         for b in all {

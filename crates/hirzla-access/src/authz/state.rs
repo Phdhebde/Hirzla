@@ -173,6 +173,14 @@ impl LockerState {
         e.devices.get(device)
     }
 
+    /// Records a device revocation (definitive, § 9.7).
+    pub(crate) fn revoke(&mut self, member: Id16, device: Id16) {
+        self.revoked.insert((member, device));
+        if let Some(e) = self.members.get_mut(&member) {
+            e.devices.remove(&device);
+        }
+    }
+
     /// Whether a device was revoked in this locker.
     #[must_use]
     pub fn is_revoked(&self, member: &Id16, device: &Id16) -> bool {

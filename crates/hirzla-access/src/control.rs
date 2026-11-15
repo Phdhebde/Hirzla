@@ -94,41 +94,77 @@ fn envelopes_value(envs: &[KeyEnvelopeEntry]) -> Value {
     Value::Array(envs.iter().map(KeyEnvelopeEntry::to_value).collect())
 }
 
+/// Envelopes, at most one per recipient device (`sync-protocol.md` § 7.3: « exactement une
+/// enveloppe par appareil »). Whether they are the right ones is the authorisation's job.
 fn decode_envelopes(v: &Value) -> Result<Vec<KeyEnvelopeEntry>, CborError> {
-    array_max(v, MAX_ENVELOPES)?
+    let envs: Vec<KeyEnvelopeEntry> = array_max(v, MAX_ENVELOPES)?
         .iter()
         .map(KeyEnvelopeEntry::from_value)
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    if envs.iter().any(|e| !seen.insert((e.member, e.device))) {
+        return Err(CborError::Malformed);
+    }
+    Ok(envs)
 }
 
-fn op_ids_value(ids: &[OpId]) -> Value {
-    Value::Array(ids.iter().map(|i| Value::bytes(i)).collect())
+/// A sorted list of operation identifiers (quarantine decisions, `Compact`): sorted, without
+/// duplicates, written sorted (`sync-protocol.md` § 16, point 27).
+fn op_ids_value(ids: &[OpId]) -> Result<Value, CborError> {
+    Ok(Value::Array(cbor::sorted(
+        ids.iter().map(|i| Value::bytes(i)).collect(),
+    )?))
 }
 
+/// Strict decoding of a sorted, non-empty list of operation identifiers: an empty decision or
+/// compaction has no meaning and a second encoding of « nothing » is refused.
 fn decode_op_ids(v: &Value) -> Result<Vec<OpId>, CborError> {
-    array_max(v, MAX_OP_IDS)?.iter().map(fixed::<48>).collect()
+    let items = array_max(v, MAX_OP_IDS)?;
+    if items.is_empty() {
+        return Err(CborError::Malformed);
+    }
+    check_sorted(items)?;
+    items.iter().map(fixed::<48>).collect()
 }
 
 fn approvals_value(a: &[Approval]) -> Value {
     Value::Array(a.iter().map(Approval::to_value).collect())
 }
 
-fn decode_approvals(v: &Value) -> Result<Vec<Approval>, CborError> {
-    array_max(v, MAX_APPROVALS)?
+/// Approvals, one per `(member, device)`. An optional list (`Grant` 7, `Revoke` 6) is omitted
+/// when there is none: present and empty is a second encoding, refused (point 27). The
+/// required list of `Policy` may be empty.
+fn decode_approvals(v: &Value, allow_empty: bool) -> Result<Vec<Approval>, CborError> {
+    let items = array_max(v, MAX_APPROVALS)?;
+    if items.is_empty() && !allow_empty {
+        return Err(CborError::Malformed);
+    }
+    let a: Vec<Approval> = items
         .iter()
         .map(Approval::from_value)
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    if a.iter().any(|x| !seen.insert((x.member, x.device))) {
+        return Err(CborError::Malformed);
+    }
+    Ok(a)
 }
 
 fn prev_value(p: &[EpochWrap]) -> Value {
     Value::Array(p.iter().map(EpochWrap::to_value).collect())
 }
 
+/// Wrapped epochs, one per epoch.
 fn decode_prev(v: &Value) -> Result<Vec<EpochWrap>, CborError> {
-    array_max(v, MAX_PREV)?
+    let wraps: Vec<EpochWrap> = array_max(v, MAX_PREV)?
         .iter()
         .map(EpochWrap::from_value)
-        .collect()
+        .collect::<Result<_, _>>()?;
+    let mut seen = std::collections::BTreeSet::new();
+    if wraps.iter().any(|w| !seen.insert(w.epoch)) {
+        return Err(CborError::Malformed);
+    }
+    Ok(wraps)
 }
 
 fn role_of(v: &Value) -> Result<Role, CborError> {
@@ -527,6 +563,44 @@ impl ControlBody {
         }
     }
 
+    /// Envelopes carried by the operation. All are for the operation's `epoch` (ADR 0018,
+    /// `sync-protocol.md` § 16, point 26).
+    #[must_use]
+    pub fn envelopes(&self) -> Vec<&KeyEnvelopeEntry> {
+        match self {
+            ControlBody::LockerCreate(c) => vec![&c.envelope],
+            ControlBody::Grant(g) => g.envelopes.iter().collect(),
+            ControlBody::Revoke(r) => r.envelopes.iter().collect(),
+            ControlBody::Rotate(r) => r.envelopes.iter().collect(),
+            ControlBody::EnvelopeAdd(envs) => envs.iter().collect(),
+            ControlBody::DeviceAdd(d) => d.envelopes.iter().collect(),
+            ControlBody::DeviceRemove(d) => d.envelopes.iter().collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Older epochs wrapped under the new one by an epoch-creating operation.
+    #[must_use]
+    pub fn epoch_wraps(&self) -> &[EpochWrap] {
+        match self {
+            ControlBody::Revoke(r) => &r.prev,
+            ControlBody::Rotate(r) => &r.prev,
+            ControlBody::DeviceRemove(d) => &d.prev,
+            _ => &[],
+        }
+    }
+
+    /// The multi-owner request identifier, if any (§ 7.7).
+    #[must_use]
+    pub fn request_id(&self) -> Option<Id16> {
+        match self {
+            ControlBody::Grant(g) => g.request_id,
+            ControlBody::Revoke(r) => r.request_id,
+            ControlBody::Policy(p) => Some(p.request_id),
+            _ => None,
+        }
+    }
+
     /// Canonical value.
     ///
     /// # Errors
@@ -577,17 +651,12 @@ impl ControlBody {
                 e.push((4, prev_value(&r.prev)));
             }
             ControlBody::EnvelopeAdd(envs) => e.push((2, envelopes_value(envs))),
-            ControlBody::QuarantineAccept(ops) => e.push((2, op_ids_value(ops))),
+            ControlBody::QuarantineAccept(ops) => e.push((2, op_ids_value(ops)?)),
             ControlBody::QuarantineReject { ops, auto } => {
-                e.push((2, op_ids_value(ops)));
+                e.push((2, op_ids_value(ops)?));
                 e.push((3, Value::Bool(*auto)));
             }
-            ControlBody::Compact(prune) => e.push((
-                2,
-                Value::Array(cbor::sorted(
-                    prune.iter().map(|i| Value::bytes(i)).collect(),
-                )?),
-            )),
+            ControlBody::Compact(prune) => e.push((2, op_ids_value(prune)?)),
             ControlBody::Policy(p) => {
                 e.push((2, Value::Uint(u64::from(p.owner_removal_quorum))));
                 e.push((3, Value::bytes(&p.request_id)));
@@ -683,7 +752,7 @@ impl ControlBody {
                         .collect::<Result<_, _>>()?,
                     envelopes: decode_envelopes(f.req(5)?)?,
                     request_id: f.opt(6).map(id).transpose()?,
-                    approvals: f.opt(7).map(decode_approvals).transpose()?,
+                    approvals: f.opt(7).map(|a| decode_approvals(a, false)).transpose()?,
                     keylog_proof: f
                         .opt(8)
                         .map(|p| bytes_max(p, MAX_KEYLOG_PROOF))
@@ -698,7 +767,7 @@ impl ControlBody {
                     envelopes: decode_envelopes(f.req(3)?)?,
                     prev: decode_prev(f.req(4)?)?,
                     request_id: f.opt(5).map(id).transpose()?,
-                    approvals: f.opt(6).map(decode_approvals).transpose()?,
+                    approvals: f.opt(6).map(|a| decode_approvals(a, false)).transpose()?,
                 })
             }
             KIND_ROTATE => {
@@ -712,7 +781,11 @@ impl ControlBody {
             KIND_ENVELOPE_ADD => {
                 let f = Fields::new(v, &[1, 2])?;
                 kind_is(&f, kind)?;
-                ControlBody::EnvelopeAdd(decode_envelopes(f.req(2)?)?)
+                let envs = decode_envelopes(f.req(2)?)?;
+                if envs.is_empty() {
+                    return Err(AccessError::Malformed);
+                }
+                ControlBody::EnvelopeAdd(envs)
             }
             KIND_QUARANTINE_ACCEPT => {
                 let f = Fields::new(v, &[1, 2])?;
@@ -730,8 +803,6 @@ impl ControlBody {
             KIND_COMPACT => {
                 let f = Fields::new(v, &[1, 2])?;
                 kind_is(&f, kind)?;
-                let items = array_max(f.req(2)?, MAX_OP_IDS)?;
-                check_sorted(items)?;
                 ControlBody::Compact(decode_op_ids(f.req(2)?)?)
             }
             KIND_POLICY => {
@@ -741,7 +812,7 @@ impl ControlBody {
                 ControlBody::Policy(Policy {
                     owner_removal_quorum: u8::try_from(q).map_err(|_| AccessError::Malformed)?,
                     request_id: id(f.req(3)?)?,
-                    approvals: decode_approvals(f.req(4)?)?,
+                    approvals: decode_approvals(f.req(4)?, true)?,
                 })
             }
             KIND_DEVICE_ADD => {

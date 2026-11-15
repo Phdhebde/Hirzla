@@ -1,11 +1,10 @@
-//! Test support: identities, an in-memory reference authorizer and an in-memory relay.
+//! Test support: identities and an in-memory relay.
 //!
 //! Compiled for the tests of this crate and, with the `test-support` feature, for the tests
 //! of dependent crates. Never in a shipped binary.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
 
-mod authorizer;
 mod relay;
 
 use std::sync::Arc;
@@ -15,10 +14,9 @@ use hirzla_crypto::sign::{DeviceSigningKey, MemberSigningKey};
 use hirzla_crypto::util::random_array;
 use hirzla_vault::model::{DeviceCert, Id16, MemberKeys};
 
-use crate::codec::DeviceRevocation;
+use crate::control::DeviceRevocation;
 use crate::device::LocalDevice;
 
-pub use authorizer::{MemoryAuthorizer, MemoryState};
 pub use relay::{MemoryRelay, PushStatus};
 
 /// A member with its root key, able to certify and revoke devices.

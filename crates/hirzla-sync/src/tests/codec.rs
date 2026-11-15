@@ -5,7 +5,6 @@ use hirzla_vault::model::OpRef;
 use proptest::prelude::*;
 
 use super::support::*;
-use crate::codec::{Approval, ApprovalAction, ApprovalRequest, RoleCode};
 use crate::control::ControlBody;
 use crate::pairing::{
     peer_auth, read_vector_message, vector_message, verify_peer, Message, PeerHello,
@@ -13,10 +12,12 @@ use crate::pairing::{
 use crate::testing::TestMember;
 use crate::wire::{OpItem, Stub, SyncState, Vector};
 use crate::SyncError;
+use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
+use hirzla_access::Role;
 
 /// Every control body a busy locker produces.
 fn control_bodies() -> Vec<ControlBody> {
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Editor]);
+    let mut w = World::new(&[Role::Owner, Role::Editor]);
     let d = w.add_device(0, 0);
     w.replicas[0].rotate().unwrap();
     w.replicas[0].revoke(w.members[2].id(), None).unwrap();
@@ -24,19 +25,22 @@ fn control_bodies() -> Vec<ControlBody> {
         .quarantine_reject(vec![[1; 48], [2; 48]], true)
         .unwrap();
     w.replicas[0].quarantine_accept(vec![[3; 48]]).unwrap();
-    w.replicas[0].compact(vec![[4; 48]]).unwrap();
+    let past = fake_past(&w.replicas[0], [4; 48]);
+    w.replicas[0]
+        .compact_forged(vec![[4; 48]], &[past])
+        .unwrap();
     let rid = [5; 16];
     let req = ApprovalRequest {
         locker_id: w.replicas[0].locker_id(),
         request_id: rid,
-        action: ApprovalAction::Policy,
+        action: SensitiveAction::Policy,
         target: None,
         detail: Some(3),
         issuer: w.members[0].id(),
         approver_member: w.members[1].id(),
         approver_device: w.devices[1].device_id(),
     };
-    let a = Approval::sign(&w.devices[1], &req).unwrap();
+    let a = approve(&w.devices[1], &req).unwrap();
     w.replicas[0].policy(3, rid, vec![a]).unwrap();
     let rev = w.members[0].revoke(&w.devices[d].device_id());
     w.replicas[0].device_remove(rev).unwrap();
@@ -55,7 +59,7 @@ fn control_bodies_round_trip() {
         assert!(kinds.contains(&k), "kind {k} exercised");
     }
     for b in &bodies {
-        let v = b.to_value();
+        let v = b.to_value().unwrap();
         let bytes = cbor::encode(&v).unwrap();
         let back = ControlBody::from_value(&cbor::decode(&bytes).unwrap()).unwrap();
         assert_eq!(&back, b);
@@ -80,11 +84,11 @@ fn without_entry(v: &Value, key: u64) -> Value {
 #[test]
 fn control_decoding_is_strict() {
     for b in control_bodies() {
-        let v = b.to_value();
+        let v = b.to_value().unwrap();
         // Unknown key.
         assert!(ControlBody::from_value(&with_entry(&v, 99, Value::Uint(0))).is_err());
         // Missing required key (every kind requires key 2 or 3).
-        let required = if matches!(b, ControlBody::Rotate { .. }) {
+        let required = if matches!(b, ControlBody::Rotate(_)) {
             3
         } else {
             2
