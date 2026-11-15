@@ -9,10 +9,12 @@
 //! - [`service`]: what the core does with a request (vault, lock, automatic lock);
 //! - [`daemon`]: the `hirzla-core` process;
 //! - [`client`]: the client side, used by `hirzla` and `hirzla-native-host`;
-//! - [`origin`]: web origins of the browser operations (version 2).
+//! - [`origin`]: web origins of the browser operations (version 2);
+//! - [`agent`]: the machine member of a Hornn agent (`docs/integration-hornn.md`).
 
 #![forbid(unsafe_code)]
 
+pub mod agent;
 pub mod auth;
 pub mod client;
 pub mod daemon;
