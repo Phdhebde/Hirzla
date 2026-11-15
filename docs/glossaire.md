@@ -16,6 +16,7 @@ l'anglais dans le code.
 | Attribution | `Grant` | Opération signée qui donne un rôle |
 | Membre | `Member` | Personne ou machine titulaire d'un rôle |
 | Membre machine | `MachineMember` | Agent (Hornn, rotation) membre d'un casier |
+| Autorisation de session | `SessionGrant` | Autorisation signée par Hornn, à usage unique, avant tout descellement par un agent |
 | Appareil | `Device` | Un poste enrôlé d'un membre |
 | Clé du poste | `DeviceKey` | Clé gardée par le matériel, ouvre le coffre local |
 | Clé de casier | `LockerKey` | Clé symétrique d'un casier |

@@ -67,6 +67,9 @@ Une opération d'un membre ou d'un appareil retiré, écrite sans qu'il ait vu s
 - Qui a pu lire un secret a pu le copier. Après une révocation, seule la rotation du mot de
   passe sur la cible protège vraiment. Hirzla le signale, et le fait quand la rotation est en place.
 - `BlindUser` n'a de sens qu'avec un bastion : l'agent Hornn lit à la place de l'utilisateur.
+  L'utilisateur déclenche l'usage par Hornn ; le noyau de l'agent, membre machine `Reader` ou
+  `Editor`, vérifie l'autorisation signée par Hornn et le rôle de l'utilisateur, puis descelle
+  (`integration-hornn.md`, ADR 0031).
 - Avec deux propriétaires et le quorum par défaut, le plus récent ne peut pas retirer le plus
   ancien. Il faut nommer un troisième propriétaire.
 - En mode Serveur, un poste n'enveloppe une clé de casier que pour une clé inscrite au registre
