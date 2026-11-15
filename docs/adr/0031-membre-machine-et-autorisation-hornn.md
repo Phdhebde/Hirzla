@@ -30,8 +30,8 @@ doivent pas changer pour cela.
    signe que ce domaine. Pas de JWT : il n'existe pas de profil JWS hybride normalisé, et le CBOR
    réutilise le décodeur strict du projet. Ajouter un domaine ne change pas la suite.
 5. **Fenêtre** : durée de vie ≤ 60 s, tolérance d'horloge 5 s, usage unique en mémoire (au plus
-   4 096 autorisations vivantes, refus au-delà), refus de toute autorisation émise avant le
-   démarrage du noyau (ce qui rend l'usage unique sûr malgré une mémoire perdue au redémarrage).
+   4 096 autorisations vivantes, refus au-delà), refus de toute autorisation émise moins de
+   5 s après le démarrage du noyau (ce qui rend l'usage unique sûr malgré une mémoire perdue au redémarrage).
 6. **Demandeur** : `BlindUser`, ou un rôle lecteur (il pourrait lire de toute façon) ; jamais
    `Auditor`, un non-membre, ni la machine elle-même.
 7. **Retrait de la machine** : le noyau refuse toute autorisation tant que sa réplique tient une

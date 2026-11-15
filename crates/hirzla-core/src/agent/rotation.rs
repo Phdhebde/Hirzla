@@ -53,7 +53,16 @@ impl SshTarget {
                 None => (authority, 22),
             }
         };
-        if host.is_empty() || host.len() > MAX_HOST || port == 0 || host.contains(['@', '[', ']']) {
+        // A host is handed to an SSH client: refuse anything that could read as an option
+        // (`-oProxyCommand=…`) and keep to the characters of a name or an address.
+        if host.is_empty()
+            || host.len() > MAX_HOST
+            || port == 0
+            || host.starts_with(['-', '.', ':'])
+            || !host
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+        {
             return None;
         }
         Some(SshTarget {
@@ -132,6 +141,11 @@ mod tests {
             "ssh://a@b@srv",
             "ssh://[::1",
             "ssh://sr v",
+            "ssh://-oProxyCommand=x",
+            "ssh://root@-oProxyCommand=x:22",
+            "ssh://srv;id",
+            "ssh://sr%20v",
+            "ssh://[-x]:22",
         ] {
             assert_eq!(t(bad), None, "{bad}");
         }

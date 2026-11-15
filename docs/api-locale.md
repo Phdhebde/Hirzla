@@ -496,7 +496,7 @@ l'autorisation) :
 | 5 | `not_yet_valid` | Émise dans le futur au-delà de 5 s |
 | 6 | `expired` | Expirée (tolérance 5 s) |
 | 7 | `lifetime` | Durée de vie nulle ou supérieure à 60 s |
-| 8 | `before_start` | Émise avant le démarrage du noyau |
+| 8 | `before_start` | Émise avant le démarrage du noyau augmenté de la tolérance (5 s) |
 | 9 | `replayed` | Déjà utilisée |
 | 10 | `guard_full` | Trop d'autorisations vivantes en mémoire |
 | 11 | `requester` | Le demandeur n'a pas de rôle qui permet l'usage |

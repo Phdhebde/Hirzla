@@ -175,8 +175,15 @@ fn parse_id16(s: &str) -> Option<Id16> {
 
 /// Loads Hornn's pinned identity: the key file holds the encoded hybrid verification key
 /// (2 691 bytes, `docs/format.md` § 3.1), raw. Public data.
+/// Bound on the Hornn key file read (its exact size is checked by `HornnTrust::new`).
+const HORNN_KEY_READ_LIMIT: u64 = 4096;
+
 fn load_hornn(issuer: Id16, key: &PathBuf) -> Result<HornnTrust, String> {
-    let bytes = std::fs::read(key).map_err(|_| "impossible de lire la clé de Hornn.".to_owned())?;
+    // The key is a fixed-size public key: read at most one byte more than that.
+    let mut bytes = Vec::new();
+    std::fs::File::open(key)
+        .and_then(|f| f.take(HORNN_KEY_READ_LIMIT).read_to_end(&mut bytes))
+        .map_err(|_| "impossible de lire la clé de Hornn.".to_owned())?;
     HornnTrust::new(issuer, &bytes).map_err(|_| "clé de Hornn invalide.".to_owned())
 }
 

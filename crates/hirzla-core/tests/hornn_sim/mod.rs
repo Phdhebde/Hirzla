@@ -32,7 +32,7 @@ pub type R = Replica<AccessAuthorizer>;
 pub const START_MS: u64 = 1_800_000_000_000;
 
 thread_local! {
-    static NOW: Cell<u64> = const { Cell::new(START_MS + 1_000) };
+    static NOW: Cell<u64> = const { Cell::new(START_MS + 10_000) };
 }
 
 /// The simulated wall clock, shared by Hornn and the agents of one test thread (H5: both
@@ -211,7 +211,7 @@ pub const INITIAL: &str = "Initial-P4ss!word";
 
 impl World {
     pub fn new() -> World {
-        set_now(START_MS + 1_000);
+        set_now(START_MS + 10_000);
         let hornn = HornnSim::new();
         let alice_m = TestMember::new();
         let mut alice =

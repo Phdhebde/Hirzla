@@ -296,9 +296,12 @@ impl SessionGrant {
     }
 
     /// Time checks: lifetime at most [`MAX_LIFETIME_MS`], issued at most [`MAX_SKEW_MS`] in
-    /// the future, not expired (with the same tolerance), and issued after `not_before_ms`
-    /// (the start of the core: a grant older than the core may have been used before a
-    /// restart, which the [`ReplayGuard`] has forgotten).
+    /// the future, not expired (with the same tolerance), and issued strictly more than
+    /// [`MAX_SKEW_MS`] after `not_before_ms`, the start of the core. A core that stopped
+    /// before `not_before_ms` only accepted grants issued at most [`MAX_SKEW_MS`] after its
+    /// own clock: none of those passes here, so a grant consumed before a restart (which
+    /// the [`ReplayGuard`] has forgotten) can never be used again. The price: for
+    /// [`MAX_SKEW_MS`] after a start, every grant is refused.
     ///
     /// # Errors
     /// [`GrantRefusal::Lifetime`], [`GrantRefusal::NotYetValid`], [`GrantRefusal::Expired`]
@@ -317,7 +320,7 @@ impl SessionGrant {
         if now_ms >= self.expires_ms.saturating_add(MAX_SKEW_MS) {
             return Err(GrantRefusal::Expired);
         }
-        if self.issued_ms.saturating_add(MAX_SKEW_MS) < not_before_ms {
+        if self.issued_ms <= not_before_ms.saturating_add(MAX_SKEW_MS) {
             return Err(GrantRefusal::BeforeStart);
         }
         Ok(())

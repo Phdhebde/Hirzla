@@ -1,5 +1,6 @@
 //! The machine member against the Hornn control plane simulator: sessions, refusals of
-//! every kind, `BlindUser`, rotation of bout en bout.
+//! every kind, `BlindUser`, end-to-end rotation.
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
 
 mod hornn_sim;
@@ -157,7 +158,16 @@ fn restart_refuses_older_grants() {
         refused(restarted.open_session(&grant)),
         GrantRefusal::BeforeStart
     );
-    // A fresh grant works.
+    // A grant issued less than 5 s after the restart is refused too: the old core may
+    // have accepted it if Hornn's clock was ahead. After that, fresh grants work.
+    let early = w
+        .hornn
+        .open_session(w.bob.id(), &w.gateway_id, w.locker, w.secret);
+    assert_eq!(
+        refused(restarted.open_session(&early)),
+        GrantRefusal::BeforeStart
+    );
+    advance(5_001);
     let g2 = w
         .hornn
         .open_session(w.bob.id(), &w.gateway_id, w.locker, w.secret);

@@ -120,7 +120,7 @@ Dans cet ordre ; la première qui échoue refuse, avec un code de motif (`api-lo
 4. `purpose` égal à l'opération demandée (`SessionOpen` : 1 ; `Rotate` : 2) ;
 5. destinataire : `agent_member` et `agent_device` sont ceux du noyau ;
 6. temps, avec une tolérance d'horloge de 5 s : durée de vie ≤ 60 s, pas émise dans le futur,
-   pas expirée, et **émise après le démarrage du noyau** (§ 5) ;
+   pas expirée, et **émise plus de 5 s après le démarrage du noyau** (§ 5) ;
 7. le casier est servi par l'agent ;
 8. rôle de l'agent dans l'état d'autorisation courant de sa réplique : appareil actif,
    `Reader` ou `Editor` pour une session, `Editor` pour une rotation (ADR 0031) ; refus si la
@@ -138,8 +138,12 @@ encore parvenue, il accepte. L'agent synchronise donc avant de présenter une au
 
 Le noyau garde les `grant_id` consommés jusqu'à `expires_ms + 5 s`, au plus 4 096 à la fois ;
 plein, il refuse plutôt que d'oublier. Cette mémoire est perdue au redémarrage : c'est pourquoi
-une autorisation émise plus de 5 s avant le démarrage du noyau est refusée. Une autorisation ne
-peut donc servir qu'une fois, même si le noyau redémarre pendant sa durée de vie.
+une autorisation dont `issued_ms` n'est pas strictement postérieur au démarrage du noyau
+augmenté de la tolérance (5 s) est refusée (`before_start`). La tolérance joue dans ce sens
+pour couvrir une horloge de Hornn en retard : une autorisation consommée juste avant un
+redémarrage ne peut pas être rejouée juste après. Une autorisation ne peut donc servir qu'une
+fois, même si le noyau redémarre pendant sa durée de vie ; en contrepartie, le noyau refuse
+toute autorisation pendant ses 5 premières secondes.
 
 ## 6. Membre machine
 

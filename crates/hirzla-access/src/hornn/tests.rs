@@ -252,11 +252,11 @@ fn time_checks() {
         assert_eq!(g.check_time(NOW, 0), Err(GrantRefusal::Lifetime));
     }
     // Issued before the core started.
-    assert_eq!(
-        g.check_time(NOW, NOW + MAX_SKEW_MS + 1),
-        Err(GrantRefusal::BeforeStart)
-    );
-    g.check_time(NOW, NOW + MAX_SKEW_MS).unwrap();
+    // Issued before the core started, or within the skew after: refused.
+    for start in [NOW + 1, NOW, NOW - MAX_SKEW_MS] {
+        assert_eq!(g.check_time(NOW, start), Err(GrantRefusal::BeforeStart));
+    }
+    g.check_time(NOW, NOW - MAX_SKEW_MS - 1).unwrap();
 }
 
 #[test]
