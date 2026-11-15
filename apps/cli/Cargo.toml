@@ -15,3 +15,12 @@ workspace = true
 
 [dependencies]
 hirzla-core = { path = "../../crates/hirzla-core" }
+hirzla-crypto = { path = "../../crates/hirzla-crypto" }
+hirzla-keystore = { path = "../../crates/hirzla-keystore" }
+hirzla-vault = { path = "../../crates/hirzla-vault" }
+zeroize = "1.8"
+# ADR 0016: clipboard with history and cloud exclusion. No image support.
+arboard = { version = "3.7.0", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"

@@ -9,5 +9,15 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "hirzla-audit-verify"
+path = "src/bin/hirzla-audit-verify.rs"
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
+# Deterministic CBOR, same library and version as hirzla-vault (ADR 0013): no new crate.
+cbor4ii = { version = "1.2.4", default-features = false, features = ["use_alloc"] }
+thiserror = "2.0"
+
+[dev-dependencies]
+tempfile = "3.27.0"

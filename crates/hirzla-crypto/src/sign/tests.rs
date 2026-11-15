@@ -107,12 +107,18 @@ fn each_role_signs_and_verifies_its_domains() {
         DeviceDomain::ExchangeFile,
         DeviceDomain::DeviceEnrol,
         DeviceDomain::RecoveryShare,
+        DeviceDomain::AuditCheckpoint,
     ] {
         let sig = device.sign(d, MSG).unwrap();
         device.verifying_key().verify(d, MSG, &sig).unwrap();
     }
     let server = ServerSigningKey::generate().unwrap();
-    for d in [ServerDomain::ServerAuth, ServerDomain::Receipt] {
+    for d in [
+        ServerDomain::ServerAuth,
+        ServerDomain::Receipt,
+        ServerDomain::KeyLogHead,
+        ServerDomain::AuditCheckpoint,
+    ] {
         let sig = server.sign(d, MSG).unwrap();
         server.verifying_key().verify(d, MSG, &sig).unwrap();
     }
@@ -156,6 +162,9 @@ fn signature_does_not_verify_in_another_domain_or_for_another_message() {
         Domain::ExchangeFile,
         Domain::DeviceEnrol,
         Domain::RecoveryShare,
+        Domain::KeyLogHead,
+        Domain::AuditCheckpoint,
+        Domain::DeviceAuditCheckpoint,
     ] {
         assert_eq!(
             vk.verify(d, MSG, &sig),
@@ -187,7 +196,11 @@ fn domain_labels_are_distinct_and_prefix_free() {
         Domain::ExchangeFile,
         Domain::DeviceEnrol,
         Domain::RecoveryShare,
+        Domain::KeyLogHead,
+        Domain::AuditCheckpoint,
+        Domain::DeviceAuditCheckpoint,
     ];
+    assert_eq!(Domain::KeyLogHead.label(), b"hirzla/v1/keylog-head");
     for a in all {
         assert!(a.label().is_ascii() && !a.label().contains(&0));
         for b in all {

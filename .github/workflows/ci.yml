@@ -52,7 +52,7 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace
+        run: cargo test --workspace --no-fail-fast
 
   # dudect-style timing test of the Shamir arithmetic (ADR 0012). Shared runners are noisy:
   # the result is informative and never blocks a merge.
