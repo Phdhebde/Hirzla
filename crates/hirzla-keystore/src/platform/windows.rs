@@ -340,7 +340,8 @@ pub fn pipe_server_pid(pipe: BorrowedHandle<'_>) -> io::Result<u32> {
     Ok(pid)
 }
 
-pub(super) fn os_harden_process() -> HardeningReport {
+pub(super) fn os_harden_process(_lock: bool) -> HardeningReport {
+    // No process-wide memory locking here: `_lock` changes nothing.
     let dacl = if restrict_process_dacl().is_ok() {
         HardeningStatus::Partial
     } else {

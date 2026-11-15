@@ -120,7 +120,9 @@ impl CoreLink {
             Err(e) => return Err(self.connection_error(e)),
         }
         if self.config.harden && self.hardening.is_none() {
-            self.hardening = Some(hirzla_keystore::platform::harden_process());
+            // Not `harden_process`: locking all memory of a process that hosts a web engine
+            // would pin gigabytes of reserved address space and get it killed.
+            self.hardening = Some(hirzla_keystore::platform::harden_process_without_memory_lock());
         }
         Ok(client)
     }

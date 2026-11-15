@@ -362,7 +362,8 @@ Décisions : ADR 0024. Code : `apps/desktop`.
 - Client du noyau comme la ligne de commande, autorisé par son nom (`hirzla-desktop`, dans
   `DEFAULT_CLIENTS`) à côté de `hirzla-core`. Elle démarre le noyau s'il ne tourne pas.
 - Elle se durcit après le premier `Status` accepté (sous Linux, un processus non vidable
-  masque son exécutable au noyau), puis garde une seule connexion, sondée par `Status`
+  masque son exécutable au noyau), sans verrouiller sa mémoire (`mlockall` épinglerait
+  l'espace réservé par le moteur web), puis garde une seule connexion, sondée par `Status`
   toutes les trois secondes. Une connexion perdue après ce durcissement ne peut pas être
   rouverte sous Linux : l'application demande alors à être redémarrée.
 - Requêtes : `Status` (sondage), `Init` (sans paramètres : calibrage par le noyau ; mot de

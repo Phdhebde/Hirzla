@@ -213,7 +213,11 @@ impl StatusDto {
             clipboard_clear_s: s.clipboard_clear_s,
             core_version: s.core_version,
             core_hardening: s.hardening.into(),
-            app_hardening: app.map(Into::into),
+            app_hardening: app.map(|r| HardeningDto {
+                // Never attempted in this process (see `link`), whatever the system allows.
+                memory_locked: "not_attempted",
+                ..r.into()
+            }),
             app_version: env!("CARGO_PKG_VERSION"),
         }
     }

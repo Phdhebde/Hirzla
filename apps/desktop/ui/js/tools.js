@@ -75,6 +75,7 @@ const HARDENING = {
   partial: "Partielle",
   unsupported: "Impossible sur ce système",
   failed: "Échec",
+  not_attempted: "Non tentée (moteur web)",
 };
 
 /** @param {number} s */

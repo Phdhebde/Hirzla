@@ -67,9 +67,12 @@ moteur web du système : chaque ligne de code et chaque dépendance s'ajoute à 
 6. **Authentification et durcissement.** L'exécutable s'appelle `hirzla-desktop`, nom déjà
    présent dans la liste d'autorisation par défaut du noyau (`DEFAULT_CLIENTS`) : il doit être
    installé à côté de `hirzla-core` (les installeurs le font). L'application démarre le noyau
-   s'il ne tourne pas. Elle se durcit (`harden_process`) **après** le premier `Status` accepté
-   par le noyau : sous Linux, un processus non vidable masque son exécutable, que le noyau doit
-   lire. Elle garde ensuite **une** connexion ouverte, sondée par `Status` toutes les trois
+   s'il ne tourne pas. Elle se durcit **après** le premier `Status` accepté par le noyau : sous
+   Linux, un processus non vidable masque son exécutable, que le noyau doit lire. Elle applique
+   l'interdiction des vidages et du traçage, **sans verrouiller sa mémoire** :
+   `harden_process_without_memory_lock`, ajouté à `hirzla_keystore::platform`. Un moteur web
+   réserve des gigaoctets d'espace d'adressage ; `mlockall(MCL_FUTURE)` les engagerait tous
+   (essai sous Linux en administrateur : processus tué par manque de mémoire). Elle garde ensuite **une** connexion ouverte, sondée par `Status` toutes les trois
    secondes (ce qui ne prolonge pas l'ouverture du coffre). Si cette connexion se perd une fois
    le processus durci sous Linux, le noyau ne peut plus l'authentifier : l'application le dit
    et demande à être redémarrée.

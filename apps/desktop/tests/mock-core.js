@@ -34,7 +34,7 @@
     clipboard_clear_s: 30,
     core_version: "0.0.0",
     core_hardening: { memory_locked: "failed", dumps_disabled: "applied", tracing_blocked: "applied" },
-    app_hardening: { memory_locked: "failed", dumps_disabled: "applied", tracing_blocked: "applied" },
+    app_hardening: { memory_locked: "not_attempted", dumps_disabled: "applied", tracing_blocked: "applied" },
     app_version: "0.0.0",
   });
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
