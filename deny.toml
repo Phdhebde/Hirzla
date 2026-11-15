@@ -1,6 +1,13 @@
 # cargo-deny : licences, avis de sécurité et provenance des dépendances.
 [advisories]
 yanked = "deny"
+# proc-macro-error is unmaintained (no vulnerability): build-time proc macro pulled by
+# Tauri 2's Linux GTK3 stack (gtk-rs 0.18 -> glib-macros). It never runs in the shipped
+# binary and handles no secret. No upgrade exists until Tauri moves off gtk-rs 0.18;
+# maintainer decision 2026-11-15. Revisit at each Tauri upgrade.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained build-time macro via Tauri/gtk-rs 0.18, no fix available" },
+]
 
 [licenses]
 # Zlib: foldhash, pulled by rusqlite -> hashlink -> hashbrown (ADR 0013).
@@ -22,6 +29,30 @@ allow = ["BSL-1.0"]
 [[licenses.exceptions]]
 crate = "error-code"
 allow = ["BSL-1.0"]
+
+# Servo's CSS crates and option-ext: Mozilla Public License 2.0, a file-level copyleft that
+# allows linking unmodified sources into a program under any licence (sources stay available
+# on crates.io). Pulled by Tauri 2 (ADR 0024): tauri-utils and wry (HTML and CSP handling),
+# dirs-sys. Allowed for these crates only.
+[[licenses.exceptions]]
+crate = "cssparser"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "selectors"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
 
 # Workspace crates are `publish = false` and the project licence is not chosen yet:
 # only third-party crates are subject to the allow list above.

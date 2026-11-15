@@ -99,7 +99,16 @@ pub struct HardeningReport {
 /// reported; none aborts the process.
 #[must_use]
 pub fn harden_process() -> HardeningReport {
-    os_harden_process()
+    os_harden_process(true)
+}
+
+/// Hardens a process that hosts a web view (the desktop application): no core dumps, no
+/// tracing, but **no memory locking**. A web engine reserves gigabytes of address space
+/// (JavaScript heaps); `mlockall(MCL_FUTURE)` would commit and pin all of it and get the
+/// process killed. `memory_locked` is then reported as [`HardeningStatus::Unsupported`].
+#[must_use]
+pub fn harden_process_without_memory_lock() -> HardeningReport {
+    os_harden_process(false)
 }
 
 /// Reads one line (up to a newline, excluded, or the end of input) from `reader` into an

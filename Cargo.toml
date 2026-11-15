@@ -11,6 +11,9 @@ members = [
     "apps/cli",
     "apps/native-host",
     "apps/server",
+    # Tauri 2 shell (ADR 0024): in the workspace so that the four commands of CLAUDE.md,
+    # the single Cargo.lock and cargo-deny cover it. Linux needs webkit2gtk-4.1 to build it.
+    "apps/desktop/src-tauri",
 ]
 # Fuzz targets live outside the workspace (nightly, cargo-fuzz).
 exclude = ["fuzz"]

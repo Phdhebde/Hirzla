@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use super::unix::{disable_core_dumps, effective_uid, PeerCredentials};
 use super::{HardeningReport, HardeningStatus};
 
-pub(super) fn os_harden_process() -> HardeningReport {
+pub(super) fn os_harden_process(lock: bool) -> HardeningReport {
     // Not dumpable: no core file, /proc/<pid>/mem and ptrace closed to processes of the same
     // user that lack CAP_SYS_PTRACE.
     // SAFETY: prctl(PR_SET_DUMPABLE, 0) takes integer arguments only and touches no memory
@@ -17,7 +17,11 @@ pub(super) fn os_harden_process() -> HardeningReport {
     let core_limit = disable_core_dumps();
 
     HardeningReport {
-        memory_locked: lock_memory(),
+        memory_locked: if lock {
+            lock_memory()
+        } else {
+            HardeningStatus::Unsupported
+        },
         dumps_disabled: if not_dumpable && core_limit {
             HardeningStatus::Applied
         } else {

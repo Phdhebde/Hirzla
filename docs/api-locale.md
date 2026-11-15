@@ -410,7 +410,24 @@ l'encodage JSON par l'ADR 0027 (proposé).
 - Il lit et écrit ses messages sans les tampons de la bibliothèque standard (qui ne sont
   jamais effacés), dans des tampons effacés à leur libération.
 
-## 13. Points ouverts
+## 13. L'application de poste `hirzla-desktop`
+
+Décisions : ADR 0024. Code : `apps/desktop`.
+
+- Client du noyau comme la ligne de commande, autorisé par son nom (`hirzla-desktop`, dans
+  `DEFAULT_CLIENTS`) à côté de `hirzla-core`. Elle démarre le noyau s'il ne tourne pas.
+- Elle se durcit après le premier `Status` accepté (sous Linux, un processus non vidable
+  masque son exécutable au noyau), sans verrouiller sa mémoire (`mlockall` épinglerait
+  l'espace réservé par le moteur web), puis garde une seule connexion, sondée par `Status`
+  toutes les trois secondes. Une connexion perdue après ce durcissement ne peut pas être
+  rouverte sous Linux : l'application demande alors à être redémarrée.
+- Requêtes : `Status` (sondage), `Init` (sans paramètres : calibrage par le noyau ; mot de
+  passe d'au moins 12 caractères exigé par l'application), `Unlock`, `Lock`, `List`, `Read`
+  (révélation d'un champ, ou copie faite par le processus Rust sans passer par la vue web),
+  `Create`, `Update`, `Delete`, `Generate`. Un `Create` par ligne pour l'import CSV.
+- Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers à sa fermeture.
+
+## 14. Points ouverts
 
 Décisions prises seul pendant cette étape, à confirmer :
 
@@ -424,7 +441,8 @@ Décisions prises seul pendant cette étape, à confirmer :
    300 s) : perdu au redémarrage du noyau.
 4. **`auto_lock_s = 0`** traité comme la valeur par défaut, et non comme « jamais ».
 5. **Verrouillage automatique** non déclenché par la mise en veille ni par le verrouillage de
-   la session : à ajouter avec l'application de poste.
+   la session. L'application de poste (§ 13) verrouille le coffre à sa fermeture, mais ne
+   suit pas encore la veille ni la session : reste à faire.
 6. **Pas de gestion de `SIGTERM`** (elle demanderait du code `unsafe` ou une dépendance) : un
    noyau tué ne supprime pas sa socket, retirée au démarrage suivant ; sa mémoire est rendue
    au système sans effacement explicite.

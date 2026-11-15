@@ -1,0 +1,15 @@
+{
+  "name": "hirzla-desktop-ui",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Interface de l'application de poste Hirzla : HTML, CSS et JavaScript sans framework ni étape de construction (ADR 0024).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "scripts": {
+    "check": "tsc -p tsconfig.json",
+    "captures": "node scripts/captures.mjs"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3"
+  }
+}

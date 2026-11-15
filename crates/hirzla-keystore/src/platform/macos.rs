@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use super::unix::{disable_core_dumps, PeerCredentials};
 use super::{HardeningReport, HardeningStatus};
 
-pub(super) fn os_harden_process() -> HardeningReport {
+pub(super) fn os_harden_process(_lock: bool) -> HardeningReport {
+    // No process-wide memory locking here: `_lock` changes nothing.
     // SAFETY: PT_DENY_ATTACH takes no address nor data (null and zero) and only flags the
     // current process.
     #[allow(unsafe_code)]
