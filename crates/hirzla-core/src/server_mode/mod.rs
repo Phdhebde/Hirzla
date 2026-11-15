@@ -1,5 +1,6 @@
 //! The server mode of the core (`docs/api-locale.md` § 15, ADR 0032): joining a `hirzlad`,
-//! synchronising the shared lockers, creating them, granting and revoking roles.
+//! synchronising the shared lockers, creating them, granting and revoking roles, revoking
+//! another device of the member (ADR 0059).
 //!
 //! - The identity is the vault's: member key, device certificate and device private keys
 //!   (ADR 0032, point 2). Keys never leave this process.
@@ -17,6 +18,7 @@
 //!   and the dated watch of the key log that freezes a locker whose announced removal is
 //!   withheld.
 
+mod devices;
 mod governance;
 pub mod proto;
 
@@ -808,6 +810,7 @@ impl ServerMode {
             } => self.grant(vault, locker, member, role, fingerprint.as_deref()),
             ServerRequest::RoleRevoke { locker, member } => self.revoke(vault, locker, member),
             ServerRequest::LockerMembers { locker } => self.members(&locker),
+            ServerRequest::DeviceRevoke { device } => self.device_revoke(vault, device),
             ServerRequest::QuorumPrepare {
                 locker,
                 action,

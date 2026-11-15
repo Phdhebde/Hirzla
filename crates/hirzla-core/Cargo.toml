@@ -32,6 +32,8 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 tempfile = "3.27.0"
 # In-memory relay and test identities, for the Hornn control plane simulator (tests only).
 hirzla-sync = { path = "../hirzla-sync", features = ["net", "test-support"] }
+# A second device of the same member for the device revocation test (ADR 0059).
+hirzla-vault = { path = "../hirzla-vault", features = ["test-support"] }
 # Server mode end-to-end test (ADR 0032): a real hirzlad, its test PKI and its TLS types.
 # Same versions and features as apps/server; tests only, never linked into the core.
 hirzla-server = { path = "../../apps/server" }

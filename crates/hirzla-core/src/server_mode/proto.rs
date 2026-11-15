@@ -1,6 +1,6 @@
 //! Server mode operations of the local API (`docs/api-locale.md` § 15): version 4, operation
-//! codes 40 to 48 and 90 to 98 (approvals and quarantine, ADR 0044 and 0045), error codes 40
-//! to 48 and 90 to 93. Same frames, same CBOR profile and same strict decoding as the rest of
+//! codes 40 to 49 (49: device revocation, ADR 0059) and 90 to 98 (approvals and quarantine,
+//! ADR 0044 and 0045), error codes 40 to 49 and 90 to 93. Same frames, same CBOR profile and same strict decoding as the rest of
 //! the API (`crate::proto`).
 
 pub use hirzla_access::Role;
@@ -56,6 +56,8 @@ pub enum ServerOp {
     RoleRevoke = 47,
     /// Members and roles of a shared locker.
     LockerMembers = 48,
+    /// Revoke another device of the member (ADR 0059).
+    DeviceRevoke = 49,
     /// Prepare an approval request (ADR 0044).
     QuorumPrepare = 90,
     /// Read an approval request before signing it.
@@ -77,7 +79,7 @@ pub enum ServerOp {
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 18] = [
+    const ALL: [ServerOp; 19] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -87,6 +89,7 @@ impl ServerOp {
         ServerOp::RoleGrant,
         ServerOp::RoleRevoke,
         ServerOp::LockerMembers,
+        ServerOp::DeviceRevoke,
         ServerOp::QuorumPrepare,
         ServerOp::QuorumInspect,
         ServerOp::QuorumApprove,
@@ -117,6 +120,7 @@ impl ServerOp {
             ServerOp::RoleGrant => "role_grant",
             ServerOp::RoleRevoke => "role_revoke",
             ServerOp::LockerMembers => "locker_members",
+            ServerOp::DeviceRevoke => "device_revoke",
             ServerOp::QuorumPrepare => "quorum_prepare",
             ServerOp::QuorumInspect => "quorum_inspect",
             ServerOp::QuorumApprove => "quorum_approve",
@@ -130,7 +134,7 @@ impl ServerOp {
     }
 }
 
-/// Error codes of the server mode (40 to 48, 90 to 93). The general codes of § 7 keep their
+/// Error codes of the server mode (40 to 49, 90 to 93). The general codes of § 7 keep their
 /// numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerCode {
@@ -154,6 +158,8 @@ pub enum ServerCode {
     UnknownMember,
     /// 48: transparency proof missing or invalid for the key received.
     KeyLogRejected,
+    /// 49: the device is already revoked (ADR 0059).
+    AlreadyRevoked,
     /// 90: approval or request refused (ADR 0044).
     ApprovalInvalid,
     /// 91: the approvals collected do not reach the quorum: counted, required.
@@ -179,6 +185,7 @@ impl ServerCode {
             ServerCode::Forbidden => 46,
             ServerCode::UnknownMember => 47,
             ServerCode::KeyLogRejected => 48,
+            ServerCode::AlreadyRevoked => 49,
             ServerCode::ApprovalInvalid => 90,
             ServerCode::QuorumNotMet(..) => 91,
             ServerCode::LockerFrozen => 92,
@@ -200,6 +207,7 @@ impl ServerCode {
             ServerCode::Forbidden => "forbidden",
             ServerCode::UnknownMember => "unknown_member",
             ServerCode::KeyLogRejected => "keylog_rejected",
+            ServerCode::AlreadyRevoked => "already_revoked",
             ServerCode::ApprovalInvalid => "approval_invalid",
             ServerCode::QuorumNotMet(..) => "quorum_not_met",
             ServerCode::LockerFrozen => "locker_frozen",
@@ -269,6 +277,11 @@ pub enum ServerRequest {
     LockerMembers {
         /// Locker.
         locker: Id16,
+    },
+    /// 49.
+    DeviceRevoke {
+        /// Another device of the member.
+        device: Id16,
     },
     /// 90.
     QuorumPrepare {
@@ -474,6 +487,7 @@ impl std::fmt::Debug for ServerReply {
             Self::Approved(_) => "Approved",
             Self::Requests(_) => "Requests",
             Self::Quarantine { .. } => "Quarantine",
+            Self::DeviceRevoked { .. } => "DeviceRevoked",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -771,6 +785,11 @@ pub enum ServerReply {
         /// Whether the current member may decide.
         can_decide: bool,
     },
+    /// 49.
+    DeviceRevoked {
+        /// Lockers where the `DeviceRemove` was emitted.
+        lockers: u64,
+    },
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
@@ -835,6 +854,7 @@ impl ServerRequest {
             ServerRequest::RoleGrant { .. } => ServerOp::RoleGrant,
             ServerRequest::RoleRevoke { .. } => ServerOp::RoleRevoke,
             ServerRequest::LockerMembers { .. } => ServerOp::LockerMembers,
+            ServerRequest::DeviceRevoke { .. } => ServerOp::DeviceRevoke,
             ServerRequest::QuorumPrepare { .. } => ServerOp::QuorumPrepare,
             ServerRequest::QuorumInspect { .. } => ServerOp::QuorumInspect,
             ServerRequest::QuorumApprove { .. } => ServerOp::QuorumApprove,
@@ -894,6 +914,9 @@ impl ServerRequest {
             ])),
             ServerRequest::LockerMembers { locker } | ServerRequest::QuarantineList { locker } => {
                 Some(Value::map(vec![(1, Value::bytes(locker))]))
+            }
+            ServerRequest::DeviceRevoke { device } => {
+                Some(Value::map(vec![(1, Value::bytes(device))]))
             }
             ServerRequest::QuorumPrepare {
                 locker,
@@ -1045,6 +1068,12 @@ impl ServerRequest {
                 let f = m(Fields::new(args()?, &[1]))?;
                 Ok(ServerRequest::QuarantineList {
                     locker: id16(&f, 1)?,
+                })
+            }
+            ServerOp::DeviceRevoke => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceRevoke {
+                    device: id16(&f, 1)?,
                 })
             }
             ServerOp::QuorumPrepare => {
@@ -1425,6 +1454,9 @@ impl ServerReply {
                 ),
             )])),
             ServerReply::LockerCreated(id) => Some(Value::map(vec![(1, Value::bytes(id))])),
+            ServerReply::DeviceRevoked { lockers } => {
+                Some(Value::map(vec![(1, Value::Uint(*lockers))]))
+            }
             ServerReply::Granted {
                 fingerprint,
                 devices,
@@ -1568,6 +1600,7 @@ impl ServerReply {
                 46 => ServerCode::Forbidden,
                 47 => ServerCode::UnknownMember,
                 48 => ServerCode::KeyLogRejected,
+                49 => ServerCode::AlreadyRevoked,
                 90 => ServerCode::ApprovalInvalid,
                 91 => {
                     let d = Fields::new(body.ok_or(ErrorCode::Malformed)?, &[1, 2]).map_err(bad)?;
@@ -1671,6 +1704,12 @@ impl ServerReply {
             ServerOp::SharedLockerCreate => {
                 let b = Fields::new(body()?, &[1]).map_err(bad)?;
                 ServerReply::LockerCreated(b.req(1).and_then(fixed::<16>).map_err(bad)?)
+            }
+            ServerOp::DeviceRevoke => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::DeviceRevoked {
+                    lockers: b.req(1).and_then(uint).map_err(bad)?,
+                }
             }
             ServerOp::RoleGrant => {
                 let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
@@ -1793,6 +1832,7 @@ mod tests {
                 member: [2; 16],
             },
             ServerRequest::LockerMembers { locker: [3; 16] },
+            ServerRequest::DeviceRevoke { device: [4; 16] },
             ServerRequest::ServerJoinLink {
                 link: "hirzla-invitation:AAAA".into(),
             },
@@ -1846,9 +1886,10 @@ mod tests {
             ServerRequest::decode(&enc(1, 40, None)).unwrap_err(),
             (3, ServerCode::General(ErrorCode::UnsupportedVersion))
         );
+        // 49 is `DeviceRevoke` (ADR 0059): without its arguments, malformed.
         assert_eq!(
             ServerRequest::decode(&enc(4, 49, None)).unwrap_err(),
-            (3, ServerCode::General(ErrorCode::UnknownOperation))
+            (3, ServerCode::General(ErrorCode::Malformed))
         );
         // Arguments on an operation without any.
         assert_eq!(
@@ -1885,6 +1926,20 @@ mod tests {
             ServerRequest::decode(&enc(4, 99, None)).unwrap_err(),
             (3, ServerCode::General(ErrorCode::UnknownOperation))
         );
+        // A device revocation names exactly one device of 16 bytes (ADR 0059).
+        for bad in [
+            None,
+            Some(Value::map(vec![(1, Value::bytes(&[1; 15]))])),
+            Some(Value::map(vec![
+                (1, Value::bytes(&[1; 16])),
+                (2, Value::bytes(&[1; 16])),
+            ])),
+        ] {
+            assert_eq!(
+                ServerRequest::decode(&enc(4, 49, bad)).unwrap_err().1,
+                ServerCode::General(ErrorCode::Malformed)
+            );
+        }
         // A link together with the separate fields; an empty or duplicated decision list; an
         // unknown action.
         let both = Value::map(vec![
@@ -1936,6 +1991,10 @@ mod tests {
     fn replies_round_trip() {
         let replies = [
             (ServerOp::RoleRevoke, ServerReply::Done),
+            (
+                ServerOp::DeviceRevoke,
+                ServerReply::DeviceRevoked { lockers: 2 },
+            ),
             (
                 ServerOp::ServerStatus,
                 ServerReply::Status {
@@ -2146,6 +2205,7 @@ mod tests {
             ServerCode::QuorumNotMet(1, 3),
             ServerCode::LockerFrozen,
             ServerCode::InvitationInvalid,
+            ServerCode::AlreadyRevoked,
         ] {
             let f = ServerReply::encode(2, &Err(code)).unwrap();
             assert_eq!(
