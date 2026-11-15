@@ -256,13 +256,49 @@ fn stub_whose_ref_or_prev_differs_from_the_compact_is_refused() {
         w.replicas[0].genesis(),
     );
     r.set_clock(fixed_clock);
-    let (ops, mut stubs) = w.replicas[0].missing_for(r.vector());
-    let target = stubs[0].op_id;
-    stubs[0].opref.seq += 7;
-    r.ingest_stubs(stubs);
+    let (ops, stubs) = w.replicas[0].missing_for(r.vector());
+    let mut lying = stubs.clone();
+    let target = lying[0].op_id;
+    lying[0].opref.seq += 7;
+    r.ingest_stubs(lying);
     r.ingest(ops).unwrap();
     assert_eq!(
         r.status(&target),
         Some(OpStatus::Rejected(RejectReason::StubMismatch))
     );
+    // What depends on it waits instead of being rejected, and the right stub replaces it.
+    assert!(!r
+        .statuses()
+        .values()
+        .any(|s| *s == OpStatus::Rejected(RejectReason::RejectedDependency)));
+    r.ingest_stubs(stubs);
+    assert_eq!(r.status(&target), Some(OpStatus::Pruned));
+    assert_eq!(r.fingerprint(), w.replicas[0].fingerprint());
+}
+
+/// A stub listed only by a rejected `Compact` is refused: otherwise a member without the
+/// right to compact could make a relay inject made-up ranks (and forks) into the graph.
+#[test]
+fn stub_listed_only_by_a_rejected_compact_is_refused() {
+    let mut w = World::new(&[Role::Reader]);
+    let fake = [0x66; 48];
+    let past = fake_past(&w.replicas[1], fake);
+    let c = w.replicas[1]
+        .compact_forged(vec![fake], core::slice::from_ref(&past))
+        .unwrap();
+    w.sync();
+    assert!(matches!(w.status_everywhere(&c), OpStatus::Rejected(_)));
+    w.replicas[0].ingest_stubs(vec![Stub {
+        op_id: fake,
+        opref: past.opref,
+        prev: past.prev,
+    }]);
+    assert_eq!(
+        w.replicas[0].status(&fake),
+        Some(OpStatus::Rejected(RejectReason::UnlistedStub))
+    );
+    assert!(matches!(
+        w.replicas[0].status(&c),
+        Some(OpStatus::Rejected(_))
+    ));
 }

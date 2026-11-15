@@ -76,14 +76,42 @@ pub(super) struct DataInfo {
 
 impl<A: Authorizer> Replica<A> {
     /// Recomputes the whole view from the set of operations held.
+    ///
+    /// A stub counts only through a `Compact` that is not rejected (§ 10.3): the listings of
+    /// rejected ones are dropped, and the view recomputed, until nothing changes. The set of
+    /// dropped `Compact` only grows, so this ends.
     pub(crate) fn recompute(&mut self) {
+        let mut distrusted: BTreeSet<OpId> = BTreeSet::new();
+        loop {
+            self.recompute_with(&distrusted);
+            let more: Vec<OpId> = self
+                .status
+                .iter()
+                .filter(|(id, s)| matches!(s, OpStatus::Rejected(_)) && !distrusted.contains(*id))
+                .filter(|(id, _)| {
+                    matches!(
+                        self.opened.get(*id).map(|o| &o.content),
+                        Some(Content::CompactPast(past))
+                            if past.iter().any(|p| self.stub_pasts.contains_key(&p.op_id))
+                    )
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            if more.is_empty() {
+                return;
+            }
+            distrusted.extend(more);
+        }
+    }
+
+    fn recompute_with(&mut self, distrusted: &BTreeSet<OpId>) {
         self.decode_all();
         self.fixpoint();
 
         self.check_proofs();
 
         let mut status: BTreeMap<OpId, OpStatus> = BTreeMap::new();
-        let listed = self.listed_by_compacts();
+        let listed = self.listed_by_compacts(distrusted);
 
         // Steps 1 to 6, per operation.
         let mut nodes: BTreeMap<OpId, Node> = BTreeMap::new();
@@ -548,12 +576,15 @@ impl<A: Authorizer> Replica<A> {
     }
 
     /// The causal past of every operation listed by a signed and opened `Compact` with a
-    /// well-formed content (§ 10.3, ADR 0017). `None` when two `Compact` describe the same
-    /// operation differently: its stub is then refused.
-    fn listed_by_compacts(&self) -> BTreeMap<OpId, Option<PrunedPast>> {
+    /// well-formed content (§ 10.3, ADR 0017), except those known to be rejected. `None` when
+    /// two `Compact` describe the same operation differently: its stub is then refused.
+    fn listed_by_compacts(
+        &self,
+        distrusted: &BTreeSet<OpId>,
+    ) -> BTreeMap<OpId, Option<PrunedPast>> {
         let mut out: BTreeMap<OpId, Option<PrunedPast>> = BTreeMap::new();
         for (id, d) in self.full_decoded() {
-            if !matches!(d.control, Some(ControlBody::Compact(_))) {
+            if distrusted.contains(&id) || !matches!(d.control, Some(ControlBody::Compact(_))) {
                 continue;
             }
             let Some(Content::CompactPast(past)) = self.opened.get(&id).map(|o| &o.content) else {
@@ -644,6 +675,13 @@ impl<A: Authorizer> Replica<A> {
         }
     }
 
+    /// Whether the replica holds `id` as a stub. A refused stub (unlisted, or whose `ref`
+    /// differs from its `Compact`) comes from the relay, not from the author: what depends on
+    /// it waits for a correct one instead of being rejected (§ 10.3).
+    fn is_stub(&self, id: &OpId) -> bool {
+        matches!(self.entries.get(id).map(|e| &e.body), Some(Body::Stub(_)))
+    }
+
     /// Steps 4 and 7 for one operation, its predecessors being already classified.
     fn chain_and_deps(
         &self,
@@ -665,7 +703,7 @@ impl<A: Authorizer> Replica<A> {
                     }
                 }
                 None => match status.get(p) {
-                    Some(OpStatus::Rejected(_)) => {
+                    Some(OpStatus::Rejected(_)) if !self.is_stub(p) => {
                         return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                     }
                     _ => fail = worst(fail, OpStatus::Pending(PendingReason::MissingPrev)),
@@ -708,7 +746,7 @@ impl<A: Authorizer> Replica<A> {
                         }
                     }
                     match status.get(d) {
-                        Some(OpStatus::Rejected(_)) => {
+                        Some(OpStatus::Rejected(_)) if !self.is_stub(d) => {
                             return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                         }
                         _ => {

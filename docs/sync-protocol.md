@@ -660,6 +660,15 @@ graphe, la même autorisation et le même état que les autres.
 
 Une opération complète l'emporte toujours sur une souche du même `op_id`.
 
+- Seule une `Compact` qui n'est pas rejetée rend une souche acceptable. Le poste écarte les
+  listes des `Compact` rejetées et recalcule, jusqu'à stabilité. Sans cette règle, un membre
+  sans droit de compacter, avec l'aide d'un relais, injecterait des rangs inventés (et donc
+  des bifurcations) dans le graphe d'un appareil entrant.
+- Une souche refusée vient du relais, pas de l'auteur : ce qui en dépend reste en attente
+  au lieu d'être rejeté, et une souche refusée est remplacée par la suivante reçue pour le
+  même `op_id`. Un relais ne peut donc pas bloquer un poste pour toujours avec une `ref`
+  fausse.
+
 En mode Self, la stabilité est atteinte quand tous les appareils du membre ont échangé un
 vecteur qui couvre la `Compact` (§ 13).
 

@@ -558,7 +558,9 @@ impl<A: Authorizer> Replica<A> {
     }
 
     /// Receives stubs of pruned operations (§ 10.3). A stub only counts if a `Compact`
-    /// held by the replica lists it; a full operation always wins over its stub.
+    /// held by the replica lists it; a full operation always wins over its stub. A stub not
+    /// accepted (yet) is replaced by a newer one: a relay must not be able to pin a wrong
+    /// `ref` for good.
     pub fn ingest_stubs<I>(&mut self, stubs: I)
     where
         I: IntoIterator<Item = Stub>,
@@ -566,8 +568,12 @@ impl<A: Authorizer> Replica<A> {
         let now = (self.clock)();
         let mut added = false;
         for s in stubs {
-            if self.entries.contains_key(&s.op_id) {
-                continue;
+            if let Some(e) = self.entries.get(&s.op_id) {
+                let replaceable = matches!(&e.body, Body::Stub(old) if *old != s)
+                    && self.status.get(&s.op_id) != Some(&OpStatus::Pruned);
+                if !replaceable {
+                    continue;
+                }
             }
             self.entries.insert(
                 s.op_id,
