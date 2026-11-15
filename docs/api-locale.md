@@ -1,0 +1,350 @@
+# API locale du noyau — spécification v1
+
+Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
+(ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
+native de l'extension, lui parlent par un **canal local authentifié**. Ce document fixe ce
+canal : transport, authentification des deux bouts, trames, messages, erreurs, versions,
+journal, durcissement du processus. Les choix de dépendances et l'emplacement du code `unsafe`
+sont tranchés par l'ADR 0015 (proposé) ; le presse-papiers de la ligne de commande par
+l'ADR 0016 (proposé).
+
+Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
+`crates/hirzla-keystore` (`platform`), `apps/cli`.
+
+## 1. Principes
+
+1. Le client ne reçoit **que ce qu'il demande** : une liste issue de l'index (jamais un mot de
+   passe ni une note), ou **un** champ d'**un** secret.
+2. Aucune clé ne traverse le canal, dans aucun sens. Le mot de passe maître le traverse une
+   fois, du client vers le noyau, pour `Init` ou `Unlock`.
+3. L'identité du client vient du **noyau du système** (identifiants du pair de la socket, du
+   tube nommé), jamais d'un message.
+4. Tout message est validé strictement : clé inconnue, type inattendu, valeur hors bornes ou
+   encodage non canonique sont refusés.
+5. Aucun appel réseau : le canal est local par construction (socket Unix, tube nommé qui
+   refuse les clients distants).
+
+## 2. Transport
+
+| Système | Transport | Point de connexion par défaut |
+| --- | --- | --- |
+| Linux | Socket de domaine Unix, mode flux | `$XDG_RUNTIME_DIR/hirzla/core.sock`, sinon `/tmp/hirzla-<uid>/core.sock` |
+| macOS | Socket de domaine Unix, mode flux | `$TMPDIR/hirzla/core.sock` (`$TMPDIR` est propre à l'utilisateur), sinon `/tmp/hirzla-<uid>/core.sock` |
+| Windows | Tube nommé, mode octets | `\\.\pipe\hirzla-core-<SID de l'utilisateur>` |
+
+Le point de connexion peut être imposé par `--socket` (ou `HIRZLA_SOCKET`) : un chemin absolu
+sous Unix, un nom commençant par `\\.\pipe\` sous Windows.
+
+### 2.1 Unix
+
+- Le **répertoire** de la socket est créé en mode `0700`. Le noyau **et** le client le
+  refusent s'il n'est pas un vrai répertoire (lien symbolique refusé), possédé par l'utilisateur
+  effectif, sans aucun droit pour le groupe ni les autres.
+- La socket reçoit le mode `0600`.
+- Au démarrage, si une socket existe : si un noyau y répond, le nouveau noyau s'arrête
+  (« déjà à l'écoute ») ; sinon le fichier périmé est supprimé. Un fichier qui n'est pas une
+  socket est refusé.
+- À l'arrêt demandé (`Shutdown`), le noyau supprime sa socket.
+
+### 2.2 Windows
+
+- Chaque instance du tube est créée avec un **DACL protégé qui n'accorde l'accès qu'au SID de
+  l'utilisateur** (`D:P(A;;GA;;;<SID>)`), et `PIPE_REJECT_REMOTE_CLIENTS` : un client d'un
+  autre poste est refusé par le système.
+- La première instance porte `FILE_FLAG_FIRST_PIPE_INSTANCE` : si le nom est déjà pris (autre
+  noyau, ou squatteur qui l'aurait créé avant), le noyau refuse de démarrer.
+- Le client ouvre le tube avec `SECURITY_SQOS_PRESENT | SECURITY_IDENTIFICATION` : le serveur
+  peut l'identifier, **jamais emprunter son identité**.
+- Entre deux instances, le nom peut être brièvement absent ou occupé : le client réessaie
+  pendant au plus deux secondes.
+
+## 3. Authentification
+
+### 3.1 Le noyau authentifie le client
+
+À chaque connexion, avant de lire la moindre requête, le noyau obtient du système :
+
+| Système | Utilisateur du pair | Processus du pair | Exécutable |
+| --- | --- | --- | --- |
+| Linux | `SO_PEERCRED` (uid) | `SO_PEERCRED` (pid) | `/proc/<pid>/exe` |
+| macOS | `getpeereid` (uid) | `LOCAL_PEERPID` | `proc_pidpath` |
+| Windows | SID du jeton du processus client | `GetNamedPipeClientProcessId` | `QueryFullProcessImageNameW` |
+
+Le client est accepté si et seulement si :
+
+1. il tourne sous **le même compte** que le noyau (uid effectif égal, ou SID égal) ;
+2. son **exécutable** figure dans la **liste d'autorisation**, comparée sur les chemins
+   canoniques (un lien vers un exécutable autorisé est accepté, une copie ne l'est pas ; un
+   binaire supprimé ou remplacé est refusé).
+
+Liste par défaut : `hirzla`, `hirzla-desktop`, `hirzla-native-host` (suffixe `.exe` sous
+Windows) **dans le répertoire du noyau**. `--allow-exe CHEMIN` (répétable) la remplace. Les
+clients légitimes s'installent donc à côté de `hirzla-core`.
+
+Un client refusé reçoit, après sa première trame (non décodée) ou au bout de deux secondes, une
+réponse `Unauthorized` d'identifiant 0, puis la connexion est fermée. Le refus est journalisé
+avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`).
+
+### 3.2 Le client authentifie le noyau
+
+Symétriquement, le client vérifie que le processus à l'écoute tourne sous son compte et que
+son exécutable est le noyau attendu (`hirzla-core` à côté du client, ou `--core CHEMIN`). Sous
+Unix, il vérifie aussi le répertoire de la socket (§ 2.1). En cas d'échec il ne parle pas :
+il n'envoie pas le mot de passe maître à un faux noyau.
+
+### 3.3 Limites, dites franchement
+
+- **Un logiciel malveillant qui tourne sous le compte de l'utilisateur** peut lancer `hirzla`
+  lui-même, ou en lire la mémoire si le système le permet (sous Linux, `ptrace` d'un processus
+  du même utilisateur est souvent restreint par Yama ; sous Windows, il ne l'est pas). La liste
+  d'autorisation relève la barre, elle ne la ferme pas. La parade est le verrouillage
+  automatique, et plus tard la confirmation de présence (FIDO2) pour les secrets sensibles.
+- **Réutilisation de PID** : l'exécutable est lu d'après le PID au moment de la connexion. Un
+  processus qui se connecte puis meurt en laissant la connexion à un enfant, et dont le PID
+  serait repris par un `hirzla` légitime, passerait le contrôle. La fenêtre est étroite et
+  l'attaquant doit déjà tourner sous le compte de l'utilisateur (voir le point précédent).
+- **Administrateur ou root** : hors périmètre (modèle de menace, « Hypothèses »).
+
+## 4. Trames
+
+Une trame = longueur sur **4 octets gros-boutistes** + un élément **CBOR déterministe**, au
+profil de `format.md` § 2.1 (entiers au plus court, clés de map triées et uniques, ni
+flottant, ni étiquette, ni longueur indéfinie, profondeur ≤ 16), vérifié par réencodage.
+
+- Longueur : 1 à 8 388 608 octets (8 Mio). Hors bornes : réponse `Malformed` d'identifiant 0,
+  puis fermeture.
+- Une trame qui ne se décode pas reçoit `Malformed` ; la connexion reste ouverte (les trames
+  restent délimitées).
+- Un client envoie une requête et attend sa réponse avant la suivante.
+- Sous Unix, une connexion inactive pendant 15 minutes est fermée.
+- Le noyau sert au plus 16 connexions à la fois ; au-delà, `Busy`.
+
+Les tampons de trame et les textes décodés sont effacés à leur libération des deux côtés.
+
+## 5. Messages
+
+### 5.1 Requête
+
+| Clé | Nom | Type | Règle |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | Version du protocole : 1 |
+| 2 | `id` | `uint` | Choisi par le client, renvoyé dans la réponse |
+| 3 | `op` | `uint` | Code d'opération (§ 6) |
+| 4 | `args` | `map` | Selon l'opération ; absent si l'opération n'en prend pas |
+
+### 5.2 Réponse
+
+| Clé | Nom | Type | Règle |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | 1 |
+| 2 | `id` | `uint` | Celui de la requête ; 0 si la requête n'a pas pu être lue, ou pour un refus de connexion |
+| 3 | `status` | `uint` | 0 = succès, sinon code d'erreur (§ 7) |
+| 4 | `body` | `map` | Succès : selon l'opération, absent pour les opérations sans résultat. Erreur : détails (§ 7), absent sinon |
+
+### 5.3 Types communs
+
+| Nom | Encodage |
+| --- | --- |
+| Identifiant de casier ou de secret | `bstr(16)` |
+| Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées, plus tard (ADR 0010) : `Unsupported` |
+| Valeur de champ | `tstr` (≤ 1 Mio ; le coffre applique ses propres limites par champ), `bool` pour le favori |
+| Sélecteur | `{1: casier, 2: secret}` **ou** `{3: titre}` (exactement l'un des deux) |
+| Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note |
+
+Un sélecteur par titre désigne le secret **actif** dont le titre est égal, sans tenir compte
+de la casse ; s'il y en a plusieurs : `Ambiguous`. Un sélecteur par identifiants désigne tout
+secret non purgé (corbeille comprise).
+
+## 6. Opérations
+
+| Code | Nom | Coffre requis | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 1 | `Status` | non | — | `{1: état, 2: auto_lock_s, 3: clipboard_clear_s, 4: durcissement, 5: version du noyau, 6: [versions]}` |
+| 2 | `Init` | absent | `{1: mot de passe maître, 2?: {1: m_kib, 2: t, 3: p}}` | — (le coffre est créé **et ouvert**) |
+| 3 | `Unlock` | verrouillé | `{1: mot de passe maître}` | — |
+| 4 | `Lock` | non | — | — |
+| 5 | `List` | ouvert | `{1?: recherche, 2?: inclure la corbeille}` | `{1: [entrée], 2: [casier]}` |
+| 6 | `Read` | ouvert | `{1: sélecteur, 2: champ}` | `{1: valeur}` |
+| 7 | `Create` | ouvert | `{1?: casier, 2: type, 3: {champ: valeur}, 4?: [url], 5?: [étiquette]}` | `{1: casier, 2: secret}` |
+| 8 | `Update` | ouvert | `{1: sélecteur, 2?: {champ: valeur}, 3?: [champ à effacer]}` | — |
+| 9 | `Delete` | ouvert | `{1: sélecteur, 2?: purger}` | — |
+| 10 | `Generate` | non | `{1: longueur 8..128, 2: classes}` | `{1: mot de passe}` |
+| 11 | `Shutdown` | non | — | — (le noyau verrouille, répond, puis s'arrête) |
+
+Détails :
+
+1. **`Status`** — état : 0 aucun coffre, 1 verrouillé, 2 ouvert. Durcissement :
+   `{1: mémoire verrouillée, 2: vidages interdits, 3: traçage interdit}`, chaque valeur
+   0 appliqué, 1 partiel, 2 impossible sur ce système, 3 échec (§ 9).
+2. **`Init`** — refusé (`VaultExists`) si un fichier existe au chemin du coffre. Sans paramètres
+   explicites, Argon2id est **calibré sur le poste** (durée visée 1 s, au plus 1 Gio,
+   parallélisme ≤ 4) ; des paramètres explicites restent soumis au plancher de `crypto.md`
+   (`InvalidInput` en dessous). Le répertoire du coffre est créé en `0700` sous Unix. Le casier
+   personnel s'appelle « Personnel ».
+3. **`Unlock`** — mot de passe de 1 à 4 096 octets (`InvalidInput` s'il est vide). `AlreadyUnlocked`
+   si le coffre est ouvert, `NoVault` s'il n'existe pas, `UnlockFailed` si le mot de passe est
+   faux **ou** le coffre altéré (la cause n'est pas donnée). **Frein** : après 3 échecs
+   consécutifs, chaque nouvel essai attend 1 s, puis 2, 4… jusqu'à 300 s ; pendant l'attente,
+   `Throttled` avec `retry_after_s`. Un succès remet le compteur à zéro. Le frein s'ajoute à
+   Argon2id ; il est perdu si le noyau redémarre.
+4. **Verrouillage automatique** — le noyau verrouille le coffre après `auto_lock_s` secondes sans
+   opération sur le coffre (`List`, `Read`, `Create`, `Update`, `Delete`, `Unlock`, `Init`).
+   `Status` et `Generate` ne prolongent pas l'ouverture : une interface qui sonde l'état ne
+   garde pas le coffre ouvert. Le délai vient des réglages du coffre (`format.md` § 5.6) ; une
+   valeur 0 est remplacée par le défaut (300 s). `--auto-lock S` le remplace (1 à 86 400 s).
+   Vérification toutes les 250 ms.
+5. **`List`** — données de l'index seulement : `{1: casier, 2: secret, 3: type, 4: titre,
+   5?: identifiant, 6: [hôtes], 7: [étiquettes], 8: favori, 9: état}` (état 0 actif,
+   1 corbeille), triées par titre sans casse. Recherche ≤ 1 024 octets, sur le titre,
+   l'identifiant, les hôtes et les étiquettes. Casier : `{1: id, 2: nom, 3: personnel}`.
+6. **`Read`** — un seul champ. Champ absent : `NotFound`. Champ d'un type non textuel :
+   `Unsupported`.
+7. **`Create`** — au plus 32 champs, 64 URL, 64 étiquettes. Casier personnel par défaut. Le
+   coffre refuse un champ non permis pour le type ou un titre manquant (`InvalidInput`).
+8. **`Update`** — au moins un champ à poser ou à effacer ; un même champ ne peut pas être posé
+   et effacé (`InvalidInput`).
+9. **`Delete`** — corbeille par défaut ; `purger` est définitif (`format.md` § 9.2).
+10. **`Generate`** — classes en masque : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles
+    (`!#$%&()*+,-./:;<=>?@[]^_{|}~`, sans espace, guillemets, barre oblique inverse ni accent
+    grave). Chaque caractère est tiré uniformément par rejet sur l'aléa du système (AWS-LC) ;
+    un tirage qui manque une classe demandée est refait en entier.
+
+## 7. Erreurs
+
+| Code | Nom | Sens | Détails (`body`) |
+| --- | --- | --- | --- |
+| 1 | `Malformed` | Trame ou message mal formé | — |
+| 2 | `UnsupportedVersion` | Version non prise en charge | `{2: [versions acceptées]}` |
+| 3 | `UnknownOperation` | Code d'opération inconnu | — |
+| 4 | `Unauthorized` | Processus appelant non autorisé (§ 3.1) | — |
+| 5 | `NoVault` | Pas de coffre au chemin configuré | — |
+| 6 | `VaultExists` | Un coffre existe déjà | — |
+| 7 | `Locked` | Coffre verrouillé | — |
+| 8 | `AlreadyUnlocked` | Coffre déjà ouvert | — |
+| 9 | `UnlockFailed` | Déverrouillage refusé | — |
+| 10 | `Throttled` | Trop d'échecs, attendre | `{1: secondes}` |
+| 11 | `NotFound` | Secret ou champ introuvable | — |
+| 12 | `Ambiguous` | Plusieurs secrets portent ce titre | — |
+| 13 | `InvalidInput` | Valeur refusée | — |
+| 14 | `Unsupported` | Non pris en charge par cette version | — |
+| 15 | `Busy` | Trop de connexions | — |
+| 16 | `Corrupt` | Coffre corrompu ou altéré | — |
+| 17 | `Internal` | Défaillance interne | — |
+
+Une erreur ne contient jamais de donnée secrète ni de détail utile à un attaquant (pas de
+chemin, pas de cause cryptographique). Un code n'est jamais réutilisé.
+
+## 8. Journal du noyau
+
+Le noyau écrit une ligne par événement, sur la sortie d'erreur ou dans le fichier `--log`
+(créé en `0600` sous Unix) : `ts=<ms depuis l'époque Unix> event=<nom> clé=valeur…`.
+
+Le catalogue est **fermé** et chaque valeur est un nombre, `-` ou un mot fixe : aucun champ ne
+peut contenir un texte venu d'un client ou du coffre (ni secret, ni mot de passe, ni titre, ni
+identifiant de secret, ni chemin).
+
+| Événement | Champs |
+| --- | --- |
+| `started` | `pid`, `memory_locked`, `dumps_disabled`, `tracing_blocked` |
+| `listening` | — |
+| `connection_accepted` | `pid` |
+| `connection_refused` | `pid`, `reason` (`other_user`, `unknown_peer`, `executable_not_allowed`, `busy`) |
+| `request` | `op`, `result` (`ok` ou nom de l'erreur) |
+| `bad_message` | — |
+| `vault_created`, `unlocked`, `stopped` | — |
+| `unlock_failed` | `failures` |
+| `locked` | `reason` (`request`, `inactivity`, `shutdown`) |
+
+Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
+en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
+utilisés (et toute tranche de 8 caractères de ceux-ci) et échouent s'ils y figurent. Ce journal
+technique n'est pas le journal d'audit signé (`hirzla-audit`, étape 12).
+
+## 9. Durcissement du processus
+
+Le noyau se durcit **avant** de lire ses arguments ; la ligne de commande et son processus
+d'aide au presse-papiers font de même (au mieux). Chaque mesure est tentée seule, et rapportée
+par `Status` et l'événement `started` ; aucune n'arrête le noyau.
+
+| Mesure | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Mémoire verrouillée (hors fichier d'échange) | `mlockall(MCL_CURRENT \| MCL_FUTURE)`, **seulement** si `RLIMIT_MEMLOCK` est illimité ou si le processus est privilégié ; sinon « échec » | **Impossible** : pas de `mlockall` pour un processus non privilégié. Le fichier d'échange de macOS est chiffré par le système | **Impossible** pour tout le processus : `VirtualLock` ne vaut que par région, et les secrets sont dans le tas commun |
+| Vidages mémoire interdits | `prctl(PR_SET_DUMPABLE, 0)` et `RLIMIT_CORE = 0` | `RLIMIT_CORE = 0` | **Partiel** : le DACL du processus retire `PROCESS_VM_READ` aux autres processus de l'utilisateur, ce qui empêche `MiniDumpWriteDump` ; les vidages après plantage configurés par l'administrateur (WER `LocalDumps`) restent possibles |
+| Traçage interdit | `PR_SET_DUMPABLE = 0` : `ptrace` et `/proc/<pid>/mem` fermés aux processus du même utilisateur sans `CAP_SYS_PTRACE` | `ptrace(PT_DENY_ATTACH)` | **Partiel** : DACL protégé qui ne laisse à l'utilisateur que `SYNCHRONIZE`, `PROCESS_QUERY_LIMITED_INFORMATION` et `PROCESS_TERMINATE`. Le propriétaire d'un objet peut toujours réécrire son DACL : un processus malveillant de l'utilisateur peut défaire la mesure |
+
+Ce qui reste à la charge du poste, à documenter pour l'exploitant :
+
+- **Linux** : `RLIMIT_MEMLOCK` vaut souvent 8 Mio. Pour obtenir la mémoire verrouillée, lancer le
+  noyau avec une limite illimitée (unité systemd utilisateur `LimitMEMLOCK=infinity`). Sans
+  cela, un fichier d'échange chiffré. Verrouiller avec une limite finie ferait échouer les
+  allocations d'Argon2id (64 Mio et plus) et arrêterait le noyau : c'est pourquoi la mesure
+  n'est pas tentée.
+- **macOS** : la protection contre le débogage dépend aussi de la signature : un binaire signé
+  avec le *hardened runtime* et sans le droit `get-task-allow` (livraison, étape 7).
+- **Windows** : fichier d'échange protégé par BitLocker ; pas de moyen, depuis le processus,
+  d'interdire les vidages configurés par un administrateur.
+
+Les appels système correspondants sont dans `hirzla_keystore::platform`, seul crate où
+`unsafe` est admis (ADR 0015).
+
+## 10. Versions
+
+- Version actuelle : **1**. Le noyau annonce les versions qu'il parle dans `Status`.
+- Une requête d'une autre version reçoit `UnsupportedVersion` avec la liste des versions
+  acceptées.
+- Le décodage refuse toute clé inconnue : **ajouter une clé, une opération ou un code d'erreur
+  exige une nouvelle version** du protocole, spécifiée ici avant d'être codée. Un noyau peut
+  parler plusieurs versions à la fois.
+
+## 11. La ligne de commande `hirzla`
+
+| Commande | Requêtes |
+| --- | --- |
+| `init` | `Status`, `Init` (mot de passe demandé deux fois) |
+| `unlock` | `Status`, `Unlock`, `Status` |
+| `lock` | `Lock` |
+| `ls [RECHERCHE] [--corbeille]` | `List` |
+| `get NOM \| --id ID [--champ C] [--stdout]` | `List` (résolution), `Read`, `Status` |
+| `set NOM [--identifiant U] [--url U]… [--tag T]… [--note] [--generer [N]]` | `List`, (`Generate`), `Create` ou `Update` |
+| `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
+| `gen [N] [--sans-symboles] [--sans-chiffres] [--sans-majuscules] [--stdout]` | `Generate`, `Status` |
+| `status`, `stop` | `Status` ; `Shutdown` |
+
+- **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
+  transmettre, dans un tampon effacé.
+- **Aucun secret en argument** ni en variable d'environnement. Le mot de passe maître et les
+  valeurs se tapent sans écho (`/dev/tty` sous Unix, `CONIN$` sous Windows) quand l'entrée
+  standard est un terminal ; sinon ils se lisent sur l'entrée standard (première ligne ; tout
+  le flux pour une note), octet par octet, sans tampon intermédiaire.
+- **`get`** et **`gen`** écrivent la valeur sur la sortie standard **seulement si elle n'est pas
+  un terminal**, ou avec `--stdout`. Sinon, la valeur est copiée dans le presse-papiers par un
+  processus d'aide détaché (ADR 0016), marquée pour rester hors des historiques et de la
+  synchronisation, et effacée après `clipboard_clear_s` secondes (30 par défaut) si le
+  presse-papiers la contient encore. Sans presse-papiers disponible, la commande échoue et
+  invite à utiliser `--stdout`.
+- `init`, `unlock` et `gen` **démarrent le noyau** s'il ne tourne pas (`hirzla-core` à côté de
+  `hirzla`, détaché du terminal). Les autres commandes ne le démarrent pas.
+- `--id` attend au moins 4 chiffres hexadécimaux du début de l'identifiant affiché par `ls`.
+- Codes de sortie : 0 succès, 1 refus ou erreur, 2 usage.
+
+## 12. Points ouverts
+
+Décisions prises seul pendant cette étape, à confirmer :
+
+1. **Encodage CBOR** pour l'API locale, plutôt que JSON : même profil et même code de
+   validation que le format du coffre (`hirzla_vault::cbor`), aucune dépendance nouvelle.
+   L'hôte de messagerie native de l'extension (étape 8) traduira le JSON du navigateur.
+2. **Liste d'autorisation par chemin d'exécutable**, sans vérification de signature de code.
+   La vérification de signature (Authenticode, signature Apple) est une piste pour la
+   livraison signée de l'étape 7.
+3. **Frein du déverrouillage** en mémoire du noyau (3 essais libres, puis 1 s doublée jusqu'à
+   300 s) : perdu au redémarrage du noyau.
+4. **`auto_lock_s = 0`** traité comme la valeur par défaut, et non comme « jamais ».
+5. **Verrouillage automatique** non déclenché par la mise en veille ni par le verrouillage de
+   la session : à ajouter avec l'application de poste.
+6. **Pas de gestion de `SIGTERM`** (elle demanderait du code `unsafe` ou une dépendance) : un
+   noyau tué ne supprime pas sa socket, retirée au démarrage suivant ; sa mémoire est rendue
+   au système sans effacement explicite.
+7. **Une seule requête à la fois par connexion**, pas de multiplexage ni de notification
+   poussée (l'interface sondera `Status`).
+8. **Calibrage d'Argon2id** visant 1 s et 1 Gio au plus à la création du coffre.
