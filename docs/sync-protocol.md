@@ -731,6 +731,8 @@ vecteur qui couvre la `Compact` (§ 13).
 - Taille maximale d'une trame : 16 Mio.
 - `Message` = `{1: type (uint), 2: req (uint), 3: body (map)}`. `req` relie une réponse à sa
   demande. `req = 0` marque un message spontané du serveur.
+- Après `AuthOk`, un message spontané peut arriver à tout moment, y compris entre une demande
+  et sa réponse. Le poste le met de côté et continue d'attendre la réponse de même `req`.
 
 ### 11.3 Ouverture de session et authentification
 
@@ -785,7 +787,7 @@ appareil. `PeerVector` = `{1: device, 2: vector (array<VectorEntry>)}`. Tableaux
 | 13 | `PushResult` | S → P | `{1: results (array<PushItem>)}`, dans l'ordre de `Push` |
 | 14 | `Subscribe` | P → S | `{1: lockers (array<{1: locker, 2: after}>)}`. Le serveur envoie ensuite des `Ops` spontanés |
 | 15 | `Ack` | P → S | `{1: locker, 2: compact (OpId)}` |
-| 16 | `Stable` | S → P | `{1: locker, 2: compact (OpId)}`, spontané |
+| 16 | `Stable` | S → P | `{1: locker, 2: compact (OpId)}`, spontané : en réponse à `Ack`, et poussé aux sessions ouvertes (§ 11.9) |
 | 20 | `PutChunk` | P → S | `{1: locker, 2: attachment_id, 3: chunk, 4: chunks, 5: box (bstr)}` |
 | 21 | `GetChunk` | P → S | `{1: locker, 2: attachment_id, 3: chunk}` |
 | 22 | `Chunk` | S → P | `{1: box (bstr)}` |
@@ -872,7 +874,8 @@ Ensuite :
 - Une opération de données d'un membre ou d'un appareil déjà retiré dans l'état du serveur est
   acceptée, marquée `late`, et **transmise aux seuls `Owner`** du casier. Ce sont eux qui la
   jugent (§ 9.3). Le serveur efface son corps après sa propre durée de rétention (30 jours par
-  défaut), qui doit dépasser le délai de quarantaine des casiers.
+  défaut, réglable de 8 à 365 jours, ADR 0058), qui doit dépasser le délai de quarantaine des
+  casiers.
 - Le serveur cesse de servir un casier aux appareils d'un membre retiré dès qu'il reçoit la
   révocation, et à un appareil retiré dès qu'il reçoit la `DeviceRemove`.
 - Le serveur ne peut ni fabriquer, ni modifier, ni réordonner une opération sans être
@@ -902,13 +905,21 @@ Ensuite :
   sont pas authentifiés depuis plus de 90 jours. Le serveur envoie alors `Stable` à l'appareil
   qui accuse, et le renvoie à tout appareil qui accuse de nouveau une `Compact` déjà stable :
   un poste accuse à chaque synchronisation les `Compact` appliquées dont il n'a pas reçu la
-  stabilité. `Stable` n'est pas poussé aux autres sessions ouvertes.
+  stabilité.
+- **`Stable` poussé aux sessions ouvertes** (ADR 0057) : quand une `Compact` devient stable,
+  le serveur envoie aussi `Stable` à chaque autre session authentifiée déjà ouverte dont
+  l'appareil lit le casier (règle de `Pull`), sans `Subscribe`, une fois par session. Une
+  session ouverte ensuite l'apprend en accusant. Le serveur garde en mémoire les 1 024
+  dernières annonces ; une session plus en retard rattrape les autres par `Ack`. Un poste
+  ignore un `Stable` pour une `Compact` qu'il n'a pas appliquée.
 - **Après `Stable`**, le serveur sert la souche (`OpItem` clé 3) au lieu de l'opération pour
   chaque élément de `prune` qui est une opération de données du même casier, non `late`, reçue
   avant la `Compact`. Il efface les corps plus tard, en réécrivant son journal (ADR 0040).
 - **Opérations `late`** (ADR 0047) : le serveur date leur réception (enregistrement
   `LateSeen`, répertoire de données v3) et, après 30 jours, ne sert plus leur corps à
-  personne ; il l'efface à la réécriture suivante du journal.
+  personne ; il l'efface à la réécriture suivante du journal. La durée se règle par
+  `hirzlad serve --late-retention-days N`, de 8 à 365 jours (ADR 0058) ; une valeur hors
+  bornes ou mal écrite fait refuser le démarrage.
 
 ### 11.10 Enveloppe texte et lien d'invitation (ADR 0046)
 
@@ -1172,12 +1183,12 @@ l'implémentation ; les suivants restent ouverts.
 
 ### Ajouts du lot gouvernance (ADR 0044 à 0048)
 
-37. **`Stable` poussé aux sessions ouvertes** : `hirzlad` ne répond toujours `Stable` qu'à
-    l'appareil qui accuse ; les autres postes l'apprennent à leur synchronisation suivante,
-    au plus tard après l'intervalle de synchronisation de fond (ADR 0048). Un envoi spontané
-    demande un message serveur vers client hors requête, non spécifié.
-38. **Rétention des opérations `late` fixe** : 30 jours (ADR 0047), comptés depuis la première
-    réception par `hirzlad`. Un réglage par l'administrateur n'est pas prévu.
+37. ~~**`Stable` poussé aux sessions ouvertes**~~ : résolu par l'ADR 0057 (§ 11.2, § 11.9).
+    Les `Ops` restent poussés aux seules sessions abonnées (`Subscribe`).
+38. ~~**Rétention des opérations `late` fixe**~~ : résolu par l'ADR 0058, option
+    `--late-retention-days` de 8 à 365 jours, 30 par défaut, toujours comptés depuis la
+    première réception par `hirzlad`. Le serveur ne peut pas vérifier qu'elle dépasse le délai
+    de quarantaine des casiers, qu'il ne lit pas.
 39. **Rotation avant une décision de quarantaine** : quand des retraits concurrents laissent
     le casier sans époque courante, le noyau fait tourner la clé (`Rotate`) avant d'émettre
     `QuarantineAccept`, `QuarantineReject` ou le rejet automatique (ADR 0045).

@@ -7,6 +7,7 @@
 //! hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
 //! hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM
 //!               --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+//!               [--late-retention-days DAYS]
 //! hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter OPTIONS
 //! ```
 //!
@@ -25,6 +26,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use hirzla_server::core::LateRetention;
 use hirzla_server::net::{self, Config};
 use hirzla_server::seal::ShamirSeal;
 use hirzla_server::store::{SealHeader, Store};
@@ -35,7 +37,8 @@ const USAGE: &str = "usage:
   hirzlad init  --data DIR --threshold T --shares N --shares-out DIR
   hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
   hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM \\
-                --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+                --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM \\
+                [--late-retention-days DAYS]   (8 to 365, default 30)
   hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter …  (hirzlad admin aide)
   hirzlad --version";
 
@@ -142,7 +145,14 @@ fn addr(o: &BTreeMap<String, String>, k: &'static str) -> Result<SocketAddr, Ser
         .map_err(|_| ServerError::Config("an address is IP:port, never a name"))
 }
 
+/// `--late-retention-days` (ADR 0058): optional, checked before anything is read or bound.
+fn late_retention(o: &BTreeMap<String, String>) -> Result<LateRetention, ServerError> {
+    o.get("late-retention-days")
+        .map_or(Ok(LateRetention::DEFAULT), |v| LateRetention::parse_days(v))
+}
+
 fn serve(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
+    let late_retention = late_retention(o)?;
     let device_tls = tls::device_server_config(
         tls::load_certs(Path::new(get(o, "cert")?))?,
         tls::load_key(Path::new(get(o, "key")?))?,
@@ -158,10 +168,13 @@ fn serve(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
         admin_listen: addr(o, "admin-listen")?,
         tls: device_tls,
         admin_tls,
+        late_retention,
     })?;
     report(&format!(
-        "listening {} admin {} (sealed)",
-        running.addr, running.admin_addr
+        "listening {} admin {} (sealed), late operations kept {} days",
+        running.addr,
+        running.admin_addr,
+        late_retention.days()
     ));
     running.wait();
     Ok(())
