@@ -1,6 +1,6 @@
 # ADR 0016 — Presse-papiers et saisie au terminal dans la CLI
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

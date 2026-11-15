@@ -1,6 +1,6 @@
 # ADR 0015 — Canal local du noyau et appels système de durcissement
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
