@@ -17,6 +17,8 @@ use hirzla_sync::wire::OpItem;
 use hirzla_vault::cbor::{self, array_max, bytes_max, fixed, uint, uint_in, Fields, Value};
 use hirzla_vault::model::{lens, DeviceCert, Id16, MemberKeys, OpId};
 
+use zeroize::Zeroize;
+
 use crate::ServerError;
 
 /// ALPN of the protocol (§ 11.1).
@@ -231,8 +233,22 @@ impl FrameBuffer {
             return Ok(None);
         }
         let m = Message::decode(&self.buf[4..4 + len]);
+        // The frame may carry a seal share: wipe it before the remaining bytes move over it,
+        // and wipe the tail the move leaves behind in the capacity.
+        self.buf[..4 + len].zeroize();
+        let before = self.buf.len();
         self.buf.drain(..4 + len);
+        let after = self.buf.len();
+        self.buf.spare_capacity_mut()[..before - after]
+            .iter_mut()
+            .for_each(|b| *b = std::mem::MaybeUninit::new(0));
         m.map(Some)
+    }
+}
+
+impl Drop for FrameBuffer {
+    fn drop(&mut self) {
+        self.buf.zeroize();
     }
 }
 

@@ -21,6 +21,7 @@ use hirzla_audit::field::AccountId;
 use hirzla_audit::Event;
 use hirzla_crypto::util::sha384;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::core::{Core, Session};
 use crate::proto::{
@@ -212,6 +213,7 @@ fn fill(s: &mut Tls, fb: &mut FrameBuffer) -> Result<bool, ServerError> {
         Ok(0) => Ok(false),
         Ok(n) => {
             fb.extend(&buf[..n]);
+            buf[..n].zeroize();
             Ok(true)
         }
         Err(e) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => Ok(true),
@@ -310,7 +312,7 @@ fn admin_handle(shared: &Shared, m: &Message) -> Result<Message, ServerError> {
             Message::new(kind::ADMIN_STATUS_RESULT, req, status(shared)?.to_value())
         }
         kind::ADMIN_UNSEAL => {
-            let share = proto::read_blob(&m.body, 64 * 1024)?;
+            let share = Zeroizing::new(proto::read_blob(&m.body, 64 * 1024)?);
             match unseal(shared, &share) {
                 Ok(()) => Message::new(kind::ADMIN_STATUS_RESULT, req, status(shared)?.to_value()),
                 Err(ServerError::ShareRefused) => Message::error(req, code::AUTH),
