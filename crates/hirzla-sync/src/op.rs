@@ -83,8 +83,10 @@ pub fn resign(device: &LocalDevice, op: &mut Operation) -> Result<(OpId, Vec<u8>
     Ok((sha384(&bytes), bytes))
 }
 
-/// Verifies the author signature with a device certificate (step 3 of § 6).
-pub(crate) fn verify_signature(op: &Operation, cert: &DeviceCert) -> bool {
+/// Verifies the author signature with a device certificate (step 3 of § 6). Also used by
+/// `hirzlad` for its own check (§ 11.8, step 2).
+#[must_use]
+pub fn verify_signature(op: &Operation, cert: &DeviceCert) -> bool {
     let Ok(vk) = VerifyingKey::from_bytes(&cert.sig) else {
         return false;
     };

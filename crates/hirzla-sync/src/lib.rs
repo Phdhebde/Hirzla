@@ -11,6 +11,7 @@
 //! | [`keylog`] | Hooks of the key transparency log (`transparence.md` § 6) |
 //! | [`exchange`] | Self mode exchange file (§ 13.1) |
 //! | [`pairing`] | Self mode local pairing messages (§ 13.2), without the network part |
+//! | [`relay`] | The relay journal of one locker, shared by `hirzlad` and the test relay (§ 11) |
 //! | [`wire`] | Vectors, stubs, operation items, local sync state (§ 11.4, § 11.5) |
 //!
 //! The control bodies of § 7 are those of [`hirzla_access::control`], re-exported as
@@ -32,6 +33,7 @@ pub mod keylog;
 mod merge;
 pub mod op;
 pub mod pairing;
+pub mod relay;
 pub mod replica;
 pub mod wire;
 
