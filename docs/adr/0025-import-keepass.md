@@ -1,6 +1,6 @@
 # ADR 0025 — Import des bases KeePass (KDBX)
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

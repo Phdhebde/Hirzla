@@ -1,6 +1,6 @@
 # ADR 0024 — Application de poste : coquille Tauri, interface sans framework
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
