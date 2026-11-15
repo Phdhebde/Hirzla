@@ -152,3 +152,13 @@ fn agent_requests_are_decoded_strictly() {
     assert!(!is_agent_request(&req(1, 6, None)));
     assert!(!is_agent_request(&[0xff]));
 }
+
+#[test]
+fn request_vector_shared_with_the_go_sdk() {
+    // sdk/go/cbor_test.go, TestRequestEncodingMatchesTheCore.
+    let f = AgentRequest::SessionOpen { grant: vec![9; 10] }
+        .encode(3)
+        .unwrap();
+    let hex: String = f.iter().map(|b| format!("{b:02x}")).collect();
+    assert_eq!(hex, format!("a40103020303181a04a1014a{}", "09".repeat(10)));
+}
