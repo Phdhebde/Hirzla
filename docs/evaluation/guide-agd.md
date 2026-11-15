@@ -28,12 +28,16 @@ poste de signature hors ligne de l'éditeur (`livraison.md` § 7).
    ou équivalent).
 2. Yama `kernel.yama.ptrace_scope` à 1 au moins (défaut de Debian et Ubuntu). Le noyau se rend
    de toute façon non traçable (`PR_SET_DUMPABLE = 0`).
-3. **Mémoire verrouillée** : le noyau ne verrouille sa mémoire (`mlockall`) que si
-   `RLIMIT_MEMLOCK` est illimité (`api-locale.md` § 9). Lancer le noyau par une unité systemd
-   utilisateur avec `LimitMEMLOCK=infinity`, ou relever la limite dans
-   `/etc/security/limits.d/` pour les utilisateurs de Hirzla. Vérifier :
-   `hirzla status` doit afficher « Mémoire verrouillée : appliqué ». Sans cela, le fichier
-   d'échange chiffré (point 1) est la seule protection contre l'écriture de secrets sur disque.
+3. **Mémoire verrouillée** (exigence de la configuration évaluée, ADR 0054) : le noyau
+   relève sa limite souple `RLIMIT_MEMLOCK` jusqu'à la limite dure, puis ne verrouille sa
+   mémoire (`mlockall`) que si la limite est alors illimitée ou s'il détient `CAP_IPC_LOCK`
+   (`api-locale.md` § 9). Lancer le noyau par une unité systemd utilisateur avec
+   `LimitMEMLOCK=infinity`, ou ouvrir la limite **dure** dans `/etc/security/limits.d/`
+   (`@hirzla hard memlock unlimited`) pour les utilisateurs de Hirzla. Vérifier :
+   `hirzla status` doit afficher « Mémoire verrouillée : appliqué ». Sinon, `hirzla status`
+   affiche un avertissement et le journal du noyau porte `event=memory_not_locked
+   limit_kib=…` : le fichier d'échange chiffré (point 1), ou l'absence de fichier d'échange,
+   est alors la seule protection contre l'écriture de secrets sur disque.
 4. Installation par le paquet deb ou rpm (exécutables dans `/usr/bin`, posés par root) : le
    répertoire des exécutables ne doit être inscriptible que par root (hypothèse H13).
 5. Session graphique avec logind et un économiseur d'écran D-Bus, et l'application de poste
@@ -121,15 +125,36 @@ hirzlad serve --data /var/lib/hirzlad --listen 192.0.2.10:7443 \
 - Le port d'administration est distinct et exige un certificat client signé par
   `--admin-client-ca` ; l'exposer sur une interface d'administration seulement.
 - Le serveur démarre **scellé** : les dépositaires remettent leurs parts par le port
-  d'administration jusqu'au quorum.
+  d'administration jusqu'au quorum (`hirzlad admin desceller`, ci-dessous).
+- Chaque port est borné (ADR 0051) : 1 024 connexions simultanées sur le port des appareils
+  dont 32 par source (adresse IPv4 ou préfixe IPv6 /64), 16 dont 4 par source sur le port
+  d'administration ; poignée de main TLS en 10 s au plus ; un appareil doit s'authentifier
+  dans la minute. Au-delà, la connexion est fermée aussitôt. Filtrer et limiter le débit en
+  amont (pare-feu) reste recommandé.
 - Compte de service dédié, sans shell ; répertoire de données en `0700` ; clés TLS en `0600`.
   Les fichiers `*.pem`, `*.key` et les parts ne sont jamais versionnés.
 
-**Manque, à combler avant le dépôt** (ADR 0050, point 6) : il n'existe pas encore d'outil en
-ligne de commande pour le descellement ni pour la création de compte. Ces opérations passent
-aujourd'hui par `hirzla_server::client::AdminClient` (`apps/server/src/client.rs`), que les
-tests utilisent. En attendant, la configuration complète se reproduit par les tests de bout en
-bout (§ 6.3).
+**Administration** par `hirzlad admin` (ADR 0053), depuis un poste qui détient un certificat
+d'administrateur émis par l'autorité `--admin-client-ca` :
+
+```sh
+ADM="--serveur 127.0.0.1:7444 --nom hirzlad.exemple --ac ac-site.pem \
+     --certificat administrateur.pem --cle administrateur.key"
+hirzlad admin etat $ADM                                   # scellé, parts reçues
+hirzlad admin desceller $ADM --part share-1.bin           # chaque dépositaire, jusqu'au quorum
+hirzlad admin creer-compte $ADM --membre membre.pub --empreinte "XXXXX XXXXX XXXXX XXXXX"
+hirzlad admin point-de-controle $ADM --sortie point-2026-11-15.bin
+hirzlad admin arreter $ADM
+```
+
+- `--serveur` est une adresse IP ; `--nom` est le nom inscrit dans le certificat TLS du
+  serveur (jamais résolu).
+- `desceller` envoie la part d'un dépositaire de la clé racine **du serveur** ; elle n'ouvre
+  aucun secret d'utilisateur (règle 3). Effacer la part du poste d'administration après usage
+  si elle n'y est pas conservée sur support amovible.
+- `creer-compte` prend le fichier de `hirzla serveur identite --sortie` ; **toujours donner
+  `--empreinte`**, obtenue du membre par un canal distinct : une clé d'une autre empreinte est
+  refusée sans créer de compte.
 
 ### 5.2 Rattacher un poste
 
@@ -161,8 +186,9 @@ hirzla serveur sync
 ### 6.1 Construire
 
 Prérequis : chaîne Rust de `rust-toolchain.toml` (1.100), CMake (AWS-LC), `libclang-dev`,
-`libssl-dev`, tpm2-tss ≥ 4.1.3 (`sudo -E .github/scripts/install-tpm2-tss.sh`, archive figée
-par SHA-256), et pour l'application `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`.
+`libssl-dev`, et pour l'application `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev`.
+tpm2-tss n'est plus nécessaire : le prototype TPM est hors des binaires (ADR 0052) ; seul
+`cargo test -p hirzla-keystore --features tpm2-prototype` le demande.
 
 ```sh
 git clone <dépôt> hirzla && cd hirzla && git checkout <étiquette de la version évaluée>
@@ -179,6 +205,20 @@ cargo build --release --locked -p hirzla-core -p hirzla-cli -p hirzla-server \
 ```
 
 `À COMPLÉTER (Max)` : étiquette de la version évaluée et clé publique d'éditeur.
+
+**Compilation reproductible et nomenclature** (ADR 0056) :
+
+```sh
+cargo fetch --locked                                   # puis plus aucun accès réseau
+.github/scripts/reproducible-build.sh /tmp/repro       # deux compilations, comparées
+export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+.github/scripts/sbom.py hirzla-core --output hirzla-core.cdx.json   # CycloneDX 1.5
+```
+
+Le script affiche « identique » et l'empreinte SHA-256 de `hirzla-core`, `hirzla` et
+`hirzlad` ; ces empreintes se comparent à celles du manifeste des clients signé de la version
+(`hirzla-signer verifier`). La nomenclature régénérée doit être identique, octet pour octet, à
+celle publiée avec la version.
 
 ### 6.2 Mode Self, pas à pas (rejoué)
 

@@ -122,8 +122,11 @@ avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`,
 
 Symétriquement, le client vérifie que le processus à l'écoute tourne sous son compte et que
 son exécutable est le noyau attendu (`hirzla-core` à côté du client, ou `--core CHEMIN`). Sous
-Unix, il vérifie aussi le répertoire de la socket (§ 2.1). En cas d'échec il ne parle pas :
-il n'envoie pas le mot de passe maître à un faux noyau.
+Unix, il vérifie aussi le répertoire de la socket (§ 2.1). Dans une version de livraison, il
+vérifie enfin la **signature du noyau** (ADR 0055) : même éditeur que lui sous Windows et
+macOS ; sous Linux, empreinte du noyau installé dans le manifeste des clients signé (le
+système cache au client l'exécutable du noyau durci, voir § 3.3). En cas d'échec il ne parle
+pas : il n'envoie pas le mot de passe maître à un faux noyau.
 
 ### 3.3 Limites, dites franchement
 
@@ -321,6 +324,7 @@ identifiant de secret, ni chemin).
 | Événement | Champs |
 | --- | --- |
 | `started` | `pid`, `memory_locked`, `dumps_disabled`, `tracing_blocked` |
+| `memory_not_locked` | `limit_kib` (`RLIMIT_MEMLOCK` en vigueur, `-` si inconnue) ; une fois au démarrage, quand la mémoire n'a pas pu être verrouillée (ADR 0054) |
 | `listening` | — |
 | `connection_accepted` | `pid` |
 | `connection_refused` | `pid`, `reason` (`other_user`, `unknown_peer`, `executable_not_allowed`, `busy`, `signature_not_accepted`) |
@@ -346,17 +350,19 @@ par `Status` et l'événement `started` ; aucune n'arrête le noyau.
 
 | Mesure | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Mémoire verrouillée (hors fichier d'échange) | `mlockall(MCL_CURRENT \| MCL_FUTURE)`, **seulement** si `RLIMIT_MEMLOCK` est illimité ou si le processus est privilégié ; sinon « échec » | **Impossible** : pas de `mlockall` pour un processus non privilégié. Le fichier d'échange de macOS est chiffré par le système | **Impossible** pour tout le processus : `VirtualLock` ne vaut que par région, et les secrets sont dans le tas commun |
+| Mémoire verrouillée (hors fichier d'échange) | Limite souple `RLIMIT_MEMLOCK` relevée à la limite dure, puis `mlockall(MCL_CURRENT \| MCL_FUTURE)` **seulement** si la limite est illimitée ou si le processus est root ou détient `CAP_IPC_LOCK` ; sinon « échec », événement `memory_not_locked` et avertissement de `hirzla status` (ADR 0054) | **Impossible** : pas de `mlockall` pour un processus non privilégié. Le fichier d'échange de macOS est chiffré par le système | **Impossible** pour tout le processus : `VirtualLock` ne vaut que par région, et les secrets sont dans le tas commun |
 | Vidages mémoire interdits | `prctl(PR_SET_DUMPABLE, 0)` et `RLIMIT_CORE = 0` | `RLIMIT_CORE = 0` | **Partiel** : le DACL du processus retire `PROCESS_VM_READ` aux autres processus de l'utilisateur, ce qui empêche `MiniDumpWriteDump` ; les vidages après plantage configurés par l'administrateur (WER `LocalDumps`) restent possibles |
 | Traçage interdit | `PR_SET_DUMPABLE = 0` : `ptrace` et `/proc/<pid>/mem` fermés aux processus du même utilisateur sans `CAP_SYS_PTRACE` | `ptrace(PT_DENY_ATTACH)` | **Partiel** : DACL protégé qui ne laisse à l'utilisateur que `SYNCHRONIZE`, `PROCESS_QUERY_LIMITED_INFORMATION` et `PROCESS_TERMINATE`. Le propriétaire d'un objet peut toujours réécrire son DACL : un processus malveillant de l'utilisateur peut défaire la mesure |
 
 Ce qui reste à la charge du poste, à documenter pour l'exploitant :
 
 - **Linux** : `RLIMIT_MEMLOCK` vaut souvent 8 Mio. Pour obtenir la mémoire verrouillée, lancer le
-  noyau avec une limite illimitée (unité systemd utilisateur `LimitMEMLOCK=infinity`). Sans
-  cela, un fichier d'échange chiffré. Verrouiller avec une limite finie ferait échouer les
-  allocations d'Argon2id (64 Mio et plus) et arrêterait le noyau : c'est pourquoi la mesure
-  n'est pas tentée.
+  noyau avec une limite illimitée (unité systemd utilisateur `LimitMEMLOCK=infinity`, ou limite
+  dure seule : le noyau relève lui-même sa limite souple). Sans cela, un fichier d'échange
+  chiffré. Verrouiller avec une limite finie ferait échouer les allocations d'Argon2id (64 Mio
+  et plus) et arrêterait le noyau : c'est pourquoi la mesure n'est pas tentée. Un verrouillage
+  ciblé des seuls tampons du noyau laisserait la plupart des secrets (clés de `hirzla-crypto`,
+  tas d'AWS-LC) hors verrou : écarté par l'ADR 0054.
 - **macOS** : la protection contre le débogage dépend aussi de la signature : un binaire signé
   avec le *hardened runtime* et sans le droit `get-task-allow` (livraison, étape 7).
 - **Windows** : fichier d'échange protégé par BitLocker ; pas de moyen, depuis le processus,

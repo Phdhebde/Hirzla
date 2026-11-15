@@ -45,6 +45,23 @@ hygiène) ; **Info** (écart de documentation, rien à corriger dans le code).
 | R10 | `CLAUDE.md` (sens des dépendances) | Info | `CLAUDE.md` indique `access, audit ← sync` ; `hirzla-sync` ne dépend pas de `hirzla-audit` | Corriger le schéma (décision du mainteneur) |
 | R11 | `fuzz/` | Faible | Pas de cible pour le conteneur SQLite d'un coffre fourni par un tiers (Argon2id déclenché à l'ouverture) ni pour les réponses du noyau lues par les clients | Crochet `fuzzing` dans `hirzla-vault` qui s'arrête avant la dérivation ; cible `Reply::decode` si l'évaluateur la demande (`interfaces.md` § 5) |
 
+### 3.1 Suite donnée (demande de fusion `feat/durcissement`)
+
+| N° | Statut | Ce qui a été fait | Décision | Tests |
+| --- | --- | --- | --- | --- |
+| R1 | **Levé** | Plafond de connexions simultanées par port (1 024 appareils, 16 administration) et par source (32 et 4 ; IPv4, ou préfixe IPv6 /64), refus immédiat avant tout travail TLS et sans fil ; délai **total** de poignée de main (10 s) ; un appareil doit s'authentifier dans la minute (`apps/server/src/net.rs`) | ADR 0051 | `apps/server/tests/limits.rs` (5 tests), tests unitaires de `net.rs` |
+| R2 | **Levé** | Temporisation progressive de la boucle `accept` (50 ms doublés jusqu'à 1 s, remise à zéro au premier succès) ; `Interrupted` réessayé ; création de fil refusée traitée de même | ADR 0051 | `accept_backoff_grows_then_caps` (la condition `EMFILE` elle-même n'est pas provoquée en test) |
+| R3 | **Levé, avec risque résiduel déclaré** | Limite souple `RLIMIT_MEMLOCK` relevée à la limite dure ; `mlockall` si illimitée, root ou `CAP_IPC_LOCK` ; sinon événement `memory_not_locked limit_kib=…` et avertissement de `hirzla status` ; exigence du guide (§ 2). Le verrouillage ciblé des tampons du noyau et `MADV_DONTDUMP` sont écartés, raisons dans l'ADR | ADR 0054 | `memlock_limit_is_raised_to_the_hard_limit`, `every_event_renders_fixed_words_and_numbers_only` |
+| R4 | **Levé** | Prototype TPM derrière la fonctionnalité `tpm2-prototype` de `hirzla-keystore`, désactivée par défaut ; le job « TPM prototype (swtpm) » l'active ; tpm2-tss n'est plus installé par les autres jobs ni par la livraison ; `cargo tree -p hirzla-core -i tss-esapi` est vide | ADR 0052 | job swtpm |
+| R5 | Inchangé | Décision du mainteneur (`CLAUDE.md`) | — | — |
+| R6 | **Levé** | Test de politique sur tout l'espace de travail : aucun `#[derive(Debug)]` sur un type à champ `Zeroizing` ou à champ brut au nom secret (exceptions revues et listées, aucune obsolète) ; types de clés de `hirzla-crypto` et `hirzla-vault` sans `Debug` (vérifié à la compilation) ; requêtes et réponses de l'API locale rendues sans le secret qu'elles portent | — (test seul) | `crates/hirzla-core/tests/debug_policy.rs` (7 tests) |
+| R7, R8, R10, R11 | Inchangés | Information ou décision du mainteneur | — | — |
+| R9 | **Levé** (versions de livraison) | `CoreSignature`, miroir de la vérification des clients : `Client::connect` vérifie, avant tout envoi, que le noyau est signé par le même éditeur (Windows, macOS) ou figure au manifeste des clients signé (Linux : noyau installé haché, le système cachant le processus durci) ; échec fermé ; fonctionnalité `livraison` ajoutée à l'hôte natif et à l'application ; le manifeste nomme `hirzla-core` | ADR 0055 | `linux_client_checks_the_core_against_the_manifest`, `core_signature_off_accepts_without_looking` |
+
+Zones d'autres chantiers touchées a minima : `apps/desktop/src-tauri/Cargo.toml` (fonctionnalité
+`livraison`, une section ajoutée) ; `crates/hirzla-core/tests/server_mode.rs` n'est pas modifié
+(`net::start` garde sa signature, les bornes passent par `net::start_with_limits`).
+
 ## 4. Écarts entre la cible v1 et le code
 
 Ce ne sont pas des défauts du code mais des promesses de la cible v1 que le code ne tient pas ;
@@ -57,8 +74,8 @@ la cible v2 les marque, l'ADR 0050 propose le périmètre qui en tient compte.
 | TLS `X25519MLKEM768` au lieu de `SecP384r1MLKEM1024` | Moyenne (à déclarer) | ADR 0028, ADR 0050 point 4 |
 | Sceau HSM et TPM de `hirzlad` : interfaces seulement | Nulle (hors configuration) | Cible F14 |
 | Pas de journal d'audit local du noyau ni d'événement d'usage signé ; transport syslog TLS non écrit | Moyenne si la cible l'annonce | Cible F6 |
-| Pas d'outil d'administration de `hirzlad` en ligne de commande | Élevée pour la reproductibilité de l'évaluation | ADR 0050 point 6 ; guide § 5.1 |
-| Compilation reproductible et SBOM annoncées, non produites | Moyenne | ADR 0050 point 6 ; cible F7 |
+| ~~Pas d'outil d'administration de `hirzlad` en ligne de commande~~ **Levé** : `hirzlad admin etat, desceller, creer-compte, point-de-controle, arreter` | Élevée pour la reproductibilité de l'évaluation | ADR 0053 ; guide § 5.1 ; `apps/server/tests/admin_cli.rs` |
+| ~~Compilation reproductible et SBOM annoncées, non produites~~ **Levé** pour les exécutables Linux : deux compilations comparées en CI, nomenclature CycloneDX par exécutable | Moyenne | ADR 0056 ; cible F7 ; `.github/scripts/reproducible-build.sh`, `.github/scripts/sbom.py` |
 | Essais sur postes réels Windows et macOS (veille, Authenticode, signature Apple) non faits | Nulle si la plateforme de référence est Linux | ADR 0033, 0042, 0050 point 1 |
 
 ## 5. Ce qui a été vu et trouvé solide

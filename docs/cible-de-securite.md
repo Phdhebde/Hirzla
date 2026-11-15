@@ -170,7 +170,7 @@ est réservé.
 | H1 | Le système du poste n'est pas compromis au niveau administrateur pendant que le coffre est ouvert. Sinon, l'attaquant lit ce que l'utilisateur déverrouille. |
 | H2 | ~~La puce de sécurité, la clé FIDO2 et le HSM respectent leur propre cible de sécurité.~~ Sans objet dans la configuration évaluée (ni garde matérielle ni HSM branchés). Reviendra avec F3 matériel. |
 | H3 | Les canaux auxiliaires physiques (rayonnement, consommation) relèvent de la protection du site. Le code reste à temps constant. |
-| H4 | Le déni de service est limité par des quotas et des délais, sans objectif de résistance absolue. |
+| H4 | Le déni de service est limité par des quotas et des délais, sans objectif de résistance absolue : quotas par casier, et sur chaque port de `hirzlad` plafond de connexions simultanées, plafond par source, délais de poignée de main et d'authentification (ADR 0051). |
 | H5 | L'administrateur du serveur installe et exploite `hirzlad` selon le guide. Il peut être malveillant ; il n'est pas supposé de confiance pour la confidentialité ni pour l'intégrité des secrets. |
 | H6 | Les propriétaires d'un casier sont de confiance pour ce casier. Un propriétaire peut lire, partager et retirer les membres et les propriétaires plus récents. Retirer un propriétaire plus ancien exige un quorum (2 par défaut). |
 | H7 | Le navigateur isole les extensions entre elles et ne falsifie pas l'origine de la page. |
@@ -319,11 +319,16 @@ session (notifications natives sous Windows et macOS, D-Bus par l'application so
   `life_cycle_and_log_hygiene`, `inactivity_locks_the_vault` (`service/tests.rs`) ;
   `a_clock_jump_means_the_system_slept`, `settings_and_system_events` (`selfmode/tests.rs`) ;
   tests `Debug` des types de l'API (`proto/tests.rs`, `selfmode/proto/tests.rs`,
-  `debug_never_shows_locker_names`) ; `workspace_denies_unsafe_code`,
+  `debug_never_shows_locker_names`) ; test de politique `crates/hirzla-core/tests/debug_policy.rs`
+  (aucun `Debug` dérivé sur un type porteur de secret, types de clés sans `Debug`, types de
+  l'API rendus sans le secret qu'ils portent) ; `memlock_limit_is_raised_to_the_hard_limit`
+  (`hirzla-keystore`) ; `workspace_denies_unsafe_code`,
   `every_crate_root_but_the_keystore_forbids_unsafe_code` (`hirzla-keystore`,
   `tests/unsafe_policy.rs`).
-- **Limites** : mémoire verrouillée sous Linux seulement avec `RLIMIT_MEMLOCK` illimité,
-  impossible sous macOS et Windows (`api-locale.md` § 9) ; tampons internes de `flate2` et
+- **Limites** : mémoire verrouillée sous Linux seulement avec `RLIMIT_MEMLOCK` illimité (la
+  limite souple est relevée à la limite dure ; sinon événement `memory_not_locked` et
+  avertissement de `hirzla status`, exigence du guide : ADR 0054), impossible sous macOS et
+  Windows (`api-locale.md` § 9) ; tampons internes de `flate2` et
   `quick-xml` non effacés pendant un import KDBX ; notifications de veille Windows et macOS non
   essayées sur poste réel.
 
@@ -366,8 +371,10 @@ ML-DSA-87 par la clé d'éditeur, signature vérifiée avant tout décodage, ver
 supérieure exigée (aucun retour en arrière), noms de fichiers fermés, empreintes SHA-384
 comparées à temps constant, mise en place atomique (ADR 0043). Le noyau vérifie la signature
 de chaque client (Authenticode, signature Apple, manifeste signé sous Linux) et échoue fermé
-(ADR 0042). Binaires signés (Authenticode, Apple, GPG) ; dépendances figées (`Cargo.lock`,
-`cargo deny`).
+(ADR 0042) ; chaque client vérifie de même la signature du noyau avant tout envoi, dans les
+versions de livraison (ADR 0055). Binaires signés (Authenticode, Apple, GPG) ; dépendances
+figées (`Cargo.lock`, `cargo deny`) ; exécutables Linux compilés de façon reproductible et
+nomenclature logicielle CycloneDX publiée avec chaque livraison (ADR 0056).
 
 - **Code** : `hirzla-core::release`, `hirzla-core::release::update`, `hirzla-core::codesign` ;
   `hirzla-keystore::platform::code_signature` ; `apps/cli/src/update.rs` ;
@@ -376,13 +383,17 @@ de chaque client (Authenticode, signature Apple, manifeste signé sous Linux) et
   (`client_manifest_signature_is_checked`, `a_package_signature_is_not_a_manifest_signature`,
   `package_for_this_version_or_older_is_refused`, `package_of_another_publisher_is_refused`,
   `altered_package_changes_nothing`, `embedded_client_manifest_must_match_the_package`) ;
-  `matches_entry_refuses_a_modified_file`, `linux_manifest_check_end_to_end`
-  (`codesign.rs`) ; `required_signatures_fail_closed` (`daemon.rs`) ;
+  `matches_entry_refuses_a_modified_file`, `linux_manifest_check_end_to_end`,
+  `linux_client_checks_the_core_against_the_manifest`, `core_signature_off_accepts_without_looking`
+  (`codesign.rs`) ; job de CI « reproducible build (Linux) »
+  (`.github/scripts/reproducible-build.sh`, `.github/scripts/sbom.py`) ; `required_signatures_fail_closed` (`daemon.rs`) ;
   `verifies_applies_and_refuses_rollback` (`apps/cli/tests/update.rs`) ;
   `signs_and_verifies_manifests_and_packages` (`apps/release-signer/tests/signer.rs`).
-- **Écarts** : compilation reproductible et nomenclature logicielle (SBOM) annoncées par la
-  v1 mais non produites par la CI ; le client ne vérifie que le chemin du noyau, pas sa
-  signature ; signatures Windows et macOS non essayées sur postes réels signés.
+- **Écarts** : signatures Windows et macOS (du client par le noyau et du noyau par le
+  client) non essayées sur postes réels signés ; sous Linux, le client vérifie le noyau
+  installé, pas le processus que le système lui cache (ADR 0055, hypothèse H13) ;
+  reproductibilité vérifiée pour les exécutables Linux seulement, pas pour les paquets
+  d'installation (ADR 0056).
 
 ### F8 — Authentification mutuelle et canaux
 
@@ -583,7 +594,7 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
   Argon2id et la robustesse du mot de passe (H11). Le nombre de parts et le seuil d'un kit de
   recouvrement sont lisibles dans l'en-tête en clair (ADR 0034).
 - **M8** : mémoire du noyau non verrouillable sous macOS et Windows, et sous Linux sans
-  `LimitMEMLOCK=infinity` ; tampons internes non effacés de `flate2` et `quick-xml` pendant un
+  `LimitMEMLOCK=infinity` (signalé par `hirzla status` et le journal, ADR 0054) ; tampons internes non effacés de `flate2` et `quick-xml` pendant un
   import KDBX ; la mémoire de l'application de poste (moteur web) contient le secret affiché.
 - **M7** : un logiciel malveillant du compte peut lancer un vrai client signé et le piloter ;
   réutilisation de PID possible entre connexion et vérification ; un certificat d'éditeur
@@ -606,11 +617,13 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
 1. **Catégorie CSPN, plateforme de référence, éditeur, version, licence** :
    `À COMPLÉTER (Max)` (§ 1). Recommandation de périmètre et de plateforme : ADR 0050.
 2. **Écarts entre la v1 et le code** (garde matérielle, F15, TLS P-384, HSM, journal local du
-   noyau, syslog TLS, SBOM et compilation reproductible) : à trancher par l'ADR 0050 ; la v2
-   ne promet que ce qui est codé.
-3. **Avant le dépôt** : outil d'administration de `hirzlad` en ligne de commande (descellement,
-   création de compte), exigence ou contrôle de la mémoire verrouillée sous Linux, SBOM et
-   compilation reproductible (ADR 0050, point 6).
+   noyau, syslog TLS) : à trancher par l'ADR 0050 ; la v2 ne promet que ce qui est codé.
+   SBOM et compilation reproductible sont désormais produites (ADR 0056).
+3. **Avant le dépôt** : les trois manques du point 6 de l'ADR 0050 sont levés — outil
+   d'administration `hirzlad admin` (descellement, création de compte, ADR 0053), exigence du
+   guide et avertissement pour la mémoire verrouillée sous Linux (ADR 0054), SBOM et
+   compilation reproductible vérifiée en CI (ADR 0056). Reste à les rejouer sur la
+   plateforme de référence avec la version évaluée.
 4. **Interface et extension hors périmètre**, sauf le canal local, le profil navigateur et le
    contrôle d'origine. Le CESTI peut l'exiger autrement.
 5. **Revue interne** du 2026-11-15 : `docs/evaluation/revue-interne.md` (constats corrigés et

@@ -61,7 +61,7 @@ n'est compilé par aucune cible (`cargo tree -i ring` est vide) : tout passe par
 | `libc` | 0.2.191 | Unix | Durcissement (`prctl`, `mlockall`, `setrlimit`, `ptrace`), identité du pair (`SO_PEERCRED`, `getpeereid`) | Liaisons FFI ; chaque appel `unsafe` justifié par `// SAFETY:` dans `hirzla-keystore` |
 | `windows-sys` | 0.61.2 | Windows | Tube nommé et DACL, identité du pair, Authenticode (`WinVerifyTrust`), notifications de veille et de session, DPAPI (prototype) | Liaisons FFI ; idem |
 | `security-framework`, `security-framework-sys`, `core-foundation` | 3.7.0, 2.17.0, 0.10.1 | macOS | Signature de code des clients (`SecCode`), Secure Enclave (prototype) | FFI vers `Security.framework` |
-| `tss-esapi` / `tss-esapi-sys` | =7.7.0 / 0.6.0 | Linux | TPM 2.0 (prototype, non branché) ; lie tpm2-tss ≥ 4.1.3 du système | **C (tpm2-tss)**, FFI ; liée au noyau même si le prototype n'est pas utilisé |
+| `tss-esapi` / `tss-esapi-sys` | =7.7.0 / 0.6.0 | Linux, fonctionnalité `tpm2-prototype` seulement | TPM 2.0 (prototype, non branché) ; lie tpm2-tss ≥ 4.1.3 du système | **C (tpm2-tss)**, FFI ; **hors des binaires livrés** depuis l'ADR 0052 (fonctionnalité désactivée par défaut, activée par le seul job swtpm) |
 
 ## 5. Applications
 
@@ -89,5 +89,7 @@ depuis `Cargo.lock` : mêmes versions que le produit.
   repasse par le référent cryptographie.
 - **AWS-LC** : vérifier, au gel, si la version d'`aws-lc-sys` correspond à un module certifié
   FIPS 140-3 ; sinon, le dire au CESTI (ADR 0009).
-- **SBOM** : à produire à chaque livraison (CycloneDX ou SPDX à partir de `Cargo.lock` et de
-  `package-lock.json`), annoncée par F7 et non faite (ADR 0050, point 6).
+- **SBOM** : produite pour chaque exécutable Rust livré (CycloneDX 1.5, `.github/scripts/sbom.py`,
+  hors ligne et déterministe, ADR 0056), par la CI et le flux de livraison. Reste à faire :
+  la nomenclature des paquets npm de l'extension et des outils de vérification de l'interface
+  (`package-lock.json`), hors configuration évaluée (ADR 0050, point 7).
