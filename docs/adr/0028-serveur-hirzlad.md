@@ -1,6 +1,6 @@
 # ADR 0028 — Serveur `hirzlad` : TLS, dépendances, stockage, sceau, administration
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
@@ -163,3 +163,12 @@ limites de débit réglables ; rotation du journal d'audit.
   tiendra plus en mémoire ; le chiffrement par enregistrement resterait nécessaire.
 - **Clé racine dans un fichier protégé par mot de passe** : un seul secret, un seul
   administrateur ; contraire au quorum demandé.
+
+## Décision du mainteneur (2026-11-15)
+
+Groupe TLS : option A à titre provisoire (`X25519MLKEM768` seul, aucun groupe classique
+offert ni accepté), option C comme cible (`SecP384r1MLKEM1024` dès qu'une version publiée
+de `rustls`/`aws-lc-rs` le fournit, sans assemblage maison). Le transport n'est qu'une
+couche : tout contenu reste chiffré de bout en bout avec la suite V1 (P-384 + ML-KEM-1024)
+et l'authentification applicative reste hybride P-384 + ML-DSA-87. Les autres choix de cet
+ADR sont acceptés tels quels ; le certificat d'administration hybride reste un point ouvert.
