@@ -1,6 +1,6 @@
 # ADR 0023 — Choix du lot d'intégration de `hirzla-sync` et `hirzla-access`
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
