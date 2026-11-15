@@ -637,6 +637,8 @@ fn injected_second_locker_creation_is_rejected() {
         epoch: opref,
         deps: Vec::new(),
         body,
+        signer: dev.cert.clone(),
+        forked: false,
     });
     // Mallory then grants herself into the locker on top of her own root.
     let alice = t.alice.keys.clone();
@@ -839,4 +841,78 @@ fn result_does_not_depend_on_the_delivery_order() {
         }
         assert_eq!(st.state(), reference.state());
     }
+}
+
+// ----- signer and forks (§ 6, steps 3 and 5) -----
+
+#[test]
+fn operation_signed_under_another_certificate_is_rejected() {
+    let mut t = team();
+    let mut w = t.sim.write(t.bob.dev());
+    w.signer = t.bob.devs[1].cert.clone();
+    assert_eq!(
+        t.sim.compute().classify_data(&w, &t.sim.dag()),
+        DataStatus::Rejected(Denial::DeviceCert)
+    );
+    let r = t.sim.rotate(t.bob.dev());
+    let last = t.sim.control.last_mut().unwrap();
+    assert_eq!(last.op_id, r);
+    last.signer = t.bob.devs[1].cert.clone();
+    assert_eq!(
+        t.sim.status(&r),
+        ControlStatus::Rejected(Denial::DeviceCert)
+    );
+}
+
+#[test]
+fn forked_operations_are_quarantined_until_accepted() {
+    let mut t = team();
+    let r = t.sim.rotate(t.bob.dev());
+    t.sim.control.last_mut().unwrap().forked = true;
+    assert_eq!(t.sim.status(&r), ControlStatus::Quarantined);
+    let mut w = t.sim.write(t.bob.dev());
+    w.forked = true;
+    assert_eq!(
+        t.sim.compute().classify_data(&w, &t.sim.dag()),
+        DataStatus::Quarantined
+    );
+    let id = w.op_id;
+    t.sim.emit(t.alice.dev(), move |_, _| {
+        ControlBody::QuarantineAccept(vec![id])
+    });
+    assert_eq!(
+        t.sim.compute().classify_data(&w, &t.sim.dag()),
+        DataStatus::Applied
+    );
+}
+
+#[test]
+fn a_rejected_device_remove_still_revokes_the_device() {
+    let mut t = team();
+    let h = t.sim.heads();
+    let rev = t.bob.revoke(t.bob.devs[1].device);
+    let r = t.sim.emit_after(t.bob.dev(), h.clone(), move |s, _| {
+        let mut b = device_remove_body(s, rev);
+        if let ControlBody::DeviceRemove(d) = &mut b {
+            d.envelopes.clear();
+        }
+        b
+    });
+    assert_eq!(t.sim.status(&r), ControlStatus::Rejected(Denial::Envelopes));
+    let concurrent = t
+        .sim
+        .write_with(&t.bob.devs[1], Deps::Only(h), DataTarget::Secret(SECRET));
+    let after = t
+        .sim
+        .write_with(&t.bob.devs[1], Deps::Heads, DataTarget::Secret(SECRET));
+    assert_eq!(t.sim.data_status(&concurrent), DataStatus::Quarantined);
+    assert_eq!(
+        t.sim.data_status(&after),
+        DataStatus::Rejected(Denial::DeviceRevoked)
+    );
+    assert!(t
+        .sim
+        .compute()
+        .state()
+        .is_revoked(&t.bob.id(), &t.bob.devs[1].device));
 }

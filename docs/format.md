@@ -681,7 +681,7 @@ secret.
 | 2 | `lamport` | `uint` | `1 + max(lamport des deps)`, ou 1 sans dépendance |
 | 3 | `deps` | `array<OpId>` | Trié, 1 à 256 éléments, contient `prev` s'il existe. Vide seulement pour `LockerCreate` |
 | 4 | `wall_ms` | `uint` | Heure murale de l'auteur en millisecondes. Indicatif, jamais utilisé pour décider |
-| 5 | `content` | `SecretBody`, `LockerBody`, ou absent | Selon `kind`. Absent si `kind = 0` |
+| 5 | `content` | `SecretBody`, `LockerBody`, `CompactPast`, ou absent | Selon `kind`. Si `kind = 0`, absent, sauf pour une `Compact` qui porte obligatoirement son `CompactPast` (`sync-protocol.md` § 10.2, ADR 0017) |
 
 ### 7.3 Version de secret (`SecretBody`)
 

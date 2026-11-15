@@ -6,14 +6,17 @@ use hirzla_vault::model::{Id16, OpId, OpRef};
 use hirzla_vault::secret::{FieldValue, LockerField, SecretType};
 
 use super::support::*;
-use crate::codec::RoleCode;
+use crate::authz::AccessAuthorizer;
+use crate::control::ControlBody;
 use crate::replica::{OpStatus, RejectReason};
-use crate::testing::MemoryAuthorizer;
 use crate::wire::Stub;
+use hirzla_access::Role;
+use hirzla_vault::cbor::Value;
+use hirzla_vault::model::KIND_CONTROL;
 
 /// Alice (owner) and Bob (editor); one version kept; a secret written four times.
 fn history() -> (World, Id16, Vec<OpId>) {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     w.replicas[0]
         .put_locker_meta(vec![(LockerField::KeepVersions, FieldValue::Uint(1))])
         .unwrap();
@@ -66,7 +69,7 @@ fn joiner_after_pruning() -> (World, Id16, Vec<OpId>, R) {
     w.pass(1, 0);
     let mut r = R::join(
         dev,
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[0].locker_id(),
         w.replicas[0].genesis(),
     );
@@ -85,8 +88,9 @@ fn a_device_joining_after_pruning_accepts_listed_stubs() {
     }
 }
 
+/// ADR 0017: the `Compact` carries the causal past of what it prunes, so a device that only
+/// ever receives stubs rebuilds the same graph, the same authorization and the same state.
 #[test]
-#[ignore = "ADR 0017: a stub carries no causal metadata, the joiner's past is truncated"]
 fn a_device_joining_after_pruning_reaches_the_same_state() {
     let (w, id, _, r) = joiner_after_pruning();
     assert_eq!(password_of(&r, &id).as_deref(), Some("v3"));
@@ -111,8 +115,14 @@ fn compact_listing_a_control_operation_or_an_unknown_one_is_rejected() {
     let (mut w, _, _) = history();
     let control = w.replicas[0].rotate().unwrap();
     w.sync();
-    let c1 = w.replicas[1].compact(vec![control]).unwrap();
-    let c2 = w.replicas[1].compact(vec![[0x55; 48]]).unwrap();
+    let past = fake_past(&w.replicas[1], control);
+    let c1 = w.replicas[1]
+        .compact_forged(vec![control], &[past])
+        .unwrap();
+    let past = fake_past(&w.replicas[1], [0x55; 48]);
+    let c2 = w.replicas[1]
+        .compact_forged(vec![[0x55; 48]], &[past])
+        .unwrap();
     w.sync();
     for c in [c1, c2] {
         assert_eq!(
@@ -125,7 +135,7 @@ fn compact_listing_a_control_operation_or_an_unknown_one_is_rejected() {
 #[test]
 fn compact_listing_a_version_it_has_not_seen_is_rejected() {
     // Bob compacts versions Alice wrote concurrently: not in the Compact's past.
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     w.replicas[0]
         .put_locker_meta(vec![(LockerField::KeepVersions, FieldValue::Uint(1))])
         .unwrap();
@@ -174,10 +184,176 @@ fn stub_without_compact_is_refused() {
     // Unlisted stubs are never forwarded.
     let fresh = R::join(
         Arc::clone(&w.devices[1]),
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[0].locker_id(),
         w.replicas[0].genesis(),
     );
     let (_, stubs) = w.replicas[0].missing_for(fresh.vector());
     assert!(stubs.is_empty());
+}
+
+#[test]
+fn compact_without_its_past_and_control_with_content_are_refused() {
+    let (mut w, _, versions) = history();
+    let r = &mut w.replicas[1];
+    let p = r.prepare().unwrap();
+    let bare = r
+        .finish(
+            p,
+            Some(ControlBody::Compact(vec![versions[0]])),
+            KIND_CONTROL,
+            None,
+            None,
+        )
+        .unwrap();
+    let p = r.prepare().unwrap();
+    let padded = r
+        .finish(
+            p,
+            Some(ControlBody::QuarantineAccept(vec![versions[0]])),
+            KIND_CONTROL,
+            Some(Value::Array(Vec::new())),
+            None,
+        )
+        .unwrap();
+    w.sync();
+    for c in [bare, padded] {
+        assert_eq!(
+            w.status_everywhere(&c),
+            OpStatus::Rejected(RejectReason::TypeRule)
+        );
+    }
+}
+
+#[test]
+fn compact_with_a_wrong_past_is_refused() {
+    let (mut w, _, versions) = history();
+    let mut past = w.replicas[1].past_of(&versions[0]).unwrap();
+    past.lamport += 1;
+    let c = w.replicas[1]
+        .compact_forged(vec![versions[0]], &[past])
+        .unwrap();
+    w.sync();
+    assert_eq!(
+        w.status_everywhere(&c),
+        OpStatus::Rejected(RejectReason::CausalPastMismatch)
+    );
+}
+
+#[test]
+fn stub_whose_ref_or_prev_differs_from_the_compact_is_refused() {
+    let (mut w, _, _) = history();
+    let cands = w.replicas[0].prune_candidates();
+    let c = w.replicas[0].compact(cands.clone()).unwrap();
+    w.replicas[0].prune_stable(&c).unwrap();
+    let dev = w.members[1].device();
+    w.replicas[1].device_add(dev.cert().clone()).unwrap();
+    w.pass(1, 0);
+    let mut r = R::join(
+        dev,
+        AccessAuthorizer,
+        w.replicas[0].locker_id(),
+        w.replicas[0].genesis(),
+    );
+    r.set_clock(fixed_clock);
+    let (ops, stubs) = w.replicas[0].missing_for(r.vector());
+    let mut lying = stubs.clone();
+    let target = lying[0].op_id;
+    lying[0].opref.seq += 7;
+    r.ingest_stubs(lying);
+    r.ingest(ops).unwrap();
+    assert_eq!(
+        r.status(&target),
+        Some(OpStatus::Rejected(RejectReason::StubMismatch))
+    );
+    // What depends on it waits instead of being rejected, and the right stub replaces it.
+    assert!(!r
+        .statuses()
+        .values()
+        .any(|s| *s == OpStatus::Rejected(RejectReason::RejectedDependency)));
+    r.ingest_stubs(stubs);
+    assert_eq!(r.status(&target), Some(OpStatus::Pruned));
+    assert_eq!(r.fingerprint(), w.replicas[0].fingerprint());
+}
+
+/// A stub listed only by a rejected `Compact` is refused: otherwise a member without the
+/// right to compact could make a relay inject made-up ranks (and forks) into the graph.
+#[test]
+fn stub_listed_only_by_a_rejected_compact_is_refused() {
+    let mut w = World::new(&[Role::Reader]);
+    let fake = [0x66; 48];
+    let past = fake_past(&w.replicas[1], fake);
+    let c = w.replicas[1]
+        .compact_forged(vec![fake], core::slice::from_ref(&past))
+        .unwrap();
+    w.sync();
+    assert!(matches!(w.status_everywhere(&c), OpStatus::Rejected(_)));
+    w.replicas[0].ingest_stubs(vec![Stub {
+        op_id: fake,
+        opref: past.opref,
+        prev: past.prev,
+    }]);
+    assert_eq!(
+        w.replicas[0].status(&fake),
+        Some(OpStatus::Rejected(RejectReason::UnlistedStub))
+    );
+    assert!(matches!(
+        w.replicas[0].status(&c),
+        Some(OpStatus::Rejected(_))
+    ));
+}
+
+/// Strict decoding of the past a `Compact` carries (§ 10.2): one negative test per refusal.
+#[test]
+fn compact_past_decoding_is_strict() {
+    use crate::compact::{compact_past_value, decode_compact_past, PrunedPast};
+    let (w, _, versions) = history();
+    let good = w.replicas[0].past_of(&versions[1]).unwrap();
+    let ok = compact_past_value(core::slice::from_ref(&good)).unwrap();
+    assert_eq!(
+        decode_compact_past(&ok, &[versions[1]]).unwrap(),
+        vec![good.clone()]
+    );
+    // Identifiers that differ from `prune`, or a missing entry.
+    assert!(decode_compact_past(&ok, &[versions[2]]).is_err());
+    assert!(decode_compact_past(&ok, &[versions[1], versions[2]]).is_err());
+    let refused = |p: PrunedPast| {
+        let v = p.to_value().unwrap();
+        PrunedPast::from_value(&v).is_err()
+    };
+    // `prev` absent while `seq > 1`, or present with `seq = 1`.
+    assert!(refused(PrunedPast {
+        prev: None,
+        ..good.clone()
+    }));
+    let mut first = good.clone();
+    first.opref.seq = 1;
+    assert!(refused(first));
+    // Lamport 0, no dependency.
+    assert!(refused(PrunedPast {
+        lamport: 0,
+        ..good.clone()
+    }));
+    assert!(refused(PrunedPast {
+        deps: Vec::new(),
+        ..good.clone()
+    }));
+    // A `LockerMetaPut` that names a secret, an unknown kind, an unknown key.
+    let whole = good.to_value().unwrap();
+    let Value::Map(entries) = &whole else {
+        panic!("map");
+    };
+    let with = |k: u64, val: Value| {
+        let mut e: Vec<(Value, Value)> = entries
+            .iter()
+            .filter(|(key, _)| *key != Value::Uint(k))
+            .cloned()
+            .collect();
+        e.push((Value::Uint(k), val));
+        e.sort_by_key(|(key, _)| hirzla_vault::cbor::encode(key).unwrap().to_vec());
+        PrunedPast::from_value(&Value::Map(e)).is_err()
+    };
+    assert!(with(7, Value::Uint(2)));
+    assert!(with(7, Value::Uint(3)));
+    assert!(with(11, Value::Uint(0)));
 }

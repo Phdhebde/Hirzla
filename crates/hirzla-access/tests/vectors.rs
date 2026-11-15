@@ -95,7 +95,12 @@ fn cases() -> Vec<(&'static str, Vec<u8>)> {
                 }],
             })),
         ),
-        ("envelope-add-empty", body(ControlBody::EnvelopeAdd(vec![]))),
+        // An empty `EnvelopeAdd` is refused since the integration of hirzla-sync (point 27
+        // of `sync-protocol.md` § 16): the frozen case carries one envelope.
+        (
+            "envelope-add",
+            body(ControlBody::EnvelopeAdd(vec![envelope.clone()])),
+        ),
         (
             "quarantine-accept",
             body(ControlBody::QuarantineAccept(vec![[0x01; 48]])),

@@ -31,6 +31,12 @@ pub enum SyncError {
     /// An edit is not allowed by the secret type, or the secret is purged.
     #[error("edit not allowed")]
     EditRefused,
+    /// A recipient of an envelope was refused by the key log check (`transparence.md` § 6.2).
+    #[error("recipient refused by the key log")]
+    RecipientRefused,
+    /// Writes to the locker are frozen (`transparence.md` § 6.5).
+    #[error("writes to this locker are frozen")]
+    Frozen,
 }
 
 impl From<hirzla_vault::cbor::CborError> for SyncError {

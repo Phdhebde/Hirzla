@@ -11,12 +11,14 @@ use hirzla_vault::model::{
 use hirzla_vault::secret::{apply_edit, Field, FieldValue, SecretType};
 
 use super::support::*;
-use crate::codec::{Approval, ApprovalAction, ApprovalRequest, RoleCode};
+use crate::authz::AccessAuthorizer;
 use crate::control::ControlBody;
 use crate::device::LocalDevice;
 use crate::op::{resign, seal_and_sign, OpDraft};
 use crate::replica::{OpStatus, PendingReason, RejectReason};
-use crate::testing::{MemoryAuthorizer, TestMember};
+use crate::testing::TestMember;
+use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
+use hirzla_access::Role;
 
 /// A valid draft of a new secret by `r`'s device, on `r`'s current state.
 pub(super) fn secret_draft(r: &R) -> OpDraft {
@@ -88,14 +90,14 @@ fn rejected(r: RejectReason) -> OpStatus {
 
 #[test]
 fn valid_forgery_baseline_is_applied() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (_, bytes) = sign_draft(&w.replicas[1], &secret_draft(&w.replicas[1]));
     assert_eq!(deliver(&mut w, bytes), OpStatus::Applied);
 }
 
 #[test]
 fn garbage_and_tampered_bytes() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     assert_eq!(
         deliver(&mut w, vec![0xa0]),
         rejected(RejectReason::Malformed)
@@ -114,7 +116,7 @@ fn garbage_and_tampered_bytes() {
 
 #[test]
 fn modified_block_id_resigned_does_not_unseal() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (_, bytes) = sign_draft(&w.replicas[1], &secret_draft(&w.replicas[1]));
     let mut op = Operation::decode(&bytes).unwrap();
     op.sealed[3] ^= 1; // block_id, authenticated with the AAD
@@ -124,7 +126,7 @@ fn modified_block_id_resigned_does_not_unseal() {
 
 #[test]
 fn moved_content_does_not_unseal() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[1]
         .put_secret(None, SecretType::Password, password_edit("a", "b"))
         .unwrap();
@@ -145,14 +147,14 @@ fn moved_content_does_not_unseal() {
 
 #[test]
 fn replayed_in_another_locker() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let other = World::new(&[]);
     let foreign = other.replicas[0].all_ops();
     for b in foreign {
         assert_eq!(deliver(&mut w, b), rejected(RejectReason::WrongLocker));
     }
     // Re-signed by a device of this locker with the locker changed: the AAD binds it.
-    let w2 = World::new(&[RoleCode::Editor]);
+    let w2 = World::new(&[Role::Editor]);
     let (_, bytes) = sign_draft(&w2.replicas[1], &secret_draft(&w2.replicas[1]));
     let mut op = Operation::decode(&bytes).unwrap();
     op.locker_id = w.replicas[0].locker_id();
@@ -166,12 +168,12 @@ fn replayed_in_another_locker() {
 
 #[test]
 fn device_without_certificate_waits() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     // Bob's member key certifies a second device that was never added to the locker.
     let rogue: Arc<LocalDevice> = w.members[1].device();
     let mut r = R::join(
         Arc::clone(&rogue),
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[0].locker_id(),
         None,
     );
@@ -193,7 +195,7 @@ fn device_without_certificate_waits() {
 
 #[test]
 fn inflated_lamport() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let mut draft = secret_draft(&w.replicas[1]);
     draft.payload.lamport += 10;
     let (_, bytes) = sign_draft(&w.replicas[1], &draft);
@@ -202,7 +204,7 @@ fn inflated_lamport() {
 
 #[test]
 fn wrong_prev() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     w.replicas[1]
         .put_secret(None, SecretType::Password, password_edit("a", "b"))
         .unwrap();
@@ -230,7 +232,7 @@ fn wrong_prev() {
 
 #[test]
 fn missing_and_rejected_dependencies() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let mut draft = secret_draft(&w.replicas[1]);
     draft.payload.deps.push([9; 48]);
     draft.payload.deps.sort_unstable();
@@ -243,7 +245,7 @@ fn missing_and_rejected_dependencies() {
 
 #[test]
 fn non_current_epoch() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let old = w.replicas[0].current_epoch().unwrap();
     w.replicas[0].rotate().unwrap();
     w.sync();
@@ -257,7 +259,7 @@ fn non_current_epoch() {
 
 #[test]
 fn foreign_genesis() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     // Bob's device, which has not emitted yet in this locker, forges a second creation of
     // the same locker with himself as owner.
     let bob = Arc::clone(&w.devices[1]);
@@ -269,18 +271,19 @@ fn foreign_genesis() {
         seq: 1,
     };
     let env = crate::device::envelope_for(&lid, &opref, bob.cert(), &key).unwrap();
-    let body = ControlBody::LockerCreate(hirzla_vault::model::LockerCreate {
+    let body = ControlBody::LockerCreate(crate::control::LockerCreate {
         creator: bob.member_keys().clone(),
         creator_device: bob.cert().clone(),
         envelope: env,
         personal: false,
+        keylog_proof: None,
     });
     let draft = OpDraft {
         locker_id: lid,
         opref,
         prev: None,
         epoch: opref,
-        control: Some(body.to_value()),
+        control: Some(body.to_value().unwrap()),
         payload: SealedPayload {
             kind: KIND_CONTROL,
             lamport: 1,
@@ -302,7 +305,7 @@ fn foreign_genesis() {
         Some(rejected(RejectReason::ForeignGenesis))
     );
     // A replica that pinned nothing and opens both creations pins none and waits.
-    let mut r2 = R::join(bob, MemoryAuthorizer, lid, None);
+    let mut r2 = R::join(bob, AccessAuthorizer, lid, None);
     r2.ingest(w.replicas[0].all_ops()).unwrap();
     r2.ingest(vec![bytes]).unwrap();
     assert!(r2.genesis().is_none());
@@ -315,7 +318,7 @@ fn foreign_genesis() {
 
 #[test]
 fn version_attributing_a_value_to_another_author() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, head) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "p"))
         .unwrap();
@@ -343,7 +346,7 @@ fn version_attributing_a_value_to_another_author() {
 
 #[test]
 fn class_and_kind_mismatch() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let mut draft = secret_draft(&w.replicas[1]);
     draft.payload.kind = KIND_CONTROL;
     draft.payload.content = None;
@@ -353,7 +356,7 @@ fn class_and_kind_mismatch() {
 
 #[test]
 fn malformed_control_body() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let mut draft = secret_draft(&w.replicas[1]);
     // Reserved kind 30.
     draft.control = Some(Value::map(vec![(1, Value::Uint(30))]));
@@ -365,19 +368,19 @@ fn malformed_control_body() {
 
 #[test]
 fn reused_request_id() {
-    let mut w = World::new(&[RoleCode::Owner]);
+    let mut w = World::new(&[Role::Owner]);
     let rid = [3; 16];
     let bob = w.members[1].id();
     let lid = w.replicas[0].locker_id();
     let alice = w.members[0].id();
     let bob_dev = Arc::clone(&w.devices[1]);
     let approve = |dev: &LocalDevice, q: u64| {
-        Approval::sign(
+        approve(
             dev,
             &ApprovalRequest {
                 locker_id: lid,
                 request_id: rid,
-                action: ApprovalAction::Policy,
+                action: SensitiveAction::Policy,
                 target: None,
                 detail: Some(q),
                 issuer: alice,
@@ -400,14 +403,14 @@ fn reused_request_id() {
 
 #[test]
 fn approvals_bad_signature_and_non_owner() {
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Editor]);
+    let mut w = World::new(&[Role::Owner, Role::Editor]);
     let rid = [4; 16];
     let lid = w.replicas[0].locker_id();
     let alice = w.members[0].id();
     let req = |m: [u8; 16], d: [u8; 16], q: u64| ApprovalRequest {
         locker_id: lid,
         request_id: rid,
-        action: ApprovalAction::Policy,
+        action: SensitiveAction::Policy,
         target: None,
         detail: Some(q),
         issuer: alice,
@@ -416,7 +419,7 @@ fn approvals_bad_signature_and_non_owner() {
     };
     // Signed for another quorum than the operation carries.
     let bob_dev = Arc::clone(&w.devices[1]);
-    let bad = Approval::sign(&bob_dev, &req(bob_dev.member_id(), bob_dev.device_id(), 5)).unwrap();
+    let bad = approve(&bob_dev, &req(bob_dev.member_id(), bob_dev.device_id(), 5)).unwrap();
     let p = w.replicas[0].policy(3, rid, vec![bad]).unwrap();
     assert_eq!(
         w.replicas[0].status(&p),
@@ -425,7 +428,7 @@ fn approvals_bad_signature_and_non_owner() {
     // An editor's approval does not count towards the owners' quorum.
     let carol_dev = Arc::clone(&w.devices[2]);
     let rid2 = [5; 16];
-    let a = Approval::sign(
+    let a = approve(
         &carol_dev,
         &ApprovalRequest {
             request_id: rid2,
@@ -442,7 +445,7 @@ fn approvals_bad_signature_and_non_owner() {
 
 #[test]
 fn duplicates_are_idempotent() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let before = w.replicas[1].fingerprint();
     let all = w.replicas[0].all_ops();
     let rep = w.replicas[1].ingest(all.clone()).unwrap();
@@ -455,7 +458,7 @@ fn duplicates_are_idempotent() {
 fn queue_bound() {
     let w = World::new(&[]);
     let outsider = TestMember::new().device();
-    let mut r = R::join(outsider, MemoryAuthorizer, w.replicas[0].locker_id(), None);
+    let mut r = R::join(outsider, AccessAuthorizer, w.replicas[0].locker_id(), None);
     r.set_limits(crate::replica::Limits {
         max_unapplied_ops: 1,
         max_unapplied_bytes: usize::MAX,

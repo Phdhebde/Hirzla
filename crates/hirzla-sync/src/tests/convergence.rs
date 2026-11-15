@@ -13,9 +13,9 @@ use hirzla_vault::secret::{FieldValue, LockerField, SecretEdit, SecretType, SetK
 use proptest::prelude::*;
 
 use super::support::*;
-use crate::codec::RoleCode;
+use crate::authz::AccessAuthorizer;
 use crate::device::LocalDevice;
-use crate::testing::MemoryAuthorizer;
+use hirzla_access::Role;
 
 struct Scenario {
     ops: Vec<Vec<u8>>,
@@ -30,7 +30,7 @@ struct Scenario {
 
 /// Alice (owner), Bob (editor), Carol (owner), Dave (reader, the observer).
 fn build() -> Scenario {
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Owner, RoleCode::Reader]);
+    let mut w = World::new(&[Role::Editor, Role::Owner, Role::Reader]);
     let (s1, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("s1", "v0"))
         .unwrap();
@@ -107,7 +107,7 @@ fn scenario() -> &'static Scenario {
 fn fresh(s: &Scenario) -> R {
     let mut r = R::join(
         Arc::clone(&s.observer),
-        MemoryAuthorizer,
+        AccessAuthorizer,
         s.locker,
         s.genesis,
     );

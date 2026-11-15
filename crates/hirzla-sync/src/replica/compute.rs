@@ -3,11 +3,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use hirzla_access::approval::{verify_approval, ApprovalRequest, SensitiveAction};
+use hirzla_access::keylog::check_operation_proof;
 use hirzla_crypto::util::sha384;
 use hirzla_vault::cbor;
 use hirzla_vault::model::{
-    DeviceCert, Id16, LockerCreate, MemberKeys, OpId, OpRef, Operation, CLASS_CONTROL, CLASS_DATA,
-    KIND_CONTROL, KIND_LOCKER_META_PUT, KIND_SECRET_PUT,
+    DeviceCert, Id16, MemberKeys, OpId, OpRef, Operation, CLASS_CONTROL, CLASS_DATA, KIND_CONTROL,
+    KIND_LOCKER_META_PUT, KIND_SECRET_PUT,
 };
 use hirzla_vault::secret::{FieldValue, LockerField, SecretBody, SecretState};
 
@@ -16,12 +18,12 @@ use super::{
     Replica, SecretView,
 };
 use crate::authz::{
-    AuthorizationState, Authorizer, AuthzInput, DataKind, OpBody, OpFacts, Verdict,
-    VerifiedApproval,
+    AuthorizationState, Authorizer, AuthzInput, DataTarget, OpBody, OpFacts, Verdict,
 };
 use crate::causal::Causality;
-use crate::codec::{key_id, verify_device_cert, ApprovalAction, ApprovalRequest};
-use crate::control::ControlBody;
+use crate::codec::{key_id, open_epoch_wrap, verify_device_cert};
+use crate::compact::{decode_compact_past, PrunedPast};
+use crate::control::{ControlBody, LockerCreate};
 use crate::merge::{check_meta, check_version, merge_heads, merge_meta};
 use crate::op::{open_payload, verify_signature};
 use crate::wire::Vector;
@@ -49,8 +51,9 @@ fn decode_one(locker: &Id16, bytes: &[u8]) -> Result<Decoded, RejectReason> {
 struct Node {
     opref: OpRef,
     prev: Option<OpId>,
-    /// `None` for a stub without history (ADR 0017).
-    lamport: Option<u64>,
+    /// Claimed Lamport clock; for a pruned operation or a stub, the one carried by the
+    /// `Compact` that lists it (ADR 0017).
+    lamport: u64,
     deps: Vec<OpId>,
     is_create: bool,
 }
@@ -73,19 +76,55 @@ pub(super) struct DataInfo {
 
 impl<A: Authorizer> Replica<A> {
     /// Recomputes the whole view from the set of operations held.
+    ///
+    /// A stub counts only through a `Compact` that is not rejected (§ 10.3): the listings of
+    /// rejected ones are dropped, and the view recomputed, until nothing changes. The set of
+    /// dropped `Compact` only grows, so this ends.
     pub(crate) fn recompute(&mut self) {
+        let mut distrusted: BTreeSet<OpId> = BTreeSet::new();
+        loop {
+            self.recompute_with(&distrusted);
+            let more: Vec<OpId> = self
+                .status
+                .iter()
+                .filter(|(id, s)| matches!(s, OpStatus::Rejected(_)) && !distrusted.contains(*id))
+                .filter(|(id, _)| {
+                    matches!(
+                        self.opened.get(*id).map(|o| &o.content),
+                        Some(Content::CompactPast(past))
+                            if past.iter().any(|p| self.stub_pasts.contains_key(&p.op_id))
+                    )
+                })
+                .map(|(id, _)| *id)
+                .collect();
+            if more.is_empty() {
+                return;
+            }
+            distrusted.extend(more);
+        }
+    }
+
+    fn recompute_with(&mut self, distrusted: &BTreeSet<OpId>) {
         self.decode_all();
         self.fixpoint();
 
+        self.check_proofs();
+
         let mut status: BTreeMap<OpId, OpStatus> = BTreeMap::new();
-        let listed = self.listed_by_compacts();
+        let listed = self.listed_by_compacts(distrusted);
 
         // Steps 1 to 6, per operation.
         let mut nodes: BTreeMap<OpId, Node> = BTreeMap::new();
         let ids: Vec<OpId> = self.entries.keys().copied().collect();
+        let mut stub_pasts = BTreeMap::new();
         for id in &ids {
             match self.pre_check(id, &listed) {
                 Ok(node) => {
+                    if let (Some(Body::Stub(_)), Some(Some(p))) =
+                        (self.entries.get(id).map(|e| &e.body), listed.get(id))
+                    {
+                        stub_pasts.insert(*id, p.clone());
+                    }
                     nodes.insert(*id, node);
                 }
                 Err(s) => {
@@ -93,6 +132,7 @@ impl<A: Authorizer> Replica<A> {
                 }
             }
         }
+        self.stub_pasts = stub_pasts;
 
         // Forks (§ 9.6): two signed operations with the same device and rank.
         let mut by_rank: BTreeMap<(Id16, Id16, u64), usize> = BTreeMap::new();
@@ -116,8 +156,8 @@ impl<A: Authorizer> Replica<A> {
 
         // Steps 4 and 7, in claimed lamport order: a valid dependency always comes first.
         let mut order: Vec<OpId> = nodes.keys().copied().collect();
-        order.sort_by_key(|id| (nodes[id].lamport.unwrap_or(0), *id));
-        let mut done: BTreeMap<OpId, Result<Option<u64>, OpStatus>> = BTreeMap::new();
+        order.sort_by_key(|id| (nodes[id].lamport, *id));
+        let mut done: BTreeMap<OpId, Result<u64, OpStatus>> = BTreeMap::new();
         for id in &order {
             let n = &nodes[id];
             let outcome = self.chain_and_deps(n, &nodes, &status, &done);
@@ -151,7 +191,7 @@ impl<A: Authorizer> Replica<A> {
             .iter()
             .map(|id| {
                 let n = &nodes[id];
-                (*id, n.lamport.unwrap_or(0), n.deps.clone())
+                (*id, n.lamport, n.deps.clone())
             })
             .collect();
         self.causality = Causality::build(&graph);
@@ -163,24 +203,14 @@ impl<A: Authorizer> Replica<A> {
             return;
         };
         let mut ok: Vec<OpId> = Vec::new();
-        // A stub has no dependencies (§ 10.3): the path to the genesis through it is lost.
-        // It is only held when a signed `Compact` of this locker lists it, so an operation
-        // that reaches a stub counts as descending from the genesis (ADR 0017); the check
-        // against foreign creations below still applies.
-        let stubs: Vec<OpId> = complete
-            .iter()
-            .filter(|id| matches!(self.entries.get(*id).map(|e| &e.body), Some(Body::Stub(_))))
-            .copied()
-            .collect();
+        // A stub carries the causal past the `Compact` that lists it gives (ADR 0017): the
+        // path to the genesis through it is known, no exception is needed.
         for id in self.causality.total_order().to_vec() {
-            let is_stub = matches!(self.entries.get(&id).map(|e| &e.body), Some(Body::Stub(_)));
-            let descends = id == genesis
-                || self.causality.precedes(&genesis, &id)
-                || stubs.iter().any(|s| self.causality.precedes(s, &id));
+            let descends = id == genesis || self.causality.precedes(&genesis, &id);
             let foreign = creates
                 .iter()
                 .any(|c| *c != genesis && (*c == id || self.causality.precedes(c, &id)));
-            if foreign || (!descends && !is_stub) {
+            if foreign || !descends {
                 status.insert(id, OpStatus::Rejected(RejectReason::ForeignGenesis));
             } else {
                 ok.push(id);
@@ -210,31 +240,17 @@ impl<A: Authorizer> Replica<A> {
                 continue;
             };
             match &entry.body {
-                Body::Stub(_) => {
+                // Pruned operations and stubs: their verdict was settled before the pruning;
+                // they only count in the causal graph (ADR 0017).
+                Body::Stub(_) | Body::Pruned(_) => {
                     step8.insert(*id);
                     status.insert(*id, OpStatus::Pruned);
                 }
-                Body::Pruned(m) => {
-                    step8.insert(*id);
-                    facts.push(OpFacts {
-                        op_id: *id,
-                        opref: m.opref,
-                        lamport: m.lamport,
-                        epoch: m.epoch,
-                        creates_epoch: false,
-                        body: OpBody::Data(m.kind),
-                        author_cert: m.author_cert.clone(),
-                        author_member_key: m.author_member_key,
-                        approvals: Vec::new(),
-                        forked: forked(&m.opref),
-                        pruned: true,
-                    });
-                }
                 Body::Full(_) => {
                     match self.step8(id, &step8, &okset, &mut request_ids, &mut creations) {
-                        Ok(approvals) => {
+                        Ok(()) => {
                             step8.insert(*id);
-                            if let Some(f) = self.facts_of(id, approvals, forked) {
+                            if let Some(f) = self.facts_of(id, forked) {
                                 facts.push(f);
                             }
                         }
@@ -254,10 +270,6 @@ impl<A: Authorizer> Replica<A> {
             causality: &self.causality,
         });
         for f in &facts {
-            if f.pruned {
-                status.insert(f.op_id, OpStatus::Pruned);
-                continue;
-            }
             let control = matches!(f.body, OpBody::Control(_));
             let s = match state.verdict(&f.op_id) {
                 Verdict::Accepted if f.forked && control => {
@@ -279,7 +291,7 @@ impl<A: Authorizer> Replica<A> {
             .iter()
             .filter(|f| self.status.get(&f.op_id) == Some(&OpStatus::Applied))
             .filter_map(|f| match &f.body {
-                OpBody::Control(ControlBody::Compact { prune }) => Some((f.op_id, prune.clone())),
+                OpBody::Control(ControlBody::Compact(prune)) => Some((f.op_id, prune.clone())),
                 _ => None,
             })
             .collect();
@@ -361,7 +373,7 @@ impl<A: Authorizer> Replica<A> {
                         candidates.push((g.member.clone(), dev.clone()));
                     }
                 }
-                Some(ControlBody::DeviceAdd { cert, .. }) => added.push(cert.clone()),
+                Some(ControlBody::DeviceAdd(d)) => added.push(d.cert.clone()),
                 _ => {}
             }
         }
@@ -482,6 +494,14 @@ impl<A: Authorizer> Replica<A> {
                     }
                     let content = match (p.kind, &p.content) {
                         (KIND_CONTROL, None) => Content::None,
+                        // Only a `Compact` carries a sealed content: the causal past of the
+                        // operations it prunes (ADR 0017).
+                        (KIND_CONTROL, Some(v)) => match &d.control {
+                            Some(ControlBody::Compact(prune)) => decode_compact_past(v, prune)
+                                .map(Content::CompactPast)
+                                .unwrap_or(Content::Invalid),
+                            _ => Content::Invalid,
+                        },
                         (KIND_SECRET_PUT, Some(v)) => SecretBody::from_value(v)
                             .map(Content::Secret)
                             .unwrap_or(Content::Invalid),
@@ -518,7 +538,7 @@ impl<A: Authorizer> Replica<A> {
                 };
                 let mut found = Vec::new();
                 for w in c.epoch_wraps() {
-                    if let Ok(old) = w.open(k) {
+                    if let Ok(old) = open_epoch_wrap(w, k) {
                         found.push((w.epoch, old));
                     }
                 }
@@ -533,43 +553,86 @@ impl<A: Authorizer> Replica<A> {
         }
     }
 
-    /// Operations listed by a signed and opened `Compact`: their stubs count (§ 10.3).
-    fn listed_by_compacts(&self) -> BTreeSet<OpId> {
-        let mut s = BTreeSet::new();
-        for (id, d) in self.full_decoded() {
-            if !self.opened.contains_key(&id) {
+    /// Server mode: checks the transparency proofs of `LockerCreate` and `Grant` once per
+    /// operation (`transparence.md` § 6.3). The result is a function of the bytes and of the
+    /// pinned server key, the same on every replica.
+    fn check_proofs(&mut self) {
+        let Some(trust) = self.keylog.clone() else {
+            return;
+        };
+        let todo: Vec<(OpId, Arc<Decoded>)> = self
+            .full_decoded()
+            .into_iter()
+            .filter(|(id, _)| !self.proof_checked.contains_key(id))
+            .collect();
+        for (id, d) in todo {
+            let Some(c) = &d.control else { continue };
+            if !matches!(c, ControlBody::LockerCreate(_) | ControlBody::Grant(_)) {
                 continue;
             }
-            if let Some(ControlBody::Compact { prune }) = &d.control {
-                s.extend(prune.iter().copied());
+            let r = check_operation_proof(c, &trust.server_key, &trust.log_id).map_err(|_| ());
+            self.proof_checked.insert(id, r);
+        }
+    }
+
+    /// The causal past of every operation listed by a signed and opened `Compact` with a
+    /// well-formed content (§ 10.3, ADR 0017), except those known to be rejected. `None` when
+    /// two `Compact` describe the same operation differently: its stub is then refused.
+    fn listed_by_compacts(
+        &self,
+        distrusted: &BTreeSet<OpId>,
+    ) -> BTreeMap<OpId, Option<PrunedPast>> {
+        let mut out: BTreeMap<OpId, Option<PrunedPast>> = BTreeMap::new();
+        for (id, d) in self.full_decoded() {
+            if distrusted.contains(&id) || !matches!(d.control, Some(ControlBody::Compact(_))) {
+                continue;
+            }
+            let Some(Content::CompactPast(past)) = self.opened.get(&id).map(|o| &o.content) else {
+                continue;
+            };
+            for p in past {
+                match out.get_mut(&p.op_id) {
+                    None => {
+                        out.insert(p.op_id, Some(p.clone()));
+                    }
+                    Some(known) => {
+                        if known.as_ref() != Some(p) {
+                            *known = None;
+                        }
+                    }
+                }
             }
         }
-        s
+        out
     }
 
     /// Steps 1 to 6 for one operation.
-    fn pre_check(&self, id: &OpId, listed: &BTreeSet<OpId>) -> Result<Node, OpStatus> {
+    fn pre_check(
+        &self,
+        id: &OpId,
+        listed: &BTreeMap<OpId, Option<PrunedPast>>,
+    ) -> Result<Node, OpStatus> {
         let Some(entry) = self.entries.get(id) else {
             return Err(OpStatus::Rejected(RejectReason::Malformed));
         };
         match &entry.body {
-            Body::Stub(s) => {
-                if listed.contains(id) {
-                    Ok(Node {
-                        opref: s.opref,
-                        prev: s.prev,
-                        lamport: None,
-                        deps: Vec::new(),
-                        is_create: false,
-                    })
-                } else {
-                    Err(OpStatus::Rejected(RejectReason::UnlistedStub))
-                }
-            }
+            // The relay's `ref` and `prev` must be those the signed `Compact` carries; the
+            // rest of the past comes from it (ADR 0017).
+            Body::Stub(s) => match listed.get(id) {
+                Some(Some(p)) if p.opref == s.opref && p.prev == s.prev => Ok(Node {
+                    opref: p.opref,
+                    prev: p.prev,
+                    lamport: p.lamport,
+                    deps: p.deps.clone(),
+                    is_create: false,
+                }),
+                Some(_) => Err(OpStatus::Rejected(RejectReason::StubMismatch)),
+                None => Err(OpStatus::Rejected(RejectReason::UnlistedStub)),
+            },
             Body::Pruned(m) => Ok(Node {
                 opref: m.opref,
                 prev: m.prev,
-                lamport: Some(m.lamport),
+                lamport: m.lamport,
                 deps: m.deps.clone(),
                 is_create: false,
             }),
@@ -604,12 +667,19 @@ impl<A: Authorizer> Replica<A> {
                 Ok(Node {
                     opref: r,
                     prev: d.op.prev,
-                    lamport: Some(o.lamport),
+                    lamport: o.lamport,
                     deps: o.deps.clone(),
                     is_create: matches!(d.control, Some(ControlBody::LockerCreate(_))),
                 })
             }
         }
+    }
+
+    /// Whether the replica holds `id` as a stub. A refused stub (unlisted, or whose `ref`
+    /// differs from its `Compact`) comes from the relay, not from the author: what depends on
+    /// it waits for a correct one instead of being rejected (§ 10.3).
+    fn is_stub(&self, id: &OpId) -> bool {
+        matches!(self.entries.get(id).map(|e| &e.body), Some(Body::Stub(_)))
     }
 
     /// Steps 4 and 7 for one operation, its predecessors being already classified.
@@ -618,8 +688,8 @@ impl<A: Authorizer> Replica<A> {
         n: &Node,
         nodes: &BTreeMap<OpId, Node>,
         status: &BTreeMap<OpId, OpStatus>,
-        done: &BTreeMap<OpId, Result<Option<u64>, OpStatus>>,
-    ) -> Result<Option<u64>, OpStatus> {
+        done: &BTreeMap<OpId, Result<u64, OpStatus>>,
+    ) -> Result<u64, OpStatus> {
         let mut fail: Option<OpStatus> = None;
         // Step 4: the device chain.
         if let Some(p) = &n.prev {
@@ -633,20 +703,14 @@ impl<A: Authorizer> Replica<A> {
                     }
                 }
                 None => match status.get(p) {
-                    Some(OpStatus::Rejected(_)) => {
+                    Some(OpStatus::Rejected(_)) if !self.is_stub(p) => {
                         return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                     }
                     _ => fail = worst(fail, OpStatus::Pending(PendingReason::MissingPrev)),
                 },
             }
         }
-        let Some(lamport) = n.lamport else {
-            // A stub: its chain is all that is known (ADR 0017).
-            return match fail {
-                Some(f) => Err(f),
-                None => Ok(None),
-            };
-        };
+        let lamport = n.lamport;
         // Step 7: dependencies, `prev ∈ deps`, lamport.
         if n.is_create {
             if n.opref.seq != 1 || !n.deps.is_empty() || lamport != 1 {
@@ -661,16 +725,14 @@ impl<A: Authorizer> Replica<A> {
             }
         }
         let mut max = 0u64;
-        let mut unknown = false;
         for d in &n.deps {
             match done.get(d) {
-                Some(Ok(Some(l))) => {
+                Some(Ok(l)) => {
                     if *l >= lamport {
                         return Err(OpStatus::Rejected(RejectReason::Lamport));
                     }
                     max = max.max(*l);
                 }
-                Some(Ok(None)) => unknown = true,
                 Some(Err(OpStatus::Rejected(_))) => {
                     return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                 }
@@ -679,12 +741,12 @@ impl<A: Authorizer> Replica<A> {
                 }
                 None => {
                     if let Some(dn) = nodes.get(d) {
-                        if dn.lamport.is_some_and(|l| l >= lamport) {
+                        if dn.lamport >= lamport {
                             return Err(OpStatus::Rejected(RejectReason::Lamport));
                         }
                     }
                     match status.get(d) {
-                        Some(OpStatus::Rejected(_)) => {
+                        Some(OpStatus::Rejected(_)) if !self.is_stub(d) => {
                             return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                         }
                         _ => {
@@ -698,23 +760,31 @@ impl<A: Authorizer> Replica<A> {
         if let Some(f) = fail {
             return Err(f);
         }
-        let rule = if unknown {
-            lamport > max
-        } else {
-            Some(lamport) == max.checked_add(1)
-        };
-        if !rule {
+        // Strict equality, pruned dependencies included: their clock is carried by the
+        // `Compact` that lists them (§ 4.3, ADR 0017).
+        if max.checked_add(1) != Some(lamport) {
             return Err(OpStatus::Rejected(RejectReason::Lamport));
         }
-        Ok(Some(lamport))
+        Ok(lamport)
+    }
+
+    /// The causal past of a pruned operation or of a listed stub (ADR 0017).
+    pub(crate) fn pruned_past(&self, id: &OpId) -> Option<&PrunedPast> {
+        match &self.entries.get(id)?.body {
+            Body::Pruned(m) => Some(m),
+            Body::Stub(_) => self.stub_pasts.get(id),
+            Body::Full(_) => None,
+        }
     }
 
     pub(super) fn data_info(&self, id: &OpId) -> Option<DataInfo> {
-        match &self.entries.get(id)?.body {
-            Body::Pruned(m) => Some(DataInfo {
+        if let Some(m) = self.pruned_past(id) {
+            return Some(DataInfo {
                 secret: m.secret.map(|(s, _)| s),
                 parents: m.parents.clone(),
-            }),
+            });
+        }
+        match &self.entries.get(id)?.body {
             Body::Full(_) => match &self.opened.get(id)?.content {
                 Content::Secret(b) => Some(DataInfo {
                     secret: Some(b.secret_id),
@@ -726,22 +796,49 @@ impl<A: Authorizer> Replica<A> {
                 }),
                 _ => None,
             },
-            Body::Stub(_) => None,
+            Body::Pruned(_) | Body::Stub(_) => None,
         }
     }
 
     fn secret_type_of(&self, id: &OpId) -> Option<hirzla_vault::secret::SecretType> {
+        if let Some(m) = self.pruned_past(id) {
+            return m.secret.map(|(_, t)| t);
+        }
         match &self.entries.get(id)?.body {
-            Body::Pruned(m) => m.secret.map(|(_, t)| t),
             Body::Full(_) => match &self.opened.get(id)?.content {
                 Content::Secret(b) => Some(b.secret_type),
                 _ => None,
             },
-            Body::Stub(_) => None,
+            _ => None,
         }
     }
 
-    /// Step 8 for a full operation. Returns its verified approvals.
+    /// The causal past of a held data operation, as a `Compact` must carry it (ADR 0017).
+    pub(crate) fn past_of(&self, id: &OpId) -> Option<PrunedPast> {
+        if let Some(m) = self.pruned_past(id) {
+            return Some(m.clone());
+        }
+        let (Some(Ok(d)), Some(o)) = (self.decoded.get(id), self.opened.get(id)) else {
+            return None;
+        };
+        let (secret, parents) = match &o.content {
+            Content::Secret(b) => (Some((b.secret_id, b.secret_type)), b.parents.clone()),
+            Content::Meta(b) => (None, b.parents.clone()),
+            _ => return None,
+        };
+        Some(PrunedPast {
+            op_id: *id,
+            opref: d.op.opref,
+            prev: d.op.prev,
+            lamport: o.lamport,
+            deps: o.deps.clone(),
+            epoch: d.op.epoch,
+            secret,
+            parents,
+        })
+    }
+
+    /// Step 8 for a full operation.
     fn step8(
         &self,
         id: &OpId,
@@ -749,7 +846,7 @@ impl<A: Authorizer> Replica<A> {
         okset: &BTreeSet<OpId>,
         request_ids: &mut BTreeSet<Id16>,
         creations: &mut BTreeSet<Id16>,
-    ) -> Result<Vec<VerifiedApproval>, RejectReason> {
+    ) -> Result<(), RejectReason> {
         let (Some(Ok(d)), Some(o)) = (self.decoded.get(id), self.opened.get(id)) else {
             return Err(RejectReason::Malformed);
         };
@@ -758,31 +855,43 @@ impl<A: Authorizer> Replica<A> {
         if creates != (op.epoch == op.opref) {
             return Err(RejectReason::TypeRule);
         }
-        let mut approvals = Vec::new();
         if let Some(c) = &d.control {
             self.control_rules(op, c)?;
-            approvals = self.verify_approvals(op, c)?;
-            if let ControlBody::Compact { prune } = c {
-                for p in prune {
-                    let is_data = match self.entries.get(p).map(|e| &e.body) {
-                        Some(Body::Full(_)) => matches!(
-                            self.decoded.get(p),
-                            Some(Ok(pd)) if pd.op.class == CLASS_DATA
-                        ),
-                        Some(Body::Pruned(_) | Body::Stub(_)) => true,
-                        None => false,
-                    };
-                    if !is_data || !okset.contains(p) || !self.causality.precedes(p, id) {
-                        return Err(RejectReason::NotPrunable);
+            self.verify_approvals(op, c)?;
+            match (c, &o.content) {
+                (ControlBody::Compact(prune), Content::CompactPast(past)) => {
+                    for (p, carried) in prune.iter().zip(past) {
+                        let is_data = match self.entries.get(p).map(|e| &e.body) {
+                            Some(Body::Full(_)) => matches!(
+                                self.decoded.get(p),
+                                Some(Ok(pd)) if pd.op.class == CLASS_DATA
+                            ),
+                            Some(Body::Pruned(_) | Body::Stub(_)) => true,
+                            None => false,
+                        };
+                        if !is_data || !okset.contains(p) || !self.causality.precedes(p, id) {
+                            return Err(RejectReason::NotPrunable);
+                        }
+                        // The carried past must be the one of the operation held (§ 10.2).
+                        if self.past_of(p).as_ref() != Some(carried) {
+                            return Err(RejectReason::CausalPastMismatch);
+                        }
                     }
                 }
+                (ControlBody::Compact(_), _) | (_, Content::CompactPast(_) | Content::Invalid) => {
+                    return Err(RejectReason::TypeRule);
+                }
+                _ => {}
             }
             if let Some(rid) = c.request_id() {
                 if !request_ids.insert(rid) {
                     return Err(RejectReason::RequestIdReused);
                 }
             }
-            return Ok(approvals);
+            if matches!(self.proof_checked.get(id), Some(Err(()))) {
+                return Err(RejectReason::KeyLogProof);
+            }
+            return Ok(());
         }
         match &o.content {
             Content::Secret(body) => {
@@ -816,7 +925,7 @@ impl<A: Authorizer> Replica<A> {
                         return Err(RejectReason::InvalidVersion);
                     }
                 }
-                Ok(approvals)
+                Ok(())
             }
             Content::Meta(body) => {
                 let mut parents = Vec::new();
@@ -836,14 +945,16 @@ impl<A: Authorizer> Replica<A> {
                 } else if all_available {
                     Some(merge_meta(parents).ok_or(RejectReason::InvalidVersion)?)
                 } else {
-                    return Ok(approvals);
+                    return Ok(());
                 };
                 if !check_meta(body, merged.as_ref(), &op.opref, o.lamport) {
                     return Err(RejectReason::InvalidVersion);
                 }
-                Ok(approvals)
+                Ok(())
             }
-            Content::None | Content::Invalid => Err(RejectReason::TypeRule),
+            Content::None | Content::CompactPast(_) | Content::Invalid => {
+                Err(RejectReason::TypeRule)
+            }
         }
     }
 
@@ -880,13 +991,17 @@ impl<A: Authorizer> Replica<A> {
                     return Err(RejectReason::TypeRule);
                 }
             }
-            ControlBody::DeviceAdd { cert, .. }
-                if !any_key_verifies(&cert.member, &|mk| verify_device_cert(mk, cert).is_ok()) =>
+            ControlBody::DeviceAdd(d)
+                if !any_key_verifies(&d.cert.member, &|mk| {
+                    verify_device_cert(mk, &d.cert).is_ok()
+                }) =>
             {
                 return Err(RejectReason::TypeRule);
             }
-            ControlBody::DeviceRemove { revocation, .. }
-                if !any_key_verifies(&revocation.member, &|mk| revocation.verify(mk).is_ok()) =>
+            ControlBody::DeviceRemove(d)
+                if !any_key_verifies(&d.revocation.member, &|mk| {
+                    d.revocation.verify(mk).is_ok()
+                }) =>
             {
                 return Err(RejectReason::TypeRule);
             }
@@ -896,29 +1011,28 @@ impl<A: Authorizer> Replica<A> {
     }
 
     /// Verifies the joined approvals' signatures (§ 7.7). Their weight is the authorizer's.
-    fn verify_approvals(
-        &self,
-        op: &Operation,
-        c: &ControlBody,
-    ) -> Result<Vec<VerifiedApproval>, RejectReason> {
+    fn verify_approvals(&self, op: &Operation, c: &ControlBody) -> Result<(), RejectReason> {
         let list = c.approvals();
         if list.is_empty() {
-            return Ok(Vec::new());
+            return Ok(());
         }
         let Some(request_id) = c.request_id() else {
             return Err(RejectReason::TypeRule);
         };
         let (action, target, detail) = match c {
-            ControlBody::Revoke(r) => (ApprovalAction::RemoveOwner, Some(r.member), None),
+            ControlBody::Revoke(r) => (SensitiveAction::OwnerRemoval, Some(r.member), None),
             ControlBody::Grant(g) => (
-                ApprovalAction::ChangeOwnerRole,
+                SensitiveAction::OwnerRoleChange,
                 Some(g.member.member),
-                Some(g.role as u64),
+                Some(g.role.code()),
             ),
-            ControlBody::Policy(p) => (ApprovalAction::Policy, None, Some(p.owner_removal_quorum)),
+            ControlBody::Policy(p) => (
+                SensitiveAction::Policy,
+                None,
+                Some(u64::from(p.owner_removal_quorum)),
+            ),
             _ => return Err(RejectReason::TypeRule),
         };
-        let mut out = Vec::new();
         for a in list {
             if a.member == op.opref.member {
                 // The initiator counts without an approval (§ 7.7).
@@ -934,50 +1048,37 @@ impl<A: Authorizer> Replica<A> {
                 approver_member: a.member,
                 approver_device: a.device,
             };
-            let cert = self
-                .certs
-                .get(&(a.member, a.device))
-                .and_then(|l| l.iter().find(|(cert, _)| a.verify(&req, cert).is_ok()))
-                .map(|(cert, _)| cert.clone())
-                .ok_or(RejectReason::BadApproval)?;
-            out.push(VerifiedApproval {
-                member: a.member,
-                device: a.device,
-                cert,
+            let signed = self.certs.get(&(a.member, a.device)).is_some_and(|l| {
+                l.iter()
+                    .any(|(cert, _)| verify_approval(a, &req, cert).is_ok())
             });
+            if !signed {
+                return Err(RejectReason::BadApproval);
+            }
         }
-        Ok(out)
+        Ok(())
     }
 
-    fn facts_of(
-        &self,
-        id: &OpId,
-        approvals: Vec<VerifiedApproval>,
-        forked: impl Fn(&OpRef) -> bool,
-    ) -> Option<OpFacts> {
+    fn facts_of(&self, id: &OpId, forked: impl Fn(&OpRef) -> bool) -> Option<OpFacts> {
         let d = self.decoded.get(id)?.as_ref().ok()?;
         let o = self.opened.get(id)?;
-        let (cert, mk) = self.signed_by.get(id)?;
-        let body = match &d.control {
-            Some(c) => OpBody::Control(c.clone()),
-            None => OpBody::Data(if o.kind == KIND_SECRET_PUT {
-                DataKind::SecretPut
-            } else {
-                DataKind::LockerMetaPut
-            }),
+        let (cert, _) = self.signed_by.get(id)?;
+        let body = match (&d.control, &o.content) {
+            (Some(c), _) => OpBody::Control(c.clone()),
+            (None, Content::Secret(b)) => OpBody::Data(DataTarget::Secret(b.secret_id)),
+            (None, Content::Meta(_)) => OpBody::Data(DataTarget::LockerMeta),
+            _ => return None,
         };
         Some(OpFacts {
             op_id: *id,
             opref: d.op.opref,
             lamport: o.lamport,
+            deps: o.deps.clone(),
             epoch: d.op.epoch,
             creates_epoch: d.control.as_ref().is_some_and(ControlBody::creates_epoch),
             body,
             author_cert: cert.clone(),
-            author_member_key: *mk,
-            approvals,
             forked: forked(&d.op.opref),
-            pruned: false,
         })
     }
 

@@ -12,9 +12,9 @@ use hirzla_vault::model::Id16;
 use hirzla_vault::secret::{FieldValue, LockerField, SecretEdit, SecretType, SetKind, SetValue};
 
 use super::support::*;
-use crate::codec::RoleCode;
 use crate::testing::{MemoryRelay, PushStatus};
 use crate::AuthorizationState;
+use hirzla_access::Role;
 
 /// SplitMix64: a reproducible schedule for the test, not a cryptographic generator.
 struct Schedule(u64);
@@ -66,7 +66,7 @@ struct Net {
 impl Net {
     fn new(seed: u64) -> Net {
         // Alice (owner), Bob (editor), Carol (manager), Dave (editor).
-        let w = World::new(&[RoleCode::Editor, RoleCode::Manager, RoleCode::Editor]);
+        let w = World::new(&[Role::Editor, Role::Manager, Role::Editor]);
         let locker = w.replicas[0].locker_id();
         let n = w.replicas.len();
         let mut net = Net {

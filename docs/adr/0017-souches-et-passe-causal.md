@@ -72,3 +72,27 @@ Accepté : la `Compact` portera, scellé, le passé causal des opérations qu'el
 n'est encore déployé, le changement de format du protocole se fait donc maintenant, avant
 toute version publiée, dans le lot d'intégration de `hirzla-sync` et `hirzla-access`. D'ici
 là, l'élagage reste désactivé en mode Serveur.
+
+## Mise en œuvre (lot d'intégration, 2026-11-15)
+
+- **Format** : le `content` scellé d'une `Compact` (`format.md` § 7.2, clé 5) est un
+  `CompactPast`, un `PrunedPast` par élément de `prune` (`sync-protocol.md` § 10.2). Le
+  champ 2 de `Compact` ne change pas de type : aucun nouveau type d'opération. Rien n'ayant
+  été publié, la version reste `v = 1` (ADR 0023).
+- **Contrôle** (étape 8) : une `Compact` sans `content`, ou un autre contrôle avec un
+  `content`, est rejeté (`TypeRule`) ; un `PrunedPast` qui diffère de l'opération détenue
+  fait rejeter la `Compact` (`CausalPastMismatch`).
+- **Souches** : acceptées seulement si une `Compact` signée et bien formée les liste avec le
+  même `ref` et le même `prev` ; sinon `StubMismatch` (ou `UnlistedStub` sans `Compact`).
+  Deux `Compact` qui décrivent différemment la même opération rendent sa souche
+  inacceptable (ADR 0023).
+- **Horloge** : la règle d'égalité de `lamport` (§ 4.3) redevient stricte, y compris quand
+  une dépendance est élaguée.
+- Le point 3 de la décision (genèse supposée atteinte à travers une souche) est retiré :
+  le graphe causal est complet.
+- Code : `crates/hirzla-sync/src/compact.rs` ; le test
+  `a_device_joining_after_pruning_reaches_the_same_state` n'est plus ignoré.
+- La taille réelle est d'environ 350 octets par élément, pas 150 : une `Compact` de 4 Mio
+  liste environ 10 000 opérations. L'émetteur découpe au-delà.
+- Reste au noyau : persister les `PrunedPast` des opérations élaguées (aujourd'hui en
+  mémoire), et réactiver l'élagage en mode Serveur.

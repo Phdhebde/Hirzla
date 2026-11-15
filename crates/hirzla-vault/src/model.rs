@@ -802,7 +802,8 @@ pub struct SealedPayload {
     pub deps: Vec<OpId>,
     /// Indicative wall clock, milliseconds.
     pub wall_ms: u64,
-    /// `SecretBody` or `LockerBody`, absent for control operations.
+    /// `SecretBody` or `LockerBody`; for a control operation, absent except the causal past
+    /// carried by a `Compact` (`sync-protocol.md` § 10.3, ADR 0017).
     pub content: Option<Value>,
 }
 
@@ -833,7 +834,10 @@ impl SealedPayload {
         let f = Fields::new(&v, &[1, 2, 3, 4, 5])?;
         let kind = uint_in(f.req(1)?, 0..=2)?;
         let content = f.opt(5).cloned();
-        if content.is_some() != (kind != KIND_CONTROL) {
+        // A data operation always carries its body. A control operation carries none, except
+        // a `Compact`, which carries the causal past of what it prunes (ADR 0017): the control
+        // kind is in the clear body, so `hirzla-sync` enforces that rule.
+        if kind != KIND_CONTROL && content.is_none() {
             return Err(CborError::Malformed);
         }
         Ok(SealedPayload {

@@ -209,6 +209,13 @@ le poste récupère : les siens, et ceux des membres à qui il envoie une clé d
 
 ## 6. Ce que vérifie un poste, et quand
 
+Répartition (lot d'intégration, ADR 0023) : `hirzla-sync` porte la vérification des preuves
+à l'étape 8 en mode Serveur (§ 6.3), le contrôle des destinataires avant chaque enveloppe
+(§ 6.2, par une porte fournie par le noyau) et le gel des écritures (§ 6.5) ; il expose les
+preuves acceptées et les têtes des `Checkpoint`. `hirzla-core` tient le registre local
+(§ 6.1), compare ces preuves et ces têtes à son registre (§ 6.3, § 6.6), décide du gel et
+gère les alertes et les délais (§ 6.4, § 6.5, § 6.7). Voir `crates/hirzla-sync/src/keylog.rs`.
+
 ### 6.1 Mise à jour du registre
 
 **Quand** : à chaque ouverture de session (après `AuthOk`), puis au moins toutes les heures
