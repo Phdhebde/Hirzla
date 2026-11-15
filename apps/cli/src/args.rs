@@ -47,6 +47,9 @@ Mode Serveur :
   serveur rejoindre ADRESSE --ac PEM [--empreinte E]
                           Rattache le coffre au serveur (hirzla://hôte[:port]). Sans
                           --empreinte, confirmez ensuite l'empreinte affichée.
+  serveur rejoindre LIEN  Rattache le coffre avec le lien d'invitation de l'administrateur
+                          (hirzla-invitation:…, ou @FICHIER) : adresse, autorité et
+                          empreinte en un seul texte.
   serveur confirmer EMPREINTE
                           Confirme l'empreinte du serveur, vérifiée hors bande.
   serveur etat            Serveur rattaché et état des casiers partagés.
@@ -57,6 +60,18 @@ Mode Serveur :
                           Donne un rôle à un membre (ou change son rôle).
   casier retirer CASIER MEMBRE
                           Retire un membre du casier.
+  accord preparer CASIER retrait MEMBRE | role MEMBRE ROLE | quorum N
+                          Prépare une action qui demande l'accord d'autres propriétaires
+                          et écrit la demande (hirzla-demande:…) à leur transmettre.
+  accord voir DEMANDE     Montre ce qu'une demande ferait, sans la signer.
+  accord signer DEMANDE   Signe une demande et écrit l'accord (hirzla-accord:…) à rendre.
+  accord ajouter ACCORD   Joint un accord reçu à votre demande.
+  accord liste [CASIER]   Demandes en cours et accords recueillis.
+  accord appliquer ID     Publie l'action quand le quorum est atteint.
+  accord annuler ID       Abandonne une demande.
+  quarantaine CASIER [accepter|rejeter OP…]
+                          Opérations en quarantaine d'un casier ; les accepte ou les
+                          rejette (propriétaires).
   stop                    Verrouille le coffre et arrête le noyau.
 
 Mises à jour hors ligne (sans réseau ni noyau) :
@@ -77,7 +92,10 @@ Options globales :
 Champs : titre, identifiant, mot-de-passe, notes.
 Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
 CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
-moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).";
+moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
+DEMANDE, ACCORD, LIEN : le texte lui-même, ou @FICHIER. ID : début de l'identifiant de la
+demande (4 chiffres hexadécimaux au moins). OP : début de l'identifiant d'une opération
+(8 chiffres hexadécimaux au moins).";
 
 /// A command of the server mode (`docs/api-locale.md` § 15.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,11 +108,43 @@ pub enum ServerCommand {
         ca: PathBuf,
         fingerprint: Option<String>,
     },
+    /// With an invitation link (ADR 0046): the text, or `@FILE`.
+    JoinLink {
+        link: String,
+    },
     Confirm {
         fingerprint: String,
     },
     Status,
     Sync,
+}
+
+/// What a quorum request does (`docs/api-locale.md` § 15.8).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuorumWhat {
+    Removal { member: String },
+    RoleChange { member: String, role: String },
+    Policy { quorum: u64 },
+}
+
+/// A command on approvals (`docs/api-locale.md` § 15.6, ADR 0044). Texts may be `@FILE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuorumCommand {
+    Prepare { locker: String, what: QuorumWhat },
+    Inspect { offer: String },
+    Approve { offer: String },
+    Collect { token: String },
+    List { locker: Option<String> },
+    Apply { request: String },
+    Cancel { request: String },
+}
+
+/// `quarantaine CASIER [accepter|rejeter OP…]` (ADR 0045).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantineCommand {
+    pub locker: String,
+    /// `Some((accept, ops))` to decide.
+    pub decide: Option<(bool, Vec<String>)>,
 }
 
 /// A command on shared lockers (`docs/api-locale.md` § 15.6).
@@ -191,6 +241,8 @@ pub enum Command {
     Stop,
     Server(ServerCommand),
     Locker(LockerCommand),
+    Quorum(QuorumCommand),
+    Quarantine(QuarantineCommand),
     Update(UpdateCommand),
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
@@ -538,6 +590,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                         output: one("--sortie")?.map(PathBuf::from),
                     }
                 }
+                "rejoindre" if !has("--ac") => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    let link = arg(1, "le LIEN d'invitation, ou l'ADRESSE et --ac PEM")?;
+                    if !link.starts_with('@') && !link.starts_with("hirzla-invitation:") {
+                        return Err("« serveur rejoindre » attend un lien hirzla-invitation:…, \
+                             @FICHIER, ou une ADRESSE avec --ac PEM."
+                            .to_owned());
+                    }
+                    ServerCommand::JoinLink { link }
+                }
                 "rejoindre" => {
                     max_positional(2)?;
                     only(&["--ac", "--empreinte"])?;
@@ -615,6 +678,110 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 _ => return Err(format!("sous-commande de « casier » inconnue.\n\n{USAGE}")),
             };
             Command::Locker(sub_command)
+        }
+        "accord" => {
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            let arg = |i: usize, what: &str| -> Result<String, String> {
+                positional
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("« accord {sub} » attend {what}."))
+            };
+            let sub_command = match sub {
+                "preparer" => {
+                    let locker = arg(1, "le CASIER et l'action")?;
+                    let what =
+                        match positional.get(2).map(String::as_str) {
+                            Some("retrait") => {
+                                max_positional(4)?;
+                                QuorumWhat::Removal {
+                                    member: arg(3, "le MEMBRE")?,
+                                }
+                            }
+                            Some("role") => {
+                                max_positional(5)?;
+                                QuorumWhat::RoleChange {
+                                    member: arg(3, "le MEMBRE et le ROLE")?,
+                                    role: arg(4, "le MEMBRE et le ROLE")?,
+                                }
+                            }
+                            Some("quorum") => {
+                                max_positional(4)?;
+                                QuorumWhat::Policy {
+                                    quorum: number(&arg(3, "le quorum N")?, "quorum")?,
+                                }
+                            }
+                            _ => return Err(
+                                "« accord preparer » attend : retrait MEMBRE, role MEMBRE ROLE \
+                                 ou quorum N."
+                                    .to_owned(),
+                            ),
+                        };
+                    QuorumCommand::Prepare { locker, what }
+                }
+                "voir" => {
+                    max_positional(2)?;
+                    QuorumCommand::Inspect {
+                        offer: arg(1, "la DEMANDE")?,
+                    }
+                }
+                "signer" => {
+                    max_positional(2)?;
+                    QuorumCommand::Approve {
+                        offer: arg(1, "la DEMANDE")?,
+                    }
+                }
+                "ajouter" => {
+                    max_positional(2)?;
+                    QuorumCommand::Collect {
+                        token: arg(1, "l'ACCORD")?,
+                    }
+                }
+                "liste" => {
+                    max_positional(2)?;
+                    QuorumCommand::List {
+                        locker: positional.get(1).cloned(),
+                    }
+                }
+                "appliquer" => {
+                    max_positional(2)?;
+                    QuorumCommand::Apply {
+                        request: arg(1, "l'ID de la demande")?,
+                    }
+                }
+                "annuler" => {
+                    max_positional(2)?;
+                    QuorumCommand::Cancel {
+                        request: arg(1, "l'ID de la demande")?,
+                    }
+                }
+                _ => return Err(format!("sous-commande de « accord » inconnue.\n\n{USAGE}")),
+            };
+            Command::Quorum(sub_command)
+        }
+        "quarantaine" => {
+            let locker = positional
+                .first()
+                .cloned()
+                .ok_or_else(|| "« quarantaine » attend le CASIER.".to_owned())?;
+            let decide = match positional.get(1).map(String::as_str) {
+                None => None,
+                Some(verb @ ("accepter" | "rejeter")) => {
+                    let ops: Vec<String> = positional[2..].to_vec();
+                    if ops.is_empty() {
+                        return Err(format!(
+                            "« quarantaine CASIER {verb} » attend une OP au moins."
+                        ));
+                    }
+                    Some((verb == "accepter", ops))
+                }
+                Some(_) => {
+                    return Err(
+                        "« quarantaine CASIER » attend accepter OP… ou rejeter OP….".to_owned()
+                    )
+                }
+            };
+            Command::Quarantine(QuarantineCommand { locker, decide })
         }
         "mise-a-jour" => {
             max_positional(2)?;
@@ -835,6 +1002,87 @@ mod tests {
         assert!(p(&["gen", "abc"]).is_err());
         assert!(p(&["get", "a", "--champ"]).is_err());
         assert!(p(&["--nope", "ls"]).is_err());
+        assert_eq!(
+            p(&["serveur", "rejoindre", "hirzla-invitation:abc"])
+                .unwrap()
+                .command,
+            Command::Server(ServerCommand::JoinLink {
+                link: "hirzla-invitation:abc".into()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "rejoindre", "@lien.txt"]).unwrap().command,
+            Command::Server(ServerCommand::JoinLink {
+                link: "@lien.txt".into()
+            })
+        );
+        assert!(p(&["serveur", "rejoindre", "@lien.txt", "--empreinte", "X"]).is_err());
+        assert_eq!(
+            p(&["accord", "preparer", "Ops", "retrait", "ab"])
+                .unwrap()
+                .command,
+            Command::Quorum(QuorumCommand::Prepare {
+                locker: "Ops".into(),
+                what: QuorumWhat::Removal {
+                    member: "ab".into()
+                }
+            })
+        );
+        assert_eq!(
+            p(&["accord", "preparer", "Ops", "role", "ab", "editeur"])
+                .unwrap()
+                .command,
+            Command::Quorum(QuorumCommand::Prepare {
+                locker: "Ops".into(),
+                what: QuorumWhat::RoleChange {
+                    member: "ab".into(),
+                    role: "editeur".into()
+                }
+            })
+        );
+        assert_eq!(
+            p(&["accord", "preparer", "Ops", "quorum", "3"])
+                .unwrap()
+                .command,
+            Command::Quorum(QuorumCommand::Prepare {
+                locker: "Ops".into(),
+                what: QuorumWhat::Policy { quorum: 3 }
+            })
+        );
+        assert!(p(&["accord", "preparer", "Ops", "quorum", "trois"]).is_err());
+        assert!(p(&["accord", "preparer", "Ops", "exporter"]).is_err());
+        assert!(p(&["accord", "preparer", "Ops", "retrait", "ab", "cd"]).is_err());
+        assert_eq!(
+            p(&["accord", "liste"]).unwrap().command,
+            Command::Quorum(QuorumCommand::List { locker: None })
+        );
+        assert_eq!(
+            p(&["accord", "signer", "@d.txt"]).unwrap().command,
+            Command::Quorum(QuorumCommand::Approve {
+                offer: "@d.txt".into()
+            })
+        );
+        assert!(p(&["accord", "appliquer"]).is_err());
+        assert!(p(&["accord", "voter", "x"]).is_err());
+        assert_eq!(
+            p(&["quarantaine", "Ops"]).unwrap().command,
+            Command::Quarantine(QuarantineCommand {
+                locker: "Ops".into(),
+                decide: None
+            })
+        );
+        assert_eq!(
+            p(&["quarantaine", "Ops", "rejeter", "0011aabb", "ccdd0011"])
+                .unwrap()
+                .command,
+            Command::Quarantine(QuarantineCommand {
+                locker: "Ops".into(),
+                decide: Some((false, vec!["0011aabb".into(), "ccdd0011".into()]))
+            })
+        );
+        assert!(p(&["quarantaine"]).is_err());
+        assert!(p(&["quarantaine", "Ops", "accepter"]).is_err());
+        assert!(p(&["quarantaine", "Ops", "ignorer", "x"]).is_err());
         assert!(p(&["serveur"]).is_err());
         assert!(p(&["serveur", "rejoindre", "hirzla://h"]).is_err());
         assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());

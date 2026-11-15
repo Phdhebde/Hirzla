@@ -43,6 +43,16 @@ const COMMANDS: &[&str] = &[
     "locker_members",
     "grant_role",
     "revoke_role",
+    "server_join_link",
+    "quorum_prepare",
+    "quorum_inspect",
+    "quorum_approve",
+    "quorum_collect",
+    "quorum_list",
+    "quorum_apply",
+    "quorum_cancel",
+    "quarantine_list",
+    "quarantine_decide",
 ];
 
 fn main() {
