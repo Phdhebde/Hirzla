@@ -2,7 +2,7 @@
 # docs/evaluation/interfaces.md). Outside the workspace: needs nightly and cargo-fuzz.
 #   cargo install cargo-fuzz
 #   cargo +nightly fuzz run decode_secret_body
-# The core pulls tss-esapi on Linux: tpm2-tss must be installed (.github/scripts).
+# tpm2-tss is not needed: the TPM prototype is behind a feature that is off (ADR 0052).
 [package]
 name = "hirzla-vault-fuzz"
 version = "0.0.0"
