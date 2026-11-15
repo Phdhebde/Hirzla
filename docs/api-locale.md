@@ -103,6 +103,11 @@ il n'envoie pas le mot de passe maître à un faux noyau.
   processus qui se connecte puis meurt en laissant la connexion à un enfant, et dont le PID
   serait repris par un `hirzla` légitime, passerait le contrôle. La fenêtre est étroite et
   l'attaquant doit déjà tourner sous le compte de l'utilisateur (voir le point précédent).
+- **Noyau non vidable sous Linux** : le noyau durci passe `PR_SET_DUMPABLE` à 0, ce qui
+  rend `/proc/<pid>/exe` illisible pour un processus sans `CAP_SYS_PTRACE`. Le client ne
+  peut donc pas lire l'exécutable du noyau : quand le noyau le lui refuse (`EACCES`), il se
+  contente du même utilisateur et du répertoire privé de la socket. Le blocage du traçage du
+  noyau vaut plus que ce contrôle, qu'un logiciel du même compte contournerait de toute façon.
 - **Administrateur ou root** : hors périmètre (modèle de menace, « Hypothèses »).
 
 ## 4. Trames

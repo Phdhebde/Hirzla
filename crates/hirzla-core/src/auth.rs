@@ -93,6 +93,12 @@ pub fn check_server(peer: &PeerIdentity, expected: Option<&Path>) -> Result<(), 
         return Err(ServerRefusal::OtherUser);
     }
     if let Some(expected) = expected {
+        // Linux: the hardened core is non-dumpable (`PR_SET_DUMPABLE` 0), so the kernel hides
+        // its executable from an unprivileged client. The check then rests on the same user
+        // and the private socket directory (docs/api-locale.md § 3.3).
+        if cfg!(target_os = "linux") && peer.executable.is_none() && peer.executable_hidden {
+            return Ok(());
+        }
         let exe = peer
             .executable
             .as_deref()
@@ -114,6 +120,7 @@ mod tests {
             same_user,
             pid: Some(1),
             executable: exe,
+            executable_hidden: false,
         }
     }
 

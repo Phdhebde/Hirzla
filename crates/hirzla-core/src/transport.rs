@@ -23,6 +23,9 @@ pub struct PeerIdentity {
     pub pid: Option<u32>,
     /// Its executable, when it could be read.
     pub executable: Option<PathBuf>,
+    /// The kernel refused to show its executable (Linux: a non-dumpable process, such as a
+    /// hardened core, hides `/proc/<pid>/exe` from processes without `CAP_SYS_PTRACE`).
+    pub executable_hidden: bool,
 }
 
 /// Where the core listens.
@@ -172,15 +175,23 @@ fn ensure_private_dir(dir: &Path) -> Result<(), TransportError> {
 fn peer_of(stream: &UnixStream) -> PeerIdentity {
     use std::os::fd::AsFd;
     match platform::peer_credentials(stream.as_fd()) {
-        Ok(c) => PeerIdentity {
-            same_user: c.uid == platform::effective_uid(),
-            pid: c.pid,
-            executable: c.pid.and_then(|p| platform::process_executable(p).ok()),
-        },
+        Ok(c) => {
+            let exe = c.pid.map(platform::process_executable);
+            PeerIdentity {
+                same_user: c.uid == platform::effective_uid(),
+                pid: c.pid,
+                executable_hidden: matches!(
+                    &exe,
+                    Some(Err(e)) if e.kind() == std::io::ErrorKind::PermissionDenied
+                ),
+                executable: exe.and_then(Result::ok),
+            }
+        }
         Err(_) => PeerIdentity {
             same_user: false,
             pid: None,
             executable: None,
+            executable_hidden: false,
         },
     }
 }
@@ -193,6 +204,7 @@ fn peer_of_pid(pid: Option<u32>, own_sid: &str) -> PeerIdentity {
             .is_some_and(|s| s == own_sid),
         pid,
         executable: pid.and_then(|p| platform::process_executable(p).ok()),
+        executable_hidden: false,
     }
 }
 

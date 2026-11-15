@@ -33,7 +33,8 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 const DEFAULT_CLEAR_S: u64 = 30;
 
 fn main() -> ExitCode {
-    let _ = hirzla_keystore::platform::harden_process();
+    // Hardening waits for the core to have authorised this process (see `try_connect`):
+    // on Linux a non-dumpable process hides its executable, which the core must read.
     let args = match args::parse(std::env::args_os().skip(1)) {
         Ok(a) => a,
         Err(msg) => {
@@ -184,8 +185,14 @@ impl<'a> Session<'a> {
         })
     }
 
+    /// Connects, waits for the core to accept this process (one `Status` round trip, since
+    /// the core reads this executable when it accepts), then hardens this process. Nothing
+    /// secret is read or held before that point.
     fn try_connect(&self) -> Result<Client, ClientError> {
-        Client::connect(&self.endpoint, Some(&self.core))
+        let mut client = Client::connect(&self.endpoint, Some(&self.core))?;
+        client.call(&Request::Status)?;
+        let _ = hirzla_keystore::platform::harden_process();
+        Ok(client)
     }
 
     /// Connects; when `start` is set and no core runs, starts one, detached.
