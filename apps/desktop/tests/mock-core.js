@@ -25,7 +25,7 @@
   // Server mode: a joined server and its shared lockers (all made up). The captures change
   // this state through window.__HIRZLA_MOCK_SERVER__.
   const S = Object.assign(
-    { joined: false, verified: false, synced: false, ca: false, lastSync: null, failSync: null, unreachable: false, suspect: false, alerts: [], lost: false },
+    { joined: false, verified: false, synced: false, ca: false, lastSync: null, failSync: null, unreachable: false, suspect: false, alerts: [], lost: false, senior: false, quarantine: false, frozen: false, requests: [] },
     cfg.server || {},
   );
   window.__HIRZLA_MOCK_SERVER__ = S;
@@ -65,6 +65,16 @@
   const READERS = ["owner", "manager", "editor", "reader"];
   const ROLES = ["owner", "manager", "editor", "reader", "blind_user", "auditor"];
   const norm = (f) => (f || "").replace(/[\s-]/g, "").toUpperCase();
+  // Governance (ADR 0044 to 0046): a senior owner in "Atelier", requests, quarantine.
+  if (S.senior) roster[W].unshift({ member: others.claire, role: "owner", devices: 1, proven: true });
+  const OFFER = "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQ" + "Ax7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX".repeat(3);
+  const TOKEN = "hirzla-accord:pGEBYQJQah8MLpuNTxejxeAtIvqMFFBk" + "Vt3Hq9ZpL2xR7wNcB6mJ4dK8sY1gE5uA0oQ".repeat(4);
+  const quarantined = () => (S.quarantine
+    ? [
+        { op_id: "3c9e".padEnd(96, "1"), member: others.karim, device: "1f2e3d4c5b6a79880716253443526170", cause: "removal", class: "data", wall_ms: Date.UTC(2026, 10, 14, 17, 5), title: "Console du NAS", secret: id(9), received_ms: Date.UTC(2026, 10, 15, 8, 2), due_ms: Date.UTC(2026, 10, 22, 8, 2) },
+        { op_id: "a71b".padEnd(96, "2"), member: others.karim, device: "1f2e3d4c5b6a79880716253443526170", cause: "removal", class: "data", wall_ms: Date.UTC(2026, 10, 14, 17, 9), title: "Wi-Fi de l'atelier", secret: id(13), received_ms: Date.UTC(2026, 10, 15, 8, 2), due_ms: Date.UTC(2026, 10, 22, 8, 2) },
+      ]
+    : []);
   const lockerList = () => {
     const base = [{ id: L, name: "Personnel", personal: true }];
     if (S.joined && S.verified && S.synced) {
@@ -83,6 +93,7 @@
       me: ME,
       grantable: lost ? [] : owner ? ROLES.slice() : manager ? ROLES.slice(2) : [],
       grant_refusal: lost ? "access_lost" : owner || manager ? null : "role",
+      quorum: 2,
       members: list.map((m) => {
         const self = m.member === ME;
         let change_to = [];
@@ -91,6 +102,9 @@
         if (lost) {
           change_refusal = "access_lost";
           remove_refusal = "access_lost";
+        } else if (owner && m.member === others.claire && locker === W) {
+          change_refusal = "quorum";
+          remove_refusal = "quorum";
         } else if (owner) {
           if (self && owners === 1) {
             change_refusal = "last_owner";
@@ -112,6 +126,8 @@
     access_lost: "Accès perdu : le serveur ne vous sert plus ce casier. Demandez l'accès à son propriétaire.",
     keylog_rejected: "Registre des clés suspect : la clé de ce membre n'est pas prouvée par le registre de transparence, ou le serveur présente un registre incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité.",
     invalid: "Choisissez d'abord le certificat de l'autorité du site.",
+    invitation_invalid: "Lien d'invitation non valide ou altéré. Demandez-le à nouveau à l'administrateur du serveur, ou saisissez l'adresse, l'autorité et l'empreinte séparément.",
+    approval_invalid: "Accord refusé : texte altéré, signature fausse, signataire qui n'est pas propriétaire du casier, accord déjà compté ou destiné à une autre demande.",
   };
   const values = {
     password: "c7#Lq9vT!m2Rz@4wXe",
@@ -220,7 +236,14 @@
         verified: S.verified,
         last_sync_ms: S.lastSync,
         keylog: { suspect: S.suspect, reason: S.suspect ? "shorter" : null, entries: 148, alerts: S.alerts },
-        lockers: S.verified && S.synced ? shared.map((l) => ({ ...l, access: !(l.id === C && S.lost) })) : [],
+        lockers: S.verified && S.synced
+          ? shared.map((l) => ({
+              ...l,
+              access: !(l.id === C && S.lost),
+              frozen: l.id === W && S.frozen,
+              quarantined: l.id === W ? quarantined().length : l.quarantined,
+            }))
+          : [],
       };
     },
     server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB" }),
@@ -272,6 +295,45 @@
       const i = list.findIndex((x) => x.member === a.member);
       if (i >= 0) list.splice(i, 1);
     },
+    server_join_link: (a) => {
+      const link = (a.link || "").replace(/\s/g, "");
+      if (!link.startsWith("hirzla-invitation:") || link.includes("XX")) return refuse("invitation_invalid", SERVER_MSG.invitation_invalid);
+      S.joined = true;
+      S.verified = true;
+      return { fingerprint: FP, verified: true, account: true };
+    },
+    quorum_prepare: (a) => {
+      const q = {
+        request: "d41f8a0c" + "2b6e9d13c57a0f4e".slice(0, 8) + "8b2c6e0a4d1f3b5c",
+        locker: a.locker,
+        action: a.action,
+        target: a.target,
+        role: a.role,
+        quorum: a.quorum,
+        counted: [ME],
+        required: 2,
+        offer: OFFER,
+        created_ms: Date.UTC(2026, 10, 15, 14, 3),
+      };
+      S.requests = [q];
+      return q;
+    },
+    quorum_list: () => S.requests,
+    quorum_inspect: (a) => {
+      if (!(a.offer || "").startsWith("hirzla-demande:")) return refuse("approval_invalid", SERVER_MSG.approval_invalid);
+      return { locker: W, name: "Atelier", action: "owner_removal", target: others.karim, target_fingerprint: fpOf(others.karim), role: null, quorum: null, issuer: others.paul, issuer_fingerprint: fpOf(others.paul), can_sign: true };
+    },
+    quorum_approve: () => TOKEN,
+    quorum_collect: (a) => {
+      if (!(a.token || "").startsWith("hirzla-accord:") || !S.requests.length) return refuse("approval_invalid", SERVER_MSG.approval_invalid);
+      const q = S.requests[0];
+      if (!q.counted.includes(others.lea)) q.counted.push(others.lea);
+      return q;
+    },
+    quorum_apply: () => { S.requests = []; },
+    quorum_cancel: () => { S.requests = []; },
+    quarantine_list: () => ({ ops: quarantined(), can_decide: true }),
+    quarantine_decide: () => { S.quarantine = false; },
   };
   window.__TAURI__ = {
     core: {

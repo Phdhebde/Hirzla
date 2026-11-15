@@ -65,6 +65,8 @@ pub struct Core {
     pub(crate) log: Arc<Log>,
     /// Clocks at the previous tick, to notice a sleep (ADR 0033).
     last_tick: Option<(Instant, SystemTime)>,
+    /// Wall clock of the server mode, replaced by tests that need days to pass (ADR 0045).
+    server_clock: Option<fn() -> u64>,
 }
 
 pub(crate) fn vault_error(e: VaultError) -> ErrorReply {
@@ -153,6 +155,7 @@ impl Core {
             throttled_until: None,
             log,
             last_tick: None,
+            server_clock: None,
         }
     }
 
@@ -308,11 +311,26 @@ impl Core {
         }
     }
 
+    /// Replaces the wall clock of the server mode (quarantine delay, one-hour delays of the
+    /// key log watch), now and after every load. For tests only: the core binary never calls
+    /// it.
+    #[doc(hidden)]
+    pub fn set_server_clock(&mut self, clock: fn() -> u64) {
+        self.server_clock = Some(clock);
+        if let Some(Ok(m)) = self.server.as_mut() {
+            m.set_clock(clock);
+        }
+    }
+
     /// Loads the server mode of the open vault if it is not loaded yet.
     fn load_server(&mut self) {
         if self.server.is_none() {
             if let Some(v) = &self.vault {
-                self.server = Some(ServerMode::load(v, &self.config.vault_path));
+                let mut loaded = ServerMode::load(v, &self.config.vault_path);
+                if let (Ok(m), Some(c)) = (loaded.as_mut(), self.server_clock) {
+                    m.set_clock(c);
+                }
+                self.server = Some(loaded);
             }
         }
     }

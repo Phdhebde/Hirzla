@@ -12,7 +12,12 @@
 //!   A restart neither falls back to trust on first use nor forgets what was pruned.
 //! - No connection without a joined server, and only during a request that needs it
 //!   (`CLAUDE.md` rule 7).
+//! - Governance (ADR 0044, ADR 0045): approval requests kept in the annex until their
+//!   quorum is met, quarantine decisions, automatic rejection from the kept local reception,
+//!   and the dated watch of the key log that freezes a locker whose announced removal is
+//!   withheld.
 
+mod governance;
 pub mod proto;
 
 #[cfg(feature = "fuzzing")]
@@ -30,8 +35,8 @@ use hirzla_access::keylog::{
 };
 use hirzla_access::{AccessError, Denial, KeyLogFailure, Role};
 use hirzla_crypto::sign::VerifyingKey;
-use hirzla_crypto::util::sha384;
 use hirzla_sync::compact::PrunedPast;
+use hirzla_sync::control::Approval;
 use hirzla_sync::keylog::{KeyLogTrust, RecipientGate};
 use hirzla_sync::net::client::{Client, Identity};
 use hirzla_sync::net::proto::{code, PushStatus, MAX_PUSH_OPS};
@@ -45,17 +50,22 @@ use hirzla_vault::Vault;
 use zeroize::Zeroizing;
 
 use self::proto::{
-    AlertKind, KeyLogAlert, KeyLogStatus, LockerStatus, MemberInfo, Refusal, ServerCode,
-    ServerReply, ServerRequest, SuspectReason, SyncReport, FINGERPRINT_LEN, MAX_LOCKER_NAME,
-    MAX_ROOTS,
+    AlertKind, KeyLogAlert, KeyLogStatus, LockerStatus, MemberInfo, QuorumAction, Refusal,
+    ServerCode, ServerReply, ServerRequest, SuspectReason, SyncReport, MAX_LOCKER_NAME,
+    MAX_REQUESTS, MAX_ROOTS,
 };
 use crate::proto::ErrorCode;
 
 /// A replica of a shared locker.
 pub type SharedReplica = Replica<AccessAuthorizer>;
 
-/// Version of the annex file written (`format.md` § 15.2, ADR 0040). Version 1 is still read.
-const ANNEX_VERSION: u64 = 2;
+/// Version of the annex file written (`format.md` § 15.2, ADR 0040, ADR 0044, ADR 0045).
+/// Versions 1 and 2 are still read.
+const ANNEX_VERSION: u64 = 3;
+/// Most elements of each list of the dated watch (`format.md` § 15.2).
+const MAX_WATCH: usize = 100_000;
+/// The delays of `transparence.md` § 6.4 and § 6.5: one hour.
+pub const WATCH_DELAY_MS: u64 = 3_600_000;
 /// Most shared lockers.
 pub const MAX_LOCKERS: usize = 256;
 /// Default port of `hirzlad` (`sync-protocol.md` § 11.1).
@@ -128,30 +138,7 @@ fn net(e: NetError) -> ServerCode {
     }
 }
 
-const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-
-/// Fingerprint of a public key (`format.md` § 3.1): the first 20 characters of the RFC 4648
-/// base32 of `key_id(k) = SHA-384(k)`. A display encoding of 100 bits of the hash.
-#[must_use]
-pub fn fingerprint(key: &[u8]) -> String {
-    let hash = sha384(key);
-    let mut out = String::with_capacity(FINGERPRINT_LEN);
-    let mut acc: u32 = 0;
-    let mut bits = 0;
-    for b in hash {
-        acc = (acc << 8) | u32::from(b);
-        bits += 8;
-        while bits >= 5 && out.len() < FINGERPRINT_LEN {
-            bits -= 5;
-            out.push(char::from(BASE32[((acc >> bits) & 31) as usize]));
-        }
-        acc &= (1 << bits) - 1;
-        if out.len() == FINGERPRINT_LEN {
-            break;
-        }
-    }
-    out
-}
+pub use hirzla_sync::text::fingerprint;
 
 /// A parsed server address `hirzla://host[:port]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -233,12 +220,40 @@ struct LocalKeyLog {
     alerts: Vec<Alert>,
 }
 
+/// An approval request this device prepared and has not applied yet (ADR 0044).
+#[derive(Clone)]
+struct PendingRequest {
+    locker: Id16,
+    action: QuorumAction,
+    target: Option<Id16>,
+    detail: Option<u64>,
+    /// Verified when added, sorted by member, one per member.
+    approvals: Vec<Approval>,
+    created_ms: u64,
+}
+
+/// The dated watch of the key log (ADR 0045, `format.md` § 15.2, key 7).
+#[derive(Default, Clone)]
+struct Watch {
+    /// Removals inscribed for a locker held here, not received yet: when they were found.
+    removals: BTreeMap<OpId, u64>,
+    /// Removals issued here, not inscribed yet: locker and when.
+    issued: BTreeMap<OpId, (Id16, u64)>,
+    /// First accepted authentication, while the device certificate is not inscribed.
+    enrolled_ms: Option<u64>,
+    /// Operations waiting for a dependency the server did not serve: when first seen.
+    pending: BTreeMap<(Id16, OpId), u64>,
+}
+
 /// The joined server.
 struct Joined {
     info: ServerInfo,
     roots: Vec<u8>,
     lockers: BTreeMap<Id16, Shared>,
     keylog: LocalKeyLog,
+    /// Pending approval requests, by request identifier.
+    requests: BTreeMap<Id16, PendingRequest>,
+    watch: Watch,
 }
 
 /// A locked monitor: a poisoned lock (panic while updating) counts as a corrupt state.
@@ -261,6 +276,8 @@ pub struct ServerMode {
     joined: Option<Joined>,
     /// End of the last successful `ServerSync` since the vault was opened (not kept: ADR 0041).
     last_sync_ms: Option<u64>,
+    /// Wall clock, milliseconds (replaced by the tests that need days to pass).
+    clock: fn() -> u64,
 }
 
 /// Wall clock, milliseconds since 1970 (0 before).
@@ -288,18 +305,21 @@ fn keylog_status(log: &LocalKeyLog) -> Result<KeyLogStatus, ServerCode> {
         .map(|a| match *a {
             Alert::ForeignMemberKey { index } => KeyLogAlert {
                 kind: AlertKind::ForeignMemberKey,
-                index,
+                index: Some(index),
                 device: None,
+                locker: None,
             },
             Alert::UnknownOwnDevice { device, index } => KeyLogAlert {
                 kind: AlertKind::UnknownOwnDevice,
-                index,
+                index: Some(index),
                 device: Some(device),
+                locker: None,
             },
             Alert::UnknownOwnRevocation { device, index } => KeyLogAlert {
                 kind: AlertKind::UnknownOwnRevocation,
-                index,
+                index: Some(index),
                 device: Some(device),
+                locker: None,
             },
         })
         .collect();
@@ -362,6 +382,7 @@ impl ServerMode {
             device,
             joined: None,
             last_sync_ms: None,
+            clock: wall_ms,
         };
         match std::fs::symlink_metadata(&mode.annex) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(mode),
@@ -372,7 +393,17 @@ impl ServerMode {
         let sealed = std::fs::read(&mode.annex).map_err(corrupt)?;
         let content = vault.unseal_server_state(&sealed).map_err(corrupt)?;
         mode.joined = Some(mode.decode(&content)?);
+        mode.refresh_watch()?;
         Ok(mode)
+    }
+
+    /// Replaces the wall clock (tests: quarantine delays, one-hour delays).
+    pub fn set_clock(&mut self, clock: fn() -> u64) {
+        self.clock = clock;
+    }
+
+    fn now(&self) -> u64 {
+        (self.clock)()
     }
 
     fn trust(info: &ServerInfo) -> Result<KeyLogTrust, ServerCode> {
@@ -485,7 +516,7 @@ impl ServerMode {
 
     fn decode(&self, content: &[u8]) -> Result<Joined, ServerCode> {
         let v = cbor::decode(content).map_err(corrupt)?;
-        let f = Fields::new(&v, &[1, 2, 3, 4, 5]).map_err(corrupt)?;
+        let f = Fields::new(&v, &[1, 2, 3, 4, 5, 6, 7]).map_err(corrupt)?;
         let version = uint_in(f.req(1).map_err(corrupt)?, 1..=ANNEX_VERSION).map_err(corrupt)?;
         let info = ServerInfo::from_value(f.req(2).map_err(corrupt)?).map_err(corrupt)?;
         let roots = bytes_max(f.req(3).map_err(corrupt)?, MAX_ROOTS)
@@ -495,7 +526,16 @@ impl ServerMode {
         // Version 1 kept no key log: it starts empty and is filled at the next session.
         let keylog = match (version, f.opt(5)) {
             (1, None) => self.new_keylog(&info)?,
-            (2, Some(k)) => self.decode_keylog(&info, k)?,
+            (2 | 3, Some(k)) => self.decode_keylog(&info, k)?,
+            _ => return Err(general(ErrorCode::Corrupt)),
+        };
+        // Version 3 (ADR 0044, ADR 0045): pending requests and the dated watch.
+        let (requests, watch) = match (version, f.opt(6), f.opt(7)) {
+            (1 | 2, None, None) => (BTreeMap::new(), Watch::default()),
+            (3, Some(r), Some(w)) => (
+                governance::decode_requests(r)?,
+                governance::decode_watch(w)?,
+            ),
             _ => return Err(general(ErrorCode::Corrupt)),
         };
         let locker_keys: &[u64] = if version == 1 {
@@ -567,11 +607,16 @@ impl ServerMode {
                 },
             );
         }
+        if requests.values().any(|r| !lockers.contains_key(&r.locker)) {
+            return Err(general(ErrorCode::Corrupt));
+        }
         Ok(Joined {
             info,
             roots,
             lockers,
             keylog,
+            requests,
+            watch,
         })
     }
 
@@ -627,6 +672,8 @@ impl ServerMode {
             (3, Value::bytes(&joined.roots)),
             (4, Value::Array(lockers)),
             (5, Self::encode_keylog(&joined.keylog)?),
+            (6, governance::encode_requests(&joined.requests)),
+            (7, governance::encode_watch(&joined.watch)),
         ]))
         .map_err(internal)
     }
@@ -749,6 +796,7 @@ impl ServerMode {
                 roots,
                 fingerprint,
             } => self.join(vault, &url, roots, fingerprint.as_deref()),
+            ServerRequest::ServerJoinLink { link } => self.join_link(vault, &link),
             ServerRequest::ServerConfirm { fingerprint } => self.confirm(vault, &fingerprint),
             ServerRequest::ServerSync => self.sync(vault),
             ServerRequest::SharedLockerCreate { name } => self.create_locker(vault, &name),
@@ -760,6 +808,24 @@ impl ServerMode {
             } => self.grant(vault, locker, member, role, fingerprint.as_deref()),
             ServerRequest::RoleRevoke { locker, member } => self.revoke(vault, locker, member),
             ServerRequest::LockerMembers { locker } => self.members(&locker),
+            ServerRequest::QuorumPrepare {
+                locker,
+                action,
+                target,
+                detail,
+            } => self.quorum_prepare(vault, locker, action, target, detail),
+            ServerRequest::QuorumInspect { offer } => self.quorum_inspect(&offer),
+            ServerRequest::QuorumApprove { offer } => self.quorum_approve(&offer),
+            ServerRequest::QuorumCollect { token } => self.quorum_collect(vault, &token),
+            ServerRequest::QuorumApply { request } => self.quorum_apply(vault, request),
+            ServerRequest::QuorumList { locker } => self.quorum_list(locker),
+            ServerRequest::QuorumCancel { request } => self.quorum_cancel(vault, request),
+            ServerRequest::QuarantineList { locker } => self.quarantine_list(&locker),
+            ServerRequest::QuarantineDecide {
+                locker,
+                ops,
+                accept,
+            } => self.quarantine_decide(vault, locker, ops, accept),
         }
     }
 
@@ -773,6 +839,8 @@ impl ServerMode {
             });
         };
         let me = self.device.member_id();
+        let now = self.now();
+        let frozen = self.frozen_lockers(now)?;
         let lockers = j
             .lockers
             .iter()
@@ -787,9 +855,16 @@ impl ServerMode {
                     pending: r.ops_with_code(0).len() as u64,
                     quarantined: r.ops_with_code(2).len() as u64,
                     access: s.access,
+                    frozen: frozen.contains(id),
                 }
             })
             .collect();
+        let mut keylog = keylog_status(&j.keylog)?;
+        for a in self.dated_alerts(now, &frozen)? {
+            if keylog.alerts.len() < proto::MAX_ALERTS {
+                keylog.alerts.push(a);
+            }
+        }
         Ok(ServerReply::Status {
             server: Some((
                 j.info.url.clone(),
@@ -799,7 +874,7 @@ impl ServerMode {
             )),
             lockers,
             last_sync_ms: self.last_sync_ms,
-            keylog: Some(keylog_status(&j.keylog)?),
+            keylog: Some(keylog),
         })
     }
 
@@ -866,9 +941,14 @@ impl ServerMode {
             roots,
             lockers: BTreeMap::new(),
             keylog,
+            requests: BTreeMap::new(),
+            watch: Watch::default(),
         });
         self.save(vault)?;
         let account = if verified { self.try_auth()? } else { false };
+        if account {
+            self.note_enrolled(vault)?;
+        }
         Ok(ServerReply::Joined {
             server_id,
             fingerprint: fp,
@@ -886,9 +966,11 @@ impl ServerMode {
             j.info.server_key_verified = true;
             self.save(vault)?;
         }
-        Ok(ServerReply::Confirmed {
-            account: self.try_auth()?,
-        })
+        let account = self.try_auth()?;
+        if account {
+            self.note_enrolled(vault)?;
+        }
+        Ok(ServerReply::Confirmed { account })
     }
 
     fn sync(&mut self, vault: &Vault) -> Result<ServerReply, ServerCode> {
@@ -921,9 +1003,18 @@ impl ServerMode {
         }
         let mut reports = Vec::new();
         let mut failure = None;
-        for s in j.lockers.values_mut() {
-            match sync_locker(&mut client, s) {
-                Ok(r) => reports.push(r),
+        let now = (self.clock)();
+        let frozen = self.frozen_lockers(now)?;
+        let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
+        for (id, s) in &mut j.lockers {
+            s.replica.set_writes_frozen(frozen.contains(id));
+            match sync_locker(&mut client, s, now) {
+                Ok(r) => {
+                    if r.access {
+                        governance::note_pending(&mut j.watch, s, now);
+                    }
+                    reports.push(r);
+                }
                 Err(e) => {
                     failure = Some(e);
                     break;
@@ -932,6 +1023,14 @@ impl ServerMode {
         }
         let _ = client.bye();
         self.compare_with_keylog()?;
+        if self.joined()?.watch.enrolled_ms.is_none() {
+            self.joined
+                .as_mut()
+                .ok_or(ServerCode::NotJoined)?
+                .watch
+                .enrolled_ms = Some(now);
+        }
+        self.refresh_watch()?;
         self.save(vault)?;
         match failure {
             Some(e) => Err(e),
@@ -961,6 +1060,7 @@ impl ServerMode {
                         j.keylog.alerts.push(a);
                     }
                 }
+                self.refresh_watch()?;
                 self.save(vault)
             }
             Err(AccessError::KeyLog(KeyLogFailure::Inconsistent | KeyLogFailure::Suspect)) => {
@@ -1118,7 +1218,7 @@ impl ServerMode {
         self.save(vault)?;
         let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
         let s = j.lockers.get_mut(id).ok_or(general(ErrorCode::NotFound))?;
-        let r = sync_locker(client, s);
+        let r = sync_locker(client, s, (self.clock)());
         self.save(vault)?;
         r.map(|_| ())
     }
@@ -1181,6 +1281,7 @@ impl ServerMode {
             None => Action::GrantNew(role),
         };
         self.check(&locker, &action)?;
+        self.ensure_writable(&locker)?;
         if let Some(e) = &present {
             if let Some(fp) = expected {
                 if fingerprint(&e.keys.sig) != fp {
@@ -1228,10 +1329,14 @@ impl ServerMode {
         member: Id16,
     ) -> Result<ServerReply, ServerCode> {
         self.check(&locker, &Action::Remove(member))?;
+        self.ensure_writable(&locker)?;
         let mut client = self.session()?;
         self.update_keylog(vault, &mut client)?;
+        self.ensure_writable(&locker)?;
+        let now = self.now();
         let s = self.shared_mut(&locker)?;
-        s.replica.revoke(member, None).map_err(emit_error)?;
+        let op = s.replica.revoke(member, None).map_err(emit_error)?;
+        self.note_issued(locker, op, now)?;
         self.publish(vault, &mut client, &locker)?;
         let _ = client.bye();
         Ok(ServerReply::Done)
@@ -1254,6 +1359,7 @@ impl ServerMode {
                 } else {
                     Refusal::AccessLost
                 }),
+                quorum: None,
             });
         };
         let state = a.access().state();
@@ -1308,6 +1414,7 @@ impl ServerMode {
             members: out,
             grantable,
             grant_refusal,
+            quorum: Some(u64::from(state.quorum())),
         })
     }
 
@@ -1376,6 +1483,10 @@ impl ServerMode {
         edit: SecretEdit,
     ) -> Result<Id16, ServerCode> {
         let me = self.me();
+        if self.joined.is_some() && self.frozen_lockers(self.now())?.contains(locker) {
+            // Read-only until the announced removal arrives (`transparence.md` § 6.5).
+            return Err(general(ErrorCode::InvalidInput));
+        }
         let j = self.joined.as_mut().ok_or(general(ErrorCode::NotFound))?;
         let s = j
             .lockers
@@ -1431,7 +1542,7 @@ fn genesis_unsent(r: &Replica<AccessAuthorizer>) -> bool {
 /// § 5, § 8.4, § 10): pull to the end, reissue what never left and went stale, reseal,
 /// compact if enough versions are prunable, push, then acknowledge the verified `Compact`
 /// operations and prune those the server announces stable (ADR 0040).
-fn sync_locker(client: &mut Client, s: &mut Shared) -> Result<SyncReport, ServerCode> {
+fn sync_locker(client: &mut Client, s: &mut Shared, now: u64) -> Result<SyncReport, ServerCode> {
     let locker = s.replica.locker_id();
     let mut report = SyncReport {
         locker,
@@ -1487,6 +1598,7 @@ fn sync_locker(client: &mut Client, s: &mut Shared) -> Result<SyncReport, Server
     }
     s.access = true;
     s.replica.reissue_stale_unsent().map_err(internal)?;
+    governance::auto_reject(s, now);
     // Reseal after a rotation (§ 8.4), only by a member who writes.
     let me = s.replica.device().member_id();
     let writes = s
@@ -1634,11 +1746,11 @@ mod tests {
     #[test]
     fn fingerprint_is_twenty_base32_characters() {
         let f = fingerprint(b"key");
-        assert_eq!(f.len(), FINGERPRINT_LEN);
+        assert_eq!(f.len(), proto::FINGERPRINT_LEN);
         assert!(proto::normalise_fingerprint(&f).is_some());
         assert_ne!(f, fingerprint(b"other key"));
         // Same bits as the RFC 4648 base32 of the hash, cut to 20 characters.
-        let h = sha384(b"key");
+        let h = hirzla_crypto::util::sha384(b"key");
         let mut bits = String::new();
         for b in &h[..13] {
             bits.push_str(&format!("{b:08b}"));
@@ -1646,7 +1758,7 @@ mod tests {
         let expected: String = (0..20)
             .map(|i| {
                 let v = u8::from_str_radix(&bits[i * 5..i * 5 + 5], 2).unwrap();
-                char::from(BASE32[usize::from(v)])
+                char::from(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"[usize::from(v)])
             })
             .collect();
         assert_eq!(f, expected);

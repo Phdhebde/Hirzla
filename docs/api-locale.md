@@ -568,14 +568,15 @@ l'autorisation) :
 
 Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
-partagés, rôles. Codes : opérations **40 à 49**, erreurs **40 à 49**. Toutes exigent un coffre
+partagés, rôles, accords et quarantaine. Codes : opérations **40 à 49** et **90 à 99**
+(ADR 0044, 0045), erreurs **40 à 49** et **90 à 99**. Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
 pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
 
 ### 15.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-40 à 49 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
+40 à 49 ou 90 à 99 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
 `{2: [4]}`. Les réponses portent `v = 4`. Ces opérations sont refusées au profil navigateur
 (`Unauthorized`). `Status` (§ 6) n'annonce pas la version 4 : un client la découvre par
 `ServerStatus`.
@@ -589,9 +590,13 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Empreinte | `tstr(20)`, `format.md` § 3.1 : 20 premiers caractères de `base32(key_id(clé))`, majuscules ; à la saisie, le noyau accepte minuscules, espaces et tirets et les retire avant de comparer |
 | Membre | `bstr(16)` |
 | Rôle | `uint`, codes de `sync-protocol.md` § 7.1 (1 `Owner` … 6 `Auditor`) |
-| État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle |
+| État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool, 9: gelé bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle ; 9 : écritures gelées par une révocation retenue (ADR 0045) |
 | État du registre | `{1: suspect bool, 2: entrées uint, 3?: motif uint, 4: [alerte]}` (ADR 0041) ; 3 présent si et seulement si 1 vaut `true` : 1 racine différente, 2 tête plus petite, 3 règle R1 à R5 violée, 4 tête d'un pair incohérente, 5 tête d'un pair non servie, 6 entrée d'une preuve différente (`transparence.md` § 6.7) |
-| Alerte | `{1: type uint, 2: rang uint, 3?: appareil bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 3 présent pour les types 2 et 3 ; au plus 4 096 alertes |
+| Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 2 présent pour les types 1 à 4, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
+| Action d'accord | `uint` : 1 retrait d'un `Owner`, 2 changement de rôle d'un `Owner`, 3 changement du quorum (`sync-protocol.md` § 7.7) |
+| Demande, accord, lien | `tstr` (≤ 96 Kio) dans l'enveloppe texte de `sync-protocol.md` § 11.10 : `hirzla-demande:…`, `hirzla-accord:…`, `hirzla-invitation:…` ; les blancs sont retirés avant le décodage |
+| État d'une demande | `{1: request_id bstr(16), 2: casier, 3: action, 4?: cible, 5?: détail uint, 6: [membre], 7: requis uint, 8: demande tstr, 9: créée uint (ms)}` ; 6 : membres comptés (l'initiateur d'abord, puis les approbateurs) ; 7 : quorum en vigueur ; 4 et 5 comme dans la demande |
+| Opération en quarantaine | `{1: op_id bstr(48), 2: membre, 3: appareil bstr(16), 4: cause uint (1 retrait concurrent, 2 bifurcation), 5: classe uint (1 donnée, 2 contrôle), 6?: heure annoncée uint, 7?: titre tstr, 8?: secret bstr(16), 9: reçue uint, 10: échéance uint}` ; 6 à 8 pour une donnée lisible ; 9 et 10 en millisecondes (réception locale, rejet automatique) |
 | Refus | `uint`, pourquoi le rôle du membre courant ne permet pas une action (ADR 0041) : 1 rôle insuffisant, 2 quorum de propriétaires requis, 3 dernier propriétaire, 4 accès au casier retiré par le serveur |
 
 ### 15.3 Opérations
@@ -600,13 +605,13 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | --- | --- | --- | --- | --- |
 | 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier], 7?: dernière synchronisation uint, 8?: état du registre}` ; 2 à 5 et 8 présents si et seulement si rattaché ; 7 en millisecondes depuis 1970, absent sans synchronisation réussie depuis l'ouverture du coffre |
 | 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20)}` |
-| 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
+| 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` ou `{4: lien d'invitation}` (ADR 0046) | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
 | 43 | `ServerConfirm` | oui | `{1: empreinte}` | `{1: compte reconnu bool}` |
 | 44 | `ServerSync` | oui | — | `{1: [{1: casier, 2: reçues uint, 3: envoyées uint, 4: refusées uint, 5: accès bool}]}` |
 | 45 | `SharedLockerCreate` | oui | `{1: nom tstr (1 à 256 octets)}` | `{1: casier}` |
 | 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
 | 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
-| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus}` |
+| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
 
 Détails :
 
@@ -637,6 +642,9 @@ Détails :
      accepté.
    - Sans empreinte : `Hello` seulement, clé épinglée **non vérifiée**, « compte reconnu » à
      `false`. L'interface affiche l'empreinte pour une comparaison hors bande.
+   - **Lien d'invitation** (clé 4, seule) : décodé selon `sync-protocol.md` § 11.10 puis traité
+     comme adresse, AC et empreinte attendue. Mal formé, altéré (contrôle faux), sans
+     empreinte ou d'une version inconnue : `InvitationInvalid`, rien n'est contacté.
    - Adresse ou AC invalides : `InvalidInput`. Serveur injoignable, TLS refusé, signature du
      serveur fausse : `ServerUnreachable` ; refus du serveur avec un code : `ServerRefused`.
 4. **`ServerConfirm`** — `NotJoined` sans serveur. Empreinte différente de la clé épinglée :
@@ -710,11 +718,17 @@ casiers partagés, sans changer leurs messages :
 | 46 | `Forbidden` | Le rôle du membre ne permet pas l'action, ou elle exige un quorum | — |
 | 47 | `UnknownMember` | Membre inconnu de l'annuaire du serveur | — |
 | 48 | `KeyLogRejected` | Preuve d'inscription absente ou invalide pour la clé reçue | — |
+| 90 | `ApprovalInvalid` | Accord ou demande refusé : mal formé, signature fausse, approbateur non `Owner`, cible ou initiateur, déjà compté, autre demande | — |
+| 91 | `QuorumNotMet` | Les accords recueillis ne suffisent pas | `{1: comptés uint, 2: requis uint}` |
+| 92 | `LockerFrozen` | Casier gelé : une révocation annoncée n'a pas été reçue | — |
+| 93 | `InvitationInvalid` | Lien d'invitation mal formé, altéré ou d'une version inconnue | — |
 
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
 
-**Compatibilité** (ADR 0041) : les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
+**Compatibilité** (ADR 0041, 0044 à 0046) : la clé 9 de l'état d'un casier, la clé 4 de
+l'alerte, la clé 5 de `LockerMembers`, la clé 4 de `ServerJoin` et les opérations 90 à 98
+étendent aussi la version 4. Les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
 étendent la version 4 sans changer son numéro. Un client v4 strict antérieur refuserait ces
 réponses ; la ligne de commande, l'application de poste et le noyau sont livrés ensemble, et
 aucun autre client de la version 4 n'existe.
@@ -725,6 +739,7 @@ aucun autre client de la version 4 n'existe.
 | --- | --- |
 | `serveur identite [--sortie FICHIER]` | `ServerIdentity` (la `MemberKeys` est écrite dans le fichier pour l'administrateur) |
 | `serveur rejoindre ADRESSE --ac PEM [--empreinte E]` | `ServerJoin` |
+| `serveur rejoindre LIEN` | `ServerJoin` (lien d'invitation) |
 | `serveur confirmer EMPREINTE` | `ServerConfirm` |
 | `serveur etat` | `ServerStatus` |
 | `serveur sync` | `ServerSync` |
@@ -733,18 +748,88 @@ aucun autre client de la version 4 n'existe.
 | `casier ajouter CASIER MEMBRE ROLE [--empreinte E]` | `RoleGrant` |
 | `casier retirer CASIER MEMBRE` | `RoleRevoke` |
 | `set NOM --casier CASIER` | `Create` ou `Update` dans un casier partagé |
+| `accord preparer CASIER retrait MEMBRE`, `… role MEMBRE ROLE`, `… quorum N` | `QuorumPrepare` (la demande est écrite sur la sortie standard) |
+| `accord voir DEMANDE` | `QuorumInspect` |
+| `accord signer DEMANDE` | `QuorumInspect`, `QuorumApprove` (l'accord est écrit sur la sortie standard) |
+| `accord ajouter ACCORD` | `QuorumCollect` |
+| `accord liste [CASIER]` | `QuorumList` |
+| `accord appliquer ID` | `QuorumApply` |
+| `accord annuler ID` | `QuorumCancel` |
+| `quarantaine CASIER` | `QuarantineList` |
+| `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
 
 `CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
 identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; `ROLE`, l'un de
 `proprietaire`, `gestionnaire`, `editeur`, `lecteur`, `sans-divulgation`, `auditeur`.
+`DEMANDE`, `ACCORD` et `LIEN` sont le texte lui-même, ou `@FICHIER` pour le lire dans un fichier ;
+`ID`, au moins 4 chiffres hexadécimaux du début du `request_id` ; `OP`, au moins 8 chiffres
+hexadécimaux du début de l'`op_id`.
 
 ### 15.7 Points ouverts
 
 1. Les opérations 42 à 47 tiennent le verrou du noyau pendant leurs échanges réseau (ADR 0032,
    point 9).
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
-3. Pas d'accords à plusieurs, de décisions de quarantaine, d'enrôlement d'un second appareil ni
-   de fichiers joints dans les casiers partagés : à spécifier dans une version suivante.
+3. ~~Pas d'accords à plusieurs, de décisions de quarantaine~~ (faits : § 15.8, ADR 0044 et
+   0045). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
+   partagés : à spécifier dans une version suivante.
+4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
+   commande et l'extension restent sans tâche de fond.
+
+### 15.8 Accords et quarantaine (opérations 90 à 98)
+
+Décisions : ADR 0044 (accords), ADR 0045 (quarantaine, gel). Toutes exigent un serveur
+rattaché (`NotJoined`) et, sauf `QuorumList`, un casier partagé connu (`NotFound` sinon, ou
+pour le casier personnel).
+
+| Code | Nom | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 90 | `QuorumPrepare` | non | `{1: casier, 2: action, 3?: cible, 4?: détail uint}` | état d'une demande |
+| 91 | `QuorumInspect` | non | `{1: demande}` | `{1: casier, 2?: nom tstr, 3: action, 4?: cible, 5?: empreinte de la cible, 6?: détail, 7: initiateur, 8?: empreinte de l'initiateur, 9: peut signer bool}` |
+| 92 | `QuorumApprove` | non | `{1: demande}` | `{1: accord}` |
+| 93 | `QuorumCollect` | non | `{1: accord}` | état d'une demande |
+| 94 | `QuorumApply` | oui | `{1: request_id bstr(16)}` | — |
+| 95 | `QuorumList` | non | `{1?: casier}` | `{1: [état d'une demande]}`, au plus 64 |
+| 96 | `QuorumCancel` | non | `{1: request_id}` | — |
+| 97 | `QuarantineList` | non | `{1: casier}` | `{1: [opération en quarantaine], 2: peut décider bool}`, au plus 4 096 |
+| 98 | `QuarantineDecide` | oui | `{1: casier, 2: [op_id] (1 à 4 096, sans doublon), 3: accepter bool}` | — |
+
+Détails :
+
+1. **`QuorumPrepare`** — action 1 : `{3: cible}` ; action 2 : `{3: cible, 4: rôle}` ; action 3 :
+   `{4: quorum}` (2 à 16). Autre combinaison : `InvalidInput`. Le noyau contrôle l'action avec
+   `hirzla-access` sans accord : permise seule, `InvalidInput` (utiliser `RoleRevoke` ou
+   `RoleGrant`) ; refusée pour une autre raison que le quorum, `Forbidden` (cible absente :
+   `NotFound`). Sinon il tire un `request_id`, garde la demande dans l'annexe (`format.md`
+   § 15, au plus 64 : `InvalidInput` au-delà) et la rend avec son texte (clé 8). Casier gelé :
+   `LockerFrozen`.
+2. **`QuorumInspect`** — décode la demande sans rien signer ni garder. Demande mal formée :
+   `ApprovalInvalid` ; casier inconnu du poste : `NotFound`. « Peut signer » suit les règles
+   de `sync-protocol.md` § 7.8.
+3. **`QuorumApprove`** — signe avec la clé de l'appareil l'`ApprovalRequest` de la demande pour
+   ce membre et cet appareil. Le membre ne peut pas signer (§ 7.8) : `Forbidden`.
+4. **`QuorumCollect`** — ajoute l'accord à la demande gardée de même casier et même
+   `request_id` (aucune : `NotFound`) après l'avoir vérifié (§ 7.8) ; refusé :
+   `ApprovalInvalid`, et rien n'est gardé.
+5. **`QuorumApply`** — demande inconnue : `NotFound`. Le noyau refait le contrôle avec les
+   approbateurs comptés ; insuffisant : `QuorumNotMet` avec les nombres. Il met à jour le
+   registre (comme `RoleGrant`), émet l'opération avec les accords, la pousse et retire la
+   demande. Mêmes refus que `RoleGrant` et `RoleRevoke`, plus `LockerFrozen`.
+6. **`QuorumList`**, **`QuorumCancel`** — les demandes en cours, d'un casier ou de tous ;
+   l'annulation retire la demande et ses accords (inconnue : `NotFound`).
+7. **`QuarantineList`** — les opérations de statut 2 du casier, de la plus ancienne reçue à
+   la plus récente. Aucune valeur secrète : le titre seulement. « Reçue » est l'heure de la
+   première synchronisation qui l'a vue (`sync-protocol.md` § 11.4, clé 5) ; « échéance »,
+   reçue plus `quarantine_timeout_h`.
+8. **`QuarantineDecide`** — non-`Owner` : `Forbidden` ; une opération qui n'est pas en
+   quarantaine dans la réplique : `NotFound` ; accepter une opération de contrôle :
+   `InvalidInput`. Émet `QuarantineAccept` ou `QuarantineReject` (`auto = false`) et le pousse.
+9. **Rejet automatique** — fait par `ServerSync` sur un poste `Owner` (ADR 0045) ; aucune
+   opération dédiée.
+10. **Gel** — un casier gelé refuse `QuorumPrepare`, `QuorumApply`, `QuarantineDecide`,
+    `RoleGrant`, `RoleRevoke` (`LockerFrozen`) et les écritures de secrets (`InvalidInput`,
+    § 15.4).
+
 
 ## 16. Mode Self (version 5)
 

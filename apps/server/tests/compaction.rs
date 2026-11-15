@@ -1,6 +1,7 @@
 //! Stable compaction on `hirzlad` (`sync-protocol.md` § 10.2, ADR 0040): `Ack` recorded,
 //! `Stable` only once every reader device acknowledged, bodies replaced by stubs, deferred
-//! purge of the journal, and the same state after a restart at any step.
+//! purge of the journal, and the same state after a restart at any step; erasure of the
+//! late operations after 30 days (ADR 0047).
 
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, missing_docs)]
@@ -331,4 +332,116 @@ fn an_inactive_reader_is_not_waited_for() {
     );
     ac.bye().unwrap();
     assert!(server.running.with_core(|c| c.pruned_in(&locker)).unwrap() > 0);
+}
+
+static LATE_NOW: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn late_clock() -> u64 {
+    LATE_NOW.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A write of a member already removed is accepted `late` and served to the owners only;
+/// 30 days after its reception its body is served to nobody, leaves the journal at the
+/// rewrite, and stays gone after a restart (`sync-protocol.md` § 11.8, ADR 0047).
+#[test]
+fn a_late_operation_is_erased_after_30_days() {
+    const DAY: u64 = 24 * 3600 * 1000;
+    let tmp = tempfile::tempdir().unwrap();
+    let data = init_data(&tmp.path().join("data"));
+    let mut n = 0;
+    let mut server = Server::start(Pki::new(tmp.path()), &data);
+    LATE_NOW.store(
+        hirzla_server::core::now_ms(),
+        std::sync::atomic::Ordering::SeqCst,
+    );
+    server
+        .running
+        .with_core(|c| c.set_clock(late_clock))
+        .unwrap();
+    let (alice, bob) = (TestMember::new(), TestMember::new());
+    server.register(&alice);
+    server.register(&bob);
+    let (a_dev, b_dev) = (alice.device(), bob.device());
+    server.connect(&b_dev).bye().unwrap();
+    let mut ac = server.connect(&a_dev);
+    let mut ra = R::create_locker(Arc::clone(&a_dev), AccessAuthorizer, false, "Équipe").unwrap();
+    let locker = ra.locker_id();
+    let mk = ac.member_keys(&bob.id()).unwrap();
+    ra.grant_with_proof(
+        bob.keys.clone(),
+        Role::Editor,
+        mk.devices,
+        None,
+        mk.keylog_proof.clone(),
+    )
+    .unwrap();
+    let mut ca = 0;
+    ac.sync(&mut ra, &mut ca).unwrap();
+    ac.bye().unwrap();
+
+    // Bob receives the locker, then writes offline while Alice removes him.
+    let mut rb = R::join(Arc::clone(&b_dev), AccessAuthorizer, locker, ra.genesis());
+    let mut bc = server.connect(&b_dev);
+    let mut cb = 0;
+    bc.sync(&mut rb, &mut cb).unwrap();
+    bc.bye().unwrap();
+    rb.put_secret(None, SecretType::Password, edit("hors ligne"))
+        .unwrap();
+    ra.revoke(bob.id(), None).unwrap();
+    let mut ac = server.connect(&a_dev);
+    ac.sync(&mut ra, &mut ca).unwrap();
+    ac.bye().unwrap();
+    let mut bc = server.connect(&b_dev);
+    let late: Vec<OpId> = bc
+        .push(&rb.unsent().into_iter().map(|(_, b)| b).collect::<Vec<_>>())
+        .unwrap()
+        .into_iter()
+        .filter_map(|p| match p.status {
+            hirzla_server::proto::PushStatus::Accepted { .. } => Some(p.op_id),
+            _ => None,
+        })
+        .collect();
+    let _ = bc.bye();
+    assert_eq!(late.len(), 1, "accepted late");
+
+    let served = |server: &Server| -> Vec<(OpId, bool)> {
+        let mut c = server.connect(&a_dev);
+        let ops = c.pull(&locker, 0).unwrap();
+        let _ = c.bye();
+        ops.items
+            .iter()
+            .filter_map(|it| match it {
+                OpItem::Full { op, late, .. } => Some((hirzla_crypto::util::sha384(op), *late)),
+                OpItem::Stub { .. } => None,
+            })
+            .collect()
+    };
+    assert!(served(&server).contains(&(late[0], true)));
+
+    // 29 days: still served to the owner.
+    LATE_NOW.fetch_add(29 * DAY, std::sync::atomic::Ordering::SeqCst);
+    assert!(served(&server).contains(&(late[0], true)));
+    // 31 days: served to nobody, and gone from the disk after the restart's rewrite.
+    LATE_NOW.fetch_add(2 * DAY, std::sync::atomic::Ordering::SeqCst);
+    assert!(!served(&server).iter().any(|(id, _)| *id == late[0]));
+    // The restarted server runs on the real clock, 31 days behind: rewrite now, as the start
+    // would on the day.
+    server
+        .running
+        .with_core(|c| c.purge_journal())
+        .unwrap()
+        .unwrap();
+    server = restart(server, &data, tmp.path(), &mut n);
+    assert!(!served(&server).iter().any(|(id, _)| *id == late[0]));
+    // Alice's replica, built again from the server, still holds every other operation.
+    let mut fresh = R::join(Arc::clone(&a_dev), AccessAuthorizer, locker, ra.genesis());
+    let mut ac = server.connect(&a_dev);
+    let mut c = 0;
+    ac.sync(&mut fresh, &mut c).unwrap();
+    ac.bye().unwrap();
+    assert!(fresh.status(&late[0]).is_none());
+    assert_eq!(
+        fresh.status(&ra.genesis().unwrap()),
+        Some(OpStatus::Applied)
+    );
 }

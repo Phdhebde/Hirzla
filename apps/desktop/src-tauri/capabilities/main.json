@@ -44,6 +44,16 @@
     "allow-create-shared-locker",
     "allow-locker-members",
     "allow-grant-role",
-    "allow-revoke-role"
+    "allow-revoke-role",
+    "allow-server-join-link",
+    "allow-quorum-prepare",
+    "allow-quorum-inspect",
+    "allow-quorum-approve",
+    "allow-quorum-collect",
+    "allow-quorum-list",
+    "allow-quorum-apply",
+    "allow-quorum-cancel",
+    "allow-quarantine-list",
+    "allow-quarantine-decide"
   ]
 }

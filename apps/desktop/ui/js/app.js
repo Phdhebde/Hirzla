@@ -76,6 +76,7 @@ const form = new SecretForm({
 });
 
 const server = new ServerView({
+  prefs,
   onError: onGlobalError,
   onChanged: () => vault.refresh(),
   onStatus: (s) => {
@@ -85,7 +86,7 @@ const server = new ServerView({
       shared.set(l.id, {
         role: l.role ? ROLE_NAMES[l.role] : null,
         access: l.access,
-        writes: l.access && !!l.role && WRITING_ROLES.includes(l.role),
+        writes: l.access && !l.frozen && !!l.role && WRITING_ROLES.includes(l.role),
       });
     }
     vault.setShared(shared);

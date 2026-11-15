@@ -19,8 +19,8 @@ const ui = join(here, "..", "ui");
 const mock = await readFile(join(here, "..", "tests", "mock-core.js"), "utf8");
 const out = process.argv[2] || join(here, "..", "captures");
 mkdirSync(out, { recursive: true });
-// Optional second argument: "self" or "serveur" to take only the screens of one mode (the
-// checks of the other mode are then skipped too).
+// Optional second argument: "self", "serveur" or "gouvernance" to take only the screens of
+// one part (the checks of the others are then skipped too).
 const only = process.argv[3] || "";
 
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ttf": "font/ttf" };
@@ -85,7 +85,7 @@ async function shot(p, name, theme) {
   shots.push(file);
 }
 
-for (const theme of only === "serveur" ? [] : ["clair", "sombre"]) {
+for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   // First launch.
   let p = await page(theme, "absent");
   await p.waitForSelector("#ecran-creation:not([hidden])");
@@ -237,7 +237,7 @@ async function quiet(p) {
 
 const SYNCED = { joined: true, verified: true, synced: true, lastSync: Date.UTC(2026, 10, 15, 13, 42) };
 
-for (const theme of only === "self" ? [] : ["clair", "sombre"]) {
+for (const theme of only && only !== "serveur" ? [] : ["clair", "sombre"]) {
   // Self mode: join a server. An invitation fingerprint that does not match is refused.
   let p = await page(theme, "unlocked");
   await p.waitForSelector("#ecran-coffre:not([hidden])");
@@ -363,6 +363,92 @@ for (const theme of only === "self" ? [] : ["clair", "sombre"]) {
   await p.waitForSelector("#ecran-deverrouillage:not([hidden])");
   const left = await p.evaluate(() => document.querySelector("#identite-membre").textContent + document.querySelector("#casiers-lignes").childElementCount);
   if (left !== "0") errors.push(`${theme}: l'état du serveur reste affiché après verrouillage`);
+  await p.close();
+}
+
+// Governance (ADR 0044 to 0048): invitation link, approvals, quarantine, frozen locker.
+for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
+  // Join with an invitation link; an altered one is refused.
+  let p = await page(theme, "unlocked");
+  await p.waitForSelector("#ecran-coffre:not([hidden])");
+  await serverView(p);
+  const link =
+    "hirzla-invitation:pQEBAngmaGlyemxhOi8vY29mZnJlLmF0ZWxpZXItZHVyYW5kLmZyOjc0NDMDWQK3LS0tLS1CRUdJTiBDRVJUSUZJQ0FURS0tLS0t" +
+    "TUlJQjZqQ0NBVytnQXdJQkFnSVVSbWNkYjRxVjJ6RTdLeFhwTjNGaDlWYlRvT1V3Q2dZSUtvWkl6ajBFQXdNd0hqRWNNQm9HQTFVRUF3d1QiTTdRS1hSNFBaRDJWTkJUTDZXRUEi";
+  await p.fill("#lien-saisie", link.slice(0, 60) + "XX" + link.slice(62));
+  await p.click("#lien-envoyer");
+  await p.waitForSelector("#lien-erreur:not([hidden])");
+  await shot(p, "30-lien-d-invitation-altere", theme);
+  await p.fill("#lien-saisie", link);
+  await shot(p, "31-rejoindre-par-lien", theme);
+  await p.click("#lien-envoyer");
+  await p.waitForSelector("#serveur-connexion:not([hidden])");
+  await p.close();
+
+  // A senior owner: removing her takes approvals. Prepare the request from the members.
+  p = await page(theme, "unlocked", { ...SYNCED, senior: true });
+  await serverView(p);
+  await p.click("#casiers-lignes tr:first-child button");
+  await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  await quiet(p);
+  await shot(p, "32-membres-accord-requis", theme);
+  await p.click("#membres-lignes tr:first-child button:has-text('pour le retirer')");
+  await p.waitForSelector("#dialogue-accord-preparer[open]");
+  await p.click("#preparer-envoyer");
+  await p.waitForSelector("#preparer-resultat:not([hidden])");
+  await quiet(p);
+  await shot(p, "33-demande-preparee", theme);
+  await p.keyboard.press("Escape");
+
+  // Another owner signs a request received: inspect, then sign.
+  await p.click("#accords-signer");
+  await p.waitForSelector("#dialogue-accord-signer[open]");
+  await p.fill("#signer-saisie", "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQAx7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX");
+  await p.click("#signer-examiner");
+  await p.waitForSelector("#signer-detail:not([hidden])");
+  await shot(p, "34-examiner-une-demande", theme);
+  await p.click("#signer-envoyer");
+  await p.waitForSelector("#signer-resultat:not([hidden])");
+  await quiet(p);
+  await shot(p, "35-accord-signe", theme);
+  await p.keyboard.press("Escape");
+
+  // Back on the requester's side: add the approval, the quorum is met.
+  await p.fill("#accord-ajout-saisie", "hirzla-accord:pGEBYQJQah8MLpuNTxejxeAtIvqMFFBkVt3Hq9ZpL2xR7wNcB6mJ4dK8sY1gE5uA0oQ");
+  await p.click("#accord-ajout-envoyer");
+  await p.waitForFunction(() => document.querySelector("#accords-lignes button.bouton-principal:not(:disabled)"));
+  await quiet(p);
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-accords");
+    card.closest(".vue").scrollTop = card.offsetTop - 120;
+  });
+  await shot(p, "36-accords-quorum-atteint", theme);
+  await p.close();
+
+  // Quarantine: two writes of a member removed meanwhile.
+  p = await page(theme, "unlocked", { ...SYNCED, quarantine: true });
+  await serverView(p);
+  await p.click("#casiers-lignes tr:first-child button:has-text('Quarantaine')");
+  await p.waitForSelector("#dialogue-quarantaine[open] #quarantaine-lignes tr");
+  await p.check("#quarantaine-lignes tr:first-child input");
+  await shot(p, "37-quarantaine", theme);
+  await p.keyboard.press("Escape");
+  await p.close();
+
+  // A removal announced and withheld: writes frozen, alert, automatic synchronisation shown.
+  p = await page(theme, "unlocked", {
+    ...SYNCED,
+    frozen: true,
+    alerts: [{ kind: "withheld_removal", index: 152, device: null, locker: "0b3d5f7a9c1e2a4b6c8d0e2f4a6b8c0d" }],
+  });
+  await p.waitForSelector("#bandeau-serveur:not([hidden])");
+  await serverView(p);
+  await p.waitForSelector("#registre-alertes li");
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-casiers");
+    card.closest(".vue").scrollTop = card.offsetTop - 120;
+  });
+  await shot(p, "38-casier-gele", theme);
   await p.close();
 }
 

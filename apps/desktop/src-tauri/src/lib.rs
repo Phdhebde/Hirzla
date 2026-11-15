@@ -99,6 +99,16 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::locker_members,
             servermode::grant_role,
             servermode::revoke_role,
+            servermode::server_join_link,
+            servermode::quorum_prepare,
+            servermode::quorum_inspect,
+            servermode::quorum_approve,
+            servermode::quorum_collect,
+            servermode::quorum_list,
+            servermode::quorum_apply,
+            servermode::quorum_cancel,
+            servermode::quarantine_list,
+            servermode::quarantine_decide,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

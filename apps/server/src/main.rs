@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! hirzlad init  --data DIR --threshold T --shares N --shares-out DIR
+//! hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
 //! hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM
 //!               --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
 //! hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter OPTIONS
@@ -26,11 +27,13 @@ use std::process::ExitCode;
 
 use hirzla_server::net::{self, Config};
 use hirzla_server::seal::ShamirSeal;
-use hirzla_server::store::Store;
+use hirzla_server::store::{SealHeader, Store};
 use hirzla_server::{tls, ServerError};
+use hirzla_sync::text::{fingerprint, Invitation};
 
 const USAGE: &str = "usage:
   hirzlad init  --data DIR --threshold T --shares N --shares-out DIR
+  hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
   hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM \\
                 --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
   hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter …  (hirzlad admin aide)
@@ -97,11 +100,38 @@ fn init(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
         write_private(&out.join(format!("share-{}.bin", s.index())), s.as_bytes())?;
     }
     report(&format!(
-        "server_id {}\nserver_key_fingerprint {}\nshares {count}, threshold {threshold}: hand one to each custodian, then delete {}",
+        "server_id {}\nserver_key_fingerprint {}\nfingerprint {}\nshares {count}, threshold {threshold}: hand one to each custodian, then delete {}",
         hex(&header.server_id),
         hex(&hirzla_crypto::util::sha384(header.server_key.as_bytes())),
+        fingerprint(header.server_key.as_bytes()),
         out.display()
     ));
+    Ok(())
+}
+
+/// Writes the invitation link (`sync-protocol.md` § 11.10, ADR 0046) on standard output:
+/// the address, the site CA and the fingerprint of the server key, read from the clear
+/// header of the data directory without unsealing it.
+fn invitation(o: &BTreeMap<String, String>) -> Result<(), ServerError> {
+    let header = SealHeader::read(Path::new(get(o, "data")?))?;
+    let address = get(o, "address")?;
+    let ok = address
+        .strip_prefix("hirzla://")
+        .is_some_and(|h| !h.is_empty() && !h.contains(['/', '@', '?', '#']));
+    if !ok {
+        return Err(ServerError::Config("the address is hirzla://HOST[:PORT]"));
+    }
+    let ca = Path::new(get(o, "ca")?);
+    tls::load_certs(ca)?;
+    let roots = std::fs::read(ca)?;
+    let link = Invitation {
+        address: address.to_owned(),
+        roots,
+        fingerprint: fingerprint(header.server_key.as_bytes()),
+    }
+    .encode()
+    .map_err(|_| ServerError::Config("the CA is too large for a link"))?;
+    writeln!(std::io::stdout().lock(), "{link}")?;
     Ok(())
 }
 
@@ -155,6 +185,7 @@ fn main() -> ExitCode {
             Ok(())
         }
         Some("init") => options(&args[1..]).and_then(|o| init(&o)),
+        Some("invitation") => options(&args[1..]).and_then(|o| invitation(&o)),
         Some("serve") => options(&args[1..]).and_then(|o| serve(&o)),
         // Administration tool (ADR 0053): French messages, its own exit codes.
         Some("admin") => {

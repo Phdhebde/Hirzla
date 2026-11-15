@@ -136,10 +136,11 @@ demandée ; à revoir avec la synchronisation de fond.
   tables du coffre est due.
 - Reste à faire, hors de ce lot : enrôlement d'un second appareil par la boîte aux lettres
   (§ 14) ; ~~tenue et surveillance du registre de transparence local (`transparence.md` § 6.1,
-  § 6.4 à § 6.6)~~ (tenue, alertes et comparaison des preuves faites par l'ADR 0040 ; restent
-  le gel du § 6.5, l'échange de têtes du § 6.6 et les délais d'une heure) ; quarantaine et décisions des propriétaires ; accords et quorum ; fichiers
-  joints (`PutChunk`) ; synchronisation de fond et `Subscribe` ; écrans de l'application de
-  poste ; outil d'administration de `hirzlad` pour créer les comptes en ligne de commande.
+  § 6.4 à § 6.6)~~ (tenue, alertes et comparaison des preuves faites par l'ADR 0040 ; reste
+  l'échange de têtes du § 6.6 ; gel du § 6.5 et délais d'une heure faits par l'ADR 0045) ;
+  ~~quarantaine et décisions des propriétaires ; accords et quorum~~ (ADR 0044, 0045) ; fichiers
+  joints (`PutChunk`) ; ~~synchronisation de fond~~ (ADR 0048) et `Subscribe` ; ~~écrans de
+  l'application de poste~~ (ADR 0041, 0044 à 0048) ; outil d'administration de `hirzlad` pour créer les comptes en ligne de commande.
 
 ## Alternatives écartées
 

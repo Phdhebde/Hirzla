@@ -42,7 +42,7 @@ const HEADER_FILE: &str = "hirzlad.seal";
 const RECORDS_FILE: &str = "records.log";
 const REWRITE_FILE: &str = "records.log.tmp";
 /// Version of the data directory written (ADR 0040). Version 1 is opened and upgraded.
-pub const STORE_VERSION: u64 = 2;
+pub const STORE_VERSION: u64 = 3;
 /// Largest record (an operation of 4 MiB plus its framing).
 const MAX_RECORD: usize = 8 * 1024 * 1024;
 
@@ -234,6 +234,16 @@ pub enum Record {
         /// When.
         at_ms: u64,
     },
+    /// Reception time of an operation marked `late` (ADR 0047): its body is no longer served
+    /// after [`crate::core::LATE_RETENTION_MS`], then leaves the disk at the next rewrite.
+    LateSeen {
+        /// Locker.
+        locker: Id16,
+        /// The operation.
+        op_id: OpId,
+        /// When it was received (or when the directory was upgraded, for an older one).
+        at_ms: u64,
+    },
     /// A sealed chunk of an attachment.
     Chunk {
         /// Locker.
@@ -346,18 +356,29 @@ impl Record {
                 (3, Value::bytes(device)),
                 (4, Value::Uint(*at_ms)),
             ]),
+            Record::LateSeen {
+                locker,
+                op_id,
+                at_ms,
+            } => Value::map(vec![
+                (1, Value::Uint(11)),
+                (2, Value::bytes(locker)),
+                (3, Value::bytes(op_id)),
+                (4, Value::Uint(*at_ms)),
+            ]),
         }
     }
 
-    /// Whether this kind of record needs version 2 of the directory.
-    fn needs_v2(&self) -> bool {
-        matches!(
-            self,
+    /// The first version of the directory that knows this kind of record.
+    fn min_version(&self) -> u64 {
+        match self {
             Record::Ack { .. }
-                | Record::Stable { .. }
-                | Record::Pruned { .. }
-                | Record::Seen { .. }
-        )
+            | Record::Stable { .. }
+            | Record::Pruned { .. }
+            | Record::Seen { .. } => 2,
+            Record::LateSeen { .. } => 3,
+            _ => 1,
+        }
     }
 
     fn from_value(v: &Value) -> Result<Self, ServerError> {
@@ -454,6 +475,14 @@ impl Record {
                     at_ms: uint(f.req(4)?)?,
                 }
             }
+            11 => {
+                let f = Fields::new(v, &[1, 2, 3, 4])?;
+                Record::LateSeen {
+                    locker: fixed::<16>(f.req(2)?)?,
+                    op_id: fixed::<48>(f.req(3)?)?,
+                    at_ms: uint(f.req(4)?)?,
+                }
+            }
             _ => return Err(ServerError::Malformed),
         })
     }
@@ -493,8 +522,8 @@ fn frame(
 }
 
 /// Opens the records of a journal, in order; returns them with the length of the whole
-/// records read (a torn last record is left out). A record of version 2 in a directory of
-/// version 1 refuses the journal.
+/// records read (a torn last record is left out). A record of a later version than the
+/// directory refuses the journal.
 fn read_records(
     bytes: &[u8],
     header: &SealHeader,
@@ -522,7 +551,7 @@ fn read_records(
         .map_err(|_| ServerError::Storage)?;
         let r = Record::from_value(&cbor::decode(&plain).map_err(|_| ServerError::Storage)?)
             .map_err(|_| ServerError::Storage)?;
-        if r.needs_v2() && header.version < STORE_VERSION {
+        if r.min_version() > header.version {
             return Err(ServerError::Storage);
         }
         records.push(r);
@@ -624,12 +653,13 @@ impl Store {
         ))
     }
 
-    /// Upgrades the header of a version 1 directory before the first record of version 2,
-    /// so that an older binary refuses the directory instead of a record it does not know.
-    fn upgrade(&mut self) -> Result<(), ServerError> {
-        if self.header.version < STORE_VERSION {
+    /// Upgrades the header of an older directory before the first record of a later version
+    /// (`to`), so that an older binary refuses the directory instead of a record it does not
+    /// know.
+    fn upgrade(&mut self, to: u64) -> Result<(), ServerError> {
+        if self.header.version < to {
             let mut h = self.header.clone();
-            h.version = STORE_VERSION;
+            h.version = to;
             h.write(&self.dir)?;
             self.header = h;
         }
@@ -641,9 +671,7 @@ impl Store {
     /// # Errors
     /// [`ServerError::Storage`] or [`ServerError::Io`].
     pub fn append(&mut self, record: &Record) -> Result<(), ServerError> {
-        if record.needs_v2() {
-            self.upgrade()?;
-        }
+        self.upgrade(record.min_version())?;
         let frame = frame(&self.key, &self.header.server_id, self.next, record)?;
         self.file.write_all(&frame)?;
         self.file.sync_data()?;
@@ -659,9 +687,7 @@ impl Store {
     /// # Errors
     /// [`ServerError::Storage`] or [`ServerError::Io`].
     pub fn rewrite(&mut self, records: &[Record]) -> Result<(), ServerError> {
-        if records.iter().any(Record::needs_v2) {
-            self.upgrade()?;
-        }
+        self.upgrade(records.iter().map(Record::min_version).max().unwrap_or(1))?;
         let tmp = self.dir.join(REWRITE_FILE);
         let _ = fs::remove_file(&tmp);
         {
@@ -812,8 +838,29 @@ mod tests {
         assert_eq!(store.version(), 2);
         let h2 = SealHeader::read(dir.path()).unwrap();
         assert_eq!(h2.version, 2);
-        let (_, recs) = Store::open(dir.path(), &h2, key()).unwrap();
-        assert_eq!(recs, vec![op, seen]);
+        let (mut store, recs) = Store::open(dir.path(), &h2, key()).unwrap();
+        assert_eq!(recs, vec![op.clone(), seen.clone()]);
+        drop(store);
+
+        // A record of version 3 (ADR 0047) upgrades it again; refused under version 2.
+        let late = Record::LateSeen {
+            locker: [1; 16],
+            op_id: [4; 48],
+            at_ms: 6,
+        };
+        (store, _) = Store::open(dir.path(), &h2, key()).unwrap();
+        store.append(&late).unwrap();
+        assert_eq!(store.version(), 3);
+        drop(store);
+        let h3 = SealHeader::read(dir.path()).unwrap();
+        assert_eq!(h3.version, 3);
+        let (_, recs) = Store::open(dir.path(), &h3, key()).unwrap();
+        assert_eq!(recs, vec![op, seen, late]);
+        assert!(matches!(
+            Store::open(dir.path(), &h2, key()),
+            Err(ServerError::Storage)
+        ));
+        let h2 = h3;
 
         // Forcing the header back to version 1 under a journal of version 2: refused.
         let mut h1 = h2.clone();

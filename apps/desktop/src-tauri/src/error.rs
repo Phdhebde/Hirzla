@@ -220,6 +220,23 @@ pub fn server_message(code: ServerCode) -> String {
             pas prouvée par le registre de transparence, ou le serveur présente un registre \
             incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité."
             .into(),
+        ServerCode::ApprovalInvalid => "Accord refusé : texte altéré, signature fausse, \
+            signataire qui n'est pas propriétaire du casier, accord déjà compté ou destiné à \
+            une autre demande."
+            .into(),
+        ServerCode::QuorumNotMet(counted, required) => format!(
+            "Quorum non atteint : {counted} propriétaire(s) sur {required}. Transmettez la \
+             demande à d'autres propriétaires, puis ajoutez leurs accords."
+        ),
+        ServerCode::LockerFrozen => "Écritures gelées dans ce casier : une révocation annoncée \
+            par le registre des clés n'a pas été reçue depuis plus d'une heure. Synchronisez ; \
+            si le gel persiste, prévenez votre administrateur de sécurité. La lecture reste \
+            possible."
+            .into(),
+        ServerCode::InvitationInvalid => "Lien d'invitation non valide ou altéré. Demandez-le \
+            à nouveau à l'administrateur du serveur, ou saisissez l'adresse, l'autorité et \
+            l'empreinte séparément."
+            .into(),
     }
 }
 
