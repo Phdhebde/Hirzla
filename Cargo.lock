@@ -805,6 +805,7 @@ dependencies = [
  "hirzla-vault",
  "tempfile",
  "thiserror",
+ "url",
  "zeroize",
 ]
 

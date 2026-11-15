@@ -361,3 +361,152 @@ fn kdf_below_the_floor_is_refused() {
     );
     assert_eq!(status(&mut c).state, VaultState::Absent);
 }
+
+fn create_for(c: &mut Core, title: &str, secret_type: SecretType, urls: &[&str]) -> (Id16, Id16) {
+    let mut fields = vec![(Field::Title, ApiValue::Text(z(title)))];
+    if secret_type == SecretType::Password {
+        fields.push((Field::Username, ApiValue::Text(z("max"))));
+        fields.push((Field::Password, ApiValue::Text(z(SECRET))));
+    }
+    match c
+        .handle(Request::Create {
+            locker: None,
+            secret_type,
+            fields,
+            urls: urls.iter().map(|u| z(u)).collect(),
+            tags: vec![],
+        })
+        .unwrap()
+    {
+        Reply::Created { locker, id } => (locker, id),
+        _ => panic!(),
+    }
+}
+
+fn matches(c: &mut Core, origin: &str) -> Vec<String> {
+    match c
+        .handle(Request::Match {
+            origin: origin.into(),
+        })
+        .unwrap()
+    {
+        Reply::Matches(e) => e.iter().map(|e| e.title.to_string()).collect(),
+        _ => panic!(),
+    }
+}
+
+fn fill(c: &mut Core, (locker, id): (Id16, Id16), origin: &str) -> Result<Reply, ErrorReply> {
+    c.handle(Request::Fill {
+        locker,
+        id,
+        origin: origin.into(),
+    })
+}
+
+/// `Match` and `Fill` (version 2): exact host, `https`, active password secrets only.
+#[test]
+fn origin_operations_are_exact() {
+    let dir = tempdir();
+    let (mut c, _sink) = core(dir.path(), None);
+    let origin = "https://bank.example";
+    assert_eq!(
+        code(c.handle(Request::Match {
+            origin: origin.into()
+        })),
+        ErrorCode::NoVault
+    );
+    c.handle(Request::Init {
+        password: z(PASSWORD),
+        kdf: floor(),
+    })
+    .unwrap();
+    let bank = create_for(
+        &mut c,
+        "Banque",
+        SecretType::Password,
+        &["https://bank.example/login"],
+    );
+    let both = create_for(
+        &mut c,
+        "Banque bis",
+        SecretType::Password,
+        &["https://other.example", "https://BANK.example:8443/x"],
+    );
+    let note = create_for(&mut c, "Note", SecretType::Note, &[]);
+    let sub = create_for(
+        &mut c,
+        "Sous-domaine",
+        SecretType::Password,
+        &["https://login.bank.example"],
+    );
+    let trashed = create_for(
+        &mut c,
+        "Corbeille",
+        SecretType::Password,
+        &["https://bank.example"],
+    );
+    c.handle(Request::Delete {
+        selector: Selector::Id {
+            locker: trashed.0,
+            id: trashed.1,
+        },
+        purge: false,
+    })
+    .unwrap();
+
+    assert_eq!(matches(&mut c, origin), vec!["Banque", "Banque bis"]);
+    assert_eq!(
+        matches(&mut c, "https://bank.example:8443"),
+        vec!["Banque", "Banque bis"]
+    );
+    assert_eq!(
+        matches(&mut c, "https://login.bank.example"),
+        vec!["Sous-domaine"]
+    );
+    for o in [
+        "https://www.bank.example",
+        "https://bank.example.evil.example",
+        "https://bank-example.example",
+        "https://xn--bnk-sna.example",
+        "https://example",
+    ] {
+        assert!(matches(&mut c, o).is_empty(), "{o}");
+    }
+    for o in [
+        "http://bank.example",
+        "https://bank.example/",
+        "https://Bank.example",
+    ] {
+        assert_eq!(
+            code(c.handle(Request::Match { origin: o.into() })),
+            ErrorCode::InvalidInput,
+            "{o}"
+        );
+        assert_eq!(code(fill(&mut c, bank, o)), ErrorCode::InvalidInput, "{o}");
+    }
+
+    match fill(&mut c, bank, origin).unwrap() {
+        Reply::Filled { username, password } => {
+            assert_eq!(username.as_deref().map(String::as_str), Some("max"));
+            assert_eq!(password.as_str(), SECRET);
+        }
+        _ => panic!(),
+    }
+    assert!(fill(&mut c, both, origin).is_ok());
+    // Another host, a subdomain, a parent domain, a note, a secret in the trash, an
+    // unknown secret: all `NotFound`, alike.
+    for (s, o) in [
+        (bank, "https://login.bank.example"),
+        (bank, "https://other.example"),
+        (sub, origin),
+        (sub, "https://example"),
+        (note, origin),
+        (trashed, origin),
+        (([9; 16], bank.1), origin),
+        ((bank.0, [9; 16]), origin),
+    ] {
+        assert_eq!(code(fill(&mut c, s, o)), ErrorCode::NotFound, "{o}");
+    }
+    c.handle(Request::Lock).unwrap();
+    assert_eq!(code(fill(&mut c, bank, origin)), ErrorCode::Locked);
+}

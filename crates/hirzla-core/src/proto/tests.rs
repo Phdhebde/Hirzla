@@ -78,6 +78,14 @@ fn every_request_round_trips() {
             set: vec![(Field::Password, ApiValue::Text(z("new")))],
             clear: vec![Field::Notes],
         },
+        Request::Match {
+            origin: "https://bank.example".into(),
+        },
+        Request::Fill {
+            locker: [1; 16],
+            id: [2; 16],
+            origin: "https://bank.example:8443".into(),
+        },
         Request::Delete {
             selector: sel.clone(),
             purge: true,
@@ -151,6 +159,35 @@ fn every_reply_round_trips() {
         }),
     );
     reply_round_trip(Op::Generate, Ok(Reply::Generated(z("abc"))));
+    reply_round_trip(Op::Match, Ok(Reply::Matches(vec![])));
+    reply_round_trip(
+        Op::Match,
+        Ok(Reply::Matches(vec![ListEntry {
+            locker: [1; 16],
+            id: [2; 16],
+            secret_type: 1,
+            title: z("Banque"),
+            username: None,
+            hosts: vec!["bank.example".into()],
+            tags: vec![],
+            favorite: false,
+            state: 0,
+        }])),
+    );
+    reply_round_trip(
+        Op::Fill,
+        Ok(Reply::Filled {
+            username: Some(z("max")),
+            password: z("s3cr3t"),
+        }),
+    );
+    reply_round_trip(
+        Op::Fill,
+        Ok(Reply::Filled {
+            username: None,
+            password: z("s3cr3t"),
+        }),
+    );
     reply_round_trip(Op::Read, Err(ErrorReply::new(ErrorCode::NotFound)));
     reply_round_trip(
         Op::Unlock,
@@ -214,7 +251,7 @@ fn non_canonical_encoding_is_refused() {
 #[test]
 fn unknown_version_and_operation_are_refused_with_the_identifier() {
     let b = encode_map(vec![
-        (1, Value::Uint(2)),
+        (1, Value::Uint(3)),
         (2, Value::Uint(5)),
         (3, Value::Uint(1)),
     ]);
@@ -225,6 +262,95 @@ fn unknown_version_and_operation_are_refused_with_the_identifier() {
         (3, Value::Uint(99)),
     ]);
     assert_eq!(refused(&b), (6, ErrorCode::UnknownOperation));
+    // The operations of version 2 do not exist in version 1.
+    for op in [Op::Match, Op::Fill] {
+        let b = encode_map(vec![
+            (1, Value::Uint(1)),
+            (2, Value::Uint(7)),
+            (3, Value::Uint(op as u64)),
+            (4, Value::map(vec![(1, Value::text("https://a.example"))])),
+        ]);
+        assert_eq!(refused(&b), (7, ErrorCode::UnknownOperation));
+    }
+}
+
+/// Each request is sent in the first version that knows its operation; the reply carries
+/// the version of the request.
+#[test]
+fn versions_of_requests_and_replies() {
+    let version_of = |bytes: &[u8]| {
+        let v = cbor::decode(bytes).unwrap();
+        let f = Fields::new(&v, &[1, 2, 3, 4]).unwrap();
+        uint(f.req(1).unwrap()).unwrap()
+    };
+    assert_eq!(version_of(&Request::Status.encode(1).unwrap()), 1);
+    let m = Request::Match {
+        origin: "https://a.example".into(),
+    };
+    let bytes = m.encode(1).unwrap();
+    assert_eq!(version_of(&bytes), 2);
+    assert_eq!(Request::decode_versioned(&bytes).unwrap().1, 2);
+    assert_eq!(
+        Request::decode_versioned(&Request::Lock.encode(4).unwrap())
+            .unwrap()
+            .1,
+        1
+    );
+    // A refusal of an unsupported version is written in version 1.
+    let b = encode_map(vec![
+        (1, Value::Uint(9)),
+        (2, Value::Uint(5)),
+        (3, Value::Uint(1)),
+    ]);
+    assert_eq!(
+        Request::decode_versioned(&b).unwrap_err(),
+        (5, 1, ErrorCode::UnsupportedVersion)
+    );
+    let r = Reply::encode_versioned(1, 3, &Ok(Reply::Done)).unwrap();
+    assert_eq!(version_of(&r), 1);
+    let r = Reply::encode_versioned(2, 3, &Ok(Reply::Done)).unwrap();
+    assert_eq!(version_of(&r), 2);
+    assert_eq!(Reply::decode(Op::Lock, &r).unwrap(), (3, Ok(Reply::Done)));
+    // A reply of version 2 cannot be written for a request of version 1.
+    assert!(Reply::encode_versioned(1, 3, &Ok(Reply::Matches(vec![]))).is_err());
+    assert!(Reply::encode_versioned(3, 3, &Ok(Reply::Done)).is_err());
+}
+
+#[test]
+fn origin_arguments_are_checked() {
+    let req2 = |op: Op, args: Value| {
+        encode_map(vec![
+            (1, Value::Uint(2)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(op as u64)),
+            (4, args),
+        ])
+    };
+    for args in [
+        Value::map(vec![]),
+        Value::map(vec![(1, Value::text(""))]),
+        Value::map(vec![(1, Value::Uint(1))]),
+        Value::map(vec![(1, Value::text(&"a".repeat(MAX_ORIGIN + 1)))]),
+        Value::map(vec![
+            (1, Value::text("https://a.example")),
+            (2, Value::Null),
+        ]),
+    ] {
+        assert_eq!(refused(&req2(Op::Match, args)).1, ErrorCode::Malformed);
+    }
+    for args in [
+        Value::map(vec![
+            (1, Value::bytes(&[1; 16])),
+            (2, Value::bytes(&[2; 16])),
+        ]),
+        Value::map(vec![
+            (1, Value::bytes(&[1; 15])),
+            (2, Value::bytes(&[2; 16])),
+            (3, Value::text("https://a.example")),
+        ]),
+    ] {
+        assert_eq!(refused(&req2(Op::Fill, args)).1, ErrorCode::Malformed);
+    }
 }
 
 fn request(op: Op, args: Option<Value>) -> Zeroizing<Vec<u8>> {
@@ -432,4 +558,9 @@ fn debug_hides_content() {
     assert!(!format!("{s:?}").contains("hunter2"));
     let g = Reply::Generated(z("hunter2-very-secret"));
     assert!(!format!("{g:?}").contains("hunter2"));
+    let f = Reply::Filled {
+        username: Some(z("hunter2-user")),
+        password: z("hunter2-very-secret"),
+    };
+    assert!(!format!("{f:?}").contains("hunter2"));
 }

@@ -1,15 +1,16 @@
-# API locale du noyau — spécification v1
+# API locale du noyau — spécification v2
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
 native de l'extension, lui parlent par un **canal local authentifié**. Ce document fixe ce
 canal : transport, authentification des deux bouts, trames, messages, erreurs, versions,
 journal, durcissement du processus. Les choix de dépendances et l'emplacement du code `unsafe`
-sont tranchés par l'ADR 0015 (proposé) ; le presse-papiers de la ligne de commande par
-l'ADR 0016 (proposé).
+sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
+(proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
+l'ADR 0026 (proposé).
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
-`crates/hirzla-keystore` (`platform`), `apps/cli`.
+`crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
 
 ## 1. Principes
 
@@ -81,6 +82,21 @@ Liste par défaut : `hirzla`, `hirzla-desktop`, `hirzla-native-host` (suffixe `.
 Windows) **dans le répertoire du noyau**. `--allow-exe CHEMIN` (répétable) la remplace. Les
 clients légitimes s'installent donc à côté de `hirzla-core`.
 
+**Profil du client** (version 2, ADR 0026). Un client accepté reçoit un profil, décidé par le
+noyau d'après son exécutable, jamais d'après un message :
+
+| Profil | Exécutables | Opérations permises |
+| --- | --- | --- |
+| complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
+| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
+
+Un exécutable présent dans les deux listes a le profil navigateur. Une opération hors profil
+reçoit `Unauthorized` avec l'identifiant de la requête ; la connexion reste ouverte et le refus
+est journalisé (`event=request result=unauthorized`). Le profil navigateur ne peut donc ni
+lister le coffre, ni lire un champ hors d'une origine vérifiée, ni modifier, supprimer,
+créer le coffre, l'ouvrir ou arrêter le noyau : le mot de passe maître ne passe jamais par le
+navigateur.
+
 Un client refusé reçoit, après sa première trame (non décodée) ou au bout de deux secondes, une
 réponse `Unauthorized` d'identifiant 0, puis la connexion est fermée. Le refus est journalisé
 avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`).
@@ -132,7 +148,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 
 | Clé | Nom | Type | Règle |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | Version du protocole : 1 |
+| 1 | `v` | `uint` | Version du protocole : 1 ou 2 (§ 10) |
 | 2 | `id` | `uint` | Choisi par le client, renvoyé dans la réponse |
 | 3 | `op` | `uint` | Code d'opération (§ 6) |
 | 4 | `args` | `map` | Selon l'opération ; absent si l'opération n'en prend pas |
@@ -141,7 +157,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 
 | Clé | Nom | Type | Règle |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | 1 |
+| 1 | `v` | `uint` | Celle de la requête ; 1 si la requête n'a pas pu être lue ou si sa version n'est pas prise en charge |
 | 2 | `id` | `uint` | Celui de la requête ; 0 si la requête n'a pas pu être lue, ou pour un refus de connexion |
 | 3 | `status` | `uint` | 0 = succès, sinon code d'erreur (§ 7) |
 | 4 | `body` | `map` | Succès : selon l'opération, absent pour les opérations sans résultat. Erreur : détails (§ 7), absent sinon |
@@ -155,6 +171,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 | Valeur de champ | `tstr` (≤ 1 Mio ; le coffre applique ses propres limites par champ), `bool` pour le favori |
 | Sélecteur | `{1: casier, 2: secret}` **ou** `{3: titre}` (exactement l'un des deux) |
 | Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note |
+| Origine (v2) | `tstr` (1 à 2 048 octets) : origine web sérialisée `https://hôte[:port]`, voir § 6.1 |
 
 Un sélecteur par titre désigne le secret **actif** dont le titre est égal, sans tenir compte
 de la casse ; s'il y en a plusieurs : `Ambiguous`. Un sélecteur par identifiants désigne tout
@@ -175,6 +192,8 @@ secret non purgé (corbeille comprise).
 | 9 | `Delete` | ouvert | `{1: sélecteur, 2?: purger}` | — |
 | 10 | `Generate` | non | `{1: longueur 8..128, 2: classes}` | `{1: mot de passe}` |
 | 11 | `Shutdown` | non | — | — (le noyau verrouille, répond, puis s'arrête) |
+| 12 | `Match` (v2) | ouvert | `{1: origine}` | `{1: [entrée]}` |
+| 13 | `Fill` (v2) | ouvert | `{1: casier, 2: secret, 3: origine}` | `{1?: identifiant, 2: mot de passe}` |
 
 Détails :
 
@@ -214,6 +233,38 @@ Détails :
     grave). Chaque caractère est tiré uniformément par rejet sur l'aléa du système (AWS-LC) ;
     un tirage qui manque une classe demandée est refait en entier.
 
+11. **`Match`** (v2) — les secrets **actifs** de type mot de passe dont les `hosts` de l'index
+    (`format.md` § 10, règle des `hosts`) contiennent **exactement** l'hôte de l'origine. Mêmes
+    entrées et même ordre que `List` ; liste vide si rien ne correspond. Aucun rapprochement :
+    ni sous-domaine, ni domaine parent, ni « www. », ni domaine enregistrable, ni casse ou
+    Unicode autre que la forme ASCII de l'index.
+12. **`Fill`** (v2) — l'identifiant (s'il existe) et le mot de passe d'**un** secret, **si et
+    seulement si** il est actif, de type mot de passe, et que l'hôte de l'origine figure
+    exactement dans ses `hosts`. Sinon `NotFound`, sans dire lequel de ces points manque (un
+    client ne peut pas apprendre par `Fill` qu'un secret existe hors de son origine). Pas de
+    mot de passe : `NotFound`.
+
+### 6.1 Origine (v2)
+
+Une origine est acceptée si et seulement si, analysée selon le *URL Standard* du WHATWG :
+
+1. son schéma est `https` (ni `http`, ni `file`, ni schéma d'extension) ;
+2. elle a un hôte, ni nom d'utilisateur ni mot de passe, un chemin `/` vide, ni requête ni
+   fragment ;
+3. sa sérialisation d'origine ASCII est **égale octet pour octet** au texte reçu (forme
+   canonique : minuscules, A-label IDNA, port par défaut omis, pas de `/` final).
+
+Sinon `InvalidInput`. Le port, s'il est donné, est accepté mais n'entre pas dans la
+comparaison : l'index ne garde que l'hôte (`format.md`). L'hôte comparé est celui que la règle
+des `hosts` tire de l'origine, ce qui garantit la même normalisation des deux côtés.
+
+Le noyau ne voit pas la page : il **ne peut pas** vérifier que l'origine annoncée est celle de
+l'onglet. Il garantit que le client navigateur n'obtient un mot de passe que pour l'origine
+qu'il nomme, et que cette origine est en `https` et exactement enregistrée. La vérification
+que l'origine est celle de la page, du cadre principal, et le geste de l'utilisateur, sont
+faits par l'extension, avec les informations du navigateur (`apps/extension/README.md`,
+ADR 0026).
+
 ## 7. Erreurs
 
 | Code | Nom | Sens | Détails (`body`) |
@@ -221,7 +272,7 @@ Détails :
 | 1 | `Malformed` | Trame ou message mal formé | — |
 | 2 | `UnsupportedVersion` | Version non prise en charge | `{2: [versions acceptées]}` |
 | 3 | `UnknownOperation` | Code d'opération inconnu | — |
-| 4 | `Unauthorized` | Processus appelant non autorisé (§ 3.1) | — |
+| 4 | `Unauthorized` | Processus appelant non autorisé (§ 3.1), ou opération hors de son profil (v2) | — |
 | 5 | `NoVault` | Pas de coffre au chemin configuré | — |
 | 6 | `VaultExists` | Un coffre existe déjà | — |
 | 7 | `Locked` | Coffre verrouillé | — |
@@ -294,7 +345,13 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **1**. Le noyau annonce les versions qu'il parle dans `Status`.
+- Version actuelle : **2**. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`).
+- La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
+  (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
+  qu'avant, portant `v = 1`. Un client envoie chaque requête avec **la plus petite version qui
+  connaît son opération** (1 pour les opérations 1 à 11, 2 pour 12 et 13) : un client récent
+  parle donc encore à un noyau v1 pour tout ce qui existait.
+- `Match` ou `Fill` dans une requête v1 : `UnknownOperation`.
 - Une requête d'une autre version reçoit `UnsupportedVersion` avec la liste des versions
   acceptées.
 - Le décodage refuse toute clé inconnue : **ajouter une clé, une opération ou un code d'erreur
@@ -332,7 +389,23 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 - `--id` attend au moins 4 chiffres hexadécimaux du début de l'identifiant affiché par `ls`.
 - Codes de sortie : 0 succès, 1 refus ou erreur, 2 usage.
 
-## 12. Points ouverts
+## 12. L'hôte de messagerie native `hirzla-native-host`
+
+Client du noyau au profil navigateur (§ 3.1), lancé par le navigateur à chaque message de
+l'extension. Il traduit le JSON de la messagerie native en requêtes de cette API ; il ne
+détient aucune clé, ne garde aucun état entre deux lancements et n'écrit aucun journal. Son
+protocole JSON, ses refus et son installation sont décrits dans `apps/extension/README.md` ;
+l'encodage JSON par l'ADR 0027 (proposé).
+
+- Il se connecte au noyau `hirzla-core` situé à côté de lui (ou `HIRZLA_CORE`), au point de
+  connexion par défaut (ou `HIRZLA_SOCKET`), vérifie le noyau (§ 3.2), fait un aller-retour
+  `Status` accepté, **puis seulement** durcit son processus (comme la ligne de commande : un
+  processus non vidable masque son exécutable au noyau sous Linux).
+- Il ne démarre pas le noyau et n'ouvre pas le coffre : verrouillé, il répond `locked` et
+  l'extension invite à ouvrir le coffre avec l'application ou `hirzla unlock`.
+- Il revérifie lui-même la forme de l'origine (§ 6.1) avant de la transmettre.
+
+## 13. Points ouverts
 
 Décisions prises seul pendant cette étape, à confirmer :
 
@@ -353,3 +426,8 @@ Décisions prises seul pendant cette étape, à confirmer :
 7. **Une seule requête à la fois par connexion**, pas de multiplexage ni de notification
    poussée (l'interface sondera `Status`).
 8. **Calibrage d'Argon2id** visant 1 s et 1 Gio au plus à la création du coffre.
+9. **Profil navigateur** (v2, ADR 0026) : décidé par le chemin de l'exécutable, comme la
+   liste d'autorisation, avec les mêmes limites (§ 3.3).
+10. **`Match` et `Fill` en `https` seulement** et sans port : un site interne en `http` ne
+    peut pas être rempli par l'extension. Garder le schéma et le port dans l'index demanderait
+    un changement de format.

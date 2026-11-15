@@ -8,12 +8,13 @@ use std::time::{Duration, Instant};
 use hirzla_keystore::platform::HardeningReport;
 use hirzla_vault::model::{Id16, Settings};
 use hirzla_vault::secret::{
-    Field, FieldValue, IndexEntry, SecretEdit, SecretState, SetKind, SetValue,
+    Field, FieldValue, IndexEntry, SecretEdit, SecretState, SecretType, SetKind, SetValue,
 };
 use hirzla_vault::{CreateOptions, KdfCost, Vault, VaultError};
 
 use crate::events::{Event, LockReason, Log};
 use crate::generator;
+use crate::origin::origin_host;
 use crate::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, LockerEntry, Reply, Request, Selector,
     StatusInfo, VaultState, SUPPORTED_VERSIONS,
@@ -285,6 +286,8 @@ impl Core {
                 .map_err(vault_error)?;
                 Ok(Reply::Done)
             }
+            Request::Match { origin } => self.matches(&origin),
+            Request::Fill { locker, id, origin } => self.fill(locker, id, &origin),
         }
     }
 
@@ -454,6 +457,64 @@ impl Core {
                 }
             }
         }
+    }
+
+    /// Active password secrets whose hosts contain exactly the host of `origin`
+    /// (`docs/api-locale.md` § 6, `Match`).
+    fn matches(&mut self, origin: &str) -> Result<Reply, ErrorReply> {
+        let vault = self.vault()?;
+        let host = origin_host(origin).ok_or_else(|| ErrorReply::new(ErrorCode::InvalidInput))?;
+        let mut entries = Vec::new();
+        for l in vault.lockers() {
+            for e in vault.list(l.id).map_err(vault_error)? {
+                if e.state == SecretState::Active
+                    && e.secret_type == SecretType::Password
+                    && e.hosts.contains(&host)
+                {
+                    entries.push(list_entry(l.id, &e));
+                }
+            }
+        }
+        entries.sort_by(|a, b| {
+            a.title
+                .chars()
+                .flat_map(char::to_lowercase)
+                .cmp(b.title.chars().flat_map(char::to_lowercase))
+                .then(a.id.cmp(&b.id))
+        });
+        Ok(Reply::Matches(entries))
+    }
+
+    /// User name and password of one secret, only if it is an active password secret whose
+    /// hosts contain exactly the host of `origin` (`docs/api-locale.md` § 6, `Fill`). Every
+    /// other case is `NotFound`, without saying which condition failed.
+    fn fill(&mut self, locker: Id16, id: Id16, origin: &str) -> Result<Reply, ErrorReply> {
+        let vault = self.vault()?;
+        let host = origin_host(origin).ok_or_else(|| ErrorReply::new(ErrorCode::InvalidInput))?;
+        let not_found = || ErrorReply::new(ErrorCode::NotFound);
+        let eligible = vault
+            .list(locker)
+            .map_err(|_| not_found())?
+            .iter()
+            .any(|e| {
+                e.secret_id == id
+                    && e.state == SecretState::Active
+                    && e.secret_type == SecretType::Password
+                    && e.hosts.contains(&host)
+            });
+        if !eligible {
+            return Err(not_found());
+        }
+        let body = vault.read_secret(locker, id).map_err(vault_error)?;
+        let text = |f: Field| match body.fields.get(&f).map(|e| &e.value) {
+            Some(FieldValue::Text(t)) => Some(t.clone()),
+            _ => None,
+        };
+        let password = text(Field::Password).ok_or_else(not_found)?;
+        Ok(Reply::Filled {
+            username: text(Field::Username),
+            password,
+        })
     }
 
     fn read(&mut self, selector: &Selector, field: Field) -> Result<Reply, ErrorReply> {

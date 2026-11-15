@@ -13,10 +13,10 @@ use hirzla_vault::model::Id16;
 use hirzla_vault::secret::{Field, SecretType};
 use zeroize::Zeroizing;
 
-/// Version of the protocol spoken by this build.
-pub const PROTOCOL_VERSION: u64 = 1;
+/// Latest version of the protocol spoken by this build.
+pub const PROTOCOL_VERSION: u64 = 2;
 /// Versions this build accepts.
-pub const SUPPORTED_VERSIONS: &[u64] = &[1];
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2];
 /// Largest frame accepted, in bytes (length prefix excluded).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Longest master password, in bytes.
@@ -25,6 +25,8 @@ pub const MAX_PASSWORD: usize = 4096;
 pub const MAX_TEXT: usize = 1024 * 1024;
 /// Longest search query, in bytes.
 pub const MAX_QUERY: usize = 1024;
+/// Longest web origin, in bytes (version 2).
+pub const MAX_ORIGIN: usize = 2048;
 /// Most fields set or cleared by one request.
 pub const MAX_FIELDS: usize = 32;
 /// Most URLs or tags given by one request.
@@ -152,10 +154,14 @@ pub enum Op {
     Generate = 10,
     /// Lock and stop the core.
     Shutdown = 11,
+    /// Password secrets registered for exactly one web origin (version 2).
+    Match = 12,
+    /// User name and password of one secret, for its exact web origin (version 2).
+    Fill = 13,
 }
 
 impl Op {
-    const ALL: [Op; 11] = [
+    const ALL: [Op; 13] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -167,6 +173,8 @@ impl Op {
         Op::Delete,
         Op::Generate,
         Op::Shutdown,
+        Op::Match,
+        Op::Fill,
     ];
 
     /// The operation from its number.
@@ -190,6 +198,18 @@ impl Op {
             Op::Delete => "delete",
             Op::Generate => "generate",
             Op::Shutdown => "shutdown",
+            Op::Match => "match",
+            Op::Fill => "fill",
+        }
+    }
+
+    /// The first protocol version that knows this operation. A request is sent with it, so
+    /// that a recent client still talks to an older core for what the older core knows.
+    #[must_use]
+    pub fn min_version(self) -> u64 {
+        match self {
+            Op::Match | Op::Fill => 2,
+            _ => 1,
         }
     }
 }
@@ -411,6 +431,20 @@ pub enum Request {
     },
     /// Lock and stop the core.
     Shutdown,
+    /// Active password secrets whose hosts contain exactly the host of `origin` (v2).
+    Match {
+        /// Serialised web origin, `https://host[:port]` (`docs/api-locale.md` § 6.1).
+        origin: String,
+    },
+    /// User name and password of one secret, if `origin` is exactly one of its hosts (v2).
+    Fill {
+        /// Locker.
+        locker: Id16,
+        /// Secret.
+        id: Id16,
+        /// Serialised web origin.
+        origin: String,
+    },
 }
 
 impl std::fmt::Debug for Request {
@@ -436,6 +470,8 @@ impl Request {
             Request::Delete { .. } => Op::Delete,
             Request::Generate { .. } => Op::Generate,
             Request::Shutdown => Op::Shutdown,
+            Request::Match { .. } => Op::Match,
+            Request::Fill { .. } => Op::Fill,
         }
     }
 
@@ -534,16 +570,23 @@ impl Request {
                 (1, Value::Uint(u64::from(*length))),
                 (2, Value::Uint(*classes)),
             ])),
+            Request::Match { origin } => Some(Value::map(vec![(1, Value::text(origin))])),
+            Request::Fill { locker, id, origin } => Some(Value::map(vec![
+                (1, Value::bytes(locker)),
+                (2, Value::bytes(id)),
+                (3, Value::text(origin)),
+            ])),
         }
     }
 
-    /// Encodes the request as a frame body, with request identifier `id`.
+    /// Encodes the request as a frame body, with request identifier `id`, in the first
+    /// protocol version that knows its operation ([`Op::min_version`]).
     ///
     /// # Errors
     /// [`ErrorCode::Internal`] if encoding fails.
     pub fn encode(&self, id: u64) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
         let mut m = vec![
-            (1, Value::Uint(PROTOCOL_VERSION)),
+            (1, Value::Uint(self.op().min_version())),
             (2, Value::Uint(id)),
             (3, Value::Uint(self.op() as u64)),
         ];
@@ -559,26 +602,39 @@ impl Request {
     /// # Errors
     /// `(id, code)`.
     pub fn decode(body: &[u8]) -> Result<(u64, Request), (u64, ErrorCode)> {
-        let v = cbor::decode(body).map_err(|_| (0, ErrorCode::Malformed))?;
-        let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(|_| (0, ErrorCode::Malformed))?;
+        Self::decode_versioned(body)
+            .map(|(id, _, r)| (id, r))
+            .map_err(|(id, _, c)| (id, c))
+    }
+
+    /// Like [`Request::decode`], also returning the protocol version the reply must carry:
+    /// the request's, or 1 when it could not be read or is not supported.
+    ///
+    /// # Errors
+    /// `(id, version, code)`.
+    pub fn decode_versioned(body: &[u8]) -> Result<(u64, u64, Request), (u64, u64, ErrorCode)> {
+        let v = cbor::decode(body).map_err(|_| (0, 1, ErrorCode::Malformed))?;
+        let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(|_| (0, 1, ErrorCode::Malformed))?;
         let id = f
             .req(2)
             .and_then(uint)
-            .map_err(|_| (0, ErrorCode::Malformed))?;
+            .map_err(|_| (0, 1, ErrorCode::Malformed))?;
         let version = f
             .req(1)
             .and_then(uint)
-            .map_err(|_| (id, ErrorCode::Malformed))?;
+            .map_err(|_| (id, 1, ErrorCode::Malformed))?;
         if !SUPPORTED_VERSIONS.contains(&version) {
-            return Err((id, ErrorCode::UnsupportedVersion));
+            return Err((id, 1, ErrorCode::UnsupportedVersion));
         }
         let op = f
             .req(3)
             .and_then(uint)
-            .map_err(|_| (id, ErrorCode::Malformed))?;
-        let op = Op::from_u64(op).ok_or((id, ErrorCode::UnknownOperation))?;
-        let req = Self::decode_args(op, f.opt(4)).map_err(|c| (id, c))?;
-        Ok((id, req))
+            .map_err(|_| (id, version, ErrorCode::Malformed))?;
+        let op = Op::from_u64(op)
+            .filter(|o| o.min_version() <= version)
+            .ok_or((id, version, ErrorCode::UnknownOperation))?;
+        let req = Self::decode_args(op, f.opt(4)).map_err(|c| (id, version, c))?;
+        Ok((id, version, req))
     }
 
     fn decode_args(op: Op, args: Option<&Value>) -> Result<Request, ErrorCode> {
@@ -705,6 +761,21 @@ impl Request {
                     classes,
                 })
             }
+            Op::Match => {
+                let f = fields(args()?, &[1])?;
+                Ok(Request::Match {
+                    origin: origin(f.req(1).map_err(|_| ErrorCode::Malformed)?)?,
+                })
+            }
+            Op::Fill => {
+                let f = fields(args()?, &[1, 2, 3])?;
+                let req = |k| f.req(k).map_err(|_| ErrorCode::Malformed);
+                Ok(Request::Fill {
+                    locker: id16(req(1)?)?,
+                    id: id16(req(2)?)?,
+                    origin: origin(req(3)?)?,
+                })
+            }
         }
     }
 }
@@ -800,6 +871,15 @@ pub enum Reply {
     },
     /// Generated password.
     Generated(Zeroizing<String>),
+    /// Password secrets of an origin (v2), index data only.
+    Matches(Vec<ListEntry>),
+    /// User name and password of a secret, for its origin (v2).
+    Filled {
+        /// User name, when the secret has one.
+        username: Option<Zeroizing<String>>,
+        /// Password.
+        password: Zeroizing<String>,
+    },
 }
 
 impl std::fmt::Debug for Reply {
@@ -811,6 +891,8 @@ impl std::fmt::Debug for Reply {
             Reply::Value(_) => "Reply::Value",
             Reply::Created { .. } => "Reply::Created",
             Reply::Generated(_) => "Reply::Generated",
+            Reply::Matches(_) => "Reply::Matches",
+            Reply::Filled { .. } => "Reply::Filled",
         })
     }
 }
@@ -957,10 +1039,31 @@ impl Reply {
                 (2, Value::bytes(id)),
             ])),
             Reply::Generated(p) => Some(Value::map(vec![(1, Value::text(p))])),
+            Reply::Matches(entries) => Some(Value::map(vec![(
+                1,
+                Value::Array(entries.iter().map(entry_value).collect()),
+            )])),
+            Reply::Filled { username, password } => {
+                let mut m = Vec::new();
+                if let Some(u) = username {
+                    m.push((1, Value::text(u)));
+                }
+                m.push((2, Value::text(password)));
+                Some(Value::map(m))
+            }
         }
     }
 
-    /// Encodes a reply (success or refusal) to request `id`.
+    /// The first protocol version that knows this reply.
+    fn min_version(&self) -> u64 {
+        match self {
+            Reply::Matches(_) | Reply::Filled { .. } => 2,
+            _ => 1,
+        }
+    }
+
+    /// Encodes a reply (success or refusal) to request `id`, in the first protocol version
+    /// that knows it (1 for a refusal).
     ///
     /// # Errors
     /// [`ErrorCode::Internal`] if encoding fails.
@@ -968,7 +1071,25 @@ impl Reply {
         id: u64,
         result: &Result<Reply, ErrorReply>,
     ) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
-        let mut m = vec![(1, Value::Uint(PROTOCOL_VERSION)), (2, Value::Uint(id))];
+        let version = result.as_ref().map_or(1, Reply::min_version);
+        Self::encode_versioned(version, id, result)
+    }
+
+    /// Encodes a reply to request `id` of protocol `version` (the request's version).
+    ///
+    /// # Errors
+    /// [`ErrorCode::Internal`] if encoding fails, or if the reply does not exist in `version`.
+    pub fn encode_versioned(
+        version: u64,
+        id: u64,
+        result: &Result<Reply, ErrorReply>,
+    ) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
+        if !SUPPORTED_VERSIONS.contains(&version)
+            || result.as_ref().is_ok_and(|r| r.min_version() > version)
+        {
+            return Err(ErrorCode::Internal);
+        }
+        let mut m = vec![(1, Value::Uint(version)), (2, Value::Uint(id))];
         match result {
             Ok(r) => {
                 m.push((3, Value::Uint(0)));
@@ -1005,7 +1126,8 @@ impl Reply {
         let v = cbor::decode(frame).map_err(|_| ErrorCode::Malformed)?;
         let f = fields(&v, &[1, 2, 3, 4])?;
         let req = |k| f.req(k).map_err(|_| ErrorCode::Malformed);
-        if uint(req(1)?).map_err(|_| ErrorCode::Malformed)? != PROTOCOL_VERSION {
+        let version = uint(req(1)?).map_err(|_| ErrorCode::Malformed)?;
+        if !SUPPORTED_VERSIONS.contains(&version) {
             return Err(ErrorCode::Malformed);
         }
         let id = uint(req(2)?).map_err(|_| ErrorCode::Malformed)?;
@@ -1111,6 +1233,23 @@ impl Reply {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
                 Reply::Generated(text(b.req(1).map_err(|_| ErrorCode::Malformed)?, 1024)?)
             }
+            Op::Match => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
+                Reply::Matches(
+                    array_max(b.req(1).map_err(|_| ErrorCode::Malformed)?, MAX_ENTRIES)
+                        .map_err(|_| ErrorCode::Malformed)?
+                        .iter()
+                        .map(entry_from)
+                        .collect::<Result<_, _>>()?,
+                )
+            }
+            Op::Fill => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2])?;
+                Reply::Filled {
+                    username: b.opt(1).map(|u| text(u, MAX_TEXT)).transpose()?,
+                    password: text(b.req(2).map_err(|_| ErrorCode::Malformed)?, MAX_TEXT)?,
+                }
+            }
         };
         Ok((id, Ok(reply)))
     }
@@ -1136,6 +1275,16 @@ fn password(v: &Value) -> Result<Zeroizing<String>, ErrorCode> {
         return Err(ErrorCode::InvalidInput);
     }
     Ok(p)
+}
+
+/// An origin, as text: its form is checked by the core (`docs/api-locale.md` § 6.1), which
+/// answers `InvalidInput`; here only its type and length.
+fn origin(v: &Value) -> Result<String, ErrorCode> {
+    let o = text_max(v, MAX_ORIGIN).map_err(|_| ErrorCode::Malformed)?;
+    if o.is_empty() {
+        return Err(ErrorCode::Malformed);
+    }
+    Ok(o.to_owned())
 }
 
 fn id16(v: &Value) -> Result<Id16, ErrorCode> {
