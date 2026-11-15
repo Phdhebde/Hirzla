@@ -51,8 +51,9 @@ fn decode_one(locker: &Id16, bytes: &[u8]) -> Result<Decoded, RejectReason> {
 struct Node {
     opref: OpRef,
     prev: Option<OpId>,
-    /// `None` for a stub without history (ADR 0017).
-    lamport: Option<u64>,
+    /// Claimed Lamport clock; for a pruned operation or a stub, the one carried by the
+    /// `Compact` that lists it (ADR 0017).
+    lamport: u64,
     deps: Vec<OpId>,
     is_create: bool,
 }
@@ -127,8 +128,8 @@ impl<A: Authorizer> Replica<A> {
 
         // Steps 4 and 7, in claimed lamport order: a valid dependency always comes first.
         let mut order: Vec<OpId> = nodes.keys().copied().collect();
-        order.sort_by_key(|id| (nodes[id].lamport.unwrap_or(0), *id));
-        let mut done: BTreeMap<OpId, Result<Option<u64>, OpStatus>> = BTreeMap::new();
+        order.sort_by_key(|id| (nodes[id].lamport, *id));
+        let mut done: BTreeMap<OpId, Result<u64, OpStatus>> = BTreeMap::new();
         for id in &order {
             let n = &nodes[id];
             let outcome = self.chain_and_deps(n, &nodes, &status, &done);
@@ -162,7 +163,7 @@ impl<A: Authorizer> Replica<A> {
             .iter()
             .map(|id| {
                 let n = &nodes[id];
-                (*id, n.lamport.unwrap_or(0), n.deps.clone())
+                (*id, n.lamport, n.deps.clone())
             })
             .collect();
         self.causality = Causality::build(&graph);
@@ -590,7 +591,7 @@ impl<A: Authorizer> Replica<A> {
                 Some(Some(p)) if p.opref == s.opref && p.prev == s.prev => Ok(Node {
                     opref: p.opref,
                     prev: p.prev,
-                    lamport: Some(p.lamport),
+                    lamport: p.lamport,
                     deps: p.deps.clone(),
                     is_create: false,
                 }),
@@ -600,7 +601,7 @@ impl<A: Authorizer> Replica<A> {
             Body::Pruned(m) => Ok(Node {
                 opref: m.opref,
                 prev: m.prev,
-                lamport: Some(m.lamport),
+                lamport: m.lamport,
                 deps: m.deps.clone(),
                 is_create: false,
             }),
@@ -635,7 +636,7 @@ impl<A: Authorizer> Replica<A> {
                 Ok(Node {
                     opref: r,
                     prev: d.op.prev,
-                    lamport: Some(o.lamport),
+                    lamport: o.lamport,
                     deps: o.deps.clone(),
                     is_create: matches!(d.control, Some(ControlBody::LockerCreate(_))),
                 })
@@ -649,8 +650,8 @@ impl<A: Authorizer> Replica<A> {
         n: &Node,
         nodes: &BTreeMap<OpId, Node>,
         status: &BTreeMap<OpId, OpStatus>,
-        done: &BTreeMap<OpId, Result<Option<u64>, OpStatus>>,
-    ) -> Result<Option<u64>, OpStatus> {
+        done: &BTreeMap<OpId, Result<u64, OpStatus>>,
+    ) -> Result<u64, OpStatus> {
         let mut fail: Option<OpStatus> = None;
         // Step 4: the device chain.
         if let Some(p) = &n.prev {
@@ -671,13 +672,7 @@ impl<A: Authorizer> Replica<A> {
                 },
             }
         }
-        let Some(lamport) = n.lamport else {
-            // A stub: its chain is all that is known (ADR 0017).
-            return match fail {
-                Some(f) => Err(f),
-                None => Ok(None),
-            };
-        };
+        let lamport = n.lamport;
         // Step 7: dependencies, `prev ∈ deps`, lamport.
         if n.is_create {
             if n.opref.seq != 1 || !n.deps.is_empty() || lamport != 1 {
@@ -692,16 +687,14 @@ impl<A: Authorizer> Replica<A> {
             }
         }
         let mut max = 0u64;
-        let mut unknown = false;
         for d in &n.deps {
             match done.get(d) {
-                Some(Ok(Some(l))) => {
+                Some(Ok(l)) => {
                     if *l >= lamport {
                         return Err(OpStatus::Rejected(RejectReason::Lamport));
                     }
                     max = max.max(*l);
                 }
-                Some(Ok(None)) => unknown = true,
                 Some(Err(OpStatus::Rejected(_))) => {
                     return Err(OpStatus::Rejected(RejectReason::RejectedDependency))
                 }
@@ -710,7 +703,7 @@ impl<A: Authorizer> Replica<A> {
                 }
                 None => {
                     if let Some(dn) = nodes.get(d) {
-                        if dn.lamport.is_some_and(|l| l >= lamport) {
+                        if dn.lamport >= lamport {
                             return Err(OpStatus::Rejected(RejectReason::Lamport));
                         }
                     }
@@ -729,15 +722,12 @@ impl<A: Authorizer> Replica<A> {
         if let Some(f) = fail {
             return Err(f);
         }
-        let rule = if unknown {
-            lamport > max
-        } else {
-            Some(lamport) == max.checked_add(1)
-        };
-        if !rule {
+        // Strict equality, pruned dependencies included: their clock is carried by the
+        // `Compact` that lists them (§ 4.3, ADR 0017).
+        if max.checked_add(1) != Some(lamport) {
             return Err(OpStatus::Rejected(RejectReason::Lamport));
         }
-        Ok(Some(lamport))
+        Ok(lamport)
     }
 
     /// The causal past of a pruned operation or of a listed stub (ADR 0017).

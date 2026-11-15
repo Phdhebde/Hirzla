@@ -122,3 +122,17 @@ dans `hirzla-access` (étape 10). Le lot d'intégration garde une seule définit
 `ControlBody`, dans `hirzla-access`, que `hirzla-sync` réutilise ; `hirzla-sync` dépend
 donc de `hirzla-access`, conformément au sens des dépendances de `CLAUDE.md`, et le trait
 `Authorizer` est implémenté par un adaptateur au-dessus de `hirzla_access::authz`.
+
+## Mise en œuvre (lot d'intégration, 2026-11-15)
+
+- `hirzla-sync` dépend de `hirzla-access`. `crates/hirzla-sync/src/control.rs` est supprimé :
+  `hirzla_sync::control` réexporte `hirzla_access::control`. Les rares écarts entre les deux
+  modèles ont été tranchés selon la spécification (liste dans l'ADR 0023).
+- `AccessAuthorizer` (`crates/hirzla-sync/src/authz.rs`) implémente `Authorizer` au-dessus de
+  `hirzla_access::authz::compute` et `classify_data`. C'est l'autorisation de production ;
+  tous les tests de `hirzla-sync` (convergence, réseau fautif, propriétés) tournent avec elle.
+- `MemoryAuthorizer`, l'implémentation de référence de l'étape 9, est retiré : il divergeait
+  de la spécification sur plusieurs points et un test différentiel aurait figé ces écarts.
+- `hirzla-access` reçoit en plus, pour chaque opération, le certificat qui a vérifié la
+  signature (`signer`) et l'indication de bifurcation (`forked`) : le calcul vérifie que
+  l'appareil actif est bien ce certificat, et met en quarantaine les opérations bifurquées.

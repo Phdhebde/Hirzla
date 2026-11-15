@@ -9,6 +9,12 @@ Ce document s'appuie sur `docs/format.md` pour tout encodage : CBOR déterminist
 `SealedPayload` (§ 7), `SecretBody` (§ 7.3). « Doit » est une obligation. Toute entrée non
 conforme est refusée.
 
+Révision du lot d'intégration (2026-11-15) : la `Compact` porte, scellé, le passé causal des
+opérations qu'elle élague (ADR 0017, § 10.2) ; les corps de contrôle et le calcul
+d'autorisation n'ont qu'une définition, celle de `hirzla-access` (ADR 0018) ; les choix
+d'interprétation faits à cette occasion sont dans l'ADR 0023. Rien n'ayant été publié, ces
+changements restent dans la v1 : `v = 1` et `format.md` § 7 ne changent pas de numéro.
+
 ## 1. Principes
 
 1. Toute modification est une **opération** : créer ou modifier un secret, changer les
@@ -76,8 +82,8 @@ L'horloge est une horloge de Lamport par casier.
 - `lamport = 1 + max(lamport(d) pour d ∈ deps)` ; `lamport = 1` si `deps` est vide.
 - L'égalité est exigée, pas seulement l'inégalité. Un auteur ne peut donc pas gonfler son
   horloge pour gagner toutes les fusions futures.
-- Si une dépendance a été élaguée (§ 10), on vérifie seulement `lamport > lamport` de chaque
-  dépendance disponible.
+- La règle vaut aussi quand une dépendance a été élaguée (§ 10) : son `lamport` est celui
+  que porte la `Compact` qui la liste (§ 10.2).
 - `wall_ms` est indicatif. Il sert à l'affichage, jamais à décider.
 
 ### 4.4 Dépendances causales
@@ -85,8 +91,8 @@ L'horloge est une horloge de Lamport par casier.
 - `deps` = les têtes du journal connues de l'auteur au moment d'écrire, plus `prev`.
 - Au plus 256 éléments. S'il y a plus de têtes, l'auteur garde `prev` puis les têtes de plus
   grand `lamport`. Les autres restent des têtes et seront reprises plus tard.
-- Toutes les dépendances doivent être présentes, ou connues comme élaguées, avant qu'une
-  opération soit validée.
+- Toutes les dépendances doivent être présentes, en entier ou comme souches acceptées
+  (§ 10.3), avant qu'une opération soit validée.
 
 ## 5. Émettre une opération
 
@@ -126,6 +132,13 @@ Dans cet ordre. Le statut renvoie à `format.md` § 5.2.
 | 9 | Autorisation, révocations d'appareil et époque (§ 7.4, § 9) | Rejetée (3) ou en quarantaine (2) |
 | 10 | Appliquer | Appliquée (1) |
 
+- Étape 3 : la clé de vérification est celle du certificat que le casier connaît pour
+  `ref.device`. L'étape 9 vérifie que ce certificat est bien celui que l'état d'autorisation
+  tient pour l'appareil actif ; sinon l'opération est rejetée.
+- Étape 8, mode Serveur : la `keylog_proof` d'une `LockerCreate` ou d'un `Grant` doit se
+  vérifier contre la clé épinglée du serveur (`transparence.md` § 6.3). Une preuve absente
+  laisse l'opération valide ; une preuve invalide la fait rejeter.
+- Étape 9 : une opération d'un appareil en bifurcation (§ 9.6) est en quarantaine.
 - Une opération en attente est réexaminée à chaque nouvelle arrivée.
 - La file d'attente est bornée à 100 000 opérations ou 256 Mio par casier. Au-delà, le poste
   arrête de recevoir ce casier et le signale.
@@ -139,7 +152,12 @@ Dans cet ordre. Le statut renvoie à `format.md` § 5.2.
 
 Une opération de contrôle (`class = 2`) porte un `ControlBody` **en clair**. Le serveur doit
 pouvoir le lire pour filtrer (ADR 0004). Il ne contient aucun secret. Son `sealed` porte
-l'horloge et les dépendances, avec `kind = 0` et sans `content`.
+l'horloge et les dépendances, avec `kind = 0` et sans `content`, sauf la `Compact`, dont le
+`content` est obligatoire (`CompactPast`, § 10.2). Un `content` sur un autre type de
+contrôle, ou son absence sur une `Compact`, fait rejeter l'opération (étape 8).
+
+Une seule implémentation fait foi pour l'encodage et le décodage de ces corps :
+`hirzla_access::control`, que `hirzla-sync` réutilise (ADR 0018).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
@@ -168,7 +186,7 @@ Codes de rôle :
 | 14 | `EnvelopeAdd` | 2 `envelopes` | `Owner`, `Manager`, `Editor` ; ou un appareil du même membre que tous les destinataires |
 | 15 | `QuarantineAccept` | 2 `ops` : `array<OpId>` | `Owner` |
 | 16 | `QuarantineReject` | 2 `ops` : `array<OpId>` ; 3 `auto` : `bool` | `Owner` |
-| 17 | `Compact` | 2 `prune` : `array<OpId>` | `Owner`, `Manager`, `Editor` |
+| 17 | `Compact` | 2 `prune` : `array<OpId>` ; contenu scellé : `CompactPast` (§ 10.2) | `Owner`, `Manager`, `Editor` |
 | 18 | `Policy` | 2 `owner_removal_quorum` : `uint` (2 à 16) ; 3 `request_id` : `ID16` ; 4 `approvals` | `Owner`, avec le quorum en vigueur (§ 9.2) |
 | 20 | `DeviceAdd` | 2 `cert` : `DeviceCert` ; 3 `envelopes` | Un appareil du même membre déjà présent ; ou `Owner`, `Manager`, `Editor` |
 | 21 | `DeviceRemove` | 2 `revocation` : `DeviceRevocation` ; 3 `envelopes` ; 4 `prev` | Tout appareil titulaire d'un rôle dans le casier |
@@ -243,6 +261,16 @@ cette règle, le serveur pourrait injecter une seconde racine avec son propre cr
 **`DeviceRemove`** : § 9.7.
 
 **`Compact`** : § 10.
+
+**Décodage strict, commun à tous les types** :
+
+- les listes d'enveloppes (`envelopes`), d'accords (`approvals`) et d'emballages (`prev`)
+  sont sans doublon : une même `(member, device)`, un même approbateur, une même époque ;
+- une liste d'accords vide est refusée dans `Grant` et `Revoke` (absente veut dire aucune) ;
+  dans `Policy`, le champ est obligatoire et peut être vide ;
+- `EnvelopeAdd` porte au moins une enveloppe ;
+- `QuarantineAccept`, `QuarantineReject` et `Compact` portent une liste non vide, triée et
+  sans doublon.
 
 ### 7.4 Époque courante
 
@@ -477,8 +505,16 @@ Entrée : les opérations de contrôle du casier qui ont passé les étapes 1 à
 Sortie : l'ensemble `A` des opérations acceptées et l'ensemble `Q` des opérations en quarantaine.
 
 ```text
+# 0. Bifurcations (§ 9.6).
+Q ← { o : o vient d'un appareil en bifurcation, à partir du seq en double }
+
 # 1. Retraits d'appareils : définitifs, signés par la clé du membre.
-Q ← { o : un appareil d participe à o, une DeviceRemove de d est concurrente de o }
+D ← { DeviceRemove hors Q dont la DeviceRevocation est signée par la clé du membre
+      telle que la connaît l'état S(A₀), où A₀ = rejouer(contrôle hors Q) }
+Q ← Q ∪ { o : un appareil d participe à o, une r ∈ D qui retire d est concurrente de o }
+# Une révocation de D s'applique dans le passé de chaque opération qui la suit, même si
+# sa DeviceRemove est elle-même rejetée (enveloppes fausses, auteur sans rôle) : la
+# révocation est définitive et monotone (§ 9.7, ADR 0023).
 
 # 2. Retraits de membres, par ordre de priorité.
 traités ← ∅
@@ -553,6 +589,9 @@ appareil compromis, ou une copie de coffre utilisée sur deux postes.
 - Un accord (§ 7.7) signé par `d` et concurrent de son retrait ne compte pas.
 - La révocation est définitive et monotone : deux révocations, même croisées, s'ajoutent.
   Si deux appareils de certification se révoquent l'un l'autre, les deux sont retirés.
+- Une `DeviceRemove` rejetée (enveloppes qui ne couvrent pas exactement les lecteurs,
+  auteur sans rôle) ne crée pas d'époque, mais sa `DeviceRevocation`, si elle est signée par
+  la clé du membre, retire quand même l'appareil (§ 9.4, ADR 0023).
 - Le serveur refuse les sessions de `d` dès que la révocation est publiée dans le casier personnel.
 
 ## 10. Compaction
@@ -576,19 +615,50 @@ Les opérations de contrôle, en quarantaine ou en attente ne sont **jamais** é
 
 1. Un appareil `Editor` ou plus émet `Compact` avec la liste `prune`, triée, d'au plus
    65 536 éléments. Au-delà, il émet plusieurs `Compact`.
-2. Chaque poste vérifie que **chaque** élément de `prune` est élaguable (§ 10.1). Sinon la
-   `Compact` est rejetée.
-3. Après vérification, chaque poste envoie un accusé `Ack` (§ 11.5).
-4. La compaction est **stable** quand tous les appareils lecteurs ont accusé réception. Les
+2. Le `content` scellé de la `Compact` est un `CompactPast` : un `PrunedPast` par élément
+   de `prune`, dans le même ordre (ADR 0017). Il porte ce qu'un poste qui n'a jamais vu
+   l'opération complète doit connaître pour rebâtir le graphe causal, les têtes et les
+   contrôles de version, jamais le contenu. Le serveur n'en apprend rien (§ 12).
+3. Chaque poste vérifie que **chaque** élément de `prune` est élaguable (§ 10.1) et que le
+   `PrunedPast` porté est exactement celui de l'opération qu'il détient (en entier, ou par
+   les métadonnées qu'il a gardées en l'élaguant). Sinon la `Compact` est rejetée.
+4. Après vérification, chaque poste envoie un accusé `Ack` (§ 11.5).
+5. La compaction est **stable** quand tous les appareils lecteurs ont accusé réception. Les
    appareils inactifs depuis plus de 90 jours (réglage du serveur) ne sont pas attendus.
-5. Le serveur annonce la stabilité (`Stable`). Le serveur et les postes remplacent alors le
-   corps des opérations élaguées par une souche (`format.md` § 5.2, statut 5).
+6. Le serveur annonce la stabilité (`Stable`). Le serveur et les postes remplacent alors le
+   corps des opérations élaguées par une souche (`format.md` § 5.2, statut 5). Un poste garde
+   le `PrunedPast` de chaque opération qu'il élague.
+
+`CompactPast` = `array<PrunedPast>`, 1 à 65 536 éléments, les `op_id` égaux à `prune` dans
+l'ordre. `PrunedPast` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `op_id` | `OpId` | |
+| 2 | `ref` | `OpRef` | |
+| 3 | `prev` | `OpId` ou `null` | `null` si et seulement si `ref.seq = 1` |
+| 4 | `lamport` | `uint` | ≥ 1 |
+| 5 | `deps` | `array<OpId>` | Trié, sans doublon, 1 à 256 éléments |
+| 6 | `epoch` | `OpRef` | Époque qui a scellé l'opération |
+| 7 | `kind` | `uint` | 1 `SecretPut`, 2 `LockerMetaPut` |
+| 8 | `secret_id` | `ID16` | Si `kind = 1` seulement |
+| 9 | `secret_type` | `uint` | Si `kind = 1` seulement (`format.md` § 8.1) |
+| 10 | `parents` | `array<OpId>` | Trié, sans doublon, au plus 256 éléments |
+
+Taille : environ 350 octets par élément ; la `Compact` entière reste sous 4 Mio (§ 6,
+étape 1), soit environ 10 000 éléments typiques. Au-delà, l'émetteur la découpe.
 
 ### 10.3 Souches
 
-Une souche garde `op_id`, `locker_id`, `ref`, `prev` et `server_seq`. Elle suffit pour
-vérifier les chaînes d'appareil et les dépendances. Un poste n'accepte une souche que si une
-`Compact` valide et reçue la liste.
+Une souche garde `op_id`, `locker_id`, `ref`, `prev` et `server_seq`. Un poste n'accepte une
+souche que si une `Compact` signée, descellée et bien formée la liste, et si son `ref` et son
+`prev`, fournis par le relais et non signés, sont ceux du `PrunedPast` de cette `Compact`.
+Sinon la souche est rejetée. Si deux `Compact` décrivent différemment la même opération, sa
+souche est rejetée. Le reste du passé (`lamport`, `deps`, `epoch`, secret, parents) vient du
+`PrunedPast` : un appareil qui rejoint après une compaction stable calcule donc le même
+graphe, la même autorisation et le même état que les autres.
+
+Une opération complète l'emporte toujours sur une souche du même `op_id`.
 
 En mode Self, la stabilité est atteinte quand tous les appareils du membre ont échangé un
 vecteur qui couvre la `Compact` (§ 13).
@@ -920,7 +990,8 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     100 000 opérations, inactivité de 90 jours, boîte aux lettres de 10 minutes, rescellement
     sous 10 minutes, rétention des opérations `late` de 30 jours.
 16. **Le serveur garde les opérations `late`** et les transmet aux `Owner`, au lieu de les refuser.
-17. **Dépendances élaguées** : la règle de `lamport` est relâchée (§ 4.3).
+17. ~~**Dépendances élaguées** : la règle de `lamport` est relâchée~~ : résolu par l'ADR 0017,
+    la règle reste stricte (§ 4.3).
 18. **Confiance au premier contact** pour la clé du serveur, avec comparaison d'empreinte hors
     bande (décision validée). Les clés de membre sont vérifiées contre le registre de
     transparence en mode Serveur (`transparence.md`, étape 10).
@@ -943,7 +1014,9 @@ Précisions apparues en codant `hirzla-sync`. Les numéros 24 à 28 sont appliqu
 l'implémentation ; les suivants restent ouverts.
 
 24. **Frontière avec `hirzla-access`** : trait `Authorizer` défini par `hirzla-sync`
-    (ADR 0018). Le sens des dépendances de `CLAUDE.md` est à mettre à jour.
+    (ADR 0018). Résolu au lot d'intégration : `hirzla-sync` dépend de `hirzla-access`
+    (`access ← sync`, comme le dit `CLAUDE.md`), et `AccessAuthorizer` implémente le trait
+    au-dessus de `hirzla_access::authz`.
 25. **Ancrage de la genèse** (ADR 0018) : genèse donnée à l'ouverture, ou unique
     `LockerCreate` reçue ; plusieurs rendent le casier ambigu (tout en attente) ; toute
     opération qui descend d'une autre `LockerCreate` est rejetée.
@@ -951,7 +1024,9 @@ l'implémentation ; les suivants restent ouverts.
     `DeviceAdd` et `EnvelopeAdd` (ADR 0018).
 27. **Décodage strict** : une liste d'accords vide est refusée (absente veut dire aucune) ;
     les listes d'opérations (`QuarantineAccept`, `QuarantineReject`, `Compact`) sont triées et
-    sans doublon ; un `VectorEntry` de rang 0 est refusé (jamais encodé).
+    sans doublon ; un `VectorEntry` de rang 0 est refusé (jamais encodé). Complété au lot
+    d'intégration (§ 7.3) : pas de doublon d'enveloppe, d'approbateur ni d'époque emballée,
+    `EnvelopeAdd` non vide.
 28. **Réémission des opérations locales (§ 7.5, ligne 2)** : seule la fin de chaîne qui n'a
     **jamais quitté l'appareil** est réécrite. Une opération remise à un pair, écrite dans un
     fichier d'échange, ou revenue du réseau compte comme publiée (ligne 3 : rescellement), même
@@ -959,9 +1034,8 @@ l'implémentation ; les suivants restent ouverts.
     est réémise sur l'état courant (nouvelles enveloppes, accords repris), pas abandonnée.
     Une donnée dont l'intention ne s'applique plus (secret purgé, ensemble plein) est retirée
     et signalée.
-29. **Souches sans passé causal** (ADR 0017, accepté : changement de format au lot d'intégration) : un appareil qui rejoint après une
-    compaction stable a un passé tronqué et peut diverger. Changement de format proposé ;
-    d'ici là, ne pas élaguer en mode Serveur.
+29. ~~**Souches sans passé causal**~~ : résolu par l'ADR 0017 (§ 10.2, § 10.3). L'élagage
+    peut être réactivé en mode Serveur.
 30. **Bifurcations et vecteurs** : deux opérations de même `(member, device, seq)` ont le même
     rang dans un vecteur ; l'échange différentiel (§ 13.2) ne transmet donc pas la seconde.
     Sur le réseau local, une bifurcation n'est détectée que si l'un des postes reçoit les deux
@@ -973,12 +1047,10 @@ l'implémentation ; les suivants restent ouverts.
 32. **Appareils `BlindUser` et `Auditor`** : sans clé d'époque, ils ne descellent ni les
     opérations de contrôle ni leurs dépendances, et restent en attente sur tout le journal.
     Le § 6 ne leur donne pas de chemin de validation.
-33. **Contrôle de version d'une opération dont les parents sont élagués** : la fusion des
-    parents n'est connue que des postes qui ont gardé les métadonnées ; voir ADR 0017.
-34. **Référence d'une souche** : `ref` et `prev` d'une souche viennent du relais et ne sont pas
-    signés ; seule la présence dans la liste d'une `Compact` signée les rend acceptables. Un
-    relais peut mentir sur la `ref` d'une souche listée. L'ADR 0017 corrige ce point si la
-    `Compact` porte aussi `ref`.
+33. ~~**Contrôle de version d'une opération dont les parents sont élagués**~~ : résolu,
+    la `Compact` porte les `parents` (ADR 0017).
+34. ~~**Référence d'une souche**~~ : résolu, `ref` et `prev` d'une souche doivent être ceux
+    du `PrunedPast` de la `Compact` signée qui la liste (§ 10.3).
 35. **Appairage direct (§ 13.2)** : messages, transcription et vérification du pair codés ;
     la couche réseau (TLS 1.3 + exportateur, mDNS) n'est pas implémentée, faute de dépendance
     réseau validée.

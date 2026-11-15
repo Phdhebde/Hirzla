@@ -142,10 +142,7 @@ impl<A: Authorizer> Replica<A> {
         if let Some(o) = self.opened.get(id) {
             return Some(o.lamport);
         }
-        match &self.entries.get(id)?.body {
-            Body::Pruned(m) => Some(m.lamport),
-            _ => None,
-        }
+        self.pruned_past(id).map(|p| p.lamport)
     }
 
     pub(crate) fn prepare(&self) -> Result<Prepared, SyncError> {
