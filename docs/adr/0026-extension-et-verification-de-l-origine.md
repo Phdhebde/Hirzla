@@ -1,6 +1,6 @@
 # ADR 0026 — Extension navigateur : geste, cadre principal et vérification de l'origine
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

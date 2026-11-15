@@ -1,6 +1,6 @@
 # ADR 0027 — JSON de l'hôte de messagerie native, écrit à la main
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
