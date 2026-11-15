@@ -6,7 +6,7 @@
 //! device private key, no member private key. It holds its own signing key (sessions,
 //! receipts, key log heads, audit checkpoints) and the storage key, both under the seal.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
@@ -26,9 +26,9 @@ use hirzla_crypto::sign::{ServerDomain, ServerSigningKey, Signature, VerifyingKe
 use hirzla_crypto::util::{random_array, sha384};
 use hirzla_sync::op::verify_signature;
 use hirzla_sync::relay::{ChainCheck, LockerLog};
-use hirzla_sync::wire::OpItem;
+use hirzla_sync::wire::{OpItem, Stub};
 use hirzla_vault::cbor::{self, Value};
-use hirzla_vault::model::{DeviceCert, Id16, MemberKeys, OpId, Operation};
+use hirzla_vault::model::{DeviceCert, Id16, MemberKeys, OpId, Operation, CLASS_DATA};
 
 use crate::proto::{
     self, code, kind, Auth, AuthOk, Hello, HelloAck, LockerCursor, MemberKeysResult, Message, Ops,
@@ -46,6 +46,14 @@ const MAILBOX_PER_DEVICE: usize = 16;
 const QUOTA_OPS: u64 = 1_000_000;
 /// Quota: most bytes in one locker journal.
 const QUOTA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// A device that has not authenticated for this long is not waited for by a compaction
+/// (`sync-protocol.md` § 10.2, step 5; § 16, point 15): 90 days.
+pub const INACTIVE_MS: u64 = 90 * 24 * 3600 * 1000;
+/// The last authentication of a device is recorded at most this often: one day.
+const SEEN_EVERY_MS: u64 = 24 * 3600 * 1000;
+/// The journal is written again (deferred purge) once the bodies pruned in memory but still
+/// on disk reach this many bytes, and at every start (ADR 0040).
+pub const PURGE_REWRITE_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Milliseconds since the Unix epoch.
 #[must_use]
@@ -122,10 +130,20 @@ impl Session {
     }
 }
 
+/// A `Compact` as the server follows it (§ 10.2): the clear list of its control body, the
+/// devices that acknowledged it, and whether it is stable.
+struct CompactState {
+    server_seq: u64,
+    prune: Vec<OpId>,
+    acks: BTreeSet<(Id16, Id16)>,
+    stable: bool,
+}
+
 struct Locker {
     log: LockerLog,
     view: LockerView,
     bytes: u64,
+    compacts: BTreeMap<OpId, CompactState>,
 }
 
 /// The unsealed server.
@@ -141,6 +159,10 @@ pub struct Core {
     personal: BTreeMap<Id16, Id16>,
     mailbox: BTreeMap<Id16, VecDeque<(Vec<u8>, u64)>>,
     chunks: BTreeMap<(Id16, Id16, u64), (u64, Vec<u8>)>,
+    /// Last authentication (or inscription) of each device, for the inactivity rule.
+    seen: BTreeMap<(Id16, Id16), u64>,
+    /// Bytes of bodies pruned in memory and still in the journal on disk.
+    purgeable: u64,
     clock: fn() -> u64,
 }
 
@@ -198,12 +220,79 @@ impl Core {
             personal: BTreeMap::new(),
             mailbox: BTreeMap::new(),
             chunks: BTreeMap::new(),
+            seen: BTreeMap::new(),
+            purgeable: 0,
             clock: now_ms,
         };
         for r in records {
             core.replay(r)?;
         }
+        // Deferred purge: what became stable before the stop leaves the disk now.
+        if core.purgeable > 0 {
+            core.purge_journal()?;
+        }
         Ok(core)
+    }
+
+    /// Bytes of pruned bodies still in the journal on disk (tests, administration).
+    #[must_use]
+    pub fn purgeable_bytes(&self) -> u64 {
+        self.purgeable
+    }
+
+    /// Writes the journal again without the bodies pruned after a stable compaction
+    /// (deferred purge, ADR 0040): each such [`Record::Op`] becomes a [`Record::Pruned`] in
+    /// place, the acknowledgements of stable compactions and the older activity records
+    /// are dropped; every other record keeps its order.
+    ///
+    /// # Errors
+    /// [`ServerError::Storage`], [`ServerError::Io`].
+    pub fn purge_journal(&mut self) -> Result<(), ServerError> {
+        let records = self.store.records()?;
+        let mut last_seen: BTreeMap<(Id16, Id16), usize> = BTreeMap::new();
+        for (i, r) in records.iter().enumerate() {
+            if let Record::Seen { member, device, .. } = r {
+                last_seen.insert((*member, *device), i);
+            }
+        }
+        let mut out = Vec::with_capacity(records.len());
+        for (i, r) in records.into_iter().enumerate() {
+            match r {
+                Record::Op {
+                    locker,
+                    late,
+                    bytes,
+                } => {
+                    let op_id = sha384(&bytes);
+                    let stub = self
+                        .lockers
+                        .get(&locker)
+                        .and_then(|l| l.log.get(&op_id))
+                        .and_then(|it| it.stub);
+                    match stub {
+                        Some(stub) => out.push(Record::Pruned { locker, late, stub }),
+                        None => out.push(Record::Op {
+                            locker,
+                            late,
+                            bytes,
+                        }),
+                    }
+                }
+                Record::Ack {
+                    locker, compact, ..
+                } if self
+                    .lockers
+                    .get(&locker)
+                    .and_then(|l| l.compacts.get(&compact))
+                    .is_some_and(|c| c.stable) => {}
+                Record::Seen { member, device, .. }
+                    if last_seen.get(&(member, device)) != Some(&i) => {}
+                other => out.push(other),
+            }
+        }
+        self.store.rewrite(&out)?;
+        self.purgeable = 0;
+        Ok(())
     }
 
     /// Replaces the clock (tests).
@@ -239,6 +328,7 @@ impl Core {
                 self.keylog
                     .append_device(&cert, logged_ms)
                     .map_err(|_| ServerError::Storage)?;
+                self.mark_seen(cert.member, cert.device, logged_ms);
                 self.member_devices
                     .entry(cert.member)
                     .or_default()
@@ -282,8 +372,171 @@ impl Core {
                 self.chunks
                     .insert((locker, attachment, chunk), (chunks, sealed));
             }
+            Record::Ack {
+                locker,
+                compact,
+                member,
+                device,
+            } => {
+                let c = self
+                    .lockers
+                    .get_mut(&locker)
+                    .and_then(|l| l.compacts.get_mut(&compact))
+                    .ok_or(ServerError::Storage)?;
+                c.acks.insert((member, device));
+            }
+            Record::Stable {
+                locker, compact, ..
+            } => {
+                let freed = self.prune_compact(&locker, &compact)?;
+                self.purgeable += freed;
+            }
+            Record::Pruned { locker, late, stub } => {
+                let l = self.lockers.get_mut(&locker).ok_or(ServerError::Storage)?;
+                l.log.append_stub(stub, late);
+            }
+            Record::Seen {
+                member,
+                device,
+                at_ms,
+            } => self.mark_seen(member, device, at_ms),
         }
         Ok(())
+    }
+
+    fn mark_seen(&mut self, member: Id16, device: Id16, at_ms: u64) {
+        let e = self.seen.entry((member, device)).or_insert(at_ms);
+        *e = (*e).max(at_ms);
+    }
+
+    /// Marks a `Compact` stable and replaces with stubs the bodies it lists that the server
+    /// may prune: data operations of the locker, received before it, not `late`, still held
+    /// in full. The server cannot check the rest of § 10.1 (it is sealed); every device did
+    /// before acknowledging. Returns the bytes freed in memory.
+    fn prune_compact(&mut self, locker: &Id16, compact: &OpId) -> Result<u64, ServerError> {
+        let l = self.lockers.get_mut(locker).ok_or(ServerError::Storage)?;
+        let c = l.compacts.get_mut(compact).ok_or(ServerError::Storage)?;
+        // Once stable, the acknowledgements are no longer needed (the rewrite drops them).
+        c.stable = true;
+        c.acks.clear();
+        let (limit, prune) = (c.server_seq, c.prune.clone());
+        let mut freed = 0u64;
+        for p in prune {
+            let stub = match l.log.get(&p) {
+                Some(it) if it.stub.is_none() && !it.late && it.server_seq < limit => {
+                    match Operation::decode(&it.bytes) {
+                        Ok(op) if op.class == CLASS_DATA && op.locker_id == *locker => Stub {
+                            op_id: p,
+                            opref: op.opref,
+                            prev: op.prev,
+                        },
+                        _ => continue,
+                    }
+                }
+                _ => continue,
+            };
+            if let Some(n) = l.log.prune(stub) {
+                freed += n as u64;
+                l.bytes = l.bytes.saturating_sub(n as u64);
+            }
+        }
+        Ok(freed)
+    }
+
+    /// The devices a compaction of `locker` waits for: active devices of the members who
+    /// read it, neither revoked in the key log nor inactive for [`INACTIVE_MS`].
+    fn required_acks(&self, locker: &Id16, now: u64) -> BTreeSet<(Id16, Id16)> {
+        let Some(l) = self.lockers.get(locker) else {
+            return BTreeSet::new();
+        };
+        l.view
+            .reader_devices()
+            .into_iter()
+            .filter(|(m, d)| !self.revoked_in_log(m, d))
+            .filter(|k| {
+                self.seen
+                    .get(k)
+                    .is_none_or(|t| now.saturating_sub(*t) <= INACTIVE_MS)
+            })
+            .collect()
+    }
+
+    /// `Ack` (§ 10.2, step 4) of a device that reads the locker: recorded once, then every
+    /// `Compact` of the locker acknowledged by all the devices it waits for becomes stable
+    /// (step 5), its bodies are pruned (step 6), and the journal is written again once enough
+    /// bytes wait on disk. Answers `Stable` (spontaneous) if this `Compact` is stable.
+    fn on_ack(
+        &mut self,
+        locker: Id16,
+        compact: OpId,
+        member: Id16,
+        device: Id16,
+        now: u64,
+    ) -> Result<Vec<Message>, ServerError> {
+        let stable_msg = || {
+            vec![Message::new(
+                kind::STABLE,
+                0,
+                proto::ack_value(&locker, &compact),
+            )]
+        };
+        let Some(c) = self
+            .lockers
+            .get(&locker)
+            .and_then(|l| l.compacts.get(&compact))
+        else {
+            // Not a `Compact` of this locker: nothing to record.
+            return Ok(Vec::new());
+        };
+        if c.stable {
+            return Ok(stable_msg());
+        }
+        if !c.acks.contains(&(member, device)) {
+            self.store.append(&Record::Ack {
+                locker,
+                compact,
+                member,
+                device,
+            })?;
+            if let Some(c) = self
+                .lockers
+                .get_mut(&locker)
+                .and_then(|l| l.compacts.get_mut(&compact))
+            {
+                c.acks.insert((member, device));
+            }
+        }
+        let required = self.required_acks(&locker, now);
+        let due: Vec<OpId> = self
+            .lockers
+            .get(&locker)
+            .map(|l| {
+                l.compacts
+                    .iter()
+                    .filter(|(_, c)| !c.stable && !required.is_empty())
+                    .filter(|(_, c)| required.is_subset(&c.acks))
+                    .map(|(id, _)| *id)
+                    .collect()
+            })
+            .unwrap_or_default();
+        for c in due {
+            self.store.append(&Record::Stable {
+                locker,
+                compact: c,
+                at_ms: now,
+            })?;
+            let freed = self.prune_compact(&locker, &c)?;
+            self.purgeable += freed;
+        }
+        if self.purgeable >= PURGE_REWRITE_BYTES {
+            self.purge_journal()?;
+        }
+        let stable = self
+            .lockers
+            .get(&locker)
+            .and_then(|l| l.compacts.get(&compact))
+            .is_some_and(|c| c.stable);
+        Ok(if stable { stable_msg() } else { Vec::new() })
     }
 
     /// The control operation of `op` for the view, with its signing certificate.
@@ -325,9 +578,21 @@ impl Core {
             log: LockerLog::new(),
             view: LockerView::new(op.locker_id, op_id),
             bytes: 0,
+            compacts: BTreeMap::new(),
         });
         let seq = locker.log.append(&op, bytes, late);
         locker.bytes += size;
+        if let Some(ControlBody::Compact(prune)) = ctrl.as_ref().map(|c| &c.body) {
+            locker.compacts.insert(
+                op_id,
+                CompactState {
+                    server_seq: seq,
+                    prune: prune.clone(),
+                    acks: BTreeSet::new(),
+                    stable: false,
+                },
+            );
+        }
         if let Some(c) = ctrl {
             let personal = matches!(&c.body, ControlBody::LockerCreate(lc) if lc.personal);
             locker.view.append(c);
@@ -634,6 +899,18 @@ impl Core {
             }
         }
         self.inscribe_device(&cert, now)?;
+        if self
+            .seen
+            .get(&(member, device))
+            .is_none_or(|t| now.saturating_sub(*t) >= SEEN_EVERY_MS)
+        {
+            self.store.append(&Record::Seen {
+                member,
+                device,
+                at_ms: now,
+            })?;
+            self.mark_seen(member, device, now);
+        }
         self.audit(Event::SessionOpened {
             member: mid(&member),
             device: did(&device),
@@ -689,10 +966,17 @@ impl Core {
             });
         let items = items
             .into_iter()
-            .map(|it| OpItem::Full {
-                server_seq: Some(it.server_seq),
-                op: it.bytes.clone(),
-                late: it.late,
+            .map(|it| match it.stub {
+                // Pruned after a stable compaction: the stub only (§ 10.3, § 11.5).
+                Some(stub) => OpItem::Stub {
+                    server_seq: Some(it.server_seq),
+                    stub,
+                },
+                None => OpItem::Full {
+                    server_seq: Some(it.server_seq),
+                    op: it.bytes.clone(),
+                    late: it.late,
+                },
             })
             .collect();
         Some((
@@ -759,13 +1043,12 @@ impl Core {
                 Ok(self.pending(s))
             }
             kind::ACK => {
-                // Stable compaction (§ 10.2) is not implemented by this server yet: the
-                // acknowledgement is checked and dropped (ADR 0028, remaining work).
-                let (l, _) = proto::read_ack(&m.body)?;
+                // Stable compaction (§ 10.2, ADR 0040).
+                let (l, c) = proto::read_ack(&m.body)?;
                 if self.reader(&l, &member, &device).is_none() {
                     return err(code::ACCESS);
                 }
-                Ok(Vec::new())
+                self.on_ack(l, c, member, device, now)
             }
             kind::PUT_CHUNK => {
                 let c = PutChunk::from_value(&m.body)?;
@@ -1267,6 +1550,56 @@ impl Core {
         if let Some(l) = self.lockers.get_mut(locker) {
             l.log.append_unchecked(bytes, false);
         }
+    }
+
+    /// Operations of a locker served as stubs after a stable compaction (tests,
+    /// administration).
+    #[must_use]
+    pub fn pruned_in(&self, locker: &Id16) -> usize {
+        self.lockers.get(locker).map_or(0, |l| {
+            l.log.items().iter().filter(|it| it.stub.is_some()).count()
+        })
+    }
+
+    /// A digest of the logical state: journals (ranks, identifiers, stubs, `late`),
+    /// compactions (acknowledgements, stability), key log, accounts and device activity.
+    /// Independent of what still waits on disk for the deferred purge: two servers with the
+    /// same digest serve the same answers (tests of restarts).
+    #[doc(hidden)]
+    #[must_use]
+    pub fn state_digest(&self) -> [u8; 48] {
+        let mut out = Vec::new();
+        out.extend_from_slice(&self.keylog.size().to_be_bytes());
+        out.extend_from_slice(&self.keylog.root());
+        for (m, (a, _)) in &self.accounts {
+            out.extend_from_slice(m);
+            out.extend_from_slice(a);
+        }
+        for ((m, d), t) in &self.seen {
+            out.extend_from_slice(m);
+            out.extend_from_slice(d);
+            out.extend_from_slice(&t.to_be_bytes());
+        }
+        for (id, l) in &self.lockers {
+            out.extend_from_slice(id);
+            out.extend_from_slice(&l.bytes.to_be_bytes());
+            for it in l.log.items() {
+                out.extend_from_slice(&it.server_seq.to_be_bytes());
+                out.extend_from_slice(&it.op_id);
+                out.push(u8::from(it.late));
+                out.push(u8::from(it.stub.is_some()));
+                out.extend_from_slice(&sha384(&it.bytes));
+            }
+            for (c, s) in &l.compacts {
+                out.extend_from_slice(c);
+                out.push(u8::from(s.stable));
+                for (m, d) in &s.acks {
+                    out.extend_from_slice(m);
+                    out.extend_from_slice(d);
+                }
+            }
+        }
+        sha384(&out)
     }
 
     /// Members of a locker with their roles, in the server's view (tests, administration).

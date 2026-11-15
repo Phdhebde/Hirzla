@@ -16,7 +16,13 @@
 //! AAD of a record: `CBOR({1: "hirzla/v1/server-record", 2: server_id, 3: index})`, so that a
 //! record moved, reordered or copied from another server does not open. Removing records at
 //! the end (rollback) is not detected locally; the receipts the devices keep reveal it
-//! (`sync-protocol.md` § 11.5) and replication will (ADR 0029).
+//! (`sync-protocol.md` § 11.5), so does their local key log (`transparence.md` § 6.1), and
+//! replication will (ADR 0029).
+//!
+//! Version 2 of the directory (ADR 0040) adds the records of the stable compaction
+//! (`Ack`, `Stable`, pruned operation) and of the device activity. The journal is written
+//! again, whole, to erase the bodies of the operations pruned after a stable compaction
+//! ([`Store::rewrite`], deferred purge): temporary file, then rename.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -25,6 +31,7 @@ use std::path::{Path, PathBuf};
 use hirzla_crypto::sign::{ServerSigningKey, VerifyingKey};
 use hirzla_crypto::sym::{self, SealedBox, SymmetricKey};
 use hirzla_sync::control::DeviceRevocation;
+use hirzla_sync::wire::Stub;
 use hirzla_vault::cbor::{self, bytes_max, fixed, uint, Fields, Value};
 use hirzla_vault::model::{DeviceCert, Id16, MemberKeys, OpId};
 
@@ -33,6 +40,9 @@ use crate::ServerError;
 
 const HEADER_FILE: &str = "hirzlad.seal";
 const RECORDS_FILE: &str = "records.log";
+const REWRITE_FILE: &str = "records.log.tmp";
+/// Version of the data directory written (ADR 0040). Version 1 is opened and upgraded.
+pub const STORE_VERSION: u64 = 2;
 /// Largest record (an operation of 4 MiB plus its framing).
 const MAX_RECORD: usize = 8 * 1024 * 1024;
 
@@ -51,6 +61,8 @@ pub struct SealHeader {
     pub server_key: VerifyingKey,
     /// Server signing key, sealed under the storage key.
     pub sealed_server_key: Vec<u8>,
+    /// Version of the directory: 1 (ADR 0028) or 2 (ADR 0040).
+    pub version: u64,
 }
 
 fn aad(label: &str, server_id: &Id16, index: Option<u64>) -> Result<Vec<u8>, ServerError> {
@@ -64,7 +76,7 @@ fn aad(label: &str, server_id: &Id16, index: Option<u64>) -> Result<Vec<u8>, Ser
 impl SealHeader {
     fn to_value(&self) -> Value {
         Value::map(vec![
-            (1, Value::Uint(1)),
+            (1, Value::Uint(self.version)),
             (2, Value::bytes(&self.server_id)),
             (3, Value::Uint(self.seal.code())),
             (
@@ -81,7 +93,8 @@ impl SealHeader {
 
     fn from_value(v: &Value) -> Result<Self, ServerError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7])?;
-        if uint(f.req(1)?)? != 1 {
+        let version = uint(f.req(1)?)?;
+        if !(1..=STORE_VERSION).contains(&version) {
             return Err(ServerError::Malformed);
         }
         let dealer = match f.req(4)? {
@@ -95,7 +108,20 @@ impl SealHeader {
             wrapped_storage_key: bytes_max(f.req(5)?, 4096)?.to_vec(),
             server_key: VerifyingKey::from_bytes(bytes_max(f.req(6)?, 8192)?)?,
             sealed_server_key: bytes_max(f.req(7)?, 16 * 1024)?.to_vec(),
+            version,
         })
+    }
+
+    /// Writes the header atomically (temporary file, then rename).
+    fn write(&self, dir: &Path) -> Result<(), ServerError> {
+        let enc = cbor::encode(&self.to_value())?;
+        let tmp = dir.join("hirzlad.seal.tmp");
+        let _ = fs::remove_file(&tmp);
+        let mut f = OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        f.write_all(&enc)?;
+        f.sync_all()?;
+        fs::rename(&tmp, dir.join(HEADER_FILE))?;
+        sync_dir(dir)
     }
 
     /// Reads the header of a data directory.
@@ -168,6 +194,45 @@ pub enum Record {
         late: bool,
         /// The bytes received.
         bytes: Vec<u8>,
+    },
+    /// A device acknowledged a `Compact` (`sync-protocol.md` § 10.2, step 4).
+    Ack {
+        /// Locker.
+        locker: Id16,
+        /// The `Compact`.
+        compact: OpId,
+        /// Member of the device.
+        member: Id16,
+        /// Device.
+        device: Id16,
+    },
+    /// A `Compact` became stable (§ 10.2, step 5): the bodies it lists are no longer served.
+    Stable {
+        /// Locker.
+        locker: Id16,
+        /// The `Compact`.
+        compact: OpId,
+        /// When.
+        at_ms: u64,
+    },
+    /// What remains of an operation pruned after a stable compaction, in place of its
+    /// [`Record::Op`] once the journal is written again (deferred purge, ADR 0040).
+    Pruned {
+        /// Locker.
+        locker: Id16,
+        /// Marked `late`.
+        late: bool,
+        /// The stub (`op_id`, `ref`, `prev`): only what the header of the operation showed.
+        stub: Stub,
+    },
+    /// Last authentication of a device, at most once a day (inactivity of § 10.2, step 5).
+    Seen {
+        /// Member.
+        member: Id16,
+        /// Device.
+        device: Id16,
+        /// When.
+        at_ms: u64,
     },
     /// A sealed chunk of an attachment.
     Chunk {
@@ -243,7 +308,56 @@ impl Record {
                 (5, Value::Uint(*chunks)),
                 (6, Value::bytes(sealed)),
             ]),
+            Record::Ack {
+                locker,
+                compact,
+                member,
+                device,
+            } => Value::map(vec![
+                (1, Value::Uint(7)),
+                (2, Value::bytes(locker)),
+                (3, Value::bytes(compact)),
+                (4, Value::bytes(member)),
+                (5, Value::bytes(device)),
+            ]),
+            Record::Stable {
+                locker,
+                compact,
+                at_ms,
+            } => Value::map(vec![
+                (1, Value::Uint(8)),
+                (2, Value::bytes(locker)),
+                (3, Value::bytes(compact)),
+                (4, Value::Uint(*at_ms)),
+            ]),
+            Record::Pruned { locker, late, stub } => Value::map(vec![
+                (1, Value::Uint(9)),
+                (2, Value::bytes(locker)),
+                (3, Value::Bool(*late)),
+                (4, stub.to_value()),
+            ]),
+            Record::Seen {
+                member,
+                device,
+                at_ms,
+            } => Value::map(vec![
+                (1, Value::Uint(10)),
+                (2, Value::bytes(member)),
+                (3, Value::bytes(device)),
+                (4, Value::Uint(*at_ms)),
+            ]),
         }
+    }
+
+    /// Whether this kind of record needs version 2 of the directory.
+    fn needs_v2(&self) -> bool {
+        matches!(
+            self,
+            Record::Ack { .. }
+                | Record::Stable { .. }
+                | Record::Pruned { .. }
+                | Record::Seen { .. }
+        )
     }
 
     fn from_value(v: &Value) -> Result<Self, ServerError> {
@@ -307,15 +421,121 @@ impl Record {
                     sealed: bytes_max(f.req(6)?, max)?.to_vec(),
                 }
             }
+            7 => {
+                let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
+                Record::Ack {
+                    locker: fixed::<16>(f.req(2)?)?,
+                    compact: fixed::<48>(f.req(3)?)?,
+                    member: fixed::<16>(f.req(4)?)?,
+                    device: fixed::<16>(f.req(5)?)?,
+                }
+            }
+            8 => {
+                let f = Fields::new(v, &[1, 2, 3, 4])?;
+                Record::Stable {
+                    locker: fixed::<16>(f.req(2)?)?,
+                    compact: fixed::<48>(f.req(3)?)?,
+                    at_ms: uint(f.req(4)?)?,
+                }
+            }
+            9 => {
+                let f = Fields::new(v, &[1, 2, 3, 4])?;
+                Record::Pruned {
+                    locker: fixed::<16>(f.req(2)?)?,
+                    late: cbor::boolean(f.req(3)?)?,
+                    stub: Stub::from_value(f.req(4)?)?,
+                }
+            }
+            10 => {
+                let f = Fields::new(v, &[1, 2, 3, 4])?;
+                Record::Seen {
+                    member: fixed::<16>(f.req(2)?)?,
+                    device: fixed::<16>(f.req(3)?)?,
+                    at_ms: uint(f.req(4)?)?,
+                }
+            }
             _ => return Err(ServerError::Malformed),
         })
     }
 }
 
+/// Flushes a directory entry (a rename) to disk; best effort where it is not supported.
+fn sync_dir(dir: &Path) -> Result<(), ServerError> {
+    #[cfg(unix)]
+    {
+        File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+    }
+    Ok(())
+}
+
+/// Seals one record at rank `index` and frames it.
+fn frame(
+    key: &SymmetricKey,
+    server_id: &Id16,
+    index: u64,
+    record: &Record,
+) -> Result<Vec<u8>, ServerError> {
+    let plain = cbor::encode(&record.to_value())?;
+    let b = sym::seal(
+        key,
+        &aad("hirzla/v1/server-record", server_id, Some(index))?,
+        &plain,
+    )?;
+    let len = u32::try_from(b.as_bytes().len()).map_err(|_| ServerError::Storage)?;
+    let mut frame = Vec::with_capacity(4 + b.as_bytes().len());
+    frame.extend_from_slice(&len.to_be_bytes());
+    frame.extend_from_slice(b.as_bytes());
+    Ok(frame)
+}
+
+/// Opens the records of a journal, in order; returns them with the length of the whole
+/// records read (a torn last record is left out). A record of version 2 in a directory of
+/// version 1 refuses the journal.
+fn read_records(
+    bytes: &[u8],
+    header: &SealHeader,
+    key: &SymmetricKey,
+) -> Result<(Vec<Record>, usize), ServerError> {
+    let mut records = Vec::new();
+    let mut pos = 0usize;
+    let mut index = 0u64;
+    while let Some(head) = bytes.get(pos..pos + 4) {
+        let mut len = [0u8; 4];
+        len.copy_from_slice(head);
+        let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| ServerError::Storage)?;
+        if len > MAX_RECORD {
+            return Err(ServerError::Storage);
+        }
+        let Some(body) = bytes.get(pos + 4..pos + 4 + len) else {
+            break;
+        };
+        let b = SealedBox::from_bytes(body).map_err(|_| ServerError::Storage)?;
+        let plain = sym::unseal(
+            key,
+            &aad("hirzla/v1/server-record", &header.server_id, Some(index))?,
+            &b,
+        )
+        .map_err(|_| ServerError::Storage)?;
+        let r = Record::from_value(&cbor::decode(&plain).map_err(|_| ServerError::Storage)?)
+            .map_err(|_| ServerError::Storage)?;
+        if r.needs_v2() && header.version < STORE_VERSION {
+            return Err(ServerError::Storage);
+        }
+        records.push(r);
+        pos += 4 + len;
+        index += 1;
+    }
+    Ok((records, pos))
+}
+
 /// The open storage.
 pub struct Store {
     dir: PathBuf,
-    server_id: Id16,
+    header: SealHeader,
     key: SymmetricKey,
     file: File,
     next: u64,
@@ -356,6 +576,7 @@ impl Store {
             wrapped_storage_key: provider.wrap(&storage)?,
             server_key: server_key.verifying_key().clone(),
             sealed_server_key: sealed.as_bytes().to_vec(),
+            version: STORE_VERSION,
         };
         let enc = cbor::encode(&header.to_value())?;
         let mut f = OpenOptions::new()
@@ -380,34 +601,11 @@ impl Store {
         key: SymmetricKey,
     ) -> Result<(Store, Vec<Record>), ServerError> {
         let path = dir.join(RECORDS_FILE);
+        // A rewrite interrupted before its rename leaves the old journal whole.
+        let _ = fs::remove_file(dir.join(REWRITE_FILE));
         let bytes = fs::read(&path)?;
-        let mut records = Vec::new();
-        let mut pos = 0usize;
-        let mut index = 0u64;
-        while let Some(head) = bytes.get(pos..pos + 4) {
-            let mut len = [0u8; 4];
-            len.copy_from_slice(head);
-            let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| ServerError::Storage)?;
-            if len > MAX_RECORD {
-                return Err(ServerError::Storage);
-            }
-            let Some(body) = bytes.get(pos + 4..pos + 4 + len) else {
-                break;
-            };
-            let b = SealedBox::from_bytes(body).map_err(|_| ServerError::Storage)?;
-            let plain = sym::unseal(
-                &key,
-                &aad("hirzla/v1/server-record", &header.server_id, Some(index))?,
-                &b,
-            )
-            .map_err(|_| ServerError::Storage)?;
-            records.push(
-                Record::from_value(&cbor::decode(&plain).map_err(|_| ServerError::Storage)?)
-                    .map_err(|_| ServerError::Storage)?,
-            );
-            pos += 4 + len;
-            index += 1;
-        }
+        let (records, pos) = read_records(&bytes, header, &key)?;
+        let index = records.len() as u64;
         if pos < bytes.len() {
             let f = OpenOptions::new().write(true).open(&path)?;
             f.set_len(u64::try_from(pos).map_err(|_| ServerError::Storage)?)?;
@@ -417,7 +615,7 @@ impl Store {
         Ok((
             Store {
                 dir: dir.to_path_buf(),
-                server_id: header.server_id,
+                header: header.clone(),
                 key,
                 file,
                 next: index,
@@ -426,25 +624,87 @@ impl Store {
         ))
     }
 
+    /// Upgrades the header of a version 1 directory before the first record of version 2,
+    /// so that an older binary refuses the directory instead of a record it does not know.
+    fn upgrade(&mut self) -> Result<(), ServerError> {
+        if self.header.version < STORE_VERSION {
+            let mut h = self.header.clone();
+            h.version = STORE_VERSION;
+            h.write(&self.dir)?;
+            self.header = h;
+        }
+        Ok(())
+    }
+
     /// Appends a record and flushes it to disk before returning.
     ///
     /// # Errors
     /// [`ServerError::Storage`] or [`ServerError::Io`].
     pub fn append(&mut self, record: &Record) -> Result<(), ServerError> {
-        let plain = cbor::encode(&record.to_value())?;
-        let b = sym::seal(
-            &self.key,
-            &aad("hirzla/v1/server-record", &self.server_id, Some(self.next))?,
-            &plain,
-        )?;
-        let len = u32::try_from(b.as_bytes().len()).map_err(|_| ServerError::Storage)?;
-        let mut frame = Vec::with_capacity(4 + b.as_bytes().len());
-        frame.extend_from_slice(&len.to_be_bytes());
-        frame.extend_from_slice(b.as_bytes());
+        if record.needs_v2() {
+            self.upgrade()?;
+        }
+        let frame = frame(&self.key, &self.header.server_id, self.next, record)?;
         self.file.write_all(&frame)?;
         self.file.sync_data()?;
         self.next += 1;
         Ok(())
+    }
+
+    /// Writes the whole journal again with `records`, ranks from 0 (deferred purge,
+    /// ADR 0040): temporary file flushed to disk, then renamed over the journal. A crash
+    /// before the rename keeps the old journal; after it, the new one. The bodies left out
+    /// are no longer in the file; the blocks they used may stay on the medium until reused.
+    ///
+    /// # Errors
+    /// [`ServerError::Storage`] or [`ServerError::Io`].
+    pub fn rewrite(&mut self, records: &[Record]) -> Result<(), ServerError> {
+        if records.iter().any(Record::needs_v2) {
+            self.upgrade()?;
+        }
+        let tmp = self.dir.join(REWRITE_FILE);
+        let _ = fs::remove_file(&tmp);
+        {
+            let mut o = OpenOptions::new();
+            o.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                o.mode(0o600);
+            }
+            let mut f = std::io::BufWriter::new(o.open(&tmp)?);
+            for (i, r) in records.iter().enumerate() {
+                f.write_all(&frame(&self.key, &self.header.server_id, i as u64, r)?)?;
+            }
+            let f = f.into_inner().map_err(|_| ServerError::Storage)?;
+            f.sync_all()?;
+        }
+        fs::rename(&tmp, self.dir.join(RECORDS_FILE))?;
+        sync_dir(&self.dir)?;
+        self.file = OpenOptions::new()
+            .append(true)
+            .open(self.dir.join(RECORDS_FILE))?;
+        self.next = records.len() as u64;
+        Ok(())
+    }
+
+    /// Version of the directory.
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        self.header.version
+    }
+
+    /// Reads every record of the journal again, in order (before a rewrite).
+    ///
+    /// # Errors
+    /// [`ServerError::Storage`], [`ServerError::Io`].
+    pub fn records(&self) -> Result<Vec<Record>, ServerError> {
+        let bytes = fs::read(self.dir.join(RECORDS_FILE))?;
+        let (records, pos) = read_records(&bytes, &self.header, &self.key)?;
+        if pos != bytes.len() || records.len() as u64 != self.next {
+            return Err(ServerError::Storage);
+        }
+        Ok(records)
     }
 
     /// Directory of the audit log.
@@ -509,6 +769,119 @@ mod tests {
             Store::open(dir.path(), &header, key),
             Err(ServerError::Storage)
         ));
+    }
+
+    fn stub(n: u8) -> Stub {
+        Stub {
+            op_id: [n; 48],
+            opref: hirzla_vault::model::OpRef {
+                member: [1; 16],
+                device: [2; 16],
+                seq: 1,
+            },
+            prev: None,
+        }
+    }
+
+    /// A version 1 directory opens; its first record of version 2 upgrades the header first.
+    /// A record of version 2 in a directory still marked version 1 refuses the start.
+    #[test]
+    fn a_version_1_directory_is_upgraded_before_a_new_record() {
+        let dir = tempfile::tempdir().unwrap();
+        let setup = ShamirSeal::generate(2, 3).unwrap();
+        let mut header = Store::init(dir.path(), &setup.seal, None).unwrap();
+        header.version = 1;
+        header.write(dir.path()).unwrap();
+        let key = || setup.seal.unwrap(&header.wrapped_storage_key).unwrap();
+        let (mut store, _) =
+            Store::open(dir.path(), &SealHeader::read(dir.path()).unwrap(), key()).unwrap();
+        assert_eq!(store.version(), 1);
+        let op = Record::Op {
+            locker: [1; 16],
+            late: false,
+            bytes: b"op".to_vec(),
+        };
+        store.append(&op).unwrap();
+        assert_eq!(SealHeader::read(dir.path()).unwrap().version, 1);
+        let seen = Record::Seen {
+            member: [1; 16],
+            device: [2; 16],
+            at_ms: 5,
+        };
+        store.append(&seen).unwrap();
+        assert_eq!(store.version(), 2);
+        let h2 = SealHeader::read(dir.path()).unwrap();
+        assert_eq!(h2.version, 2);
+        let (_, recs) = Store::open(dir.path(), &h2, key()).unwrap();
+        assert_eq!(recs, vec![op, seen]);
+
+        // Forcing the header back to version 1 under a journal of version 2: refused.
+        let mut h1 = h2.clone();
+        h1.version = 1;
+        h1.write(dir.path()).unwrap();
+        assert!(matches!(
+            Store::open(dir.path(), &h1, key()),
+            Err(ServerError::Storage)
+        ));
+        // An unknown version: refused.
+        let mut h9 = h2;
+        h9.version = 9;
+        h9.write(dir.path()).unwrap();
+        assert!(SealHeader::read(dir.path()).is_err());
+    }
+
+    /// The journal written again replaces the old one whole; ranks restart from 0 and new
+    /// records follow; the records of version 2 round-trip.
+    #[test]
+    fn the_journal_is_written_again_whole() {
+        let dir = tempfile::tempdir().unwrap();
+        let setup = ShamirSeal::generate(2, 3).unwrap();
+        let header = Store::init(dir.path(), &setup.seal, None).unwrap();
+        let key = || setup.seal.unwrap(&header.wrapped_storage_key).unwrap();
+        let (mut store, _) = Store::open(dir.path(), &header, key()).unwrap();
+        let body = b"secret-looking body".to_vec();
+        let recs = vec![
+            Record::Op {
+                locker: [1; 16],
+                late: false,
+                bytes: body.clone(),
+            },
+            Record::Ack {
+                locker: [1; 16],
+                compact: [3; 48],
+                member: [1; 16],
+                device: [2; 16],
+            },
+            Record::Stable {
+                locker: [1; 16],
+                compact: [3; 48],
+                at_ms: 9,
+            },
+        ];
+        for r in &recs {
+            store.append(r).unwrap();
+        }
+        assert_eq!(store.records().unwrap(), recs);
+        let kept = vec![
+            Record::Pruned {
+                locker: [1; 16],
+                late: false,
+                stub: stub(4),
+            },
+            recs[2].clone(),
+        ];
+        store.rewrite(&kept).unwrap();
+        let more = Record::Seen {
+            member: [1; 16],
+            device: [2; 16],
+            at_ms: 10,
+        };
+        store.append(&more).unwrap();
+        drop(store);
+        let (_, back) = Store::open(dir.path(), &header, key()).unwrap();
+        let mut expected = kept;
+        expected.push(more);
+        assert_eq!(back, expected);
     }
 
     #[test]
