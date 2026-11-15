@@ -1,6 +1,6 @@
 # ADR 0031 — Membre machine et autorisation de session Hornn
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
