@@ -765,8 +765,9 @@ aléatoire à chaque opération), le nombre de secrets d'un casier, les dépenda
 l'horloge logique, la lecture d'un secret sur un poste (aucun échange réseau).
 
 Point d'attention : les événements d'usage envoyés au journal d'audit (`architecture.md`)
-révèleraient quel secret est lu, et quand. Leur format, et ce que le serveur peut en lire,
-relèvent de l'étape 12.
+révèlent quand un membre utilise un secret d'un casier, et pas lequel par défaut. Leur format
+et ce que le serveur en apprend sont spécifiés dans `evenements.md` (§ 7.2 et § 9) et
+l'ADR 0021.
 
 ## 13. Mode Self
 

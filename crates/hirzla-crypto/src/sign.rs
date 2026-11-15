@@ -15,8 +15,8 @@
 //! | Key | Domains |
 //! | --- | --- |
 //! | [`MemberSigningKey`] | device certificate, device revocation |
-//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share |
-//! | [`ServerSigningKey`] | server authentication, receipt |
+//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share, device audit checkpoint |
+//! | [`ServerSigningKey`] | server authentication, receipt, audit checkpoint |
 //!
 //! | Object | Layout | Length |
 //! | --- | --- | --- |
@@ -75,6 +75,10 @@ pub enum Domain {
     DeviceEnrol,
     /// A secret share for recovery (ADR 0012).
     RecoveryShare,
+    /// A checkpoint of the server audit log (`docs/evenements.md`, ADR 0021).
+    AuditCheckpoint,
+    /// A checkpoint of a device's local audit log (`docs/evenements.md`, ADR 0021).
+    DeviceAuditCheckpoint,
 }
 
 impl Domain {
@@ -92,6 +96,8 @@ impl Domain {
             Domain::ExchangeFile => b"hirzla/v1/exchange-file",
             Domain::DeviceEnrol => b"hirzla/v1/device-enrol",
             Domain::RecoveryShare => b"hirzla/v1/recovery-share",
+            Domain::AuditCheckpoint => b"hirzla/v1/audit-checkpoint",
+            Domain::DeviceAuditCheckpoint => b"hirzla/v1/device-audit-checkpoint",
         }
     }
 
@@ -129,6 +135,8 @@ pub enum DeviceDomain {
     DeviceEnrol,
     /// A recovery share.
     RecoveryShare,
+    /// A checkpoint of the device's local audit log.
+    AuditCheckpoint,
 }
 
 /// Domains a server key may sign.
@@ -138,6 +146,8 @@ pub enum ServerDomain {
     ServerAuth,
     /// A receipt.
     Receipt,
+    /// A checkpoint of the server audit log.
+    AuditCheckpoint,
 }
 
 impl From<MemberDomain> for Domain {
@@ -158,6 +168,7 @@ impl From<DeviceDomain> for Domain {
             DeviceDomain::ExchangeFile => Domain::ExchangeFile,
             DeviceDomain::DeviceEnrol => Domain::DeviceEnrol,
             DeviceDomain::RecoveryShare => Domain::RecoveryShare,
+            DeviceDomain::AuditCheckpoint => Domain::DeviceAuditCheckpoint,
         }
     }
 }
@@ -167,6 +178,7 @@ impl From<ServerDomain> for Domain {
         match d {
             ServerDomain::ServerAuth => Domain::ServerAuth,
             ServerDomain::Receipt => Domain::Receipt,
+            ServerDomain::AuditCheckpoint => Domain::AuditCheckpoint,
         }
     }
 }
@@ -454,7 +466,7 @@ role_key!(
     DeviceDomain
 );
 role_key!(
-    /// The server key: it authenticates the server and signs receipts.
+    /// The server key: it authenticates the server, signs receipts and audit checkpoints.
     ServerSigningKey,
     ServerDomain
 );
