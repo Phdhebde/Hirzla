@@ -4,6 +4,7 @@
 use hirzla_core::client::ClientError;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
 use hirzla_core::selfmode::proto::SelfCode;
+use hirzla_core::server_mode::proto::ServerCode;
 use serde::ser::SerializeStruct;
 
 /// An error of the desktop application, as the web view receives it.
@@ -43,6 +44,9 @@ pub enum DesktopError {
     /// The user closed a dialog without choosing.
     #[error("cancelled")]
     Cancelled,
+    /// The core refused a server mode request (`docs/api-locale.md` § 15.5).
+    #[error("the core refused the server mode request: {}", .0.name())]
+    Server(ServerCode),
 }
 
 impl DesktopError {
@@ -61,6 +65,9 @@ impl DesktopError {
             DesktopError::Clipboard => "clipboard",
             DesktopError::Import(_) => "import",
             DesktopError::Cancelled => "cancelled",
+            // "access_lost" for the refusal of a locker: the interface shows it apart.
+            DesktopError::Server(ServerCode::ServerRefused(4)) => "access_lost",
+            DesktopError::Server(c) => c.name(),
         }
     }
 
@@ -86,6 +93,20 @@ impl DesktopError {
             DesktopError::Clipboard => "Le presse-papiers n'est pas disponible.".into(),
             DesktopError::Import(what) => (*what).to_owned(),
             DesktopError::Cancelled => "Opération annulée.".into(),
+            DesktopError::Server(c) => server_message(*c),
+        }
+    }
+
+    /// A refusal of a server mode request (`docs/api-locale.md` § 15.5). A general refusal
+    /// that is not about the server (locked vault, connection) keeps its usual meaning.
+    #[must_use]
+    pub fn from_server(code: ServerCode) -> DesktopError {
+        match code {
+            ServerCode::General(c @ (ErrorCode::InvalidInput | ErrorCode::NotFound)) => {
+                DesktopError::Server(ServerCode::General(c))
+            }
+            ServerCode::General(c) => DesktopError::Refused(ErrorReply::new(c)),
+            other => DesktopError::Server(other),
         }
     }
 
@@ -146,6 +167,59 @@ impl From<ClientError> for DesktopError {
             ClientError::Protocol => DesktopError::Protocol,
             ClientError::Io(_) => DesktopError::Connection,
         }
+    }
+}
+
+/// French message for a refusal of a server mode request (`docs/api-locale.md` § 15.5).
+#[must_use]
+pub fn server_message(code: ServerCode) -> String {
+    match code {
+        ServerCode::General(ErrorCode::InvalidInput) => "Valeur refusée : vérifiez l'adresse \
+            du serveur, le certificat de l'autorité, le nom du casier, l'identifiant du membre \
+            ou le rôle choisi."
+            .into(),
+        ServerCode::General(ErrorCode::NotFound) => {
+            "Casier partagé ou membre introuvable. Synchronisez, puis réessayez.".into()
+        }
+        ServerCode::General(c) => refusal_message(&ErrorReply::new(c)),
+        ServerCode::NotJoined => "Aucun serveur n'est rattaché à ce coffre.".into(),
+        ServerCode::AlreadyJoined => "Ce coffre est déjà rattaché à un serveur.".into(),
+        ServerCode::ServerUnverified => "L'empreinte du serveur n'est pas encore confirmée : \
+            rien n'est envoyé au serveur avant. Comparez-la avec celle que vous a transmise \
+            l'administrateur, puis confirmez-la."
+            .into(),
+        ServerCode::FingerprintMismatch => "Empreinte inattendue : elle ne correspond pas à la \
+            clé présentée. Rien n'a été enregistré ni envoyé. Vérifiez l'empreinte auprès de \
+            son détenteur par un autre canal ; si elle est exacte, quelqu'un s'interpose \
+            peut-être entre vous et le serveur."
+            .into(),
+        ServerCode::ServerUnreachable => "Serveur injoignable, ou connexion sécurisée \
+            impossible. Vérifiez l'adresse et le réseau, puis réessayez. Vos secrets restent \
+            disponibles sur ce poste."
+            .into(),
+        ServerCode::ServerRefused(3) => "Le serveur ne reconnaît pas votre compte. \
+            Transmettez votre identité à son administrateur, puis synchronisez."
+            .into(),
+        ServerCode::ServerRefused(4) => "Accès perdu : le serveur ne vous sert plus ce casier. \
+            Demandez l'accès à son propriétaire."
+            .into(),
+        ServerCode::ServerRefused(8) => "Quota du serveur dépassé. Prévenez son \
+            administrateur."
+            .into(),
+        ServerCode::ServerRefused(10) => {
+            "Le serveur est momentanément indisponible. Réessayez plus tard.".into()
+        }
+        ServerCode::ServerRefused(c) => format!("Le serveur a refusé la demande (code {c})."),
+        ServerCode::Forbidden => "Accès refusé : votre rôle dans ce casier ne permet pas cette \
+            action, ou elle exige l'accord de plusieurs propriétaires."
+            .into(),
+        ServerCode::UnknownMember => "Membre inconnu du serveur : vérifiez son identifiant, ou \
+            demandez à l'administrateur de créer son compte."
+            .into(),
+        ServerCode::KeyLogRejected => "Registre des clés suspect : la clé de ce membre n'est \
+            pas prouvée par le registre de transparence, ou le serveur présente un registre \
+            incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité."
+            .into(),
     }
 }
 
@@ -218,6 +292,42 @@ mod tests {
             assert!(e.message().contains("KeePass"));
             assert!(e.message().ends_with('.'));
         }
+    }
+
+    #[test]
+    fn server_refusals_have_a_code_and_a_french_message() {
+        for code in [
+            ServerCode::NotJoined,
+            ServerCode::AlreadyJoined,
+            ServerCode::ServerUnverified,
+            ServerCode::FingerprintMismatch,
+            ServerCode::ServerUnreachable,
+            ServerCode::ServerRefused(3),
+            ServerCode::ServerRefused(4),
+            ServerCode::ServerRefused(7),
+            ServerCode::Forbidden,
+            ServerCode::UnknownMember,
+            ServerCode::KeyLogRejected,
+            ServerCode::General(ErrorCode::InvalidInput),
+            ServerCode::General(ErrorCode::NotFound),
+        ] {
+            let e = DesktopError::from_server(code);
+            assert!(e.message().ends_with('.'), "{}", e.message());
+            assert!(!e.code().is_empty());
+        }
+        assert_eq!(
+            DesktopError::from_server(ServerCode::ServerRefused(4)).code(),
+            "access_lost"
+        );
+        assert_eq!(
+            DesktopError::from_server(ServerCode::KeyLogRejected).code(),
+            "keylog_rejected"
+        );
+        // A locked vault stays a locked vault, whatever the request.
+        assert_eq!(
+            DesktopError::from_server(ServerCode::General(ErrorCode::Locked)).code(),
+            "locked"
+        );
     }
 
     #[test]

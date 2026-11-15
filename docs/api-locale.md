@@ -8,7 +8,7 @@ journal, durcissement du processus. Les choix de dépendances et l'emplacement d
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
-l'ADR 0032 (accepté) ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
+l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -567,12 +567,15 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Membre | `bstr(16)` |
 | Rôle | `uint`, codes de `sync-protocol.md` § 7.1 (1 `Owner` … 6 `Auditor`) |
 | État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle |
+| État du registre | `{1: suspect bool, 2: entrées uint, 3?: motif uint, 4: [alerte]}` (ADR 0041) ; 3 présent si et seulement si 1 vaut `true` : 1 racine différente, 2 tête plus petite, 3 règle R1 à R5 violée, 4 tête d'un pair incohérente, 5 tête d'un pair non servie, 6 entrée d'une preuve différente (`transparence.md` § 6.7) |
+| Alerte | `{1: type uint, 2: rang uint, 3?: appareil bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 3 présent pour les types 2 et 3 ; au plus 4 096 alertes |
+| Refus | `uint`, pourquoi le rôle du membre courant ne permet pas une action (ADR 0041) : 1 rôle insuffisant, 2 quorum de propriétaires requis, 3 dernier propriétaire, 4 accès au casier retiré par le serveur |
 
 ### 15.3 Opérations
 
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
-| 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier]}` ; 2 à 5 présents si et seulement si rattaché |
+| 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier], 7?: dernière synchronisation uint, 8?: état du registre}` ; 2 à 5 et 8 présents si et seulement si rattaché ; 7 en millisecondes depuis 1970, absent sans synchronisation réussie depuis l'ouverture du coffre |
 | 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20)}` |
 | 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
 | 43 | `ServerConfirm` | oui | `{1: empreinte}` | `{1: compte reconnu bool}` |
@@ -580,7 +583,7 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | 45 | `SharedLockerCreate` | oui | `{1: nom tstr (1 à 256 octets)}` | `{1: casier}` |
 | 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
 | 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
-| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool}]}` |
+| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus}` |
 
 Détails :
 
@@ -588,6 +591,17 @@ Détails :
    chargée à l'ouverture du coffre. « À envoyer » : opérations locales pas encore accusées par
    le serveur ; « en attente » et « en quarantaine » : statuts 0 et 2 de `format.md` § 5.2.
    « Accès » vaut `false` quand le serveur a refusé le casier (code 4 : membre retiré).
+   - « Dernière synchronisation » (clé 7, ADR 0041) : l'heure murale de la fin de la dernière
+     `ServerSync` réussie depuis l'ouverture du coffre. Elle n'est pas enregistrée : après un
+     verrouillage, elle est absente jusqu'à la synchronisation suivante.
+   - « État du registre » (clé 8, ADR 0040 et 0041) : le registre de transparence local tel
+     que le noyau le tient, mis à jour à chaque `ServerSync`, `SharedLockerCreate`, `RoleGrant`
+     et `RoleRevoke`. « Suspect » : le registre a été prouvé incohérent (`transparence.md`
+     § 6.7) ; le noyau refuse alors toute attribution et toute enveloppe pour un tiers
+     (`KeyLogRejected`) et le reste après un redémarrage. « Entrées » : leur nombre local.
+     Les alertes portent sur les clés du membre du poste (§ 6.4) ; elles sont gardées dans
+     l'annexe et rendues à chaque `ServerStatus`, sans opération pour les effacer : une
+     alerte est une preuve à transmettre à l'administrateur, pas une notification.
 2. **`ServerIdentity`** — données publiques à remettre à l'administrateur du serveur, qui crée
    le compte à partir de la `MemberKeys` (ADR 0028, point 8). Aucune clé privée.
 3. **`ServerJoin`** — `AlreadyJoined` si un serveur est déjà rattaché. Le noyau ouvre TLS 1.3
@@ -628,6 +642,18 @@ Détails :
 9. **`LockerMembers`** — l'état d'autorisation de la réplique locale (`hirzla-access`) :
    membres titulaires d'un rôle, nombre d'appareils actifs, empreinte, et si leur `Grant` (ou
    la `LockerCreate`) porte une preuve d'inscription vérifiée.
+   Pour que l'interface n'offre que ce qui sera accepté (ADR 0041), le noyau y joint ce que le
+   **membre courant** (clé 2) peut faire, calculé par le même contrôle que `RoleGrant` et
+   `RoleRevoke` (`hirzla-access`, sans accord joint) :
+   - clé 3 : les rôles qu'il peut attribuer à un nouveau membre ; vide, la clé 4 dit pourquoi ;
+   - clé 6 de chaque membre : les rôles vers lesquels il peut changer le sien (jamais le rôle
+     actuel ; jamais un rôle non lecteur pour un lecteur, `sync-protocol.md` § 7.3) ; vide, la
+     clé 7 dit pourquoi ;
+   - clé 8 de chaque membre : présente si le membre courant ne peut pas le retirer, avec le
+     motif ; absente, le retrait est permis (se retirer soi-même compris).
+
+   Ce n'est qu'une indication : `RoleGrant` et `RoleRevoke` refont le contrôle avant d'émettre.
+   Un casier dont le serveur a retiré l'accès donne le motif 4 partout.
 
 Une opération réseau qui a déjà émis puis perd la connexion garde l'opération dans la réplique
 et l'annexe : elle part à la synchronisation suivante (« à envoyer » de `ServerStatus`).
@@ -664,6 +690,11 @@ casiers partagés, sans changer leurs messages :
 
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
+
+**Compatibilité** (ADR 0041) : les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
+étendent la version 4 sans changer son numéro. Un client v4 strict antérieur refuserait ces
+réponses ; la ligne de commande, l'application de poste et le noyau sont livrés ensemble, et
+aucun autre client de la version 4 n'existe.
 
 ### 15.6 Ligne de commande
 

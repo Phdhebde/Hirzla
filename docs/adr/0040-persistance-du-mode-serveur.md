@@ -102,7 +102,7 @@ ni le registre local ne quittent le poste.
   (journalisation du système de fichiers, SSD) : le chiffrement par enregistrement reste la
   vraie protection.
 - Reste à faire : gel sur révocation manquante (§ 6.5) et délais d'une heure ; exposition des
-  alertes dans l'API locale (champ à coordonner avec la v5) ; effacement des corps `late`
+  alertes dans l'API locale (faite : ADR 0041, clé 8 de `ServerStatus`) ; effacement des corps `late`
   après 30 jours ; `Stable` poussé aux autres sessions ouvertes (aujourd'hui : à la session
   suivante) ; synchronisation de fond.
 

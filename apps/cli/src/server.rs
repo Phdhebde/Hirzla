@@ -5,7 +5,8 @@
 use hirzla_core::client::Client;
 use hirzla_core::proto::{ErrorReply, LockerEntry, Reply, Request};
 use hirzla_core::server_mode::proto::{
-    normalise_fingerprint, Role, ServerCode, ServerReply, ServerRequest,
+    normalise_fingerprint, AlertKind, KeyLogStatus, Role, ServerCode, ServerReply, ServerRequest,
+    SuspectReason,
 };
 use hirzla_vault::model::Id16;
 use zeroize::Zeroizing;
@@ -231,8 +232,12 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
             Ok(())
         }
         ServerCommand::Status => {
-            let ServerReply::Status { server, lockers } =
-                call_server(&mut c, &ServerRequest::ServerStatus)?
+            let ServerReply::Status {
+                server,
+                lockers,
+                keylog,
+                ..
+            } = call_server(&mut c, &ServerRequest::ServerStatus)?
             else {
                 return bad_reply();
             };
@@ -249,6 +254,9 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
                     "non vérifiée"
                 }
             ));
+            if let Some(k) = &keylog {
+                say(&keylog_lines(k));
+            }
             if lockers.is_empty() {
                 say("Aucun casier partagé.");
             }
@@ -301,6 +309,41 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
     }
 }
 
+/// The state of the local key log and its alerts (`docs/api-locale.md` § 15.2, ADR 0041).
+fn keylog_lines(k: &KeyLogStatus) -> String {
+    let mut out = match k.suspect {
+        None => format!("Registre des clés : cohérent ({} entrées).", k.entries),
+        Some(r) => format!(
+            "Registre des clés : SUSPECT ({}). Le partage est suspendu. Prévenez votre \
+             administrateur de sécurité.",
+            match r {
+                SuspectReason::RootMismatch => "racine différente",
+                SuspectReason::SizeDecrease => "registre raccourci",
+                SuspectReason::RuleViolation => "règle du registre violée",
+                SuspectReason::PeerHead | SuspectReason::Unserved => {
+                    "tête d'un autre poste incohérente"
+                }
+                SuspectReason::ProofEntry => "preuve d'inscription contradictoire",
+            }
+        ),
+    };
+    for a in &k.alerts {
+        let what = match a.kind {
+            AlertKind::ForeignMemberKey => "clé de membre usurpée".to_owned(),
+            AlertKind::UnknownOwnDevice => format!(
+                "appareil inconnu inscrit à votre nom ({})",
+                a.device.map_or_else(String::new, |d| hex(&d))
+            ),
+            AlertKind::UnknownOwnRevocation => format!(
+                "révocation inconnue ({})",
+                a.device.map_or_else(String::new, |d| hex(&d))
+            ),
+        };
+        out.push_str(&format!("\nAlerte : {what}, entrée {}.", a.index));
+    }
+    out
+}
+
 fn say_account(account: bool) {
     if account {
         say("Le serveur reconnaît votre compte.");
@@ -342,7 +385,7 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
         }
         LockerCommand::Members { locker } => {
             let locker = resolve_locker(&mut c, locker)?;
-            let ServerReply::Members(members) =
+            let ServerReply::Members { members, .. } =
                 call_server(&mut c, &ServerRequest::LockerMembers { locker })?
             else {
                 return bad_reply();

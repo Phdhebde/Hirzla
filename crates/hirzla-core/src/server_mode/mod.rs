@@ -42,8 +42,9 @@ use hirzla_vault::Vault;
 use zeroize::Zeroizing;
 
 use self::proto::{
-    LockerStatus, MemberInfo, ServerCode, ServerReply, ServerRequest, SyncReport, FINGERPRINT_LEN,
-    MAX_LOCKER_NAME, MAX_ROOTS,
+    AlertKind, KeyLogAlert, KeyLogStatus, LockerStatus, MemberInfo, Refusal, ServerCode,
+    ServerReply, ServerRequest, SuspectReason, SyncReport, FINGERPRINT_LEN, MAX_LOCKER_NAME,
+    MAX_ROOTS,
 };
 use crate::proto::ErrorCode;
 
@@ -255,7 +256,76 @@ pub struct ServerMode {
     annex: PathBuf,
     device: Arc<LocalDevice>,
     joined: Option<Joined>,
+    /// End of the last successful `ServerSync` since the vault was opened (not kept: ADR 0041).
+    last_sync_ms: Option<u64>,
 }
+
+/// Wall clock, milliseconds since 1970 (0 before).
+fn wall_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// What `ServerStatus` says of the local key log (`docs/api-locale.md` § 15.2).
+fn keylog_status(log: &LocalKeyLog) -> Result<KeyLogStatus, ServerCode> {
+    use hirzla_access::keylog::ForkReason;
+    let m = read_log(&log.monitor)?;
+    let suspect = m.suspect().map(|e| match e.reason {
+        ForkReason::RootMismatch => SuspectReason::RootMismatch,
+        ForkReason::SizeDecrease => SuspectReason::SizeDecrease,
+        ForkReason::RuleViolation { .. } => SuspectReason::RuleViolation,
+        ForkReason::PeerHead => SuspectReason::PeerHead,
+        ForkReason::Unserved => SuspectReason::Unserved,
+        ForkReason::ProofEntry => SuspectReason::ProofEntry,
+    });
+    let alerts = log
+        .alerts
+        .iter()
+        .map(|a| match *a {
+            Alert::ForeignMemberKey { index } => KeyLogAlert {
+                kind: AlertKind::ForeignMemberKey,
+                index,
+                device: None,
+            },
+            Alert::UnknownOwnDevice { device, index } => KeyLogAlert {
+                kind: AlertKind::UnknownOwnDevice,
+                index,
+                device: Some(device),
+            },
+            Alert::UnknownOwnRevocation { device, index } => KeyLogAlert {
+                kind: AlertKind::UnknownOwnRevocation,
+                index,
+                device: Some(device),
+            },
+        })
+        .collect();
+    Ok(KeyLogStatus {
+        suspect,
+        entries: m.size(),
+        alerts,
+    })
+}
+
+/// Why an action is refused, for the interface (ADR 0041). `None`: the denial only says the
+/// change is meaningless (same role, reader to non-reader), not that the role is too low.
+fn refusal(d: Denial) -> Option<Refusal> {
+    match d {
+        Denial::NoChange | Denial::ReaderToNonReader => None,
+        Denial::QuorumNotMet => Some(Refusal::QuorumRequired),
+        Denial::LastOwner => Some(Refusal::LastOwner),
+        _ => Some(Refusal::RoleTooLow),
+    }
+}
+
+const ALL_ROLES: [Role; 6] = [
+    Role::Owner,
+    Role::Manager,
+    Role::Editor,
+    Role::Reader,
+    Role::BlindUser,
+    Role::Auditor,
+];
 
 /// Who opens a session.
 enum Who {
@@ -288,6 +358,7 @@ impl ServerMode {
             annex,
             device,
             joined: None,
+            last_sync_ms: None,
         };
         match std::fs::symlink_metadata(&mode.annex) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(mode),
@@ -668,7 +739,7 @@ impl ServerMode {
         request: ServerRequest,
     ) -> Result<ServerReply, ServerCode> {
         match request {
-            ServerRequest::ServerStatus => Ok(self.status()),
+            ServerRequest::ServerStatus => self.status(),
             ServerRequest::ServerIdentity => self.identity(),
             ServerRequest::ServerJoin {
                 url,
@@ -689,12 +760,14 @@ impl ServerMode {
         }
     }
 
-    fn status(&self) -> ServerReply {
+    fn status(&self) -> Result<ServerReply, ServerCode> {
         let Some(j) = &self.joined else {
-            return ServerReply::Status {
+            return Ok(ServerReply::Status {
                 server: None,
                 lockers: Vec::new(),
-            };
+                last_sync_ms: None,
+                keylog: None,
+            });
         };
         let me = self.device.member_id();
         let lockers = j
@@ -714,7 +787,7 @@ impl ServerMode {
                 }
             })
             .collect();
-        ServerReply::Status {
+        Ok(ServerReply::Status {
             server: Some((
                 j.info.url.clone(),
                 j.info.server_id,
@@ -722,7 +795,9 @@ impl ServerMode {
                 j.info.server_key_verified,
             )),
             lockers,
-        }
+            last_sync_ms: self.last_sync_ms,
+            keylog: Some(keylog_status(&j.keylog)?),
+        })
     }
 
     fn identity(&self) -> Result<ServerReply, ServerCode> {
@@ -857,7 +932,10 @@ impl ServerMode {
         self.save(vault)?;
         match failure {
             Some(e) => Err(e),
-            None => Ok(ServerReply::Synced(reports)),
+            None => {
+                self.last_sync_ms = Some(wall_ms());
+                Ok(ServerReply::Synced(reports))
+            }
         }
     }
 
@@ -1156,26 +1234,78 @@ impl ServerMode {
         Ok(ServerReply::Done)
     }
 
+    /// Members of a shared locker, with what the current member may do to each (ADR 0041),
+    /// by the same check as [`ServerMode::grant`] and [`ServerMode::revoke`], without
+    /// approvals.
     fn members(&self, locker: &Id16) -> Result<ServerReply, ServerCode> {
+        let me = self.me();
         let j = self.joined()?;
         let s = j.lockers.get(locker).ok_or(general(ErrorCode::NotFound))?;
         let Some(a) = s.replica.authorization() else {
-            return Ok(ServerReply::Members(Vec::new()));
+            return Ok(ServerReply::Members {
+                me: me.member,
+                members: Vec::new(),
+                grantable: Vec::new(),
+                grant_refusal: Some(if s.access {
+                    Refusal::RoleTooLow
+                } else {
+                    Refusal::AccessLost
+                }),
+            });
         };
         let state = a.access().state();
+        let none = BTreeSet::new();
+        // Allowed roles for `action`, and why none is when the list is empty.
+        let allowed = |action: &dyn Fn(Role) -> Action| -> (Vec<Role>, Option<Refusal>) {
+            if !s.access {
+                return (Vec::new(), Some(Refusal::AccessLost));
+            }
+            let mut ok = Vec::new();
+            let mut why = None;
+            for r in ALL_ROLES {
+                match state.authorize(me, &action(r), &none) {
+                    Ok(()) => ok.push(r),
+                    Err(d) => why = why.or(refusal(d)),
+                }
+            }
+            let why = if ok.is_empty() {
+                Some(why.unwrap_or(Refusal::RoleTooLow))
+            } else {
+                None
+            };
+            (ok, why)
+        };
+        let (grantable, grant_refusal) = allowed(&Action::GrantNew);
         let unproven = s.replica.unproven_members();
         let mut out = Vec::new();
         for (id, role) in state.members_with_roles() {
             let Some(e) = state.member(id) else { continue };
+            let (change_to, change_refusal) = allowed(&|to| Action::ChangeRole { target: *id, to });
+            let remove_refusal = if s.access {
+                state
+                    .authorize(me, &Action::Remove(*id), &none)
+                    .err()
+                    .map(|d| refusal(d).unwrap_or(Refusal::RoleTooLow))
+            } else {
+                Some(Refusal::AccessLost)
+            };
             out.push(MemberInfo {
                 member: *id,
                 role,
                 devices: e.devices.len() as u64,
                 fingerprint: fingerprint(&e.keys.sig),
                 proven: !unproven.contains(id),
+                change_to,
+                change_refusal,
+                remove_refusal,
             });
         }
-        Ok(ServerReply::Members(out))
+        Ok(ServerReply::Members {
+            me: me.member,
+            members: out,
+            grantable,
+            grant_refusal,
+        })
     }
 
     // -------------------------------------------------------------------------------------

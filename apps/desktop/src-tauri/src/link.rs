@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
+use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningReport;
 
@@ -88,6 +89,14 @@ fn is_idempotent_self(op: SelfOp) -> bool {
             | SelfOp::History
             | SelfOp::ReadVersion
             | SelfOp::RecoveryStatus
+    )
+}
+
+/// Server mode requests that may be sent again on a new connection: those that read only.
+fn is_idempotent_server(op: ServerOp) -> bool {
+    matches!(
+        op,
+        ServerOp::ServerStatus | ServerOp::ServerIdentity | ServerOp::LockerMembers
     )
 }
 
@@ -235,6 +244,38 @@ impl CoreLink {
         }
     }
 
+    /// Sends one server mode request (`docs/api-locale.md` § 15, version 4), with the same
+    /// reconnection rule as [`CoreLink::call`]: only the requests that change nothing are sent
+    /// again.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`DesktopError::from_server`].
+    pub fn call_server(&mut self, request: &ServerRequest) -> Result<ServerReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_server(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ServerCode::General(ErrorCode::Unauthorized) {
+                        self.client = Some(client);
+                    }
+                    return Err(DesktopError::from_server(code));
+                }
+                Err(ClientError::Io(_)) if !retried && is_idempotent_server(request.op()) => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     /// The state of the core.
     ///
     /// # Errors
@@ -289,5 +330,12 @@ mod tests {
         assert!(!is_idempotent_self(SelfOp::RecoveryUnlock));
         assert!(!is_idempotent_self(SelfOp::ImportKdbx));
         assert!(!is_idempotent_self(SelfOp::RestoreVersion));
+        assert!(is_idempotent_server(ServerOp::ServerStatus));
+        assert!(is_idempotent_server(ServerOp::LockerMembers));
+        assert!(!is_idempotent_server(ServerOp::ServerJoin));
+        assert!(!is_idempotent_server(ServerOp::ServerSync));
+        assert!(!is_idempotent_server(ServerOp::RoleGrant));
+        assert!(!is_idempotent_server(ServerOp::RoleRevoke));
+        assert!(!is_idempotent_server(ServerOp::SharedLockerCreate));
     }
 }
