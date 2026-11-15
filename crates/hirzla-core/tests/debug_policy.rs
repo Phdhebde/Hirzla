@@ -33,11 +33,6 @@ const REVIEWED: &[(&str, &str, &str)] = &[
         "private",
         "TPM private area, encrypted by the chip (prototype)",
     ),
-    (
-        "ServerReply",
-        "member_keys",
-        "public member keys (hirzla serveur identite)",
-    ),
     ("HelloAck", "server_key", "server's public verifying key"),
     (
         "MemberKeysResult",
