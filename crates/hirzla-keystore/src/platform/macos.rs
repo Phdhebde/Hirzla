@@ -90,6 +90,7 @@ pub fn process_executable(pid: u32) -> io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
     use std::os::fd::{AsFd, AsRawFd};
     use std::os::unix::net::UnixStream;
 
