@@ -44,6 +44,12 @@ const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
  * @property {(e: import("./api.js").ApiError) => void} onError  Refusal not handled here.
  * @property {() => number} revealSeconds  How long a revealed value stays visible.
  * @property {(entry: Entry) => void} onEdit  Opens the form on this secret.
+ * @property {(locker: string, name: string) => void} onMembers  Opens the members of a shared locker.
+ */
+
+/**
+ * What the server mode says of a shared locker, ready to show.
+ * @typedef {{ role: string | null, access: boolean, writes: boolean }} SharedInfo
  */
 
 export class VaultView {
@@ -54,6 +60,8 @@ export class VaultView {
     this.entries = [];
     /** @type {Locker[]} */
     this.lockers = [];
+    /** @type {Map<string, SharedInfo>} Shared lockers, by identifier (server mode). */
+    this.shared = new Map();
     /** @type {Entry[]} */
     this.shown = [];
     this.filter = "tous";
@@ -100,6 +108,11 @@ export class VaultView {
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
     byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
     byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    byId("liste-membres").addEventListener("click", () => {
+      const id = this.lockerFilter();
+      const locker = this.lockers.find((l) => l.id === id);
+      if (locker) this.hooks.onMembers(locker.id, locker.name);
+    });
     byId("dialogue-historique").addEventListener("close", () => {
       this.hideAll();
       byId("historique-liste").replaceChildren();
@@ -109,6 +122,23 @@ export class VaultView {
   /** @returns {Entry | undefined} */
   selected() {
     return this.entries.find((e) => e.id === this.selectedId);
+  }
+
+  /** The locker shown alone, if any. @returns {string | null} */
+  lockerFilter() {
+    return this.filter.startsWith("casier:") ? this.filter.slice("casier:".length) : null;
+  }
+
+  /**
+   * New state of the shared lockers (server mode).
+   * @param {Map<string, SharedInfo>} shared
+   */
+  setShared(shared) {
+    this.shared = shared;
+    if (this.lockers.length > 0) {
+      this.renderLockers();
+      this.renderLockerHeader();
+    }
   }
 
   /** @param {string} filter */
@@ -123,12 +153,14 @@ export class VaultView {
     this.hideAll();
     this.entries = [];
     this.lockers = [];
+    this.shared = new Map();
     this.shown = [];
     this.selectedId = null;
     this.query = "";
     /** @type {HTMLInputElement} */ (byId("recherche")).value = "";
     this.list.replaceChildren();
     byId("liste-casiers").replaceChildren();
+    byId("liste-casier-partage").hidden = true;
     byId("fiche-champs").replaceChildren();
     byId("fiche-titre").textContent = "";
     byId("fiche-contenu").hidden = true;
@@ -158,15 +190,41 @@ export class VaultView {
     ul.replaceChildren(
       ...this.lockers.map((l) => {
         const count = this.entries.filter((e) => e.locker === l.id && !e.trash).length;
+        const shared = l.personal ? undefined : this.shared.get(l.id);
         const button = h(
           "button",
           { class: "nav-lien", type: "button", "data-vue": "secrets", "data-filtre": `casier:${l.id}` },
-          [h("span", { text: l.name }), h("span", { class: "compte", text: String(count), "aria-hidden": "true" })],
+          [
+            h("span", { class: "nom-casier", text: l.name }),
+            l.personal ? null : h("span", { class: "marque-partage", text: "Partagé", "aria-hidden": "true" }),
+            shared && !shared.access ? h("span", { class: "forme forme-triangle", "aria-hidden": "true" }) : null,
+            h("span", { class: "compte", text: String(count), "aria-hidden": "true" }),
+          ],
         );
+        if (!l.personal) {
+          const role = shared?.role ? `, rôle ${shared.role.toLowerCase()}` : "";
+          const lost = shared && !shared.access ? ", accès perdu" : "";
+          button.setAttribute("aria-label", `${l.name}, casier partagé${role}${lost}, ${count} secret${count > 1 ? "s" : ""}`);
+        }
         if (this.filter === `casier:${l.id}`) button.setAttribute("aria-current", "page");
         return h("li", {}, [button]);
       }),
     );
+  }
+
+  /** Role and members button above the list of a shared locker. */
+  renderLockerHeader() {
+    const id = this.lockerFilter();
+    const locker = id ? this.lockers.find((l) => l.id === id) : undefined;
+    const box = byId("liste-casier-partage");
+    box.hidden = !locker || locker.personal;
+    if (!locker || locker.personal) return;
+    const info = this.shared.get(locker.id);
+    byId("liste-casier-role").textContent = !info
+      ? "Casier partagé."
+      : !info.access
+        ? "Accès perdu : le serveur ne vous sert plus ce casier."
+        : `Casier partagé · votre rôle : ${info.role ? info.role.toLowerCase() : "aucun"}${info.writes ? "" : " (lecture seule)"}.`;
   }
 
   /** @returns {string} */
@@ -190,6 +248,7 @@ export class VaultView {
       return true;
     });
     byId("liste-titre").textContent = this.filterTitle();
+    this.renderLockerHeader();
     const n = this.shown.length;
     byId("liste-compte").textContent = n === 0 ? "" : n === 1 ? "1 secret" : `${n} secrets`;
     const empty = byId("liste-vide");

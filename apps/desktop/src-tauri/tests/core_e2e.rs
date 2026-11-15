@@ -488,3 +488,98 @@ fn the_self_mode_commands_drive_a_real_core() {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
 }
+
+/// The server mode commands (local API version 4) against a real core, without a server:
+/// state before joining, public identity, checks before the core, an unreachable server and
+/// the refusals that need a joined server.
+#[test]
+fn the_server_mode_commands_drive_a_real_core() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+
+    let status = serde_json::to_value(state.server_status().unwrap()).unwrap();
+    assert_eq!(status["joined"], false);
+    assert!(status["keylog"].is_null());
+    assert_eq!(status["lockers"].as_array().unwrap().len(), 0);
+
+    let id = serde_json::to_value(state.server_identity().unwrap()).unwrap();
+    assert_eq!(id["member"].as_str().unwrap().len(), 32);
+    assert_eq!(id["fingerprint"].as_str().unwrap().len(), 20);
+    let out = dir.path().join("membre.hirzla-membre");
+    assert_eq!(state.export_identity(&out).unwrap(), "membre.hirzla-membre");
+    assert!(!std::fs::read(&out).unwrap().is_empty());
+
+    // No CA chosen yet, then a CA and a server that does not answer.
+    assert_eq!(
+        state
+            .join_server("hirzla://127.0.0.1:9", None)
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    // A public test CA (certificate only, no key): `*.pem` files are never tracked.
+    let ca = dir.path().join("ac-essai.pem");
+    std::fs::write(&ca, TEST_CA).unwrap();
+    assert_eq!(state.set_server_ca(&ca).unwrap(), "ac-essai.pem");
+    assert_eq!(
+        state
+            .join_server("hirzla://127.0.0.1:9", Some("pas une empreinte"))
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    let e = state.join_server("hirzla://127.0.0.1:9", None).unwrap_err();
+    assert_eq!(e.code(), "server_unreachable");
+    assert!(e.message().contains("injoignable"));
+    assert_eq!(
+        serde_json::to_value(state.server_status().unwrap()).unwrap()["joined"],
+        false
+    );
+
+    // Everything else needs a joined server.
+    assert_eq!(state.sync_server().unwrap_err().code(), "not_joined");
+    assert_eq!(
+        state
+            .confirm_server("ABCDE FGHIJ KLMNO PQRST")
+            .unwrap_err()
+            .code(),
+        "not_joined"
+    );
+    assert_eq!(
+        state.create_shared_locker("Équipe").unwrap_err().code(),
+        "not_joined"
+    );
+    let locker = "00".repeat(16);
+    assert_eq!(
+        state.locker_members(&locker).unwrap_err().code(),
+        "not_joined"
+    );
+}
+
+/// Self-signed P-384 test CA certificate (public part only), valid until 2126.
+const TEST_CA: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIBxTCCAUygAwIBAgIUb8x3Xi2TDnCx4MYcTDmhz69zUSYwCgYIKoZIzj0EAwIw\n\
+GTEXMBUGA1UEAwwOSGlyemxhIHRlc3QgQ0EwIBcNMjYxMTE1MTgzNDI2WhgPMjEy\n\
+NjEwMjIxODM0MjZaMBkxFzAVBgNVBAMMDkhpcnpsYSB0ZXN0IENBMHYwEAYHKoZI\n\
+zj0CAQYFK4EEACIDYgAEjGcMoBspil/oJREJebPryQPCQhq2Oa/3JwHPP/pGOXV+\n\
+dB4lHDJzBczdCSykNhFufEa2r8XmoalJxXQwgraj3nLHjlg9gbLSHsG31+E3YEgJ\n\
+SWdBGd9+14bqC3RrzS3vo1MwUTAdBgNVHQ4EFgQUn3tiQPklvKnbq7U4EDJSBg4G\n\
+qGAwHwYDVR0jBBgwFoAUn3tiQPklvKnbq7U4EDJSBg4GqGAwDwYDVR0TAQH/BAUw\n\
+AwEB/zAKBggqhkjOPQQDAgNnADBkAjBi+R2MQQpkCr7QPt4g7DBk0NeazDszCc4M\n\
+Vk83Xgz+gJqOWhcSegKX485IMqnibTUCMHVUfZhnI/haugLJx2PwOGp8Qz0T7GP9\n\
+r62SVJqDcufcgXZY7rsiQYxB762fYktrWA==\n\
+-----END CERTIFICATE-----\n\
+";

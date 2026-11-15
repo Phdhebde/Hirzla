@@ -19,6 +19,9 @@ const ui = join(here, "..", "ui");
 const mock = await readFile(join(here, "..", "tests", "mock-core.js"), "utf8");
 const out = process.argv[2] || join(here, "..", "captures");
 mkdirSync(out, { recursive: true });
+// Optional second argument: "self" or "serveur" to take only the screens of one mode (the
+// checks of the other mode are then skipped too).
+const only = process.argv[3] || "";
 
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ttf": "font/ttf" };
 const server = createServer(async (req, res) => {
@@ -53,7 +56,7 @@ const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath
 const errors = [];
 const shots = [];
 
-async function page(theme, state) {
+async function page(theme, state, server) {
   const context = await browser.newContext({
     viewport: { width: 1180, height: 760 },
     deviceScaleFactor: 2,
@@ -68,7 +71,7 @@ async function page(theme, state) {
   p.on("request", (r) => {
     if (!r.url().startsWith("http://127.0.0.1")) errors.push(`requête externe : ${r.url()}`);
   });
-  await p.addInitScript(`window.__HIRZLA_MOCK__ = { state: ${JSON.stringify(state)} };`);
+  await p.addInitScript(`window.__HIRZLA_MOCK__ = ${JSON.stringify({ state, server })};`);
   await p.addInitScript(mock);
   await p.goto(base);
   await p.evaluate(() => document.fonts.ready);
@@ -82,7 +85,7 @@ async function shot(p, name, theme) {
   shots.push(file);
 }
 
-for (const theme of ["clair", "sombre"]) {
+for (const theme of only === "serveur" ? [] : ["clair", "sombre"]) {
   // First launch.
   let p = await page(theme, "absent");
   await p.waitForSelector("#ecran-creation:not([hidden])");
@@ -217,6 +220,149 @@ for (const theme of ["clair", "sombre"]) {
   await shot(p, "16-ouvrir-avec-le-kit", theme);
   await p.click("#recouvrement-ouvrir");
   await p.waitForSelector("#ecran-coffre:not([hidden])");
+  await p.close();
+}
+
+/** Opens the server view from the navigation. */
+async function serverView(p) {
+  await p.click("[data-vue='serveur']");
+  await p.waitForSelector("#vue-serveur:not([hidden])");
+  await p.waitForFunction(() => document.querySelector("#identite-membre").textContent.length > 0);
+}
+
+/** Waits for the announcements to fade. */
+async function quiet(p) {
+  await p.waitForFunction(() => document.querySelectorAll("#annonces .annonce").length === 0, null, { timeout: 15000 });
+}
+
+const SYNCED = { joined: true, verified: true, synced: true, lastSync: Date.UTC(2026, 10, 15, 13, 42) };
+
+for (const theme of only === "self" ? [] : ["clair", "sombre"]) {
+  // Self mode: join a server. An invitation fingerprint that does not match is refused.
+  let p = await page(theme, "unlocked");
+  await p.waitForSelector("#ecran-coffre:not([hidden])");
+  if (!(await p.isHidden("#etat-serveur"))) errors.push(`${theme}: état du serveur affiché en mode Self`);
+  await serverView(p);
+  await p.fill("#rejoindre-adresse", "coffre.atelier-durand.fr");
+  await p.click("#rejoindre-ac");
+  await p.waitForFunction(() => document.querySelector("#rejoindre-ac-nom").textContent.length > 0);
+  await shot(p, "17-rejoindre-un-serveur", theme);
+  await p.fill("#rejoindre-empreinte", "AAAAA BBBBB CCCCC DDDDD");
+  await p.click("#rejoindre-envoyer");
+  await p.waitForSelector("#rejoindre-erreur:not([hidden])");
+  await shot(p, "18-empreinte-inattendue", theme);
+
+  // Without the fingerprint: it is shown, to compare out of band and type again.
+  await p.fill("#rejoindre-empreinte", "");
+  await p.click("#rejoindre-envoyer");
+  await p.waitForSelector("#serveur-confirmer:not([hidden])");
+  await p.waitForSelector("#bandeau-serveur:not([hidden])");
+  await quiet(p);
+  await shot(p, "19-confirmer-l-empreinte", theme);
+  await p.fill("#confirmer-saisie", "m7qkx-r4pzd-2vnbt-l6wea");
+  await p.click("#form-confirmer button[type=submit]");
+  await p.waitForSelector("#serveur-connexion:not([hidden])");
+
+  // First synchronisation: shared lockers arrive.
+  await p.click("#connexion-synchroniser");
+  await p.waitForSelector("#connexion-resultat:not([hidden])");
+  await p.waitForSelector("#serveur-casiers tbody tr");
+  await quiet(p);
+  await shot(p, "20-serveur-synchronise", theme);
+  await p.close();
+
+  // Shared lockers in the list, distinguished; the record of one.
+  p = await page(theme, "unlocked", SYNCED);
+  await p.waitForSelector("#liste-casiers .marque-partage");
+  await p.click("#liste-casiers li:nth-child(2) button");
+  await p.waitForSelector("#liste-casier-partage:not([hidden])");
+  await p.click("#liste-secrets li");
+  await p.waitForSelector("#fiche-contenu:not([hidden])");
+  await shot(p, "21-casiers-partages", theme);
+
+  // New secret: the locker can be chosen.
+  await p.keyboard.press("Control+n");
+  await p.waitForSelector("#dialogue-secret[open] #secret-casier-champ:not([hidden])");
+  await p.fill("#secret-titre", "Imprimante de l'atelier");
+  await shot(p, "22-nouveau-secret-casier-partage", theme);
+  await p.keyboard.press("Escape");
+
+  // New shared locker.
+  await p.click("#bouton-casier-partage");
+  await p.waitForSelector("#dialogue-casier[open]");
+  await p.keyboard.type("Chantiers 2027");
+  await shot(p, "23-nouveau-casier-partage", theme);
+  await p.keyboard.press("Enter");
+  await p.waitForSelector("#dialogue-casier", { state: "hidden" });
+  await p.waitForFunction(() => [...document.querySelectorAll("#liste-casiers .nom-casier")].some((e) => e.textContent === "Chantiers 2027"));
+
+  // Members as the owner: every control enabled, except for the last owner.
+  await p.click("#liste-casiers li:nth-child(2) button");
+  await p.click("#liste-membres");
+  await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
+  await p.fill("#ajout-empreinte", "N3KQ7 XZB2T VW5RM H4DJC");
+  await shot(p, "24-membres-proprietaire", theme);
+  await p.click("#ajout-envoyer");
+  await p.waitForFunction(() => document.querySelectorAll("#membres-lignes tr").length === 5);
+  await p.keyboard.press("Escape");
+
+  // Members as a reader: disabled, with the reason.
+  await p.click("#liste-casiers li:nth-child(3) button");
+  await p.click("#liste-membres");
+  await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  if (!(await p.evaluate(() => document.querySelector("#membres-ajout").disabled))) errors.push(`${theme}: un lecteur peut ajouter un membre`);
+  await quiet(p);
+  await shot(p, "25-membres-lecteur", theme);
+  await p.keyboard.press("Escape");
+
+  // Server unreachable at the next synchronisation.
+  await p.evaluate(() => (window.__HIRZLA_MOCK_SERVER__.failSync = "server_unreachable"));
+  await p.click("#bouton-synchroniser");
+  await p.waitForSelector("#etat-serveur.etat-alerte");
+  await serverView(p);
+  await p.waitForSelector("#connexion-erreur:not([hidden])");
+  await quiet(p);
+  await shot(p, "26-serveur-injoignable", theme);
+  await p.close();
+
+  // Access lost to a locker.
+  p = await page(theme, "unlocked", { ...SYNCED, lost: true });
+  await p.waitForSelector("#bandeau-serveur:not([hidden])");
+  await p.click("#liste-casiers li:nth-child(3) button");
+  await p.waitForSelector("#liste-casier-partage:not([hidden])");
+  await shot(p, "27-acces-perdu", theme);
+  await p.close();
+
+  // Suspect key log, and an alert about the member's own keys.
+  p = await page(theme, "unlocked", {
+    ...SYNCED,
+    suspect: true,
+    alerts: [{ kind: "unknown_device", index: 131, device: "77c2e0a9b1d34f5e6a7b8c9d0e1f2a3b" }],
+  });
+  await p.waitForSelector("#bandeau-serveur:not([hidden])");
+  await serverView(p);
+  await p.waitForSelector("#registre-alertes li");
+  // Scroll the view only, not the window: the header and the alert strip stay in sight.
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-registre");
+    card.closest(".vue").scrollTop = card.offsetTop - 120;
+  });
+  await shot(p, "28-registre-suspect", theme);
+  // Sharing is refused while the log is suspect.
+  await p.click("#casiers-lignes tr:first-child button");
+  await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
+  await p.click("#ajout-envoyer");
+  await p.waitForSelector("#membres-erreur:not([hidden])");
+  await shot(p, "29-partage-refuse-registre-suspect", theme);
+  await p.keyboard.press("Escape");
+
+  // Lock: nothing of the server mode stays shown.
+  await p.keyboard.press("Control+l");
+  await p.waitForSelector("#ecran-deverrouillage:not([hidden])");
+  const left = await p.evaluate(() => document.querySelector("#identite-membre").textContent + document.querySelector("#casiers-lignes").childElementCount);
+  if (left !== "0") errors.push(`${theme}: l'état du serveur reste affiché après verrouillage`);
   await p.close();
 }
 

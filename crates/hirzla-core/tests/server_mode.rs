@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
-use hirzla_core::server_mode::proto::{Role, ServerCode, ServerReply, ServerRequest};
+use hirzla_core::server_mode::proto::{
+    Refusal, Role, ServerCode, ServerReply, ServerRequest, SuspectReason,
+};
 use hirzla_core::server_mode::{annex_path, COMPACT_MIN};
 use hirzla_core::service::{Config, Core};
 use hirzla_crypto::password::{MIN_M_KIB, MIN_T};
@@ -332,10 +334,16 @@ impl Member {
     }
 
     fn sync(&mut self) -> Vec<hirzla_core::server_mode::proto::SyncReport> {
-        match self.server(ServerRequest::ServerSync).unwrap() {
+        let reports = match self.server(ServerRequest::ServerSync).unwrap() {
             ServerReply::Synced(r) => r,
             other => panic!("unexpected {other:?}"),
+        };
+        // A successful synchronisation is dated in `ServerStatus` (ADR 0041).
+        match self.server(ServerRequest::ServerStatus).unwrap() {
+            ServerReply::Status { last_sync_ms, .. } => assert!(last_sync_ms.is_some()),
+            other => panic!("unexpected {other:?}"),
         }
+        reports
     }
 
     fn create(&mut self, locker: Id16, title: &str, password: &str) -> Result<Id16, ErrorCode> {
@@ -525,11 +533,16 @@ fn two_members_share_a_locker_then_one_is_removed() {
         .is_ok());
 
     // Members, seen from both sides.
-    let ServerReply::Members(members) =
-        bob.server(ServerRequest::LockerMembers { locker }).unwrap()
+    let ServerReply::Members {
+        me,
+        members,
+        grantable,
+        grant_refusal,
+    } = bob.server(ServerRequest::LockerMembers { locker }).unwrap()
     else {
         panic!("members expected");
     };
+    assert_eq!(me, bob.id);
     assert_eq!(members.len(), 2);
     assert!(members
         .iter()
@@ -537,6 +550,38 @@ fn two_members_share_a_locker_then_one_is_removed() {
     assert!(members
         .iter()
         .any(|m| m.member == bob.id && m.role == Role::Reader && m.proven));
+    // What a reader may do (ADR 0041): leave, nothing else.
+    assert!(grantable.is_empty());
+    assert_eq!(grant_refusal, Some(Refusal::RoleTooLow));
+    for m in &members {
+        assert!(m.change_to.is_empty());
+        assert_eq!(m.change_refusal, Some(Refusal::RoleTooLow));
+        let leave = m.member == bob.id;
+        assert_eq!(m.remove_refusal.is_none(), leave, "{:?}", m.role);
+    }
+    // What the only owner may do: grant any role, move the reader to another reader role
+    // only, remove the reader, but not leave.
+    let ServerReply::Members {
+        me,
+        members,
+        grantable,
+        grant_refusal,
+    } = alice
+        .server(ServerRequest::LockerMembers { locker })
+        .unwrap()
+    else {
+        panic!("members expected");
+    };
+    assert_eq!(me, alice.id);
+    assert_eq!(grantable.len(), 6);
+    assert_eq!(grant_refusal, None);
+    let of = |id: Id16| members.iter().find(|m| m.member == id).unwrap();
+    assert_eq!(
+        of(bob.id).change_to,
+        vec![Role::Owner, Role::Manager, Role::Editor]
+    );
+    assert_eq!(of(bob.id).remove_refusal, None);
+    assert_eq!(of(alice.id).remove_refusal, Some(Refusal::LastOwner));
 
     // A reader neither writes nor grants (§ 15.4: `InvalidInput` for a write).
     assert_eq!(
@@ -772,12 +817,22 @@ fn refusals() {
             password: z(PASSWORD),
         })
         .unwrap();
-    let ServerReply::Status { server: s, lockers } =
-        alice.server(ServerRequest::ServerStatus).unwrap()
+    let ServerReply::Status {
+        server: s,
+        lockers,
+        last_sync_ms,
+        keylog,
+    } = alice.server(ServerRequest::ServerStatus).unwrap()
     else {
         panic!("status expected");
     };
     assert_eq!(s.map(|s| (s.2, s.3)), Some((fp, true)));
+    // Not kept across a lock (ADR 0041); the key log is (ADR 0040), sound.
+    assert_eq!(last_sync_ms, None);
+    let keylog = keylog.unwrap();
+    assert!(keylog.entries > 0);
+    assert_eq!(keylog.suspect, None);
+    assert!(keylog.alerts.is_empty());
     assert!(lockers
         .iter()
         .any(|l| l.id == locker && l.role == Some(Role::Owner) && l.unsent == 0));
@@ -932,6 +987,13 @@ fn a_server_rolled_back_is_detected_after_a_core_restart() {
         alice.server(ServerRequest::SharedLockerCreate { name: z("Après") }),
         Err(ServerCode::KeyLogRejected)
     );
+    // `ServerStatus` says so, with the reason (ADR 0041).
+    match alice.server(ServerRequest::ServerStatus).unwrap() {
+        ServerReply::Status {
+            keylog: Some(k), ..
+        } => assert_eq!(k.suspect, Some(SuspectReason::SizeDecrease)),
+        other => panic!("unexpected {other:?}"),
+    }
     drop(server);
 }
 

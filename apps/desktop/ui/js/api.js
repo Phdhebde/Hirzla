@@ -23,6 +23,22 @@
  * @typedef {{ kit: string, threshold: number, count: number, folder: string, files: string[] }} CreatedKit
  * @typedef {{ imported: number, empty: number, recycled: number, attachments: number, history: number,
  *   custom_skipped: number, totp: number, refused: number }} KdbxReport
+ * @typedef {"owner" | "manager" | "editor" | "reader" | "blind_user" | "auditor"} RoleName
+ * @typedef {"role" | "quorum" | "last_owner" | "access_lost"} Refusal
+ * @typedef {{ id: string, name: string | null, role: RoleName | null, unsent: number, pending: number,
+ *   quarantined: number, access: boolean }} SharedLocker
+ * @typedef {{ kind: "foreign_member_key" | "unknown_device" | "unknown_revocation", index: number,
+ *   device: string | null }} KeyLogAlert
+ * @typedef {{ suspect: boolean, reason: "root" | "shorter" | "rule" | "peer" | "proof" | null, entries: number,
+ *   alerts: KeyLogAlert[] }} KeyLog
+ * @typedef {{ joined: boolean, url: string | null, server_id: string | null, fingerprint: string | null,
+ *   verified: boolean, last_sync_ms: number | null, keylog: KeyLog | null, lockers: SharedLocker[] }} ServerStatus
+ * @typedef {{ member: string, fingerprint: string, device: string, control_code: string }} Identity
+ * @typedef {{ fingerprint: string, verified: boolean, account: boolean }} Joined
+ * @typedef {{ locker: string, received: number, sent: number, refused: number, access: boolean }} SyncReport
+ * @typedef {{ member: string, me: boolean, role: RoleName, devices: number, fingerprint: string, proven: boolean,
+ *   change_to: RoleName[], change_refusal: Refusal | null, remove_refusal: Refusal | null }} Member
+ * @typedef {{ me: string, members: Member[], grantable: RoleName[], grant_refusal: Refusal | null }} Members
  */
 
 /**
@@ -122,4 +138,28 @@ export const api = {
   chooseKdbxFile: () => call("choose_kdbx_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
+
+  // Server mode (local API version 4).
+  /** @returns {Promise<ServerStatus>} */
+  serverStatus: () => call("server_status"),
+  /** @returns {Promise<Identity>} */
+  serverIdentity: () => call("server_identity"),
+  /** @returns {Promise<string>} */
+  exportServerIdentity: () => call("export_server_identity"),
+  /** @returns {Promise<string>} */
+  chooseServerCa: () => call("choose_server_ca"),
+  /** @param {string} url @param {string | null} fingerprint @returns {Promise<Joined>} */
+  serverJoin: (url, fingerprint) => call("server_join", { url, fingerprint }),
+  /** @param {string} fingerprint @returns {Promise<boolean>} */
+  serverConfirm: (fingerprint) => call("server_confirm", { fingerprint }),
+  /** @returns {Promise<SyncReport[]>} */
+  serverSync: () => call("server_sync"),
+  /** @param {string} name @returns {Promise<string>} */
+  createSharedLocker: (name) => call("create_shared_locker", { name }),
+  /** @param {string} locker @returns {Promise<Members>} */
+  lockerMembers: (locker) => call("locker_members", { locker }),
+  /** @param {string} locker @param {string} member @param {RoleName} role @param {string | null} fingerprint @returns {Promise<string>} */
+  grantRole: (locker, member, role, fingerprint) => call("grant_role", { locker, member, role, fingerprint }),
+  /** @param {string} locker @param {string} member @returns {Promise<void>} */
+  revokeRole: (locker, member) => call("revoke_role", { locker, member }),
 };

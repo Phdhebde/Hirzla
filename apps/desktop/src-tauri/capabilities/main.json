@@ -33,6 +33,17 @@
     "allow-recovery-unlock",
     "allow-remove-recovery-kit",
     "allow-choose-kdbx-file",
-    "allow-import-kdbx"
+    "allow-import-kdbx",
+    "allow-server-status",
+    "allow-server-identity",
+    "allow-export-server-identity",
+    "allow-choose-server-ca",
+    "allow-server-join",
+    "allow-server-confirm",
+    "allow-server-sync",
+    "allow-create-shared-locker",
+    "allow-locker-members",
+    "allow-grant-role",
+    "allow-revoke-role"
   ]
 }

@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { announce, byId, h, showError } from "./dom.js";
 import { SecretForm } from "./form.js";
 import { applyTheme, loadPrefs } from "./prefs.js";
+import { ROLE_NAMES, ServerView, WRITING_ROLES } from "./server.js";
 import { GeneratorView, SettingsView } from "./tools.js";
 import { VaultView } from "./vault.js";
 
@@ -63,6 +64,7 @@ const vault = new VaultView({
   },
   revealSeconds: () => prefs.reveal_s,
   onEdit: (entry) => form.open(entry),
+  onMembers: (locker, name) => void server.members.open(locker, name),
 });
 
 const form = new SecretForm({
@@ -72,6 +74,40 @@ const form = new SecretForm({
     if (ref) vault.select(ref.id, false);
   },
 });
+
+const server = new ServerView({
+  onError: onGlobalError,
+  onChanged: () => vault.refresh(),
+  onStatus: (s) => {
+    /** @type {Map<string, import("./vault.js").SharedInfo>} */
+    const shared = new Map();
+    for (const l of s?.lockers ?? []) {
+      shared.set(l.id, {
+        role: l.role ? ROLE_NAMES[l.role] : null,
+        access: l.access,
+        writes: l.access && !!l.role && WRITING_ROLES.includes(l.role),
+      });
+    }
+    vault.setShared(shared);
+  },
+  onShow: () => {
+    showView("serveur");
+    markNav("serveur", null);
+    byId("vue-serveur").querySelector("h1")?.focus();
+  },
+});
+
+/** Opens the form for a new secret, in the locker shown if the member may write there. */
+function newSecret() {
+  form.setLockers(
+    vault.lockers.filter((l) => {
+      if (l.personal) return true;
+      const s = server.locker(l.id);
+      return !!s && s.access && !!s.role && WRITING_ROLES.includes(s.role);
+    }),
+  );
+  form.open(null, vault.lockerFilter());
+}
 
 const generator = new GeneratorView(onGlobalError);
 const settings = new SettingsView(prefs, onGlobalError, () => void vault.refresh());
@@ -85,6 +121,7 @@ function wipe() {
   }
   form.clear();
   settings.wipe();
+  server.wipe();
   wipeRecovery();
   byId("import-resultat").hidden = true;
 }
@@ -127,6 +164,7 @@ async function poll() {
       showScreen("coffre");
       showView("secrets");
       await vault.refresh();
+      await server.refresh();
     }
     if (s.state === "unlocked") settings.render(s);
   } catch (e) {
@@ -320,8 +358,12 @@ document.addEventListener("click", (ev) => {
 
 /** @param {string} view */
 function showView(view) {
-  for (const v of ["secrets", "generateur", "reglages"]) {
+  for (const v of ["secrets", "generateur", "serveur", "reglages"]) {
     byId(`vue-${v}`).hidden = v !== view;
+  }
+  if (view === "serveur") {
+    void server.refresh();
+    void server.loadIdentity();
   }
   if (view !== "generateur") generator.wipe();
   if (view === "reglages" && status) settings.render(status);
@@ -350,7 +392,7 @@ byId("ecran-coffre").querySelector(".navigation")?.addEventListener("click", (ev
   heading?.focus();
 });
 
-byId("bouton-nouveau").addEventListener("click", () => form.open(null));
+byId("bouton-nouveau").addEventListener("click", () => newSecret());
 
 async function lockNow() {
   userLocked = true;
@@ -384,7 +426,7 @@ document.addEventListener("keydown", (ev) => {
     byId("recherche").focus();
   } else if (key === "n") {
     ev.preventDefault();
-    form.open(null);
+    newSecret();
   } else if (key === "l") {
     ev.preventDefault();
     void lockNow();

@@ -35,6 +35,8 @@ pub struct AppState {
     pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
     pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
+    /// Site CA chosen with the file picker, waiting for the address of the server.
+    pub(crate) pending_ca: Mutex<Option<crate::servermode::PendingCa>>,
 }
 
 pub(crate) fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -52,6 +54,7 @@ impl AppState {
             generated: Mutex::new(None),
             pending_kdbx: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
+            pending_ca: Mutex::new(None),
         }
     }
 
