@@ -1300,3 +1300,13 @@ fn generate_reference_files() {
     std::fs::write(dir.join("vault.expected.txt"), expected).unwrap();
     std::fs::write(dir.join("unlock.expected.txt"), unlock).unwrap();
 }
+
+/// The settings unsealed at opening are exposed to the core (auto-lock, clipboard delay).
+#[test]
+fn settings_are_read_at_opening() {
+    let (_dir, path, v) = new_vault();
+    assert_eq!(v.settings(), Settings::default());
+    v.close();
+    let v = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(v.settings(), Settings::default());
+}

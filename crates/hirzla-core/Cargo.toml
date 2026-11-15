@@ -16,3 +16,8 @@ hirzla-access = { path = "../hirzla-access" }
 hirzla-audit = { path = "../hirzla-audit" }
 hirzla-keystore = { path = "../hirzla-keystore" }
 hirzla-sync = { path = "../hirzla-sync" }
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
