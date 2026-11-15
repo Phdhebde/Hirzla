@@ -103,3 +103,14 @@ Sur la branche de cette demande de fusion, Linux x86-64, Rust 1.100 :
 | `cargo test --workspace` | ok : 625 tests réussis, 0 échec, 9 ignorés (prototypes matériels, dudect) |
 | `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` |
 | `cargo build --bins` dans `fuzz/` (stable) puis 25 s par nouvelle cible | aucune panique |
+
+Après la demande de fusion `feat/durcissement` (constats R1, R2, R3, R4, R6, R9 et prérequis
+de l'ADR 0050), même plateforme :
+
+| Commande | Résultat |
+| --- | --- |
+| `cargo fmt --all -- --check` | ok |
+| `cargo clippy --workspace --all-targets -- -D warnings` | ok (aussi `hirzla-keystore` en croisé pour `x86_64-pc-windows-msvc` et `aarch64-apple-darwin`, et avec `--features tpm2-prototype`) |
+| `cargo test --workspace` | ok : 648 tests réussis, 0 échec, 4 ignorés (les prototypes TPM ne sont plus compilés sans leur fonctionnalité) |
+| `cargo deny check` | `advisories ok, bans ok, licenses ok, sources ok` |
+| `.github/scripts/reproducible-build.sh` | `hirzla-core`, `hirzla`, `hirzlad` identiques entre deux compilations dans deux répertoires ; aucun chemin de la machine dans les binaires |
