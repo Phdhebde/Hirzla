@@ -836,6 +836,23 @@ Ensuite :
   détecté. Il peut en **retenir** une. La parade est l'inscription des retraits au registre de
   transparence et l'échange de têtes entre postes (`transparence.md` § 6.5 et § 6.6).
 
+### 11.9 Ajouts de l'étape 11 (`hirzlad`, ADR 0028, proposé)
+
+- **Groupe TLS en vigueur** : `X25519MLKEM768` seul, en attendant `SecP384r1MLKEM1024` dans la
+  bibliothèque TLS (ADR 0028, point 1). Aucun groupe classique n'est accepté.
+- **`MailboxGet` avant `Auth`** : après `Hello`, un appareil en cours d'enrôlement (§ 14), qui
+  n'a pas encore de certificat, peut lire la boîte aux lettres de son propre `device`, et rien
+  d'autre. Une lecture consomme le premier paquet non expiré ; sans paquet : code 4.
+- **Droits vus par le serveur** (étape 5 du § 11.8) : calcul de `hirzla-access` sur les corps de
+  contrôle stockés, dans l'ordre de réception ; refus (code 4) seulement pour un défaut de droit
+  qu'aucun ordre causal ne lève (ADR 0028, point 7).
+- **Un `Grant` nomme un membre inscrit** sur ce serveur, avec la clé inscrite au registre.
+- **Interface d'administration** : port distinct, certificat client, messages 100 à 107
+  (`AdminStatus`, `AdminStatusResult`, `AdminUnseal`, `AdminCreateAccount`, `AdminAccount`,
+  `AdminCheckpoint`, `AdminCheckpointResult`, `AdminShutdown`), refusés sur le port des postes.
+- `Ack` est vérifié puis ignoré, `Stable` n'est jamais envoyé : la compaction stable reste à
+  faire côté serveur.
+
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
 | Il apprend | D'où | Pourquoi c'est nécessaire | Réduction |
@@ -849,6 +866,7 @@ Ensuite :
 | Qui tire quel casier, et quand | `Pull` | Distribuer | Un poste tire tout le casier, jamais un secret isolé |
 | Opérations en quarantaine (`late`) | Son propre filtrage | Limiter la diffusion | — |
 | Qu'une action à plusieurs a eu lieu, et qui l'a approuvée | Accords joints en clair | Vérifier le quorum | Les accords ne circulent pas avant publication (§ 7.7) |
+| Destinataire, taille et heure des paquets de la boîte aux lettres ; identifiant et adresse IP d'un appareil en cours d'enrôlement | `MailboxPut`, `MailboxGet` (§ 11.9) | Acheminer l'enrôlement et les accords | Paquets chiffrés pour le destinataire, gardés 10 minutes, en mémoire seulement |
 
 Il n'apprend **pas** : les titres, adresses, noms d'utilisateur, valeurs, notes, noms de
 casiers, types de secrets, le secret visé par une opération (`secret_id` scellé, `block_id`
