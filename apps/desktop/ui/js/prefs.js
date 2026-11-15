@@ -1,13 +1,17 @@
 // @ts-check
-// Display preferences of this window (never a secret): theme and reveal delay. Kept in the
-// web view's local storage when available; defaults otherwise.
+// Display preferences of this window (never a secret): theme, reveal delay and interval of
+// the background synchronisation (ADR 0048). Kept in the web view's local storage when
+// available; defaults otherwise.
 
 const KEY = "hirzla.preferences";
 
-/** @typedef {{ theme: "systeme" | "clair" | "sombre", reveal_s: number }} Prefs */
+/** @typedef {{ theme: "systeme" | "clair" | "sombre", reveal_s: number, sync_min: number }} Prefs */
+
+/** Intervals of the background synchronisation, in minutes; 0 turns it off. */
+export const SYNC_MINUTES = [0, 1, 5, 15, 60];
 
 /** @type {Prefs} */
-const DEFAULTS = { theme: "systeme", reveal_s: 15 };
+const DEFAULTS = { theme: "systeme", reveal_s: 15, sync_min: 5 };
 
 /** @returns {Prefs} */
 export function loadPrefs() {
@@ -17,7 +21,8 @@ export function loadPrefs() {
     const p = JSON.parse(raw);
     const theme = ["systeme", "clair", "sombre"].includes(p.theme) ? p.theme : DEFAULTS.theme;
     const reveal_s = [5, 10, 15, 30].includes(p.reveal_s) ? p.reveal_s : DEFAULTS.reveal_s;
-    return { theme, reveal_s };
+    const sync_min = SYNC_MINUTES.includes(p.sync_min) ? p.sync_min : DEFAULTS.sync_min;
+    return { theme, reveal_s, sync_min };
   } catch {
     return { ...DEFAULTS };
   }
