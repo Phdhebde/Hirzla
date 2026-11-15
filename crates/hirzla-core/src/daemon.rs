@@ -2,6 +2,7 @@
 //! client, one thread per connection, and automatic locking (`docs/api-locale.md`).
 
 use std::ffi::OsString;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use hirzla_keystore::platform::{self, HardeningReport};
+use zeroize::Zeroizing;
 
 use crate::auth::{authorize_client, AllowList};
 use crate::events::{Event, Log, Refusal};
@@ -20,6 +22,10 @@ use crate::transport::{Connection, Endpoint, Listener};
 
 /// Most connections served at once.
 const MAX_CONNECTIONS: usize = 16;
+/// Most refusals being answered at once; beyond, a refused connection is closed at once.
+const MAX_REFUSALS: usize = 16;
+/// Most bytes read (and discarded) from a refused client before answering.
+const MAX_REFUSAL_READ: usize = 4096;
 /// An idle connection is closed after this delay (Unix; Windows pipes have no read timeout).
 const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 /// Time left to a refused client to send its first request before the refusal is sent.
@@ -225,6 +231,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
 
     log.record(Event::Listening);
     let active = Arc::new(AtomicUsize::new(0));
+    let refusing = Arc::new(AtomicUsize::new(0));
     let endpoint = Arc::new(options.endpoint.clone());
     loop {
         let (conn, peer) = match listener.accept() {
@@ -239,7 +246,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 pid: peer.pid,
                 reason,
             });
-            std::thread::spawn(move || refuse(conn, ErrorCode::Unauthorized));
+            spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
             continue;
         }
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
@@ -248,7 +255,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 pid: peer.pid,
                 reason: Refusal::Busy,
             });
-            std::thread::spawn(move || refuse(conn, ErrorCode::Busy));
+            spawn_refusal(conn, ErrorCode::Busy, &refusing);
             continue;
         }
         log.record(Event::ConnectionAccepted { pid: peer.pid });
@@ -263,11 +270,32 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     }
 }
 
-/// Answers a refused client: waits briefly for its first frame (never decoded), sends the
-/// refusal with request identifier 0, and closes.
+/// Answers a refused client on its own thread, within [`MAX_REFUSALS`]; beyond, the
+/// connection is closed without an answer.
+fn spawn_refusal(conn: Connection, code: ErrorCode, refusing: &Arc<AtomicUsize>) {
+    if refusing.fetch_add(1, Ordering::SeqCst) >= MAX_REFUSALS {
+        refusing.fetch_sub(1, Ordering::SeqCst);
+        drop(conn);
+        return;
+    }
+    let refusing = Arc::clone(refusing);
+    std::thread::spawn(move || {
+        refuse(conn, code);
+        refusing.fetch_sub(1, Ordering::SeqCst);
+    });
+}
+
+/// Answers a refused client: waits briefly for its first request, reads and discards at
+/// most [`MAX_REFUSAL_READ`] bytes of it (never decoded, nothing allocated from its
+/// length), sends the refusal with request identifier 0, and closes.
 fn refuse(mut conn: Connection, code: ErrorCode) {
     let _ = conn.set_read_timeout(Some(REFUSAL_TIMEOUT));
-    let _ = read_frame(&mut conn);
+    let mut header = [0u8; 4];
+    if conn.read_exact(&mut header).is_ok() {
+        let announced = usize::try_from(u32::from_be_bytes(header)).unwrap_or(usize::MAX);
+        let mut discard = Zeroizing::new([0u8; MAX_REFUSAL_READ]);
+        let _ = conn.read_exact(&mut discard[..announced.min(MAX_REFUSAL_READ)]);
+    }
     if let Ok(body) = Reply::encode(0, &Err(ErrorReply::new(code))) {
         let _ = write_frame(&mut conn, &body);
     }
