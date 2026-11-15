@@ -429,14 +429,29 @@ fn read_database(file: &[u8], password: &str) -> Result<KdbxDatabase, KdbxRefusa
         .decrypt(header.cipher, &header.iv, ciphertext)
         .map_err(|_| KdbxRefusal::Malformed)?;
     drop(keys);
-    let payload = if header.gzip {
-        gunzip(&plaintext)?
-    } else {
-        plaintext
-    };
+    read_payload(plaintext, header.gzip)
+}
+
+/// What follows decryption: optional gzip, inner header, XML document.
+fn read_payload(plaintext: Zeroizing<Vec<u8>>, gzip: bool) -> Result<KdbxDatabase, KdbxRefusal> {
+    let payload = if gzip { gunzip(&plaintext)? } else { plaintext };
     let (mut stream, offset) = inner_header(&payload)?;
     let document = payload.get(offset..).ok_or(KdbxRefusal::Malformed)?;
     xml::parse(document, &mut stream)
+}
+
+/// Fuzzing entry point (feature `fuzzing`, never in a release build): runs the stages after
+/// decryption, which random input cannot reach through [`read`] since every block is
+/// authenticated. The first byte chooses whether the rest is gzip-compressed.
+///
+/// # Errors
+/// [`VaultError::Kdbx`], with the reason.
+#[cfg(feature = "fuzzing")]
+pub fn read_decrypted_payload(data: &[u8]) -> Result<KdbxDatabase, VaultError> {
+    let (gzip, rest) = data
+        .split_first()
+        .ok_or(VaultError::Kdbx(KdbxRefusal::Malformed))?;
+    read_payload(Zeroizing::new(rest.to_vec()), gzip & 1 == 1).map_err(VaultError::Kdbx)
 }
 
 #[cfg(test)]

@@ -9,6 +9,10 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes the stages after decryption of the KDBX reader to the fuzz targets (`fuzz/`).
+fuzzing = []
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 # ADR 0013.

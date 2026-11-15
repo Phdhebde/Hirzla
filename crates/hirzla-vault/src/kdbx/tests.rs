@@ -319,3 +319,21 @@ fn xml_custom_fields_are_bounded() {
     assert_eq!(e.custom_skipped, 3);
     assert!(e.totp);
 }
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+    /// The stages after decryption never panic, whatever the payload.
+    #[test]
+    fn payload_never_panics(data in proptest::collection::vec(proptest::prelude::any::<u8>(), 0..2048), gzip: bool) {
+        let _ = super::read_payload(zeroize::Zeroizing::new(data), gzip);
+    }
+
+    /// Nor does the reader on a reference database with one byte changed.
+    #[test]
+    fn altered_file_never_panics(pos in 0usize..2069, bit in 0u8..8) {
+        let mut file = PYKEEPASS_AES_ARGON2D.to_vec();
+        file[pos] ^= 1 << bit;
+        proptest::prop_assert!(read(&file, PASSWORD).is_err());
+    }
+}
