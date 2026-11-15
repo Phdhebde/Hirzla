@@ -1,0 +1,81 @@
+{
+  "productName": "Hirzla",
+  "mainBinaryName": "hirzla-desktop",
+  "version": "0.0.0",
+  "identifier": "app.hirzla.desktop",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hirzla",
+        "width": 1120,
+        "height": 740,
+        "minWidth": 760,
+        "minHeight": 540,
+        "center": true,
+        "dragDropEnabled": false,
+        "devtools": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'none'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "font-src": "'self'",
+        "img-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'"
+      },
+      "freezePrototype": true,
+      "dangerousDisableAssetCspModification": false,
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["deb", "rpm", "appimage", "msi", "dmg"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "publisher": "Hirzla",
+    "copyright": "Hirzla",
+    "shortDescription": "Coffre-fort de mots de passe post-quantique",
+    "longDescription": "Hirzla garde vos mots de passe et vos secrets dans un coffre chiffré par une suite hybride, classique et post-quantique. Les clés ne quittent jamais le noyau local.",
+    "linux": {
+      "deb": {
+        "section": "utils"
+      },
+      "rpm": {
+        "release": "1"
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0",
+      "hardenedRuntime": true
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "skip"
+      },
+      "wix": {
+        "language": "fr-FR"
+      }
+    }
+  }
+}

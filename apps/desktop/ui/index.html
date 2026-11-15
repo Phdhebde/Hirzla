@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- The content security policy is set by Tauri (tauri.conf.json, app.security.csp):
+       no network, no inline script or style, nothing outside the application. -->
+  <title>Hirzla</title>
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <!-- Announcements for screen readers and short confirmations. -->
+  <div id="annonces" class="annonces" role="status" aria-live="polite"></div>
+
+  <!-- Loading, and a core that cannot be reached. -->
+  <main id="ecran-attente" class="ecran ecran-centre" data-ecran="attente">
+    <div class="carte carte-etroite">
+      <div class="marque marque-grande">
+        <span class="symbole" aria-hidden="true"></span>
+        <span class="logotype">HIRZLA</span>
+      </div>
+      <h1 class="titre-ecran" id="attente-titre" tabindex="-1">Connexion au noyau…</h1>
+      <p id="attente-texte" class="texte-secondaire">L'application démarre le noyau Hirzla, qui seul détient les clés.</p>
+      <div id="attente-erreur" class="alerte" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <button id="attente-reessayer" class="bouton bouton-principal" type="button" hidden>Réessayer</button>
+    </div>
+  </main>
+
+  <!-- First launch: create the vault. -->
+  <main id="ecran-creation" class="ecran ecran-centre" data-ecran="creation" hidden>
+    <form id="form-creation" class="carte carte-etroite" novalidate>
+      <div class="marque marque-grande">
+        <span class="symbole" aria-hidden="true"></span>
+        <span class="logotype">HIRZLA</span>
+      </div>
+      <h1 class="titre-ecran" tabindex="-1">Créer votre coffre</h1>
+      <p class="texte-secondaire">Le coffre est chiffré sur ce poste par une suite hybride, classique et
+        post-quantique. Choisissez un mot de passe maître : lui seul l'ouvre, et il ne peut pas être récupéré.</p>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe maître</span>
+        <input id="creation-mdp" class="saisie saisie-mono" type="password" autocomplete="new-password"
+               spellcheck="false" required minlength="12" maxlength="1024" aria-describedby="creation-aide">
+      </label>
+      <label class="champ">
+        <span class="champ-libelle">Confirmation</span>
+        <input id="creation-confirmation" class="saisie saisie-mono" type="password" autocomplete="new-password"
+               spellcheck="false" required minlength="12" maxlength="1024">
+      </label>
+      <p id="creation-aide" class="aide">Au moins 12 caractères. Une phrase de plusieurs mots est plus facile à retenir
+        et plus difficile à deviner.</p>
+      <div id="creation-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <button class="bouton bouton-principal bouton-large" type="submit">Créer le coffre</button>
+      <p class="aide">La création calibre le chiffrement sur ce poste : comptez quelques secondes.</p>
+    </form>
+  </main>
+
+  <!-- Unlock. -->
+  <main id="ecran-deverrouillage" class="ecran ecran-centre" data-ecran="deverrouillage" hidden>
+    <form id="form-deverrouillage" class="carte carte-etroite" novalidate>
+      <div class="marque marque-grande">
+        <span class="symbole" aria-hidden="true"></span>
+        <span class="logotype">HIRZLA</span>
+      </div>
+      <p class="etat etat-scelle"><span class="forme forme-carre" aria-hidden="true"></span>Le coffre est verrouillé.</p>
+      <h1 class="titre-ecran" tabindex="-1">Ouvrir le coffre</h1>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe maître</span>
+        <input id="deverrouillage-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
+               spellcheck="false" required maxlength="1024">
+      </label>
+      <div id="deverrouillage-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <button class="bouton bouton-principal bouton-large" type="submit">Ouvrir</button>
+    </form>
+  </main>
+
+  <!-- The open vault. -->
+  <div id="ecran-coffre" class="ecran coffre" data-ecran="coffre" hidden>
+    <header class="barre">
+      <div class="marque">
+        <span class="symbole" aria-hidden="true"></span>
+        <span class="logotype">HIRZLA</span>
+      </div>
+      <div class="recherche" role="search">
+        <label for="recherche" class="visuellement-cache">Rechercher un secret</label>
+        <input id="recherche" class="saisie" type="search" placeholder="Rechercher (Ctrl+F)" autocomplete="off"
+               spellcheck="false" maxlength="256">
+      </div>
+      <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span>Coffre ouvert</p>
+      <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)">Verrouiller</button>
+    </header>
+
+    <nav class="navigation" aria-label="Sections">
+      <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)">Nouveau secret</button>
+      <ul class="nav-liste">
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="tous" aria-current="page">Tous les secrets</button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="favoris">Favoris</button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="corbeille">Corbeille</button></li>
+      </ul>
+      <h2 class="nav-titre" id="titre-casiers">Casiers</h2>
+      <ul id="liste-casiers" class="nav-liste" aria-labelledby="titre-casiers"></ul>
+      <h2 class="nav-titre">Outils</h2>
+      <ul class="nav-liste">
+        <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)">Générateur</button></li>
+        <li><button class="nav-lien" type="button" data-vue="reglages">Réglages</button></li>
+      </ul>
+    </nav>
+
+    <!-- Secrets: list and record. -->
+    <main id="vue-secrets" class="vue vue-secrets" data-vue="secrets">
+      <section class="colonne-liste" aria-labelledby="liste-titre">
+        <div class="entete-liste">
+          <h1 id="liste-titre" class="titre-section" tabindex="-1">Tous les secrets</h1>
+          <span id="liste-compte" class="texte-secondaire"></span>
+        </div>
+        <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
+        <p id="liste-vide" class="vide" hidden></p>
+      </section>
+      <section id="fiche" class="fiche" aria-labelledby="fiche-titre" aria-live="off">
+        <div id="fiche-vide" class="vide vide-fiche">
+          <span class="symbole symbole-pale" aria-hidden="true"></span>
+          <p>Choisissez un secret dans la liste.</p>
+        </div>
+        <article id="fiche-contenu" hidden>
+          <header class="fiche-entete">
+            <div>
+              <p id="fiche-type" class="surtitre"></p>
+              <h2 id="fiche-titre" class="titre-fiche" tabindex="-1"></h2>
+            </div>
+            <div class="fiche-actions">
+              <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false">Favori</button>
+              <button id="fiche-modifier" class="bouton bouton-secondaire" type="button">Modifier</button>
+              <button id="fiche-supprimer" class="bouton bouton-secondaire bouton-danger" type="button">Mettre à la corbeille</button>
+            </div>
+          </header>
+          <dl id="fiche-champs" class="champs-fiche"></dl>
+        </article>
+      </section>
+    </main>
+
+    <!-- Generator. -->
+    <main id="vue-generateur" class="vue vue-page" data-vue="generateur" hidden>
+      <h1 class="titre-section" tabindex="-1">Générateur de mots de passe</h1>
+      <p class="texte-secondaire">Le noyau tire chaque caractère uniformément sur l'aléa du système.</p>
+      <form id="form-generateur" class="carte" novalidate>
+        <div class="resultat-generateur">
+          <output id="generateur-resultat" class="valeur-secrete valeur-grande" aria-live="polite" for="generateur-longueur"></output>
+        </div>
+        <div class="ligne-actions">
+          <button id="generateur-generer" class="bouton bouton-principal" type="submit">Générer</button>
+          <button id="generateur-copier" class="bouton bouton-secondaire" type="button" disabled>Copier</button>
+        </div>
+        <label class="champ">
+          <span class="champ-libelle">Longueur : <strong id="generateur-longueur-valeur">24</strong> caractères</span>
+          <input id="generateur-longueur" type="range" min="8" max="128" value="24" class="curseur">
+        </label>
+        <fieldset class="cases">
+          <legend class="champ-libelle">Familles de caractères</legend>
+          <label class="case"><input type="checkbox" id="generateur-minuscules" checked> Minuscules (a–z)</label>
+          <label class="case"><input type="checkbox" id="generateur-majuscules" checked> Majuscules (A–Z)</label>
+          <label class="case"><input type="checkbox" id="generateur-chiffres" checked> Chiffres (0–9)</label>
+          <label class="case"><input type="checkbox" id="generateur-symboles" checked> Symboles (!#$%…)</label>
+        </fieldset>
+        <div id="generateur-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+      </form>
+    </main>
+
+    <!-- Settings. -->
+    <main id="vue-reglages" class="vue vue-page" data-vue="reglages" hidden>
+      <h1 class="titre-section" tabindex="-1">Réglages</h1>
+      <section class="carte" aria-labelledby="reglages-affichage">
+        <h2 id="reglages-affichage" class="titre-carte">Affichage</h2>
+        <fieldset class="cases">
+          <legend class="champ-libelle">Thème</legend>
+          <label class="case"><input type="radio" name="theme" value="systeme"> Celui du système</label>
+          <label class="case"><input type="radio" name="theme" value="clair"> Clair</label>
+          <label class="case"><input type="radio" name="theme" value="sombre"> Sombre</label>
+        </fieldset>
+        <label class="champ">
+          <span class="champ-libelle">Durée d'affichage d'un secret révélé</span>
+          <select id="reglage-revelation" class="saisie">
+            <option value="5">5 secondes</option>
+            <option value="10">10 secondes</option>
+            <option value="15">15 secondes</option>
+            <option value="30">30 secondes</option>
+          </select>
+        </label>
+      </section>
+      <section class="carte" aria-labelledby="reglages-coffre">
+        <h2 id="reglages-coffre" class="titre-carte">Coffre</h2>
+        <dl class="tableau-etat">
+          <dt>Verrouillage automatique</dt><dd id="reglage-auto"></dd>
+          <dt>Effacement du presse-papiers</dt><dd id="reglage-pp"></dd>
+          <dt>Version du noyau</dt><dd id="reglage-version" class="mono"></dd>
+          <dt>Version de l'application</dt><dd id="reglage-version-app" class="mono"></dd>
+        </dl>
+        <p class="aide">Ces délais sont des réglages du coffre ; ils ne se modifient pas encore depuis l'application.
+          Le coffre est aussi verrouillé à la fermeture de l'application.</p>
+      </section>
+      <section class="carte" aria-labelledby="reglages-durcissement">
+        <h2 id="reglages-durcissement" class="titre-carte">Protection des processus</h2>
+        <table class="tableau">
+          <thead><tr><th scope="col">Mesure</th><th scope="col">Noyau</th><th scope="col">Application</th></tr></thead>
+          <tbody id="reglage-durcissement"></tbody>
+        </table>
+      </section>
+      <section class="carte" aria-labelledby="reglages-import">
+        <h2 id="reglages-import" class="titre-carte">Importer</h2>
+        <p class="texte-secondaire">Le fichier est lu par l'application et chaque entrée est créée par le noyau dans
+          votre casier personnel. Rien n'est envoyé hors de ce poste.</p>
+        <div class="ligne-actions">
+          <button id="import-csv" class="bouton bouton-secondaire" type="button">Importer un fichier CSV…</button>
+          <button id="import-kdbx" class="bouton bouton-secondaire" type="button">Importer depuis KeePass (KDBX)…</button>
+        </div>
+        <p class="aide">CSV reconnus : KeePass, KeePassXC, Bitwarden, Firefox, Chrome et les tableurs dont la
+          première ligne nomme les colonnes (titre, identifiant, mot de passe, URL, notes, groupe).</p>
+        <div id="import-resultat" class="encadre" role="status" hidden></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Create or change a secret. -->
+  <dialog id="dialogue-secret" class="dialogue" aria-labelledby="dialogue-secret-titre">
+    <form id="form-secret" method="dialog" novalidate>
+      <h2 id="dialogue-secret-titre" class="titre-carte">Nouveau secret</h2>
+      <fieldset class="cases cases-ligne" id="secret-type-groupe">
+        <legend class="champ-libelle">Type</legend>
+        <label class="case"><input type="radio" name="secret-type" value="password" checked> Mot de passe</label>
+        <label class="case"><input type="radio" name="secret-type" value="note"> Note</label>
+      </fieldset>
+      <label class="champ">
+        <span class="champ-libelle">Titre</span>
+        <input id="secret-titre" class="saisie" type="text" required maxlength="1024" autocomplete="off">
+      </label>
+      <label class="champ" data-pour="password">
+        <span class="champ-libelle">Identifiant</span>
+        <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="champ" data-pour="password">
+        <label class="champ-libelle" for="secret-mdp">Mot de passe</label>
+        <div class="saisie-groupe">
+          <input id="secret-mdp" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
+          <button id="secret-mdp-voir" class="bouton bouton-secondaire" type="button" aria-pressed="false" aria-controls="secret-mdp">Afficher</button>
+          <button id="secret-mdp-generer" class="bouton bouton-secondaire" type="button">Générer</button>
+        </div>
+        <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
+      </div>
+      <label class="champ" data-pour="password" data-creation>
+        <span class="champ-libelle">Adresses web (une par ligne)</span>
+        <textarea id="secret-urls" class="saisie saisie-mono" rows="2" maxlength="8192" spellcheck="false"></textarea>
+      </label>
+      <label class="champ" data-creation>
+        <span class="champ-libelle">Étiquettes (séparées par des virgules)</span>
+        <input id="secret-etiquettes" class="saisie" type="text" maxlength="2048" autocomplete="off">
+      </label>
+      <label class="champ">
+        <span class="champ-libelle">Notes</span>
+        <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
+      </label>
+      <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
+      <label class="case"><input type="checkbox" id="secret-favori"> Favori</label>
+      <div id="secret-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="secret-enregistrer" class="bouton bouton-principal" type="submit" value="ok">Enregistrer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Confirmation. -->
+  <dialog id="dialogue-confirmation" class="dialogue dialogue-etroit" aria-labelledby="confirmation-titre" aria-describedby="confirmation-texte">
+    <form method="dialog">
+      <h2 id="confirmation-titre" class="titre-carte"></h2>
+      <p id="confirmation-texte"></p>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" value="non" autofocus>Annuler</button>
+        <button id="confirmation-oui" class="bouton bouton-principal" value="oui"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- KDBX: not available yet (ADR 0025). -->
+  <dialog id="dialogue-kdbx" class="dialogue dialogue-etroit" aria-labelledby="kdbx-titre">
+    <form method="dialog">
+      <h2 id="kdbx-titre" class="titre-carte">Import KeePass (KDBX)</h2>
+      <p>L'import direct d'une base KeePass n'est pas encore disponible : il demande une bibliothèque de
+        déchiffrement que nous n'avons pas encore validée.</p>
+      <p>En attendant, exportez votre base au format CSV, importez le fichier, puis supprimez-le :</p>
+      <ul class="liste-puces">
+        <li>KeePassXC : Base de données › Exporter › Fichier CSV ;</li>
+        <li>KeePass 2 : Fichier › Exporter › KeePass CSV (1.x).</li>
+      </ul>
+      <p class="aide">Un fichier CSV contient vos mots de passe en clair : gardez-le le moins longtemps possible.</p>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-principal" value="ok" autofocus>J'ai compris</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

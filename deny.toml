@@ -23,6 +23,30 @@ allow = ["BSL-1.0"]
 crate = "error-code"
 allow = ["BSL-1.0"]
 
+# Servo's CSS crates and option-ext: Mozilla Public License 2.0, a file-level copyleft that
+# allows linking unmodified sources into a program under any licence (sources stay available
+# on crates.io). Pulled by Tauri 2 (ADR 0024): tauri-utils and wry (HTML and CSP handling),
+# dirs-sys. Allowed for these crates only.
+[[licenses.exceptions]]
+crate = "cssparser"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "cssparser-macros"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "dtoa-short"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "selectors"
+allow = ["MPL-2.0"]
+
+[[licenses.exceptions]]
+crate = "option-ext"
+allow = ["MPL-2.0"]
+
 # Workspace crates are `publish = false` and the project licence is not chosen yet:
 # only third-party crates are subject to the allow list above.
 [licenses.private]

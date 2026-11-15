@@ -1,0 +1,39 @@
+[package]
+name = "hirzla-desktop"
+description = "Hirzla desktop application (Tauri 2): a client of the core, holds no key."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The core accepts this executable by name, next to `hirzla-core` (`DEFAULT_CLIENTS`).
+[[bin]]
+name = "hirzla-desktop"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", default-features = false }
+
+[dependencies]
+hirzla-core = { path = "../../../crates/hirzla-core" }
+hirzla-crypto = { path = "../../../crates/hirzla-crypto" }
+hirzla-keystore = { path = "../../../crates/hirzla-keystore" }
+hirzla-vault = { path = "../../../crates/hirzla-vault" }
+# ADR 0024: Tauri 2 shell without the default features we do not use (no devtools, no tray,
+# no updater). The web view calls only this application's commands.
+tauri = { version = "2.12.5", default-features = false, features = ["wry", "custom-protocol", "common-controls-v6", "compression", "x11"] }
+# Native file picker for the import, opened from Rust only (the web view cannot open it).
+# Same crate as the Tauri dialog plugin, without that plugin and its file system plugin.
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3", "common-controls-v6"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["serde"] }
+# ADR 0016: same clipboard crate as the command line, with history and cloud exclusion.
+arboard = { version = "3.7.0", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"
