@@ -424,7 +424,13 @@ fn package_for_this_version_or_older_is_refused() {
 fn package_for_another_platform_is_refused() {
     let f = fixture();
     let k = key();
-    build(&f, &k, "0.1.0", "plan9-mips");
+    // Another platform with the same executable suffix as this one.
+    let other = if cfg!(windows) {
+        "windows-mips"
+    } else {
+        "plan9-mips"
+    };
+    build(&f, &k, "0.1.0", other);
     // Verifiable anywhere, applicable only on its platform.
     assert!(verify_package(&f.package, &keys_of(&k)).is_ok());
     assert_eq!(
@@ -509,10 +515,13 @@ fn embedded_client_manifest_must_match_the_package() {
     let keys = keys_of(&k);
     let version = v("0.1.0");
     let entries = |src: &Path| {
-        vec![
+        let mut e = vec![
             update::entry_for(exe("hirzla"), &src.join(exe("hirzla")), true).unwrap(),
             update::entry_for(exe("hirzla-core"), &src.join(exe("hirzla-core")), true).unwrap(),
-        ]
+        ];
+        // Manifest order is by name: `hirzla-core.exe` sorts before `hirzla.exe`.
+        e.sort_by(|a, b| a.name.cmp(&b.name));
+        e
     };
     let write_clients = |m: &Manifest, signer: &PublisherSigningKey| {
         fs::write(
