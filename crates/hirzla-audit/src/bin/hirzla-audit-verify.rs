@@ -195,6 +195,12 @@ fn run(args: &Args) -> Result<(), Failure> {
     };
     let (parsed, report) = verify_file(&log, &options).map_err(Failure::Invalid)?;
 
+    let partial = match report.anchor {
+        Some(seq) => {
+            format!("Export partiel    : les séquences 0 à {seq} ne figurent pas dans ce fichier\n")
+        }
+        None => String::new(),
+    };
     let summary = format!(
         "Journal valide.\n\
          Journal          : {}\n\
@@ -205,7 +211,8 @@ fn run(args: &Args) -> Result<(), Failure> {
          Points de contrôle : {} (dernier : {})\n\
          Tête             : {}\n\
          Têtes connues    : {} vérifiées, {} antérieures au fichier\n\
-         Retours d'horloge : {}\n",
+         Retours d'horloge : {}\n\
+         {partial}",
         report.log_id,
         report.keeper.name(),
         KeyFingerprint::of(&key),
@@ -304,6 +311,7 @@ fn explain(e: Error) -> String {
             format!("point de contrôle non signé par la clé épinglée, séquence {s}")
         }
         Error::NoCheckpoint => "aucun point de contrôle".to_owned(),
+        Error::EmptyLog => "aucun événement dans le fichier".to_owned(),
         Error::Uncovered(s) => {
             format!("événements non couverts par un point de contrôle à partir de la séquence {s}")
         }

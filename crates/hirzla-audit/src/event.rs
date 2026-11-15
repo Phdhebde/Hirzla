@@ -407,6 +407,8 @@ events! {
     LogResumed = 51, "log_resumed", Any, Notice {
         /// An incomplete trailing record, left by a crash, was cut.
         torn_tail: bool = 2,
+        /// Entries found after the last checkpoint, now covered by the keeper's signature.
+        uncovered: Count = 3,
     }
     /// Someone consulted the log.
     AuditViewed = 52, "audit_viewed", Server, Info {

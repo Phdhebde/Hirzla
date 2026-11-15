@@ -45,6 +45,9 @@ pub enum Error {
     /// No checkpoint signed by the pinned key covers the log.
     #[error("no checkpoint")]
     NoCheckpoint,
+    /// The file holds no entry, visible or elided: nothing to verify.
+    #[error("empty log")]
+    EmptyLog,
     /// Entries follow the last checkpoint; the first uncovered sequence number is given.
     #[error("entries after the last checkpoint, from sequence {0}")]
     Uncovered(u64),

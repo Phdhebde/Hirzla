@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::chain::{Chain, Checkpoint, CheckpointSigner, Record};
 use crate::event::Event;
-use crate::field::{EntryHash, LogId};
+use crate::field::{Count, EntryHash, LogId};
 use crate::time::Timestamp;
 use crate::verify::{parse_file_lenient, verify_records, Header, VerifyOptions};
 use crate::Error;
@@ -100,7 +100,9 @@ impl<S: CheckpointSigner> AuditLog<S> {
     /// trailing record left by a crash, then records [`Event::LogResumed`] and a checkpoint.
     ///
     /// Entries after the last checkpoint are accepted here (a crash may have stopped the log
-    /// before it signed); they are covered by the new checkpoint.
+    /// before it signed); they are covered by the new checkpoint, and their number is recorded
+    /// in [`Event::LogResumed`] so that entries injected while the keeper was stopped stay
+    /// visible. A site that cannot accept this sets `every_entries` to 1.
     ///
     /// # Errors
     /// Any verification error of [`verify_records`]; [`Error::WrongLog`] if the file belongs
@@ -143,6 +145,11 @@ impl<S: CheckpointSigner> AuditLog<S> {
             Timestamp::now(),
             Event::LogResumed {
                 torn_tail: parsed.torn_tail,
+                uncovered: Count(
+                    report
+                        .uncovered_from
+                        .map_or(0, |from| report.last_seq + 1 - from),
+                ),
             },
         )?;
         log.checkpoint()?;

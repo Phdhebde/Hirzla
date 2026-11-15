@@ -1,4 +1,5 @@
 //! The `hirzla-audit-verify` tool: exit codes, refusals, exports.
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 mod common;

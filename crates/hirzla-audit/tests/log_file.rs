@@ -1,4 +1,5 @@
 //! The emission API: create, emit, reopen, crash recovery.
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 mod common;
@@ -6,7 +7,8 @@ mod common;
 use std::io::Write;
 
 use common::{device_event, server_event};
-use hirzla_audit::verify::parse_file;
+use hirzla_audit::field::Count;
+use hirzla_audit::verify::{parse_file, MAX_TORN_TAIL};
 use hirzla_audit::{
     verify_file, AuditEmitter, AuditLog, CheckpointPolicy, Error, Event, Keeper, KnownHead, Record,
     VerifyOptions,
@@ -107,7 +109,7 @@ fn reopen_resumes_the_chain() {
     assert_eq!(report.last_seq, 3);
     assert!(parsed.records.iter().any(|r| matches!(
         r,
-        Record::Entry(e) if e.event == Event::LogResumed { torn_tail: false }
+        Record::Entry(e) if e.event == Event::LogResumed { torn_tail: false, uncovered: Count(1) }
     )));
 }
 
@@ -136,8 +138,35 @@ fn reopen_cuts_a_torn_record_and_says_so() {
     let (parsed, _) = verify_file(&std::fs::read(&path).unwrap(), &options(&key)).unwrap();
     assert!(parsed.records.iter().any(|r| matches!(
         r,
-        Record::Entry(e) if e.event == Event::LogResumed { torn_tail: true }
+        Record::Entry(e) if e.event == Event::LogResumed { torn_tail: true, uncovered: Count(0) }
     )));
+}
+
+#[test]
+fn reopen_refuses_to_cut_more_than_a_record() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("audit.log");
+    let key = ServerSigningKey::generate().unwrap();
+    let mut log = AuditLog::create(&path, &key, policy(100), None).unwrap();
+    log.emit(server_event(1)).unwrap();
+    log.checkpoint().unwrap();
+    drop(log);
+    // A byte string announced longer than the rest of the file: not a crash, a forgery that
+    // would swallow the end of the log.
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    f.write_all(&[0x82, 0x01, 0x5a, 0x00, 0x10, 0x00, 0x00])
+        .unwrap();
+    f.write_all(&vec![0u8; MAX_TORN_TAIL]).unwrap();
+    drop(f);
+    let before = std::fs::read(&path).unwrap();
+    assert_eq!(
+        AuditLog::open(&path, &key, policy(100)).err(),
+        Some(Error::Truncated)
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), before, "nothing was cut");
 }
 
 #[test]

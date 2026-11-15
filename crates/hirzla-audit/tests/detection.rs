@@ -1,5 +1,6 @@
 //! Tampering with a log is detected: deletion, insertion, reordering, modification,
 //! truncation of an event or of the tail, forged or misplaced checkpoints.
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;
@@ -44,6 +45,7 @@ fn intact_log_verifies() {
     assert_eq!(report.checkpoints, 4);
     assert_eq!(report.last_checkpoint, 20);
     assert_eq!(report.time_regressions, 0);
+    assert_eq!(report.anchor, None);
     // Through the file encoding too.
     let bytes = encode_file(header, &records).unwrap();
     let (parsed, again) = verify_file(&bytes, &opts(&key, &[])).unwrap();
@@ -283,7 +285,22 @@ fn missing_checkpoint_is_refused() {
         .filter(|r| matches!(r, Record::Entry(_)))
         .collect();
     assert_eq!(check(header, &entries, &key), Err(Error::NoCheckpoint));
-    assert_eq!(check(header, &[], &key), Err(Error::NoCheckpoint));
+    assert_eq!(check(header, &[], &key), Err(Error::EmptyLog));
+    // A lone anchor checkpoint shows no entry: refused.
+    let (_, full) = server_log(&key, 5, 100);
+    let anchor = full.last().unwrap().clone();
+    let lone = verify_records(
+        Header {
+            log_id: match &anchor {
+                Record::Checkpoint(c) => c.log_id,
+                _ => panic!(),
+            },
+            keeper: Keeper::Server,
+        },
+        &[anchor],
+        &opts(&key, &[]),
+    );
+    assert_eq!(lone.map(|_| ()), Err(Error::EmptyLog));
 }
 
 #[test]
@@ -361,6 +378,7 @@ fn partial_export_with_anchor_verifies() {
         .unwrap();
     let report = check_report(header, &records[anchor..], &key);
     assert_eq!((report.first_seq, report.last_seq), (11, 20));
+    assert_eq!(report.anchor, Some(10));
     // Without its anchor, the export does not verify.
     assert_eq!(
         check(header, &records[anchor + 1..], &key),

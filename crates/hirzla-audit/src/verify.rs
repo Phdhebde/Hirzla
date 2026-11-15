@@ -18,6 +18,10 @@ pub const MAGIC: &str = "hirzla-audit";
 /// Most records accepted in one file.
 pub const MAX_RECORDS: usize = 1 << 26;
 
+/// Longest incomplete trailing record the keeper cuts when it reopens its log. A record is at
+/// most a few kilobytes (a checkpoint is about 4.9 kB): a longer cut is not a crash.
+pub const MAX_TORN_TAIL: usize = 64 * 1024;
+
 /// The first item of a log file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Header {
@@ -124,7 +128,7 @@ fn parse(bytes: &[u8], lenient: bool) -> Result<ParsedFile, Error> {
                 records.push(Record::from_value(&v)?);
                 pos += used;
             }
-            Err(Error::Truncated) if lenient => {
+            Err(Error::Truncated) if lenient && bytes.len() - pos <= MAX_TORN_TAIL => {
                 return Ok(ParsedFile {
                     header,
                     records,
@@ -210,6 +214,9 @@ pub struct Report {
     pub uncovered_from: Option<u64>,
     /// Known heads older than the file, hence not checked.
     pub known_unchecked: u64,
+    /// Sequence number of the anchor checkpoint of a partial export: the file does not show
+    /// the entries up to it. `None` when the file starts at entry 0.
+    pub anchor: Option<u64>,
     /// Entries whose time is before the previous entry's: the keeper's clock stepped back.
     pub time_regressions: u64,
 }
@@ -237,7 +244,7 @@ pub fn verify_file(
 /// # Errors
 /// [`Error::WrongLog`], [`Error::BadSignature`], [`Error::BrokenChain`],
 /// [`Error::MisplacedEvent`], [`Error::CheckpointMismatch`], [`Error::NoCheckpoint`],
-/// [`Error::Uncovered`], [`Error::KnownCheckpointMissing`].
+/// [`Error::Uncovered`], [`Error::KnownCheckpointMissing`], [`Error::EmptyLog`].
 pub fn verify_records(
     header: Header,
     records: &[Record],
@@ -316,7 +323,10 @@ pub fn verify_records(
         }
     }
 
-    let (last_seq, head) = cur.ok_or(Error::NoCheckpoint)?;
+    if first_seq.is_none() {
+        return Err(Error::EmptyLog);
+    }
+    let (last_seq, head) = cur.ok_or(Error::EmptyLog)?;
     let mut uncovered_from = None;
     match last_checkpoint {
         Some(cp) if cp == last_seq => {}
@@ -341,7 +351,7 @@ pub fn verify_records(
     Ok(Report {
         log_id,
         keeper: options.keeper,
-        first_seq: first_seq.unwrap_or_else(|| last_seq.saturating_add(1)),
+        first_seq: first_seq.unwrap_or(0),
         last_seq,
         head,
         entries: report_entries,
@@ -350,6 +360,7 @@ pub fn verify_records(
         last_checkpoint: last_checkpoint.unwrap_or(0),
         uncovered_from,
         known_unchecked,
+        anchor,
         time_regressions,
     })
 }

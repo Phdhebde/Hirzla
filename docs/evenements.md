@@ -165,7 +165,7 @@ Un journal refuse un événement d'une autre origine, à l'émission comme à la
 | Code | Nom | Origine | Gravité | Champs |
 | --- | --- | --- | --- | --- |
 | 50 | `log_started` | S/A | notice | 2 `previous_log` : `LogId?` ; 3 `previous_head` : `EntryHash?`. Toujours l'entrée 0, et seulement elle |
-| 51 | `log_resumed` | S/A | notice | 2 `torn_tail` : `bool` (un enregistrement incomplet laissé par un arrêt brutal a été coupé) |
+| 51 | `log_resumed` | S/A | notice | 2 `torn_tail` : `bool` (un enregistrement incomplet laissé par un arrêt brutal a été coupé) ; 3 `uncovered` : `Count` (entrées trouvées après le dernier point de contrôle, désormais couvertes par la signature du gardien) |
 | 52 | `audit_viewed` | S | info | 2 `member` : `MemberId?` ; 3 `account` : `AccountId?` ; 4 `lockers` : `Count` (0 = tout le journal) |
 | 53 | `audit_exported` | S/A | info | 2 `format` : `ExportFormat` ; 3 `first` : `Count` ; 4 `last` : `Count` |
 | 54 | `device_log_ingested` | S | info | 2 `member` ; 3 `device` ; 4 `log` : `LogId` ; 5 `last` : `Count` ; 6 `head` : `EntryHash` |
@@ -204,7 +204,11 @@ Une suite CBOR (RFC 8742) : un en-tête, puis des enregistrements, sans séparat
 - Un export partiel commence par un **point de contrôle d'ancrage** : la chaîne reprend à
   `seq + 1` avec `prev = head`.
 - À la réouverture, le gardien vérifie tout le fichier avec sa propre clé, coupe un dernier
-  enregistrement incomplet, puis écrit `log_resumed` et un point de contrôle.
+  enregistrement incomplet d'au plus 64 Kio (au-delà, ce n'est pas un arrêt brutal : il refuse
+  d'ouvrir), puis écrit `log_resumed` et un point de contrôle. Les entrées qui suivaient le
+  dernier point de contrôle sont acceptées et leur nombre est inscrit dans `log_resumed` : des
+  entrées injectées pendant l'arrêt restent visibles. Un site qui ne l'accepte pas règle un
+  point de contrôle par entrée.
 - Un nouveau journal qui en remplace un autre (rotation de fichier) commence par
   `log_started` avec le `log_id` et la dernière tête de l'ancien.
 
@@ -225,6 +229,7 @@ jamais lue dans le fichier) et, s'il en a, des têtes connues. Il refuse :
 | Point de contrôle non signé par la clé épinglée | `BadSignature(n)` | Point de contrôle forgé ou d'une autre clé |
 | Point de contrôle qui ne correspond pas à la chaîne là où il se trouve | `CheckpointMismatch(n)` | Chaîne réécrite, point de contrôle déplacé |
 | Aucun point de contrôle | `NoCheckpoint` | |
+| Aucune entrée, visible ou masquée (point de contrôle d'ancrage seul) | `EmptyLog` | Journal remplacé par un point de contrôle |
 | Entrées après le dernier point de contrôle | `Uncovered(n)` | Entrées ajoutées sans la clé, queue tronquée puis complétée |
 | Tête connue absente ou différente | `KnownCheckpointMissing(n)` | Troncature jusqu'à un point de contrôle antérieur, réécriture |
 
@@ -258,6 +263,9 @@ hirzla-audit-verify --key serveur.pub --export json journal > journal.jsonl
 | `--known-head <seq>:<hex>` | Tête connue d'une source de confiance. Répétable |
 | `--scope-locker <hex>` | Ne garder que les événements de ces casiers dans l'export ; les autres sont masqués. Répétable |
 | `--export json\|cef\|syslog\|native` | Écrire le journal vérifié, rien si la vérification échoue |
+
+Un export partiel (commencé par un point de contrôle d'ancrage) est signalé : l'outil indique
+les séquences absentes du fichier.
 
 Codes de sortie : 0 journal valide, 1 journal invalide (message en français avec le rang
 fautif), 2 erreur d'usage ou de lecture.

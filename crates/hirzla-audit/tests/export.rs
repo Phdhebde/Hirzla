@@ -1,5 +1,6 @@
 //! Exports: exact JSON, CEF and syslog output for a fixed entry; no export holds more than
 //! the log.
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 mod common;

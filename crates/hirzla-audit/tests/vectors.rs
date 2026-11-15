@@ -1,5 +1,6 @@
 //! Frozen vectors of the canonical encoding and of the chain, computed by an independent
 //! implementation (`tests/vectors/audit-v1.txt`).
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::panic)]
 
 use std::collections::HashMap;
