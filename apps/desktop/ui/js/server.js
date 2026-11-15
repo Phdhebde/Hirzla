@@ -2,8 +2,8 @@
 // Server mode (local API version 4, ADR 0032 and 0041): joining a server (by invitation link
 // or by its three parts, ADR 0046), confirming its fingerprint, synchronising (also in the
 // background, ADR 0048), shared lockers, members and roles, approvals between owners
-// (ADR 0044), quarantine and frozen lockers (ADR 0045), and the state of the key
-// transparency log. The core does every network exchange; this page only shows what it
+// (ADR 0044), quarantine and frozen lockers (ADR 0045), the state of the key transparency
+// log, and the revocation of an unknown device from its alert (ADR 0059). The core does every network exchange; this page only shows what it
 // answers and sends what the user typed.
 
 import { api } from "./api.js";
@@ -59,6 +59,13 @@ const REFUSALS = /** @type {Record<"grant" | "change" | "remove", Record<Refusal
   },
 });
 
+/** Refusals of a device revocation (ADR 0059), by error code. */
+const REVOKE_DEVICE_REFUSALS = /** @type {Record<string, string>} */ ({
+  forbidden: "Ce poste ne détient pas votre clé de membre. Révoquez l'appareil depuis un appareil de certification.",
+  unsupported: "Cet appareil ne figure dans aucun de vos casiers : la révocation ne peut pas encore être publiée. Prévenez votre administrateur de sécurité.",
+  not_found: "Appareil introuvable sur ce poste. Synchronisez, puis réessayez.",
+});
+
 const SUSPECT_REASONS = /** @type {Record<string, string>} */ ({
   root: "la racine recalculée diffère de celle que le serveur a signée",
   shorter: "le serveur présente un registre plus court qu'un registre déjà vérifié (restauration d'une ancienne sauvegarde, ou histoire réécrite)",
@@ -77,7 +84,7 @@ function alertText(a) {
   if (a.kind === "unknown_device") {
     return [
       "Appareil inconnu inscrit à votre nom",
-      `Un appareil que vous n'avez pas enrôlé est inscrit à votre nom${device}, entrée ${a.index}. Prévenez votre administrateur de sécurité.`,
+      `Un appareil que vous n'avez pas enrôlé est inscrit à votre nom${device}, entrée ${a.index}. Si vous ne le reconnaissez pas, révoquez-le et prévenez votre administrateur de sécurité.`,
     ];
   }
   if (a.kind === "unknown_revocation") {
@@ -285,6 +292,30 @@ export class ServerView {
     if (this.status?.joined && this.status.verified) await this.approvals.load();
   }
 
+  /**
+   * Revokes an unknown device of the member, from its alert (ADR 0059): signed by the member
+   * key on this device, published in every locker where the device appears.
+   * @param {string} device
+   */
+  async revokeDevice(device) {
+    const ok = await confirmDialog(
+      "Révoquer cet appareil ?",
+      `L'appareil ${device.slice(0, 8)}… ne pourra plus lire les nouvelles versions de vos casiers. ` +
+        "La révocation est signée par votre clé de membre, publiée dans chaque casier où il figure, dont la clé tourne. " +
+        "Elle est définitive. Ce qu'il a déjà pu lire, il a pu le copier : changez les mots de passe sensibles sur leurs cibles.",
+      "Révoquer",
+    );
+    if (!ok) return;
+    try {
+      const lockers = await api.revokeDevice(device);
+      announce(`Appareil révoqué dans ${count(lockers, "casier", "casiers")}. Leur clé a tourné.`, 6000);
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (!this.hooks.onError(err)) announce(REVOKE_DEVICE_REFUSALS[err.code] ?? err.message, 8000);
+    }
+    await this.refresh();
+  }
+
   async loadIdentity() {
     try {
       const id = await api.serverIdentity();
@@ -345,9 +376,19 @@ export class ServerView {
     byId("registre-alertes").replaceChildren(
       ...(k?.alerts ?? []).map((a) => {
         const [title, text] = alertText(a);
+        /** @type {HTMLButtonElement | null} */
+        let revoke = null;
+        if (a.kind === "unknown_device" && a.device) {
+          const device = a.device;
+          revoke = /** @type {HTMLButtonElement} */ (
+            h("button", { class: "bouton bouton-secondaire bouton-danger", type: "button", text: "Révoquer cet appareil" })
+          );
+          revoke.addEventListener("click", () => void this.revokeDevice(device));
+        }
         return h("li", { class: "alerte" }, [
           h("p", { class: "alerte-titre" }, [h("span", { class: "forme forme-triangle", "aria-hidden": "true" }), title]),
           h("p", { text }),
+          revoke ? h("div", { class: "ligne-actions" }, [revoke]) : null,
         ]);
       }),
     );
@@ -1200,6 +1241,9 @@ class QuarantineDialog {
     this.dialog = /** @type {HTMLDialogElement} */ (byId("dialogue-quarantaine"));
     /** @type {string | null} */
     this.locker = null;
+    this.name = "";
+    /** @type {string | null} The current member, never offered to remove. */
+    this.me = null;
     byId("quarantaine-accepter").addEventListener("click", () => void this.decide(true));
     byId("quarantaine-rejeter").addEventListener("click", () => void this.decide(false));
     this.dialog.addEventListener("close", () => this.wipe());
@@ -1214,6 +1258,7 @@ class QuarantineDialog {
   /** @param {string} locker @param {string} name */
   async open(locker, name) {
     this.locker = locker;
+    this.name = name;
     byId("quarantaine-titre").textContent = `Quarantaine de « ${name} »`;
     if (!(await this.load())) return;
     if (!this.dialog.open) this.dialog.showModal();
@@ -1225,6 +1270,7 @@ class QuarantineDialog {
     let q;
     try {
       q = await api.quarantineList(this.locker);
+      if (this.me === null) this.me = (await api.serverIdentity()).member;
     } catch (e) {
       const err = /** @type {ApiError} */ (e);
       if (!this.hooks.onError(err)) announce(err.message, 6000);
@@ -1248,6 +1294,14 @@ class QuarantineDialog {
     box.disabled = !canDecide;
     const what = o.title ?? (o.class === "control" ? "Opération de contrôle" : "Modification illisible ici");
     box.setAttribute("aria-label", `Choisir : ${what}`);
+    /** @type {HTMLButtonElement | null} */
+    let remove = null;
+    if (canDecide && o.member !== this.me) {
+      remove = /** @type {HTMLButtonElement} */ (
+        h("button", { class: "bouton bouton-secondaire bouton-danger", type: "button", text: "Retirer ce membre du casier" })
+      );
+      remove.addEventListener("click", () => void this.removeMember(o.member));
+    }
     return h("tr", {}, [
       h("td", {}, [box]),
       h("td", {}, [
@@ -1257,7 +1311,35 @@ class QuarantineDialog {
       h("td", { class: "mono", text: `${o.member.slice(0, 8)}…` }),
       h("td", { text: o.cause === "fork" ? "Branche divergente" : "Écrite pendant le retrait de son auteur" }),
       h("td", { text: when(o.due_ms) }),
+      h("td", {}, [remove]),
     ]);
+  }
+
+  /**
+   * Removes the author of a quarantined operation from the locker (ADR 0059, part 2): the
+   * existing `RoleRevoke`, the only removal an owner can sign for another member's device.
+   * @param {string} member
+   */
+  async removeMember(member) {
+    const ok = await confirmDialog(
+      "Retirer ce membre du casier ?",
+      `Le membre ${member.slice(0, 8)}… perd son rôle dans « ${this.name} » : tous ses appareils sont retirés de ce casier, ` +
+        "dont la clé tourne. Ce qu'il a déjà pu lire, il a pu le copier : changez les mots de passe sensibles sur leurs cibles. " +
+        "Pour ne retirer que l'appareil en cause, demandez-lui de le révoquer depuis un appareil de certification.",
+      "Retirer",
+    );
+    if (!ok || !this.locker) return;
+    showError(byId("quarantaine-erreur"), null);
+    try {
+      await api.revokeRole(this.locker, member);
+      announce("Membre retiré. La clé du casier a tourné.");
+      await this.load();
+      await this.onDecided();
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (this.hooks.onError(err)) this.dialog.close();
+      else showError(byId("quarantaine-erreur"), err.message);
+    }
   }
 
   /** @param {boolean} accept */

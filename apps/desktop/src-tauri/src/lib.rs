@@ -99,6 +99,7 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::locker_members,
             servermode::grant_role,
             servermode::revoke_role,
+            servermode::revoke_device,
             servermode::server_join_link,
             servermode::quorum_prepare,
             servermode::quorum_inspect,

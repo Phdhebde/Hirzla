@@ -175,6 +175,8 @@ export const api = {
   grantRole: (locker, member, role, fingerprint) => call("grant_role", { locker, member, role, fingerprint }),
   /** @param {string} locker @param {string} member @returns {Promise<void>} */
   revokeRole: (locker, member) => call("revoke_role", { locker, member }),
+  /** @param {string} device @returns {Promise<number>} Lockers where the revocation was published (ADR 0059). */
+  revokeDevice: (device) => call("revoke_device", { device }),
 
   // Governance (ADR 0044 to 0046).
   /** @param {string} link @returns {Promise<Joined>} */

@@ -220,6 +220,9 @@ pub fn server_message(code: ServerCode) -> String {
             pas prouvée par le registre de transparence, ou le serveur présente un registre \
             incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité."
             .into(),
+        ServerCode::AlreadyRevoked => "Cet appareil est déjà révoqué : il ne peut plus lire \
+            les nouvelles versions de vos casiers."
+            .into(),
         ServerCode::ApprovalInvalid => "Accord refusé : texte altéré, signature fausse, \
             signataire qui n'est pas propriétaire du casier, accord déjà compté ou destiné à \
             une autre demande."

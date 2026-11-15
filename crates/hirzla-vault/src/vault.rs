@@ -793,6 +793,70 @@ impl Vault {
         Ok((sign, kem))
     }
 
+    /// Whether this device holds the member key: a certification device (ADR 0011, point 3).
+    #[must_use]
+    pub fn holds_member_key(&self) -> bool {
+        self.identity.member_private.is_some()
+    }
+
+    /// The member key, rebuilt from the unsealed identity for one signature. The buffers
+    /// and the key are erased when dropped.
+    fn member_signing_key(&self) -> Result<MemberSigningKey, VaultError> {
+        let mp = self
+            .identity
+            .member_private
+            .as_ref()
+            .ok_or(VaultError::Unsupported)?;
+        let member_vk =
+            VerifyingKey::from_bytes(&self.identity.member.sig).map_err(|_| VaultError::Corrupt)?;
+        let m = Zeroizing::new(
+            [
+                &SUITE_BYTES[..],
+                mp.ecdsa_sk.as_ref(),
+                mp.mldsa_seed.as_ref(),
+            ]
+            .concat(),
+        );
+        MemberSigningKey::from_bytes(&m, &member_vk).map_err(|_| VaultError::Corrupt)
+    }
+
+    /// Signs with the member key, inside the vault, the revocation of `device`, another
+    /// device of this member (`format.md` § 3.6, ADR 0059). Returns the hybrid signature
+    /// over keys 1 to 3 of the `DeviceRevocation` (member, device, `revoked_ms`): the member
+    /// key never leaves the vault, and nothing else can be signed with it this way.
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] if this device does not hold the member key (not a
+    /// certification device), [`VaultError::InvalidInput`] for this device itself, or a
+    /// cryptographic failure.
+    pub fn sign_device_revocation(
+        &self,
+        device: &Id16,
+        revoked_ms: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        if *device == self.identity.device_cert.device {
+            return Err(VaultError::InvalidInput);
+        }
+        let key = self.member_signing_key()?;
+        let body = cbor::encode(&Value::map(vec![
+            (1, Value::bytes(&self.identity.member.member)),
+            (2, Value::bytes(device)),
+            (3, Value::Uint(revoked_ms)),
+        ]))?;
+        Ok(key.revoke_device(&body)?.as_bytes().to_vec())
+    }
+
+    /// Certifies another device of this member (tests only: enrolling a second device is
+    /// not specified yet, `api-locale.md` § 15.7). Never compiled into a shipped binary.
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] without the member key, or a cryptographic failure.
+    #[cfg(feature = "test-support")]
+    pub fn certify_device_for_tests(&self, certificate_body: &[u8]) -> Result<Vec<u8>, VaultError> {
+        let key = self.member_signing_key()?;
+        Ok(key.certify_device(certificate_body)?.as_bytes().to_vec())
+    }
+
     /// Seals the content of the server mode annex file (§ 15.1) under `K_dev_wrap`.
     ///
     /// # Errors
