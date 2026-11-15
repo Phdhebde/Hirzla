@@ -357,6 +357,10 @@ fn self_mode_v5_commands() {
         .to_owned();
     ok(&hirzla(&sock, &["restore", "--id", &id], None));
     assert!(ok(&hirzla(&sock, &["ls"], None)).contains("Banque"));
+    // By title too: the trash is searched.
+    ok(&hirzla(&sock, &["rm", "Banque"], None));
+    ok(&hirzla(&sock, &["restore", "Banque"], None));
+    assert!(ok(&hirzla(&sock, &["ls"], None)).contains("Banque"));
 
     // Settings.
     let s = ok(&hirzla(&sock, &["settings", "--veille", "non"], None));

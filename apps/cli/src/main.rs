@@ -280,8 +280,18 @@ fn print_entries(entries: &[ListEntry]) {
 /// Finds the secret meant by a name (exact title, case-insensitive, active secrets) or by
 /// an identifier prefix (as shown by `ls`, trash included).
 fn resolve(client: &mut Client, name: Option<&str>, id: Option<&str>) -> Result<ListEntry, String> {
+    resolve_in(client, name, id, false)
+}
+
+/// Like [`resolve`]; a title is also looked for in the trash when `trash` is set.
+fn resolve_in(
+    client: &mut Client,
+    name: Option<&str>,
+    id: Option<&str>,
+    trash: bool,
+) -> Result<ListEntry, String> {
     let hits: Vec<ListEntry> = match (name, id) {
-        (Some(name), _) => list(client, Some(name), false)?
+        (Some(name), _) => list(client, Some(name), trash)?
             .into_iter()
             .filter(|e| {
                 e.title

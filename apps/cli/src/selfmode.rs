@@ -12,7 +12,9 @@ use hirzla_core::selfmode::proto::{
 use hirzla_vault::MAX_SHARE_FILE;
 use zeroize::Zeroizing;
 
-use crate::{client_message, field_by_name, hex, refusal_message, resolve, say, term, Session};
+use crate::{
+    client_message, field_by_name, hex, refusal_message, resolve, resolve_in, say, term, Session,
+};
 
 /// Shortest master password accepted by the command line for a new password.
 const MIN_NEW_PASSWORD: usize = 12;
@@ -206,7 +208,8 @@ pub fn restore(
     let mut c = session.connect(false)?;
     match version {
         None => {
-            let entry = resolve(&mut c, name, id)?;
+            // A secret to take out of the trash is looked for there too.
+            let entry = resolve_in(&mut c, name, id, true)?;
             call(
                 &mut c,
                 &SelfRequest::RestoreSecret {

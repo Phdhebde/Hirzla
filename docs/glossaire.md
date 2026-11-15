@@ -25,6 +25,7 @@ l'anglais dans le code.
 | Registre de transparence | `KeyLog` | Journal vérifiable des clés publiques |
 | Leurre | `Decoy` | Identifiant factice qui signale un vol |
 | Dépositaire | `Trustee` | Détenteur d'une part de récupération |
+| Kit de recouvrement | `RecoveryKit` | Parts de récupération d'un coffre Self, dont un seuil rouvre le coffre (ADR 0034) |
 | Sceau | `Seal` | Ce qui protège la clé racine du serveur |
 | Version | `Version` | État complet d'un secret écrit par une opération `SecretPut` |
 | Tête | `Head` | Opération ou version qui n'est dans le passé d'aucune autre |

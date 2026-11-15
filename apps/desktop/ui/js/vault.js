@@ -465,9 +465,9 @@ export class VaultView {
       return;
     }
     byId("historique-titre").textContent = `Historique de « ${entry.title} »`;
-    const n = versions.length;
+    // Numbered like `hirzla history`: 1 is the current version.
     byId("historique-liste").replaceChildren(
-      ...versions.map((v, i) => this.versionItem(ref, v, n - i, i === 0)),
+      ...versions.map((v, i) => this.versionItem(ref, v, i + 1, i === 0)),
     );
     const dialog = /** @type {HTMLDialogElement} */ (byId("dialogue-historique"));
     if (!dialog.open) dialog.showModal();
@@ -477,7 +477,7 @@ export class VaultView {
    * One version in the history dialog.
    * @param {import("./api.js").SecretRef} ref
    * @param {import("./api.js").Version} v
-   * @param {number} number  1 for the oldest.
+   * @param {number} number  1 for the current version.
    * @param {boolean} current
    */
   versionItem(ref, v, number, current) {
