@@ -190,7 +190,9 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::release::update::entry_for;
+    #[cfg(target_os = "linux")]
     use crate::release::{sign, Kind, Version};
+    #[cfg(target_os = "linux")]
     use hirzla_crypto::sign::PublisherSigningKey;
 
     fn peer(exe: PathBuf) -> PeerIdentity {
@@ -203,6 +205,7 @@ mod tests {
     }
 
     /// A signed client manifest naming `name` with the content of `path`.
+    #[cfg(target_os = "linux")]
     fn manifest_file(dir: &Path, key: &PublisherSigningKey, entries: Vec<FileEntry>) -> PathBuf {
         let m = Manifest {
             version: Version::current(),
