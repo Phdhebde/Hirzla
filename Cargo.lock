@@ -845,6 +845,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirzla-native-host"
+version = "0.0.0"
+dependencies = [
+ "hirzla-core",
+ "hirzla-keystore",
+ "hirzla-vault",
+ "tempfile",
+ "zeroize",
+]
+
+[[package]]
 name = "hirzla-server"
 version = "0.0.0"
 dependencies = [
