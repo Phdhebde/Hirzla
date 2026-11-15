@@ -1021,6 +1021,12 @@ impl ServerMode {
                 }
             }
         }
+        // `Stable` pushed for a locker already synchronised in this session (ADR 0057).
+        for (l, c) in client.take_stable() {
+            if let Some(s) = j.lockers.get_mut(&l) {
+                apply_stable(s, &c);
+            }
+        }
         let _ = client.bye();
         self.compare_with_keylog()?;
         if self.joined()?.watch.enrolled_ms.is_none() {
@@ -1678,24 +1684,34 @@ fn acknowledge(client: &mut Client, s: &mut Shared) -> Result<(), ServerCode> {
         .filter(|c| !s.stable.contains(c) && !unsent.contains(c))
         .map(|c| (locker, c))
         .collect();
-    let announced = match client.ack(&acks) {
+    let mut announced = match client.ack(&acks) {
         Ok(a) => a,
         Err(NetError::Refused(c)) if c == code::ACCESS => return Ok(()),
         Err(e) => return Err(net(e)),
     };
+    // `Stable` pushed by the server during the session (ADR 0057), acknowledged or not.
+    announced.extend(client.take_stable_for(&locker));
     for (l, c) in announced {
-        if l != locker
-            || s.stable.contains(&c)
-            || s.stable.len() >= MAX_STABLE
-            || s.replica.status(&c) != Some(OpStatus::Applied)
-        {
-            continue;
-        }
-        if s.replica.prune_stable(&c).is_ok() {
-            s.stable.insert(c);
+        if l == locker {
+            apply_stable(s, &c);
         }
     }
     Ok(())
+}
+
+/// Prunes after a `Compact` the server announces stable (`sync-protocol.md` § 10.2, step 6),
+/// if this device applied it; ignored otherwise (a `Compact` not received yet, or refused
+/// here, is acknowledged and announced again at a later synchronisation).
+fn apply_stable(s: &mut Shared, c: &OpId) {
+    if s.stable.contains(c)
+        || s.stable.len() >= MAX_STABLE
+        || s.replica.status(c) != Some(OpStatus::Applied)
+    {
+        return;
+    }
+    if s.replica.prune_stable(c).is_ok() {
+        s.stable.insert(*c);
+    }
 }
 
 #[cfg(test)]

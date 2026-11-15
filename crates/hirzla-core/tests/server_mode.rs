@@ -179,6 +179,7 @@ impl Server {
                 tls::roots(tls::load_certs(&pki.admin_ca).unwrap()).unwrap(),
             )
             .unwrap(),
+            late_retention: hirzla_server::core::LateRetention::DEFAULT,
         })
         .expect("server starts");
         let roots = || tls::roots(tls::load_certs(&pki.ca).unwrap()).unwrap();

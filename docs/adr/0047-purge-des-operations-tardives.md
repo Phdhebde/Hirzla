@@ -44,6 +44,9 @@ Voir ADR 0046 § 3 : `hirzlad invitation` est livré avec ce lot.
 
 ### 3. Durée non configurable dans ce lot
 
+> Remplacé par l'ADR 0058 : `hirzlad serve --late-retention-days`, de 8 à 365 jours, 30 par
+> défaut.
+
 30 jours, la valeur du § 16 point 15. Une option de `hirzlad serve` viendra avec la
 configuration du délai de quarantaine par casier côté serveur (qui ne le lit pas : il est
 scellé dans les métadonnées du casier).

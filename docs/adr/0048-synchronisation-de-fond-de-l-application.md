@@ -34,8 +34,9 @@ tâche de fond.**
   délais réseau (10 s de connexion, 30 s de lecture). Acceptable avec un intervalle de
   plusieurs minutes ; à revoir avec un client réseau hors du verrou.
 - La ligne de commande et l'extension ne synchronisent toujours que sur demande.
-- `Stable` n'est toujours pas poussé aux autres sessions ouvertes par `hirzlad` : les postes
-  le reçoivent à leur synchronisation suivante, désormais régulière.
+- ~~`Stable` n'est toujours pas poussé aux autres sessions ouvertes par `hirzlad`~~ : poussé
+  depuis l'ADR 0057 aux sessions ouvertes au moment où la compaction devient stable ; les
+  autres postes l'apprennent à leur synchronisation suivante, désormais régulière.
 
 ## Alternatives écartées
 
