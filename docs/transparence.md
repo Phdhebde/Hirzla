@@ -229,8 +229,13 @@ tant que la session est ouverte, et avant toute enveloppe pour un tiers (§ 6.2)
 6. Le poste recalcule `MTH` sur **toutes** ses entrées : elle doit être égale à `head.root`.
 7. Tout passe : les entrées et la tête sont enregistrées ensemble. Sinon rien n'est enregistré.
 
-Le poste garde ses entrées, leur empreinte de feuille et la dernière tête vérifiée dans son
-coffre local (structure à ajouter à `format.md` § 5 à l'intégration dans `hirzla-core`).
+Le poste garde ses entrées, la dernière tête vérifiée, la preuve d'un registre suspect et ses
+alertes dans l'annexe du mode Serveur (`KeyLogState`, `format.md` § 15.2, ADR 0040). Au
+démarrage, il réingère ses entrées contre la tête gardée : un redémarrage ne revient jamais à
+la confiance au premier contact, et une tête plus petite que celle d'une session précédente
+est détectée (§ 6.7). Le noyau tire la suite du registre à chaque synchronisation et avant de
+créer un casier, d'attribuer ou de retirer un rôle ; la cadence horaire en session ouverte
+attend la synchronisation de fond.
 
 ### 6.2 Avant d'envelopper une clé de casier
 
@@ -394,4 +399,4 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
 6. **Preuve invalide = opération rejetée**, preuve absente = opération valide avec avertissement.
 7. **Registre suspect** : aucune sortie automatique.
 8. **Témoins externes** (autres serveurs, Hornn) qui cosignent les têtes : non spécifiés en v1.
-9. **Stockage local** des entrées et de la tête : à ajouter à `format.md` lors de l'intégration.
+9. ~~**Stockage local** des entrées et de la tête~~ : annexe v2 (`format.md` § 15.2, ADR 0040).

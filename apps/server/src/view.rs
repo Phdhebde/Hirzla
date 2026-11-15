@@ -153,6 +153,19 @@ impl LockerView {
         self.state.state().is_personal()
     }
 
+    /// Active devices of the members whose role reads the locker: the devices whose
+    /// acknowledgement a compaction waits for (`sync-protocol.md` § 10.2, step 5).
+    #[must_use]
+    pub fn reader_devices(&self) -> Vec<(Id16, Id16)> {
+        let st = self.state.state();
+        st.members_with_roles()
+            .filter(|(_, r)| r.is_reader())
+            .filter_map(|(m, _)| st.member(m).map(|e| (*m, e)))
+            .flat_map(|(m, e)| e.devices.keys().map(move |d| (m, *d)))
+            .filter(|(m, d)| !st.is_revoked(m, d))
+            .collect()
+    }
+
     /// Members holding a role.
     #[must_use]
     pub fn members(&self) -> Vec<(Id16, Role)> {
