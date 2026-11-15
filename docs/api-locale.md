@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v2
+# API locale du noyau — spécification v4
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -7,7 +7,8 @@ canal : transport, authentification des deux bouts, trames, messages, erreurs, v
 journal, durcissement du processus. Les choix de dépendances et l'emplacement du code `unsafe`
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
-l'ADR 0026 (proposé).
+l'ADR 0026 (proposé) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
+l'ADR 0032 (proposé).
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -348,7 +349,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **2**. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`).
+- Version actuelle : **2** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`). Les profils agent (version 3, § 14) et Serveur (version 4, § 15) ont leurs propres versions et ne sont pas annoncés par `Status`.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
   qu'avant, portant `v = 1`. Un client envoie chaque requête avec **la plus petite version qui
@@ -528,3 +529,154 @@ l'autorisation) :
 2. Les opérations 20 à 27 sont ouvertes à tout client du profil complet (§ 3.1) et refusées
    au profil navigateur (`Unauthorized`). Un profil « agent » qui les réserverait à
    l'exécutable de la gateway reste à ajouter.
+
+## 15. Mode Serveur (version 4)
+
+Décisions : ADR 0032 (proposé). Le noyau parle en plus la **version 4**, qui porte les
+opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
+partagés, rôles. Codes : opérations **40 à 49**, erreurs **40 à 49**. Toutes exigent un coffre
+ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
+pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
+
+### 15.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+40 à 49 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
+`{2: [4]}`. Les réponses portent `v = 4`. Ces opérations sont refusées au profil navigateur
+(`Unauthorized`). `Status` (§ 6) n'annonce pas la version 4 : un client la découvre par
+`ServerStatus`.
+
+### 15.2 Types
+
+| Nom | Encodage |
+| --- | --- |
+| Adresse du serveur | `tstr` (≤ 2 048 octets) `hirzla://hôte[:port]`, port 7443 par défaut ; hôte : nom DNS ou adresse IP (IPv6 entre crochets) ; ni chemin, ni requête, ni identifiant |
+| AC du site | `bstr` (≤ 64 Kio), certificats PEM : l'AC qui signe le certificat TLS du serveur |
+| Empreinte | `tstr(20)`, `format.md` § 3.1 : 20 premiers caractères de `base32(key_id(clé))`, majuscules ; à la saisie, le noyau accepte minuscules, espaces et tirets et les retire avant de comparer |
+| Membre | `bstr(16)` |
+| Rôle | `uint`, codes de `sync-protocol.md` § 7.1 (1 `Owner` … 6 `Auditor`) |
+| État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle |
+
+### 15.3 Opérations
+
+| Code | Nom | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier]}` ; 2 à 5 présents si et seulement si rattaché |
+| 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20)}` |
+| 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
+| 43 | `ServerConfirm` | oui | `{1: empreinte}` | `{1: compte reconnu bool}` |
+| 44 | `ServerSync` | oui | — | `{1: [{1: casier, 2: reçues uint, 3: envoyées uint, 4: refusées uint, 5: accès bool}]}` |
+| 45 | `SharedLockerCreate` | oui | `{1: nom tstr (1 à 256 octets)}` | `{1: casier}` |
+| 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
+| 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
+| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool}]}` |
+
+Détails :
+
+1. **`ServerStatus`** — l'annexe du mode Serveur (`format.md` § 15) telle que le noyau l'a
+   chargée à l'ouverture du coffre. « À envoyer » : opérations locales pas encore accusées par
+   le serveur ; « en attente » et « en quarantaine » : statuts 0 et 2 de `format.md` § 5.2.
+   « Accès » vaut `false` quand le serveur a refusé le casier (code 4 : membre retiré).
+2. **`ServerIdentity`** — données publiques à remettre à l'administrateur du serveur, qui crée
+   le compte à partir de la `MemberKeys` (ADR 0028, point 8). Aucune clé privée.
+3. **`ServerJoin`** — `AlreadyJoined` si un serveur est déjà rattaché. Le noyau ouvre TLS 1.3
+   (groupe hybride seul, ALPN `hirzla/1`, certificat vérifié par l'AC fournie), envoie `Hello`,
+   vérifie la signature du serveur sur la transcription liée à l'exportateur TLS (§ 11.3).
+   - Avec une empreinte attendue : différente de celle de la clé reçue, `FingerprintMismatch`,
+     la session est coupée **avant** `Auth` et rien n'est enregistré. Égale : la clé est
+     épinglée comme vérifiée, puis le noyau s'authentifie en présentant le certificat de
+     l'appareil (inscription au premier contact). « Compte reconnu » dit si `Auth` a été
+     accepté.
+   - Sans empreinte : `Hello` seulement, clé épinglée **non vérifiée**, « compte reconnu » à
+     `false`. L'interface affiche l'empreinte pour une comparaison hors bande.
+   - Adresse ou AC invalides : `InvalidInput`. Serveur injoignable, TLS refusé, signature du
+     serveur fausse : `ServerUnreachable` ; refus du serveur avec un code : `ServerRefused`.
+4. **`ServerConfirm`** — `NotJoined` sans serveur. Empreinte différente de la clé épinglée :
+   `FingerprintMismatch` (rien ne change). Égale : la clé devient vérifiée, puis le noyau tente
+   `Auth` comme ci-dessus.
+5. **`ServerSync`** — `ServerUnverified` tant que l'empreinte n'est pas vérifiée. Ouvre une
+   session (clé épinglée exigée ; toute autre clé : `ServerUnreachable`, rien n'est envoyé),
+   rejoint les casiers que `AuthOk` liste et que le poste ne connaît pas, puis pour chaque
+   casier : `Pull` jusqu'au bout, réémission des opérations locales devenues périmées (§ 5 de
+   `sync-protocol.md`), `Push`, rescellement après rotation (§ 8.4). Un casier refusé
+   (code 4) est marqué « accès perdu » sans faire échouer les autres. `Auth` refusé :
+   `ServerRefused`.
+6. **`SharedLockerCreate`** — crée le casier (`LockerCreate` avec la preuve d'inscription du
+   membre, puis ses métadonnées), le pousse et l'ajoute à l'annexe.
+7. **`RoleGrant`** — membre absent du casier : le noyau demande sa clé, ses appareils et leur
+   preuve d'inscription au serveur (`GetMemberKeys`), vérifie la preuve avec la clé épinglée
+   (`transparence.md` § 6.2 ; échec : `KeyLogRejected`), compare l'empreinte attendue si elle
+   est donnée (`FingerprintMismatch`), puis émet le `Grant` avec la preuve et le pousse. Membre
+   déjà présent : changement de rôle, sans nouvelle clé. Membre inconnu du serveur :
+   `UnknownMember`. Droit insuffisant selon `roles.md` (contrôle local par `hirzla-access`
+   avant toute émission) ou action qui exige un quorum : `Forbidden`. Passage d'un rôle lecteur
+   à un rôle non lecteur : `InvalidInput` (`sync-protocol.md` § 7.3). Casier inconnu ou
+   personnel : `NotFound`.
+8. **`RoleRevoke`** — émet le `Revoke` (nouvelle époque pour les lecteurs restants) et le
+   pousse. Mêmes refus que `RoleGrant` ; membre sans rôle : `NotFound`.
+9. **`LockerMembers`** — l'état d'autorisation de la réplique locale (`hirzla-access`) :
+   membres titulaires d'un rôle, nombre d'appareils actifs, empreinte, et si leur `Grant` (ou
+   la `LockerCreate`) porte une preuve d'inscription vérifiée.
+
+Une opération réseau qui a déjà émis puis perd la connexion garde l'opération dans la réplique
+et l'annexe : elle part à la synchronisation suivante (« à envoyer » de `ServerStatus`).
+
+### 15.4 Casiers partagés dans les opérations 5 à 9
+
+Quand un serveur est rattaché, `List`, `Read`, `Create`, `Update` et `Delete` servent aussi les
+casiers partagés, sans changer leurs messages :
+
+- `List` ajoute les secrets de chaque casier partagé lisible et ces casiers (`personnel` à
+  `false`) ; la recherche porte sur les mêmes champs.
+- Un sélecteur par identifiants peut désigner un secret d'un casier partagé ; un sélecteur par
+  titre cherche dans tous les casiers (`Ambiguous` s'il y a plusieurs secrets actifs de ce
+  titre).
+- `Create` avec un casier partagé, `Update` et `Delete` (corbeille) écrivent une opération
+  locale, appliquée tout de suite, envoyée à la synchronisation suivante. Sans droit d'écriture
+  dans le casier : `InvalidInput`, sans dire pourquoi (`Unauthorized` désigne le client, pas le
+  membre). `Delete` avec `purger` : `Unsupported`.
+- `Match` et `Fill` ne voient pas les casiers partagés dans cette version.
+
+### 15.5 Erreurs
+
+| Code | Nom | Sens | Détails |
+| --- | --- | --- | --- |
+| 40 | `NotJoined` | Aucun serveur rattaché | — |
+| 41 | `AlreadyJoined` | Un serveur est déjà rattaché | — |
+| 42 | `ServerUnverified` | Empreinte du serveur pas encore vérifiée | — |
+| 43 | `FingerprintMismatch` | L'empreinte ne correspond pas à la clé reçue ou épinglée | — |
+| 44 | `ServerUnreachable` | Connexion, TLS ou authentification du serveur impossible | — |
+| 45 | `ServerRefused` | Le serveur a refusé la demande | `{1: code de sync-protocol.md § 11.7}` |
+| 46 | `Forbidden` | Le rôle du membre ne permet pas l'action, ou elle exige un quorum | — |
+| 47 | `UnknownMember` | Membre inconnu de l'annuaire du serveur | — |
+| 48 | `KeyLogRejected` | Preuve d'inscription absente ou invalide pour la clé reçue | — |
+
+Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
+contient de secret, de clé ni de détail cryptographique.
+
+### 15.6 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `serveur identite [--sortie FICHIER]` | `ServerIdentity` (la `MemberKeys` est écrite dans le fichier pour l'administrateur) |
+| `serveur rejoindre ADRESSE --ac PEM [--empreinte E]` | `ServerJoin` |
+| `serveur confirmer EMPREINTE` | `ServerConfirm` |
+| `serveur etat` | `ServerStatus` |
+| `serveur sync` | `ServerSync` |
+| `casier creer NOM` | `SharedLockerCreate` |
+| `casier membres CASIER` | `LockerMembers` |
+| `casier ajouter CASIER MEMBRE ROLE [--empreinte E]` | `RoleGrant` |
+| `casier retirer CASIER MEMBRE` | `RoleRevoke` |
+| `set NOM --casier CASIER` | `Create` ou `Update` dans un casier partagé |
+
+`CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
+identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; `ROLE`, l'un de
+`proprietaire`, `gestionnaire`, `editeur`, `lecteur`, `sans-divulgation`, `auditeur`.
+
+### 15.7 Points ouverts
+
+1. Les opérations 42 à 47 tiennent le verrou du noyau pendant leurs échanges réseau (ADR 0032,
+   point 9).
+2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
+3. Pas d'accords à plusieurs, de décisions de quarantaine, d'enrôlement d'un second appareil ni
+   de fichiers joints dans les casiers partagés : à spécifier dans une version suivante.
