@@ -1,6 +1,6 @@
 # ADR 0046 — Lien d'invitation au serveur et enveloppe texte
 
-- Statut : accepté (2026-11-15, décision du mainteneur : recommandation implémentée)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

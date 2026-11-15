@@ -1,6 +1,6 @@
 # ADR 0047 — `hirzlad` : effacement des corps d'opérations tardives après 30 jours
 
-- Statut : accepté (2026-11-15, décision du mainteneur : recommandation implémentée)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

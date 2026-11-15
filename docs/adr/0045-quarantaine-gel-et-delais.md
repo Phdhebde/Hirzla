@@ -1,6 +1,6 @@
 # ADR 0045 — Quarantaine, gel des écritures et délais d'une heure dans le noyau
 
-- Statut : accepté (2026-11-15, décision du mainteneur : recommandation implémentée)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

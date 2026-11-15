@@ -439,6 +439,7 @@ impl std::fmt::Debug for LockerStatus {
             .field("pending", &self.pending)
             .field("quarantined", &self.quarantined)
             .field("access", &self.access)
+            .field("frozen", &self.frozen)
             .finish_non_exhaustive()
     }
 }
@@ -2135,6 +2136,7 @@ mod tests {
             pending: 0,
             quarantined: 0,
             access: true,
+            frozen: false,
         };
         let d = format!("{locker:?}");
         assert!(!d.contains("secret"), "{d}");

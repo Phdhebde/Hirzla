@@ -1,6 +1,6 @@
 # ADR 0044 — Accords et quorum du mode Serveur : demandes et accords en texte, API v4 étendue
 
-- Statut : accepté (2026-11-15, décision du mainteneur : recommandation implémentée)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

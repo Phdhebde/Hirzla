@@ -1,6 +1,6 @@
 # ADR 0048 — Synchronisation de fond dans l'application de poste
 
-- Statut : accepté (2026-11-15, décision du mainteneur : recommandation implémentée)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
