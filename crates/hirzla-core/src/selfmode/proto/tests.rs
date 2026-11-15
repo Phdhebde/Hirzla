@@ -379,4 +379,17 @@ fn debug_never_shows_values() {
     assert!(!d.contains("secret"), "{d}");
     let d = format!("{:?}", SelfReply::Value(ApiValue::Text(z("secret-valeur"))));
     assert!(!d.contains("secret"), "{d}");
+    let v = VersionInfo {
+        op_id: V,
+        lamport: 1,
+        wall_ms: 2,
+        state: 0,
+        title: z("secret-titre"),
+        username: Some(z("secret-identifiant")),
+        fields: vec![1],
+        changed: vec![1],
+        custom: 0,
+    };
+    let d = format!("{v:?}");
+    assert!(!d.contains("secret"), "{d}");
 }
