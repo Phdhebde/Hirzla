@@ -24,6 +24,9 @@ pub enum Refusal {
     ExecutableNotAllowed,
     /// Too many connections at once.
     Busy,
+    /// The peer's executable is not signed by the core's publisher, or does not match the
+    /// signed client manifest (ADR 0042).
+    SignatureNotAccepted,
 }
 
 impl Refusal {
@@ -35,6 +38,7 @@ impl Refusal {
             Refusal::UnknownPeer => "unknown_peer",
             Refusal::ExecutableNotAllowed => "executable_not_allowed",
             Refusal::Busy => "busy",
+            Refusal::SignatureNotAccepted => "signature_not_accepted",
         }
     }
 }
@@ -111,6 +115,11 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// Whether the core checks its clients' signatures (ADR 0042): 1 yes, 0 no.
+    ClientSignatures {
+        /// Required.
+        required: bool,
+    },
     /// Which system notifications the core receives (ADR 0033): 1 yes, 0 no.
     SystemWatch {
         /// Sleep.
@@ -183,6 +192,11 @@ impl Event {
             Event::AgentRequest { op, result } => {
                 write!(out, "event=agent_request op={} result={result}", op.name())
             }
+            Event::ClientSignatures { required } => write!(
+                out,
+                "event=client_signatures required={}",
+                u8::from(*required)
+            ),
             Event::SystemWatch {
                 sleep,
                 session_lock,
@@ -271,12 +285,15 @@ mod tests {
                 sleep: true,
                 session_lock: false,
             },
+            Event::ClientSignatures { required: true },
+            Event::ClientSignatures { required: false },
         ];
         for reason in [
             Refusal::OtherUser,
             Refusal::UnknownPeer,
             Refusal::ExecutableNotAllowed,
             Refusal::Busy,
+            Refusal::SignatureNotAccepted,
         ] {
             events.push(Event::ConnectionRefused {
                 pid: Some(1),

@@ -18,10 +18,12 @@ use hirzla_vault::model::Id16;
 use crate::agent::proto::{is_agent_request, AgentCode, AgentReply, AgentRequest};
 use crate::agent::service::{AgentConfig, AgentService};
 use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
+use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::events::{Event, Log, Refusal};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
+use crate::release::{self, PublisherKeys};
 use crate::selfmode::import;
 use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
@@ -60,11 +62,19 @@ pub struct Options {
     /// Agent profile (`docs/integration-hornn.md`): Hornn's issuer and the file of its
     /// hybrid verification key. Both or neither.
     pub hornn: Option<(Id16, PathBuf)>,
+    /// Whether client signatures are checked (ADR 0042).
+    pub client_signatures: SignatureMode,
+    /// Publisher key file for the client manifest (development builds only); the keys
+    /// compiled into the core when absent.
+    pub publisher_key: Option<PathBuf>,
+    /// Client manifest (Linux); `hirzla-clients.manifest` next to the core when absent.
+    pub client_manifest: Option<PathBuf>,
 }
 
 const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
 [--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
-[--hornn-issuer HEX --hornn-key FICHIER]";
+[--hornn-issuer HEX --hornn-key FICHIER] [--client-signatures required|off] \
+[--publisher-key FICHIER] [--client-manifest FICHIER]";
 
 /// The default vault file: `$XDG_DATA_HOME/hirzla/coffre.hirzla` (or
 /// `~/.local/share/hirzla/…`) on Linux, `~/Library/Application Support/Hirzla/coffre.hirzla`
@@ -102,6 +112,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let mut auto_lock = None;
     let mut hornn_issuer: Option<Id16> = None;
     let mut hornn_key: Option<PathBuf> = None;
+    let mut client_signatures = SignatureMode::default_for_build();
+    let mut publisher_key: Option<PathBuf> = None;
+    let mut client_manifest: Option<PathBuf> = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
         let mut value = |name: &str| {
@@ -137,6 +150,31 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
                     })?);
             }
             Some("--hornn-key") => hornn_key = Some(PathBuf::from(value("--hornn-key")?)),
+            Some("--client-signatures") => {
+                client_signatures = match value("--client-signatures")?.to_str() {
+                    Some("required") => SignatureMode::Required,
+                    Some("off") if release::DELIVERY_BUILD => {
+                        return Err(
+                            "--client-signatures off : refusé dans une version de livraison."
+                                .to_owned(),
+                        )
+                    }
+                    Some("off") => SignatureMode::Off,
+                    _ => return Err("--client-signatures attend required ou off.".to_owned()),
+                };
+            }
+            Some("--publisher-key") if release::DELIVERY_BUILD => {
+                return Err(
+                    "--publisher-key : refusé dans une version de livraison (clés compilées)."
+                        .to_owned(),
+                )
+            }
+            Some("--publisher-key") => {
+                publisher_key = Some(PathBuf::from(value("--publisher-key")?));
+            }
+            Some("--client-manifest") => {
+                client_manifest = Some(PathBuf::from(value("--client-manifest")?));
+            }
             Some("--help") | Some("-h") => return Err(USAGE.to_owned()),
             _ => return Err(format!("argument inconnu. {USAGE}")),
         }
@@ -162,6 +200,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         allow_browser,
         auto_lock,
         hornn,
+        client_signatures,
+        publisher_key,
+        client_manifest,
     })
 }
 
@@ -262,6 +303,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         (None, Some(_)) => AllowList::new([]),
         (None, None) => AllowList::browser_default_for(&me()?),
     };
+    let signatures = client_signatures(options, &me()?)?;
     let agent = match &options.hornn {
         None => None,
         Some((issuer, key)) => {
@@ -290,6 +332,9 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     log.record(Event::Started {
         pid: std::process::id(),
         hardening,
+    });
+    log.record(Event::ClientSignatures {
+        required: signatures.mode() == SignatureMode::Required,
     });
     let core = Arc::new(Mutex::new(Core::new(
         Config {
@@ -352,6 +397,15 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 continue;
             }
         };
+        // ADR 0042: the signature, on top of the path.
+        if let Err(reason) = signatures.check(&peer) {
+            log.record(Event::ConnectionRefused {
+                pid: peer.pid,
+                reason,
+            });
+            spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
+            continue;
+        }
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
             log.record(Event::ConnectionRefused {
@@ -372,6 +426,44 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             active.fetch_sub(1, Ordering::SeqCst);
         });
     }
+}
+
+/// Sets up the client signature check (ADR 0042). In required mode, a core that cannot
+/// establish its own publisher (Windows, macOS) or verify the client manifest (Linux) refuses
+/// to start.
+fn client_signatures(
+    options: &Options,
+    core_executable: &std::path::Path,
+) -> Result<ClientSignatures, String> {
+    if options.client_signatures == SignatureMode::Off {
+        return Ok(ClientSignatures::off());
+    }
+    let keys = match &options.publisher_key {
+        Some(path) => PublisherKeys::from_file(path)
+            .map_err(|_| "clé d'éditeur illisible ou invalide.".to_owned())?,
+        None => {
+            PublisherKeys::compiled().map_err(|_| "clé d'éditeur compilée invalide.".to_owned())?
+        }
+    };
+    let manifest = options
+        .client_manifest
+        .clone()
+        .unwrap_or_else(|| codesign::default_manifest_path(core_executable));
+    ClientSignatures::setup(SignatureMode::Required, &manifest, &keys).map_err(|e| match e {
+        codesign::SetupError::CoreNotSigned => {
+            "signature des clients exigée, mais le noyau n'est pas signé.".to_owned()
+        }
+        codesign::SetupError::NoPublisherKey => {
+            "signature des clients exigée, mais aucune clé d'éditeur n'est disponible.".to_owned()
+        }
+        codesign::SetupError::Manifest(_) => {
+            "signature des clients exigée, mais le manifeste des clients est absent ou refusé."
+                .to_owned()
+        }
+        codesign::SetupError::Unsupported => {
+            "signature des clients exigée, mais ce système ne permet pas de la vérifier.".to_owned()
+        }
+    })
 }
 
 /// Answers a refused client on its own thread, within [`MAX_REFUSALS`]; beyond, the
@@ -686,6 +778,51 @@ mod tests {
         assert_eq!(o.allow_browser.unwrap(), vec![PathBuf::from("/c")]);
         assert_eq!(o.auto_lock, Some(Duration::from_secs(5)));
         assert!(o.hornn.is_none());
+        assert_eq!(o.client_signatures, SignatureMode::default_for_build());
+    }
+
+    #[test]
+    fn parses_the_client_signature_options() {
+        let o = parse_args(args(&[
+            "--vault",
+            "v",
+            "--client-signatures",
+            "required",
+            "--client-manifest",
+            "m",
+        ]))
+        .unwrap();
+        assert_eq!(o.client_signatures, SignatureMode::Required);
+        assert_eq!(o.client_manifest, Some(PathBuf::from("m")));
+        assert!(parse_args(args(&["--vault", "v", "--client-signatures", "maybe"])).is_err());
+        let off = parse_args(args(&["--vault", "v", "--client-signatures", "off"]));
+        let key = parse_args(args(&["--vault", "v", "--publisher-key", "k"]));
+        if release::DELIVERY_BUILD {
+            // Cannot be disabled, and only compiled keys count.
+            assert!(off.is_err());
+            assert!(key.is_err());
+        } else {
+            assert_eq!(off.unwrap().client_signatures, SignatureMode::Off);
+            assert_eq!(key.unwrap().publisher_key, Some(PathBuf::from("k")));
+        }
+    }
+
+    /// A core that must check signatures but cannot refuses to start: no manifest (Linux),
+    /// unsigned test binary (Windows, macOS).
+    #[test]
+    fn required_signatures_fail_closed() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut o = parse_args(args(&["--vault", "v"])).unwrap();
+        o.client_signatures = SignatureMode::Required;
+        o.client_manifest = Some(dir.path().join("absent.manifest"));
+        assert!(client_signatures(&o, &dir.path().join("hirzla-core")).is_err());
+        o.client_signatures = SignatureMode::Off;
+        assert_eq!(
+            client_signatures(&o, &dir.path().join("hirzla-core"))
+                .unwrap()
+                .mode(),
+            SignatureMode::Off
+        );
     }
 
     #[test]
