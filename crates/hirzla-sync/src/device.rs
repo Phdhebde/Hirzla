@@ -76,6 +76,16 @@ impl LocalDevice {
         Ok(self.sign.sign(domain, message)?.as_bytes().to_vec())
     }
 
+    /// Signs the transcript of a session with the server (`Auth`, § 11.3), in the
+    /// `hirzla/v1/device-auth` domain. The transcript binds the TLS exporter of the session,
+    /// so the signature is worthless on any other connection.
+    ///
+    /// # Errors
+    /// A crypto failure.
+    pub fn sign_session(&self, transcript: &[u8]) -> Result<Vec<u8>, SyncError> {
+        self.sign(DeviceDomain::DeviceAuth, transcript)
+    }
+
     /// Signs a multi-owner request (§ 7.7) with this device. The request must name it.
     ///
     /// # Errors
