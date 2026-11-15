@@ -213,6 +213,7 @@ cargo fetch --locked                                   # puis plus aucun accès 
 .github/scripts/reproducible-build.sh /tmp/repro       # deux compilations, comparées
 export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
 .github/scripts/sbom.py hirzla-core --output hirzla-core.cdx.json   # CycloneDX 1.5
+.github/scripts/sbom.py --npm apps/extension --output extension.npm.cdx.json   # ADR 0061
 ```
 
 Le script affiche « identique » et l'empreinte SHA-256 de `hirzla-core`, `hirzla` et

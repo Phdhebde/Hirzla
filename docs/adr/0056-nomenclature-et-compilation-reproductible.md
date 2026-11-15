@@ -28,6 +28,8 @@ non justifié, résultat vérifiable par l'évaluateur.
    composants triés ; deux exécutions donnent le même fichier.
 4. Publiée avec chaque livraison (artefact du flux de livraison) et vérifiable en la
    régénérant depuis l'étiquette de la version.
+5. Les paquets npm de l'interface et de l'extension ont leur propre nomenclature, lue dans
+   `package-lock.json` (ADR 0061).
 
 ### Compilation reproductible
 

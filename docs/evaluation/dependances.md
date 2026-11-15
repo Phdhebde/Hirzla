@@ -90,6 +90,7 @@ depuis `Cargo.lock` : mêmes versions que le produit.
 - **AWS-LC** : vérifier, au gel, si la version d'`aws-lc-sys` correspond à un module certifié
   FIPS 140-3 ; sinon, le dire au CESTI (ADR 0009).
 - **SBOM** : produite pour chaque exécutable Rust livré (CycloneDX 1.5, `.github/scripts/sbom.py`,
-  hors ligne et déterministe, ADR 0056), par la CI et le flux de livraison. Reste à faire :
-  la nomenclature des paquets npm de l'extension et des outils de vérification de l'interface
-  (`package-lock.json`), hors configuration évaluée (ADR 0050, point 7).
+  hors ligne et déterministe, ADR 0056), par la CI et le flux de livraison ; et pour les paquets
+  npm de l'interface et de l'extension, lus dans `package-lock.json` (`sbom.py --npm`,
+  ADR 0061) : à ce jour, uniquement des outils de développement (`typescript`, `playwright`),
+  en portée `excluded`, aucun paquet npm livré.

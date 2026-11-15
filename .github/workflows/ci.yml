@@ -198,6 +198,12 @@ jobs:
           for p in hirzla-core hirzla-cli hirzla-server hirzla-native-host hirzla-desktop; do
             .github/scripts/sbom.py "$p" --target x86_64-unknown-linux-gnu --output "sbom/$p.cdx.json"
           done
+          # npm packages of the desktop interface and of the extension (ADR 0061): read from
+          # package-lock.json alone, nothing installed; regenerated once to check determinism.
+          for a in desktop extension; do
+            .github/scripts/sbom.py --npm "apps/$a" --output "sbom/$a.npm.cdx.json"
+            .github/scripts/sbom.py --npm "apps/$a" | cmp - "sbom/$a.npm.cdx.json"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: sbom-linux-x86_64
