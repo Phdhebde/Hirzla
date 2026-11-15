@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Leurres</title>
+  <style>
+    .gone { display: none; }
+    .away { position: absolute; left: -10000px; }
+  </style>
+</head>
+<body>
+  <!-- Served at https://bank.test/decoy: a visible login form surrounded by hidden fields
+       placed to harvest a fill. Only the visible fields may receive a value. -->
+  <form id="login" action="#">
+    <input id="decoy-user-1" class="gone" type="text" autocomplete="username">
+    <input id="decoy-pass-1" class="away" type="password">
+    <label>Identifiant <input id="user" type="email"></label>
+    <label>Mot de passe <input id="pass" type="password"></label>
+    <input id="decoy-user-2" class="away" type="text" autocomplete="username">
+    <input id="decoy-pass-2" class="gone" type="password">
+    <button type="submit">Se connecter</button>
+  </form>
+</body>
+</html>

@@ -284,3 +284,58 @@ fn second_core_on_the_same_endpoint_fails() {
         .unwrap();
     assert!(!status.success());
 }
+
+/// A client with the browser profile (`--allow-browser-exe`) gets state and the generator,
+/// and `Unauthorized` for the rest; its connection stays open (`docs/api-locale.md` § 3.1).
+#[test]
+fn browser_profile_is_enforced_by_the_core() {
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let init = Request::Init {
+        password: z(PASSWORD),
+        kdf: None,
+    };
+    assert_eq!(refused(c.call(&init)), ErrorCode::Unauthorized);
+    assert_eq!(refused(c.call(&Request::Shutdown)), ErrorCode::Unauthorized);
+    let list = Request::List {
+        query: None,
+        include_trash: false,
+    };
+    assert_eq!(refused(c.call(&list)), ErrorCode::Unauthorized);
+    match c
+        .call(&Request::Generate {
+            length: 24,
+            classes: 15,
+        })
+        .unwrap()
+    {
+        Reply::Generated(p) => assert_eq!(p.chars().count(), 24),
+        _ => panic!(),
+    }
+    // Allowed, but there is no vault yet.
+    let m = Request::Match {
+        origin: "https://bank.example".into(),
+    };
+    assert_eq!(refused(c.call(&m)), ErrorCode::NoVault);
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=request op=init result=unauthorized"),
+        "{log}"
+    );
+    assert!(
+        log.contains("event=request op=match result=no_vault"),
+        "{log}"
+    );
+    assert!(!log.contains(PASSWORD));
+}
