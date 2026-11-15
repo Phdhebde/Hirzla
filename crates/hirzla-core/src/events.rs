@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use hirzla_keystore::platform::HardeningReport;
 
 use crate::agent::proto::AgentOp;
+use crate::codesign::SignatureKind;
 use crate::proto::{ErrorCode, Op};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -121,10 +122,13 @@ pub enum Event {
         /// Limit in KiB.
         limit_kib: Option<u64>,
     },
-    /// Whether the core checks its clients' signatures (ADR 0042): 1 yes, 0 no.
+    /// Whether the core checks its clients' signatures (ADR 0042): 1 yes, 0 no; and the kind
+    /// of signature compiled into this build (ADR 0063 § 1).
     ClientSignatures {
         /// Required.
         required: bool,
+        /// `manifeste` or `systeme`.
+        kind: SignatureKind,
     },
     /// Which system notifications the core receives (ADR 0033): 1 yes, 0 no.
     SystemWatch {
@@ -203,10 +207,11 @@ impl Event {
             Event::AgentRequest { op, result } => {
                 write!(out, "event=agent_request op={} result={result}", op.name())
             }
-            Event::ClientSignatures { required } => write!(
+            Event::ClientSignatures { required, kind } => write!(
                 out,
-                "event=client_signatures required={}",
-                u8::from(*required)
+                "event=client_signatures required={} kind={}",
+                u8::from(*required),
+                kind.name()
             ),
             Event::SystemWatch {
                 sleep,
@@ -296,8 +301,14 @@ mod tests {
                 sleep: true,
                 session_lock: false,
             },
-            Event::ClientSignatures { required: true },
-            Event::ClientSignatures { required: false },
+            Event::ClientSignatures {
+                required: true,
+                kind: SignatureKind::Manifest,
+            },
+            Event::ClientSignatures {
+                required: false,
+                kind: SignatureKind::System,
+            },
             Event::MemoryNotLocked {
                 limit_kib: Some(8192),
             },

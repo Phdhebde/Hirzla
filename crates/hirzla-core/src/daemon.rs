@@ -342,6 +342,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     }
     log.record(Event::ClientSignatures {
         required: signatures.mode() == SignatureMode::Required,
+        kind: codesign::SIGNATURE_KIND,
     });
     let core = Arc::new(Mutex::new(Core::new(
         Config {
@@ -435,9 +436,9 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     }
 }
 
-/// Sets up the client signature check (ADR 0042). In required mode, a core that cannot
-/// establish its own publisher (Windows, macOS) or verify the client manifest (Linux) refuses
-/// to start.
+/// Sets up the client signature check (ADR 0042, 0063). In required mode, a core that cannot
+/// verify the client manifest (kind `manifeste`, every system) or establish its own system
+/// publisher (kind `systeme`, Windows and macOS) refuses to start.
 fn client_signatures(
     options: &Options,
     core_executable: &std::path::Path,
@@ -458,7 +459,8 @@ fn client_signatures(
         .unwrap_or_else(|| codesign::default_manifest_path(core_executable));
     ClientSignatures::setup(SignatureMode::Required, &manifest, &keys).map_err(|e| match e {
         codesign::SetupError::CoreNotSigned => {
-            "signature des clients exigée, mais le noyau n'est pas signé.".to_owned()
+            "signature des clients exigée (signature du système), mais le noyau n'est pas signé."
+                .to_owned()
         }
         codesign::SetupError::NoPublisherKey => {
             "signature des clients exigée, mais aucune clé d'éditeur n'est disponible.".to_owned()
@@ -814,8 +816,8 @@ mod tests {
         }
     }
 
-    /// A core that must check signatures but cannot refuses to start: no manifest (Linux),
-    /// unsigned test binary (Windows, macOS).
+    /// A core that must check signatures but cannot refuses to start: no manifest (kind
+    /// `manifeste`, every system), unsigned test binary (kind `systeme`).
     #[test]
     fn required_signatures_fail_closed() {
         let dir = tempfile::tempdir().unwrap();

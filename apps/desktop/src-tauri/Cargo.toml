@@ -19,6 +19,9 @@ workspace = true
 # Delivery build (ADR 0055): the core's signature is checked before anything is sent to it
 # (compiled publisher keys only, as for the core and the command line).
 livraison = ["hirzla-core/livraison"]
+# System publisher signature instead of the client manifest (ADR 0063 § 1): same choice as
+# the core.
+signature-systeme = ["hirzla-core/signature-systeme"]
 
 [build-dependencies]
 tauri-build = { version = "2.7.4", default-features = false }

@@ -1,10 +1,18 @@
-//! Signature of the core's clients (ADR 0042, `docs/api-locale.md` § 3.1), checked on top
-//! of the allow list of paths: on Windows and macOS, the client must be signed by the same
-//! publisher as the core; on Linux, its executable must match the signed client manifest.
+//! Signature of the core's clients (ADR 0042, 0063; `docs/api-locale.md` § 3.1), checked on
+//! top of the allow list of paths.
+//!
+//! How a required signature is checked is fixed when the build is compiled, never guessed at
+//! run time ([`SIGNATURE_KIND`], ADR 0063 § 1):
+//!
+//! - **manifest** (default of every build): the client's executable must match the client
+//!   manifest signed by the hybrid publisher key, installed next to the core, on Linux,
+//!   Windows and macOS alike. A core built this way ignores any system signature;
+//! - **system** (Cargo feature `signature-systeme`, only for a publisher holding an
+//!   Authenticode certificate or an Apple Developer ID): the client must be signed by the same
+//!   publisher as the core, in the sense of the operating system (Windows and macOS only).
 //!
 //! The same check runs the other way ([`CoreSignature`], ADR 0055): before it sends a
-//! request, a client checks that the core is signed by its own publisher (Windows, macOS) or
-//! matches the signed manifest installed next to it (Linux).
+//! request, a client checks the core with the same kind of signature.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -38,19 +46,55 @@ impl SignatureMode {
     }
 }
 
+/// What a required signature is checked against (ADR 0063 § 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureKind {
+    /// The client manifest signed by the hybrid publisher key (`manifeste`).
+    Manifest,
+    /// The publisher signature of the operating system: Authenticode, Apple code signing
+    /// (`systeme`).
+    System,
+}
+
+impl SignatureKind {
+    /// Its name in the core's log and in the documentation.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            SignatureKind::Manifest => "manifeste",
+            SignatureKind::System => "systeme",
+        }
+    }
+}
+
+/// The kind of signature of this build, fixed at compile time: [`SignatureKind::System`]
+/// with the Cargo feature `signature-systeme`, [`SignatureKind::Manifest`] otherwise. The core
+/// and its clients must be compiled with the same kind.
+pub const SIGNATURE_KIND: SignatureKind = if cfg!(feature = "signature-systeme") {
+    SignatureKind::System
+} else {
+    SignatureKind::Manifest
+};
+
+/// Whether this system can hash the executable of a running process for a manifest check:
+/// `/proc/<pid>/exe` on Linux, the path named by `QueryFullProcessImageNameW` (Windows) or
+/// `proc_pidpath` (macOS).
+pub const MANIFEST_SUPPORTED: bool = cfg!(any(target_os = "linux", windows, target_os = "macos"));
+
 /// Why the signature check could not be set up. The core then refuses to start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SetupError {
-    /// The core's own signature could not be established (Windows, macOS).
+    /// The core's own system signature could not be established (kind `systeme`).
     #[error("the core is not signed")]
     CoreNotSigned,
-    /// The client manifest is missing or refused (Linux).
+    /// The client manifest is missing or refused (kind `manifeste`).
     #[error("client manifest refused: {0}")]
     Manifest(ReleaseError),
     /// No publisher key to verify the manifest.
     #[error("no publisher key")]
     NoPublisherKey,
-    /// This system offers no way to check client signatures.
+    /// This system cannot check the kind of signature of this build: kind `systeme` outside
+    /// Windows and macOS, kind `manifeste` outside Linux, Windows and macOS.
     #[error("unsupported system")]
     Unsupported,
 }
@@ -58,17 +102,78 @@ pub enum SetupError {
 #[derive(Debug, Clone)]
 enum Check {
     Off,
-    /// Same publisher as the core (Windows, macOS).
+    /// Same publisher as the core, in the sense of the system (kind `systeme`).
     Publisher(platform::CodeSigner),
-    /// Hash in the signed client manifest (Linux).
+    /// Hash in the signed client manifest (kind `manifeste`).
     Manifest(Manifest),
+}
+
+impl Check {
+    fn setup(
+        kind: SignatureKind,
+        mode: SignatureMode,
+        manifest: &Path,
+        keys: &PublisherKeys,
+    ) -> Result<Check, SetupError> {
+        if mode == SignatureMode::Off {
+            return Ok(Check::Off);
+        }
+        match kind {
+            SignatureKind::System => {
+                if !platform::CODE_SIGNATURE_SUPPORTED {
+                    return Err(SetupError::Unsupported);
+                }
+                platform::own_code_signer()
+                    .map(Check::Publisher)
+                    .map_err(|_| SetupError::CoreNotSigned)
+            }
+            SignatureKind::Manifest => {
+                if !MANIFEST_SUPPORTED {
+                    return Err(SetupError::Unsupported);
+                }
+                if keys.is_empty() {
+                    return Err(SetupError::NoPublisherKey);
+                }
+                let m =
+                    release::load_client_manifest(manifest, keys).map_err(SetupError::Manifest)?;
+                // A manifest of another platform describes other executables: refused whole.
+                if m.platform != release::current_platform() {
+                    return Err(SetupError::Manifest(ReleaseError::Platform));
+                }
+                Ok(Check::Manifest(m))
+            }
+        }
+    }
+
+    fn mode(&self) -> SignatureMode {
+        match self {
+            Check::Off => SignatureMode::Off,
+            _ => SignatureMode::Required,
+        }
+    }
+}
+
+/// The file hashed for the running process `pid`, whose executable the system names
+/// `executable`. On Linux, the inode the process runs (`/proc/<pid>/exe`), not the path,
+/// which may have been replaced since. On Windows and macOS, the path the system reports
+/// (`QueryFullProcessImageNameW`, `proc_pidpath`): a replacement of the file between the
+/// launch and this read is a residual risk (`docs/cible-de-securite.md`), narrowed by the
+/// installation directory being writable by an administrator only and, on Windows, by the
+/// lock the system keeps on the image of a running process.
+fn running_executable(pid: u32, executable: &Path) -> PathBuf {
+    if cfg!(target_os = "linux") {
+        PathBuf::from(format!("/proc/{pid}/exe"))
+    } else {
+        executable.to_path_buf()
+    }
 }
 
 /// The client signature policy of a running core.
 #[derive(Debug, Clone)]
 pub struct ClientSignatures(Check);
 
-/// Where the client manifest of the core at `core_executable` is installed.
+/// Where the client manifest of the core at `core_executable` is installed: next to it, on
+/// every system (`docs/livraison.md` § 7).
 #[must_use]
 pub fn default_manifest_path(core_executable: &Path) -> PathBuf {
     core_executable
@@ -84,15 +189,15 @@ impl ClientSignatures {
         ClientSignatures(Check::Off)
     }
 
-    /// A check against a client manifest already verified (Linux; also used by tests).
+    /// A check against a client manifest already verified (tests).
     #[must_use]
     pub fn with_manifest(manifest: Manifest) -> ClientSignatures {
         ClientSignatures(Check::Manifest(manifest))
     }
 
-    /// Sets up the policy of this system for `mode`. On Windows and macOS, establishes the
-    /// core's own publisher; elsewhere, verifies the client manifest at `manifest` with
-    /// `keys`.
+    /// Sets up the policy of this build ([`SIGNATURE_KIND`]) for `mode`: verifies the client
+    /// manifest at `manifest` with `keys` (kind `manifeste`), or establishes the core's own
+    /// system publisher (kind `systeme`; `manifest` and `keys` are then unused).
     ///
     /// # Errors
     /// [`SetupError`]: the core must then refuse to start.
@@ -101,32 +206,13 @@ impl ClientSignatures {
         manifest: &Path,
         keys: &PublisherKeys,
     ) -> Result<ClientSignatures, SetupError> {
-        if mode == SignatureMode::Off {
-            return Ok(ClientSignatures::off());
-        }
-        if platform::CODE_SIGNATURE_SUPPORTED {
-            return platform::own_code_signer()
-                .map(|s| ClientSignatures(Check::Publisher(s)))
-                .map_err(|_| SetupError::CoreNotSigned);
-        }
-        if !cfg!(target_os = "linux") {
-            return Err(SetupError::Unsupported);
-        }
-        if keys.is_empty() {
-            return Err(SetupError::NoPublisherKey);
-        }
-        release::load_client_manifest(manifest, keys)
-            .map(ClientSignatures::with_manifest)
-            .map_err(SetupError::Manifest)
+        Check::setup(SIGNATURE_KIND, mode, manifest, keys).map(ClientSignatures)
     }
 
     /// Whether signatures are checked.
     #[must_use]
     pub fn mode(&self) -> SignatureMode {
-        match self.0 {
-            Check::Off => SignatureMode::Off,
-            _ => SignatureMode::Required,
-        }
+        self.0.mode()
     }
 
     /// The verdict on a client already accepted by its path.
@@ -153,9 +239,8 @@ impl ClientSignatures {
                     .and_then(|n| n.to_str())
                     .ok_or(Refusal::SignatureNotAccepted)?;
                 let entry = manifest.file(name).ok_or(Refusal::SignatureNotAccepted)?;
-                // The inode the process runs, not the path, which may have been replaced since.
-                let running = PathBuf::from(format!("/proc/{pid}/exe"));
-                let file = std::fs::File::open(&running).map_err(|_| Refusal::UnknownPeer)?;
+                let file = std::fs::File::open(running_executable(pid, exe))
+                    .map_err(|_| Refusal::UnknownPeer)?;
                 if matches_entry(file, entry) {
                     Ok(())
                 } else {
@@ -178,15 +263,15 @@ impl CoreSignature {
         CoreSignature(Check::Off)
     }
 
-    /// A check against a client manifest already verified (Linux; tests).
+    /// A check against a client manifest already verified (tests).
     #[must_use]
     pub fn with_manifest(manifest: Manifest) -> CoreSignature {
         CoreSignature(Check::Manifest(manifest))
     }
 
-    /// Sets up the policy of this system for `mode`: on Windows and macOS, the client's own
-    /// publisher, which the core must share; elsewhere, the client manifest at `manifest`,
-    /// verified with `keys`.
+    /// Sets up the policy of this build ([`SIGNATURE_KIND`]) for `mode`: the client manifest
+    /// at `manifest`, verified with `keys` (kind `manifeste`), or the client's own system
+    /// publisher, which the core must share (kind `systeme`).
     ///
     /// # Errors
     /// [`SetupError`]: the client must then refuse to talk to any core.
@@ -195,7 +280,7 @@ impl CoreSignature {
         manifest: &Path,
         keys: &PublisherKeys,
     ) -> Result<CoreSignature, SetupError> {
-        ClientSignatures::setup(mode, manifest, keys).map(|c| CoreSignature(c.0))
+        Check::setup(SIGNATURE_KIND, mode, manifest, keys).map(CoreSignature)
     }
 
     /// The policy of this build for the core at `expected_core`: required in a delivery build
@@ -215,18 +300,18 @@ impl CoreSignature {
     /// Whether signatures are checked.
     #[must_use]
     pub fn mode(&self) -> SignatureMode {
-        match self.0 {
-            Check::Off => SignatureMode::Off,
-            _ => SignatureMode::Required,
-        }
+        self.0.mode()
     }
 
     /// The verdict on the core behind the endpoint, already accepted by its user and path.
     ///
-    /// On Linux, a hardened core is not dumpable and the kernel hides its executable from the
-    /// client: the file hashed is then `expected_core`, the installed core whose path
-    /// [`crate::auth::check_server`] could not compare either. A core that shows its
-    /// executable is hashed through `/proc/<pid>/exe`, the inode it runs.
+    /// Kind `manifeste`: on Linux, a hardened core is not dumpable and the kernel hides its
+    /// executable from the client: the file hashed is then `expected_core`, the installed
+    /// core whose path [`crate::auth::check_server`] could not compare either; a core that
+    /// shows its executable is hashed through `/proc/<pid>/exe`, the inode it runs. On
+    /// Windows and macOS, the file hashed is the executable the system names for the core's
+    /// process, which [`crate::auth::check_server`] has already compared with
+    /// `expected_core`.
     ///
     /// # Errors
     /// [`ServerRefusal::SignatureNotAccepted`], or [`ServerRefusal::UnknownPeer`] when the
@@ -250,9 +335,18 @@ impl CoreSignature {
                 let entry = manifest
                     .file(&name)
                     .ok_or(ServerRefusal::SignatureNotAccepted)?;
-                let running = match (peer.pid, peer.executable_hidden) {
-                    (Some(pid), false) => PathBuf::from(format!("/proc/{pid}/exe")),
-                    _ => expected_core.to_path_buf(),
+                let running = if cfg!(target_os = "linux") {
+                    match (peer.pid, peer.executable_hidden) {
+                        (Some(pid), false) => PathBuf::from(format!("/proc/{pid}/exe")),
+                        _ => expected_core.to_path_buf(),
+                    }
+                } else {
+                    let exe = peer
+                        .executable
+                        .as_deref()
+                        .ok_or(ServerRefusal::UnknownPeer)?;
+                    let pid = peer.pid.ok_or(ServerRefusal::UnknownPeer)?;
+                    running_executable(pid, exe)
                 };
                 let file = std::fs::File::open(&running).map_err(|_| ServerRefusal::UnknownPeer)?;
                 if matches_entry(file, entry) {
@@ -294,10 +388,10 @@ mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use crate::release::update::entry_for;
-    #[cfg(target_os = "linux")]
     use crate::release::{sign, Kind, Version};
-    #[cfg(target_os = "linux")]
     use hirzla_crypto::sign::PublisherSigningKey;
+
+    const EXE: &str = std::env::consts::EXE_SUFFIX;
 
     fn peer(exe: PathBuf) -> PeerIdentity {
         PeerIdentity {
@@ -308,18 +402,60 @@ mod tests {
         }
     }
 
-    /// A signed client manifest naming `name` with the content of `path`.
-    #[cfg(target_os = "linux")]
-    fn manifest_file(dir: &Path, key: &PublisherSigningKey, entries: Vec<FileEntry>) -> PathBuf {
+    /// A signed client manifest for `platform` holding `entries` (sorted here: with `.exe`,
+    /// `hirzla-core.exe` comes before `hirzla.exe`).
+    fn manifest_file_for(
+        dir: &Path,
+        key: &PublisherSigningKey,
+        platform: String,
+        mut entries: Vec<FileEntry>,
+    ) -> PathBuf {
+        entries.sort_by(|a, b| a.name.cmp(&b.name));
         let m = Manifest {
             version: Version::current(),
-            platform: release::current_platform(),
+            platform,
             files: entries,
         };
         let bytes = sign(Kind::ClientManifest, &m, key).unwrap();
         let p = dir.join(release::CLIENT_MANIFEST_FILE);
         std::fs::write(&p, bytes).unwrap();
         p
+    }
+
+    fn manifest_file(dir: &Path, key: &PublisherSigningKey, entries: Vec<FileEntry>) -> PathBuf {
+        manifest_file_for(dir, key, release::current_platform(), entries)
+    }
+
+    /// The core as the client sees it: on Linux, hardened, its executable hidden by the
+    /// kernel; on Windows and macOS, its executable named by the system.
+    fn core_peer(core: &Path) -> PeerIdentity {
+        if cfg!(target_os = "linux") {
+            PeerIdentity {
+                same_user: true,
+                pid: Some(1),
+                executable: None,
+                executable_hidden: true,
+            }
+        } else {
+            peer(core.to_path_buf())
+        }
+    }
+
+    /// The manifest policy, whatever kind this build was compiled with.
+    fn client_setup(
+        mode: SignatureMode,
+        manifest: &Path,
+        keys: &PublisherKeys,
+    ) -> Result<ClientSignatures, SetupError> {
+        Check::setup(SignatureKind::Manifest, mode, manifest, keys).map(ClientSignatures)
+    }
+
+    fn core_setup(
+        mode: SignatureMode,
+        manifest: &Path,
+        keys: &PublisherKeys,
+    ) -> Result<CoreSignature, SetupError> {
+        Check::setup(SignatureKind::Manifest, mode, manifest, keys).map(CoreSignature)
     }
 
     #[test]
@@ -354,61 +490,110 @@ mod tests {
         }
     }
 
-    /// Linux, the client's side (ADR 0055): the installed core is hashed when the kernel
-    /// hides the running one; a core absent from the manifest, modified, or unreadable is
-    /// refused.
-    #[cfg(target_os = "linux")]
+    /// ADR 0063 § 1: the manifest unless `signature-systeme` is compiled in; the manifest is
+    /// checkable on the three systems; the system kind fails closed where the system offers
+    /// no publisher signature, and on an executable not signed by a publisher.
     #[test]
-    fn linux_client_checks_the_core_against_the_manifest() {
+    fn signature_kind_is_fixed_at_compile_time() {
+        if cfg!(feature = "signature-systeme") {
+            assert_eq!(SIGNATURE_KIND, SignatureKind::System);
+        } else {
+            assert_eq!(SIGNATURE_KIND, SignatureKind::Manifest);
+        }
+        assert_eq!(SignatureKind::Manifest.name(), "manifeste");
+        assert_eq!(SignatureKind::System.name(), "systeme");
+        const { assert!(MANIFEST_SUPPORTED) };
+        let keys = PublisherKeys::new(vec![]);
+        let system = Check::setup(
+            SignatureKind::System,
+            SignatureMode::Required,
+            Path::new("/nonexistent"),
+            &keys,
+        )
+        .err();
+        if platform::CODE_SIGNATURE_SUPPORTED {
+            // The test executable is at most ad hoc signed, never by a publisher.
+            assert_eq!(system, Some(SetupError::CoreNotSigned));
+        } else {
+            assert_eq!(system, Some(SetupError::Unsupported));
+        }
+        // The manifest kind never looks at the system signature: without a key it refuses
+        // to start, whatever signs this executable.
+        assert_eq!(
+            Check::setup(
+                SignatureKind::Manifest,
+                SignatureMode::Required,
+                Path::new("/nonexistent"),
+                &keys,
+            )
+            .err(),
+            Some(SetupError::NoPublisherKey)
+        );
+    }
+
+    /// All systems, the client's side (ADR 0055): the installed core is accepted; a core
+    /// absent from the manifest, modified, or unreadable is refused.
+    #[test]
+    fn client_checks_the_core_against_the_manifest() {
         let dir = tempfile::tempdir().unwrap();
-        let core = dir.path().join(CORE_EXECUTABLE);
+        let core_name = format!("{CORE_EXECUTABLE}{EXE}");
+        let core = dir.path().join(&core_name);
         std::fs::write(&core, b"the published core").unwrap();
         let key = PublisherSigningKey::generate().unwrap();
         let keys = PublisherKeys::new(vec![key.verifying_key().clone()]);
-        let good = entry_for(CORE_EXECUTABLE, &core, true).unwrap();
+        let good = entry_for(&core_name, &core, true).unwrap();
         let path = manifest_file(dir.path(), &key, vec![good]);
-        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
+        let s = core_setup(SignatureMode::Required, &path, &keys).unwrap();
         assert_eq!(s.mode(), SignatureMode::Required);
-        let hidden = PeerIdentity {
-            same_user: true,
-            pid: Some(1),
-            executable: None,
-            executable_hidden: true,
-        };
-        assert_eq!(s.check(&hidden, &core), Ok(()));
+        let seen = core_peer(&core);
+        assert_eq!(s.check(&seen, &core), Ok(()));
         // The installed core replaced by another program.
         std::fs::write(&core, b"a substituted core").unwrap();
         assert_eq!(
-            s.check(&hidden, &core),
+            s.check(&seen, &core),
             Err(ServerRefusal::SignatureNotAccepted)
         );
         // Removed.
         std::fs::remove_file(&core).unwrap();
-        assert_eq!(s.check(&hidden, &core), Err(ServerRefusal::UnknownPeer));
+        assert_eq!(s.check(&seen, &core), Err(ServerRefusal::UnknownPeer));
+        std::fs::write(&core, b"the published core").unwrap();
+        // Windows, macOS: a core whose executable the system does not name is refused.
+        if !cfg!(target_os = "linux") {
+            let mut unnamed = core_peer(&core);
+            unnamed.executable = None;
+            assert_eq!(s.check(&unnamed, &core), Err(ServerRefusal::UnknownPeer));
+            let mut no_pid = core_peer(&core);
+            no_pid.pid = None;
+            assert_eq!(s.check(&no_pid, &core), Err(ServerRefusal::UnknownPeer));
+        }
         // A manifest that names no core.
-        let client = dir.path().join("hirzla");
+        let client_name = format!("hirzla{EXE}");
+        let client = dir.path().join(&client_name);
         std::fs::write(&client, b"client").unwrap();
         let path = manifest_file(
             dir.path(),
             &key,
-            vec![entry_for("hirzla", &client, true).unwrap()],
+            vec![entry_for(&client_name, &client, true).unwrap()],
         );
-        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
-        std::fs::write(&core, b"the published core").unwrap();
+        let s = core_setup(SignatureMode::Required, &path, &keys).unwrap();
         assert_eq!(
-            s.check(&hidden, &core),
+            s.check(&seen, &core),
             Err(ServerRefusal::SignatureNotAccepted)
         );
-        // A visible running process is hashed through /proc: this test binary is not the
-        // core of the manifest.
+        // A visible running process is hashed (through /proc on Linux, by its path
+        // elsewhere): this test binary is not the core of the manifest.
         let me = std::env::current_exe().unwrap();
         let visible = peer(me.clone());
         let path = manifest_file(
             dir.path(),
             &key,
-            vec![entry_for(CORE_EXECUTABLE, &core, true).unwrap()],
+            vec![
+                entry_for(&core_name, &core, true).unwrap(),
+                entry_for(&client_name, &client, true).unwrap(),
+            ],
         );
-        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
+        let s = core_setup(SignatureMode::Required, &path, &keys).unwrap();
+        assert_eq!(s.check(&seen, &core), Ok(()));
         assert_eq!(
             s.check(&visible, &core),
             Err(ServerRefusal::SignatureNotAccepted)
@@ -418,10 +603,10 @@ mod tests {
         let path = manifest_file(
             dir.path(),
             &other,
-            vec![entry_for(CORE_EXECUTABLE, &core, true).unwrap()],
+            vec![entry_for(&core_name, &core, true).unwrap()],
         );
         assert_eq!(
-            CoreSignature::setup(SignatureMode::Required, &path, &keys).err(),
+            core_setup(SignatureMode::Required, &path, &keys).err(),
             Some(SetupError::Manifest(ReleaseError::Signature))
         );
     }
@@ -444,45 +629,47 @@ mod tests {
         assert!(!matches_entry(std::fs::File::open(&exe).unwrap(), &entry));
     }
 
-    /// Linux: the running test executable, named `hirzla` in the manifest, is accepted;
-    /// a manifest with another hash for it (a modified executable), a tampered manifest and a
+    /// All systems: the running test process, presented as `hirzla` (a copy of the test
+    /// executable under that name), is accepted; a manifest with another hash for it (a
+    /// modified executable), a tampered manifest, a manifest for another platform and a
     /// manifest signed by another publisher are refused.
-    #[cfg(target_os = "linux")]
     #[test]
-    fn linux_manifest_check_end_to_end() {
+    fn manifest_check_end_to_end() {
         let me = std::env::current_exe().unwrap();
-        let name = me.file_name().unwrap().to_str().unwrap().to_owned();
         let dir = tempfile::tempdir().unwrap();
         let key = PublisherSigningKey::generate().unwrap();
         let keys = PublisherKeys::new(vec![key.verifying_key().clone()]);
 
-        // The test binary's name is not an allowed client name: install a link named
-        // `hirzla` to it and present the process under that name.
-        let link = dir.path().join("hirzla");
-        std::os::unix::fs::symlink(&me, &link).unwrap();
-        let good = entry_for("hirzla", &me, true).unwrap();
+        // The test binary's name is not an allowed client name: copy it as `hirzla` and
+        // present the process under that name.
+        let name = format!("hirzla{EXE}");
+        let copy = dir.path().join(&name);
+        std::fs::copy(&me, &copy).unwrap();
+        let good = entry_for(&name, &copy, true).unwrap();
         let path = manifest_file(dir.path(), &key, vec![good.clone()]);
-        let s = ClientSignatures::setup(SignatureMode::Required, &path, &keys).unwrap();
+        let s = client_setup(SignatureMode::Required, &path, &keys).unwrap();
         assert_eq!(s.mode(), SignatureMode::Required);
-        assert_eq!(s.check(&peer(link.clone())), Ok(()));
+        assert_eq!(s.check(&peer(copy.clone())), Ok(()));
         // An executable whose name is not in the manifest.
         assert_eq!(
             s.check(&peer(me.clone())),
-            Err(Refusal::SignatureNotAccepted),
-            "{name}"
+            Err(Refusal::SignatureNotAccepted)
         );
-        // Unknown process.
-        let mut unknown = peer(link.clone());
+        // Unknown process, unknown executable.
+        let mut unknown = peer(copy.clone());
         unknown.pid = None;
         assert_eq!(s.check(&unknown), Err(Refusal::UnknownPeer));
+        let mut unnamed = peer(copy.clone());
+        unnamed.executable = None;
+        assert_eq!(s.check(&unnamed), Err(Refusal::UnknownPeer));
 
         // Modified executable: the manifest holds another hash.
         let mut modified = good.clone();
         modified.sha384[0] ^= 1;
         let path = manifest_file(dir.path(), &key, vec![modified]);
-        let s = ClientSignatures::setup(SignatureMode::Required, &path, &keys).unwrap();
+        let s = client_setup(SignatureMode::Required, &path, &keys).unwrap();
         assert_eq!(
-            s.check(&peer(link.clone())),
+            s.check(&peer(copy.clone())),
             Err(Refusal::SignatureNotAccepted)
         );
 
@@ -492,28 +679,60 @@ mod tests {
         bytes[20] ^= 1;
         std::fs::write(&path, &bytes).unwrap();
         assert!(matches!(
-            ClientSignatures::setup(SignatureMode::Required, &path, &keys),
+            client_setup(SignatureMode::Required, &path, &keys),
             Err(SetupError::Manifest(_))
         ));
 
+        // A genuine manifest of another platform.
+        let elsewhere = if cfg!(windows) {
+            "linux-x86_64"
+        } else {
+            "freebsd-x86_64"
+        };
+        let path = manifest_file_for(
+            dir.path(),
+            &key,
+            elsewhere.to_owned(),
+            vec![entry_for("hirzla", &copy, true).unwrap()],
+        );
+        assert_eq!(
+            client_setup(SignatureMode::Required, &path, &keys).err(),
+            Some(SetupError::Manifest(ReleaseError::Platform))
+        );
+
         // Signed by another publisher.
         let other = PublisherSigningKey::generate().unwrap();
-        let path = manifest_file(dir.path(), &other, vec![good]);
+        let path = manifest_file(dir.path(), &other, vec![good.clone()]);
         assert_eq!(
-            ClientSignatures::setup(SignatureMode::Required, &path, &keys).err(),
+            client_setup(SignatureMode::Required, &path, &keys).err(),
             Some(SetupError::Manifest(ReleaseError::Signature))
         );
 
         // No key, no manifest: the core refuses to start.
         assert_eq!(
-            ClientSignatures::setup(SignatureMode::Required, &path, &PublisherKeys::new(vec![]))
-                .err(),
+            client_setup(SignatureMode::Required, &path, &PublisherKeys::new(vec![])).err(),
             Some(SetupError::NoPublisherKey)
         );
         assert_eq!(
-            ClientSignatures::setup(SignatureMode::Required, &dir.path().join("absent"), &keys)
-                .err(),
+            client_setup(SignatureMode::Required, &dir.path().join("absent"), &keys).err(),
             Some(SetupError::Manifest(ReleaseError::Io))
         );
+
+        // What is hashed. Linux: the inode the process runs, so rewriting the file at the
+        // path it was launched from changes nothing. Windows and macOS: the file at the path
+        // the system names, so a replaced file is refused, and a removed one unknown.
+        let path = manifest_file(dir.path(), &key, vec![good]);
+        let s = client_setup(SignatureMode::Required, &path, &keys).unwrap();
+        std::fs::write(&copy, b"replaced after launch").unwrap();
+        let replaced = s.check(&peer(copy.clone()));
+        std::fs::remove_file(&copy).unwrap();
+        let removed = s.check(&peer(copy.clone()));
+        if cfg!(target_os = "linux") {
+            assert_eq!(replaced, Ok(()));
+            assert_eq!(removed, Ok(()));
+        } else {
+            assert_eq!(replaced, Err(Refusal::SignatureNotAccepted));
+            assert_eq!(removed, Err(Refusal::UnknownPeer));
+        }
     }
 }
