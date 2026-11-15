@@ -439,6 +439,16 @@ fn run(args: &Args) -> Result<(), String> {
                     hardening_name(s.hardening.dumps_disabled),
                     hardening_name(s.hardening.tracing_blocked),
                 ));
+                // ADR 0054: a Linux core whose memory is not locked says so, with the remedy.
+                if cfg!(target_os = "linux") && s.hardening.memory_locked == HardeningStatus::Failed
+                {
+                    say(
+                        "Attention : la mémoire du noyau n'est pas verrouillée ; des secrets \
+                         peuvent être écrits dans le fichier d'échange. Démarrez le noyau avec \
+                         une limite de mémoire verrouillée illimitée (LimitMEMLOCK=infinity) \
+                         ou chiffrez le fichier d'échange (guide d'installation, § 2).",
+                    );
+                }
                 Ok(())
             }
         },

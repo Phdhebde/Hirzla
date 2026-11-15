@@ -89,6 +89,13 @@ pub fn process_executable(pid: u32) -> io::Result<PathBuf> {
     Ok(PathBuf::from(OsString::from_vec(buf)))
 }
 
+/// No `RLIMIT_MEMLOCK` to report on this system (the memory of the core is not locked,
+/// `docs/api-locale.md` § 9).
+#[must_use]
+pub fn memory_lock_limit() -> Option<u64> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

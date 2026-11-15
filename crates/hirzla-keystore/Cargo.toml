@@ -12,12 +12,11 @@ workspace = true
 [features]
 # ADR 0052: the TPM 2.0 prototype (tss-esapi, hence the C library tpm2-tss) is built only on
 # request, by its dedicated CI job « TPM prototype (swtpm) ». Off in every shipped binary.
-tpm2-prototype = ["dep:tss-esapi", "dep:hirzla-crypto"]
+tpm2-prototype = ["dep:tss-esapi", "dep:hirzla-crypto", "dep:thiserror"]
 
 [dependencies]
 # Only the TPM prototype uses it (`tpm2-prototype`).
 hirzla-crypto = { path = "../hirzla-crypto", optional = true }
-thiserror = "2.0"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 # ADR 0015. Process hardening, peer credentials of the local channel and terminal echo
@@ -32,6 +31,11 @@ libc = "0.2.191"
 # the prototype is not wired to the core, so the C library is not linked into it.
 [target.'cfg(target_os = "linux")'.dependencies]
 tss-esapi = { version = "=7.7.0", optional = true }
+thiserror = { version = "2.0", optional = true }
+
+# The error types of the Secure Enclave and DPAPI prototypes.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+thiserror = "2.0"
 
 # ADR 0014. Secure Enclave, only ever combined with the master password (decision 1).
 # OSX_10_15: the data protection keychain, the only one that holds enclave keys.
