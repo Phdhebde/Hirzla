@@ -22,6 +22,7 @@ use crate::events::{Event, Log, Refusal};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
+use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
 use crate::service::{Config, Core};
 use crate::transport::{Connection, Endpoint, Listener};
 
@@ -413,6 +414,42 @@ fn serve_agent(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a server mode request (`docs/api-locale.md` § 15). The browser profile is refused
+/// (§ 15.1). Returns `false` if the connection must close.
+fn serve_server(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let (id, result) = match ServerRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ServerCode::General(ErrorCode::Unauthorized);
+            log.record(Event::ServerRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_server(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = ServerReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Refuses an agent request from a client whose profile does not permit it.
 fn refuse_agent(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, result) = match AgentRequest::decode(frame) {
@@ -456,6 +493,12 @@ fn serve(
             }
             Err(FrameError::Closed | FrameError::Io(_)) => break,
         };
+        if is_server_request(&frame) {
+            if serve_server(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
         if let Some(agent) = agent {
             if is_agent_request(&frame) {
                 // The agent operations are for the gateway (a full client), never for the

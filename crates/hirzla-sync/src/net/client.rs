@@ -98,6 +98,28 @@ impl Client {
         pin: Option<&VerifyingKey>,
         who: &Identity<'_>,
     ) -> Result<Client, NetError> {
+        Client::connect_checked(
+            addr,
+            server_name,
+            config,
+            |k| pin.is_none_or(|p| p == k),
+            who,
+        )
+    }
+
+    /// Opens a session (§ 11.3) and accepts the server key only if `accept` says so, before
+    /// anything else is sent (`Auth` included): a first contact checked against a
+    /// fingerprint from the invitation, or a pinned key.
+    ///
+    /// # Errors
+    /// As [`Client::connect`]; a refused key is [`NetError::Protocol`].
+    pub fn connect_checked(
+        addr: SocketAddr,
+        server_name: &str,
+        config: &Arc<ClientConfig>,
+        accept: impl FnOnce(&VerifyingKey) -> bool,
+        who: &Identity<'_>,
+    ) -> Result<Client, NetError> {
         let mut s = connect_tls(addr, server_name, config)?;
         let mut exporter = [0u8; EXPORTER_LEN];
         s.conn
@@ -122,7 +144,7 @@ impl Client {
         }
         let ack = HelloAck::from_value(&m.body)?;
         let server_key = VerifyingKey::from_bytes(&ack.server_key)?;
-        if pin.is_some_and(|p| p != &server_key) {
+        if !accept(&server_key) {
             return Err(NetError::Protocol);
         }
         let t = proto::transcript(

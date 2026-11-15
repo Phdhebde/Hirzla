@@ -314,6 +314,7 @@ identifiant de secret, ni chemin).
 | `unlock_failed` | `failures` |
 | `locked` | `reason` (`request`, `inactivity`, `shutdown`) |
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
+| `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres

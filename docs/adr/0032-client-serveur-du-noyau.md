@@ -107,7 +107,9 @@ Pour chaque casier : `Pull` jusqu'à `more = false` ; réémission des opératio
 parties dont l'époque n'est plus courante (§ 5) ; `Push` par paquets de 64 ; rescellement des
 versions concernées par une rotation (§ 8.4), poussé dans la même session. Un casier que le
 serveur refuse (code 4 : membre retiré) est marqué « accès perdu » ; sa réplique locale reste
-lisible pour ce qu'elle contenait déjà. Les casiers listés par `AuthOk` et inconnus du poste
+lisible pour ce qu'elle contenait déjà. Exception : un casier créé sur ce poste et dont la
+genèse n'est pas encore acquittée est inconnu du serveur, qui répond 4 au `Pull` ; le noyau
+passe alors directement au `Push`. Les casiers listés par `AuthOk` et inconnus du poste
 sont rejoints (genèse épinglée à la seule `LockerCreate` reçue, ADR 0018).
 
 ### 8. API locale v4 et casiers partagés dans les opérations 5 à 9

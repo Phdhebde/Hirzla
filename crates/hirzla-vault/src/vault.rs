@@ -746,6 +746,59 @@ impl Vault {
     }
 
     // -------------------------------------------------------------------------------------
+    // Server mode (ADR 0032)
+    // -------------------------------------------------------------------------------------
+
+    /// The member identity (§ 3.1): public.
+    #[must_use]
+    pub fn member_keys(&self) -> &MemberKeys {
+        &self.identity.member
+    }
+
+    /// This device's certificate (§ 3.6): public.
+    #[must_use]
+    pub fn device_cert(&self) -> &DeviceCert {
+        &self.identity.device_cert
+    }
+
+    /// Copies of this device's private keys, for the synchronisation layer of the core,
+    /// which runs in the same process (ADR 0032, point 2). They never leave the core.
+    ///
+    /// # Errors
+    /// A cryptographic failure.
+    pub fn device_private_keys(&self) -> Result<(DeviceSigningKey, kem::PrivateKey), VaultError> {
+        let sign = DeviceSigningKey::from_bytes(&self.device_sign.to_bytes()?, &self.device_vk)?;
+        let kem_public = kem::PublicKey::from_bytes(&self.identity.device_cert.kem)
+            .map_err(|_| VaultError::Corrupt)?;
+        let kem = kem::PrivateKey::from_bytes(&self.device_kem.to_bytes()?, &kem_public)?;
+        Ok((sign, kem))
+    }
+
+    /// Seals the content of the server mode annex file (§ 15.1) under `K_dev_wrap`.
+    ///
+    /// # Errors
+    /// [`VaultError::InvalidInput`] if the content is too large, or a cryptographic failure.
+    pub fn seal_server_state(&self, content: &[u8]) -> Result<Vec<u8>, VaultError> {
+        seal_padded(
+            &self.dev_wrap,
+            &aad_vault("hirzla/v1/server-state", &self.vault_id)?,
+            content,
+        )
+    }
+
+    /// Unseals the server mode annex file (§ 15.1). Any failure is [`VaultError::Corrupt`].
+    ///
+    /// # Errors
+    /// [`VaultError::Corrupt`].
+    pub fn unseal_server_state(&self, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+        unseal_padded(
+            &self.dev_wrap,
+            &aad_vault("hirzla/v1/server-state", &self.vault_id)?,
+            sealed,
+        )
+    }
+
+    // -------------------------------------------------------------------------------------
     // Low-level helpers
     // -------------------------------------------------------------------------------------
 

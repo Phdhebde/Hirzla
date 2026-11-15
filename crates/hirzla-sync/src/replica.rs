@@ -735,6 +735,25 @@ impl<A: Authorizer> Replica<A> {
         }
     }
 
+    /// Restores the "to send" mark of local operations after the replica was rebuilt from
+    /// stored operations (`format.md` § 15.3). Only operations of this device are marked.
+    /// They count as having left the device: [`Replica::reissue_stale_unsent`] never
+    /// rewrites them, so that a write interrupted just after a push cannot fork the chain.
+    pub fn restore_unsent(&mut self, ops: &[OpId]) {
+        let (member, device) = (self.device.member_id(), self.device.device_id());
+        for o in ops {
+            let own = self
+                .op_ref(o)
+                .is_some_and(|r| r.member == member && r.device == device);
+            if let Some(e) = self.entries.get_mut(o) {
+                if own && matches!(e.body, Body::Full(_)) {
+                    e.unsent = true;
+                    e.shared = true;
+                }
+            }
+        }
+    }
+
     /// Differential exchange (§ 3 of the step, § 13.2): the full operations this replica
     /// holds and `peer` lacks, in `seq` order per device, and stubs for pruned ones.
     /// Operations that are not signed by their device (or not decodable) are not
