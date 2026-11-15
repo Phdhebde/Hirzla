@@ -538,6 +538,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
         members,
         grantable,
         grant_refusal,
+        ..
     } = bob.server(ServerRequest::LockerMembers { locker }).unwrap()
     else {
         panic!("members expected");
@@ -566,6 +567,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
         members,
         grantable,
         grant_refusal,
+        ..
     } = alice
         .server(ServerRequest::LockerMembers { locker })
         .unwrap()

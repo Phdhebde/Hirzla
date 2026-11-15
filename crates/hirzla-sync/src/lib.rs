@@ -38,6 +38,7 @@ pub mod op;
 pub mod pairing;
 pub mod relay;
 pub mod replica;
+pub mod text;
 pub mod wire;
 
 /// Control bodies (§ 7): the definitions of `hirzla-access`.

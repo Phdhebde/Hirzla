@@ -1,7 +1,7 @@
 //! Emission of operations (§ 5), compaction (§ 10.2), rescelling (§ 8.4), automatic
 //! quarantine rejection (§ 9.3) and re-emission of stale local operations (§ 5).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use hirzla_access::Role;
@@ -680,16 +680,22 @@ impl<A: Authorizer> Replica<A> {
     /// `Owner` (§ 9.3). The delay runs from the local reception.
     #[must_use]
     pub fn due_auto_rejects(&self, now_ms: u64) -> Vec<OpId> {
-        let owner = self
-            .authz
-            .as_ref()
-            .and_then(|s| s.role(&self.device.member_id()))
-            == Some(Role::Owner);
-        if !owner {
-            return Vec::new();
-        }
-        let hours = self
-            .meta
+        self.due_auto_rejects_with(now_ms, &|id| self.entries.get(id).map(|e| e.received_ms))
+    }
+
+    /// As [`Self::due_auto_rejects`], the local reception being the one the caller kept
+    /// (`SyncState.quarantine_seen`, § 11.4): the replica dates an operation when it ingests
+    /// it, which a core rebuilding its replicas at each start does again and again (ADR 0045).
+    /// An operation without a kept reception is not due.
+    #[must_use]
+    pub fn due_auto_rejects_since(&self, now_ms: u64, seen: &BTreeMap<OpId, u64>) -> Vec<OpId> {
+        self.due_auto_rejects_with(now_ms, &|id| seen.get(id).copied())
+    }
+
+    /// Delay of the automatic rejection of the locker, milliseconds (`format.md` § 7.4).
+    #[must_use]
+    pub fn quarantine_timeout_ms(&self) -> u64 {
+        self.meta
             .as_ref()
             .and_then(
                 |(_, m)| match m.fields.get(&LockerField::QuarantineTimeoutH) {
@@ -700,8 +706,13 @@ impl<A: Authorizer> Replica<A> {
                     None => None,
                 },
             )
-            .unwrap_or(DEFAULT_QUARANTINE_TIMEOUT_H);
-        let delay = hours.saturating_mul(3_600_000);
+            .unwrap_or(DEFAULT_QUARANTINE_TIMEOUT_H)
+            .saturating_mul(3_600_000)
+    }
+
+    /// Quarantined operations that no applied `QuarantineAccept` or `QuarantineReject` lists.
+    #[must_use]
+    pub fn undecided_quarantine(&self) -> Vec<OpId> {
         let mut decided: BTreeSet<OpId> = BTreeSet::new();
         for (id, s) in &self.status {
             if *s != OpStatus::Applied {
@@ -721,12 +732,27 @@ impl<A: Authorizer> Replica<A> {
             .iter()
             .filter(|(_, s)| matches!(s, OpStatus::Quarantined(_)))
             .filter(|(id, _)| !decided.contains(*id))
-            .filter(|(id, _)| {
-                self.entries
-                    .get(*id)
-                    .is_some_and(|e| e.received_ms.saturating_add(delay) <= now_ms)
-            })
             .map(|(id, _)| *id)
+            .collect()
+    }
+
+    fn due_auto_rejects_with(
+        &self,
+        now_ms: u64,
+        received: &dyn Fn(&OpId) -> Option<u64>,
+    ) -> Vec<OpId> {
+        let owner = self
+            .authz
+            .as_ref()
+            .and_then(|s| s.role(&self.device.member_id()))
+            == Some(Role::Owner);
+        if !owner {
+            return Vec::new();
+        }
+        let delay = self.quarantine_timeout_ms();
+        self.undecided_quarantine()
+            .into_iter()
+            .filter(|id| received(id).is_some_and(|r| r.saturating_add(delay) <= now_ms))
             .collect()
     }
 

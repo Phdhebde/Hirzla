@@ -181,6 +181,8 @@ pub(crate) struct Opened {
     pub(crate) kind: u64,
     pub(crate) lamport: u64,
     pub(crate) deps: Vec<OpId>,
+    /// Indicative wall clock of the author (never used to decide).
+    pub(crate) wall_ms: u64,
     pub(crate) content: Content,
 }
 
@@ -220,6 +222,19 @@ impl Keyring {
         let i = *self.verified.get(epoch)?;
         self.keys.get(epoch)?.get(i)
     }
+}
+
+/// The clear header of an operation ([`Replica::op_header`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpHeader {
+    /// Author member, device and rank.
+    pub opref: OpRef,
+    /// 1 data, 2 control.
+    pub class: u64,
+    /// Kind of a control operation (`sync-protocol.md` § 7.2).
+    pub control_kind: Option<u64>,
+    /// Wall clock the author announced, once the operation is unsealed here. Indicative.
+    pub wall_ms: Option<u64>,
 }
 
 /// Merged view of one secret.
@@ -613,6 +628,22 @@ impl<A: Authorizer> Replica<A> {
         match &self.entries.get(op)?.body {
             Body::Full(b) => Some(b),
             _ => None,
+        }
+    }
+
+    /// What the clear header of a fully held operation says (ADR 0045: shown to an `Owner`
+    /// who judges a quarantined operation): its reference, its class (1 data, 2 control),
+    /// and the kind of a control operation.
+    #[must_use]
+    pub fn op_header(&self, op: &OpId) -> Option<OpHeader> {
+        match self.decoded.get(op)? {
+            Ok(d) => Some(OpHeader {
+                opref: d.op.opref,
+                class: d.op.class,
+                control_kind: d.control.as_ref().map(ControlBody::kind),
+                wall_ms: self.opened.get(op).map(|o| o.wall_ms),
+            }),
+            Err(_) => None,
         }
     }
 
