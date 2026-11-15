@@ -162,6 +162,9 @@ pub enum ServerRefusal {
     UnknownPeer,
     /// The core is not the expected executable.
     UnexpectedExecutable,
+    /// The core is not signed by the client's publisher, or does not match the signed
+    /// manifest (ADR 0055, the client's side of ADR 0042).
+    SignatureNotAccepted,
 }
 
 /// The client's verdict on the core: same user, and, when `expected` is given, that exact

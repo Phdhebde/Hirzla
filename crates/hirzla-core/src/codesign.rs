@@ -1,6 +1,10 @@
 //! Signature of the core's clients (ADR 0042, `docs/api-locale.md` § 3.1), checked on top
 //! of the allow list of paths: on Windows and macOS, the client must be signed by the same
 //! publisher as the core; on Linux, its executable must match the signed client manifest.
+//!
+//! The same check runs the other way ([`CoreSignature`], ADR 0055): before it sends a
+//! request, a client checks that the core is signed by its own publisher (Windows, macOS) or
+//! matches the signed manifest installed next to it (Linux).
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -8,6 +12,7 @@ use std::path::{Path, PathBuf};
 use hirzla_crypto::util::{constant_time_eq, Sha384};
 use hirzla_keystore::platform;
 
+use crate::auth::{ServerRefusal, CORE_EXECUTABLE};
 use crate::events::Refusal;
 use crate::release::{self, FileEntry, Manifest, PublisherKeys, ReleaseError};
 use crate::transport::PeerIdentity;
@@ -161,6 +166,105 @@ impl ClientSignatures {
     }
 }
 
+/// The signature policy of a client toward its core (ADR 0055): the mirror of
+/// [`ClientSignatures`], set up the same way.
+#[derive(Debug, Clone)]
+pub struct CoreSignature(Check);
+
+impl CoreSignature {
+    /// No signature check (development builds).
+    #[must_use]
+    pub fn off() -> CoreSignature {
+        CoreSignature(Check::Off)
+    }
+
+    /// A check against a client manifest already verified (Linux; tests).
+    #[must_use]
+    pub fn with_manifest(manifest: Manifest) -> CoreSignature {
+        CoreSignature(Check::Manifest(manifest))
+    }
+
+    /// Sets up the policy of this system for `mode`: on Windows and macOS, the client's own
+    /// publisher, which the core must share; elsewhere, the client manifest at `manifest`,
+    /// verified with `keys`.
+    ///
+    /// # Errors
+    /// [`SetupError`]: the client must then refuse to talk to any core.
+    pub fn setup(
+        mode: SignatureMode,
+        manifest: &Path,
+        keys: &PublisherKeys,
+    ) -> Result<CoreSignature, SetupError> {
+        ClientSignatures::setup(mode, manifest, keys).map(|c| CoreSignature(c.0))
+    }
+
+    /// The policy of this build for the core at `expected_core`: required in a delivery build
+    /// (compiled publisher keys, manifest next to the core), off otherwise.
+    ///
+    /// # Errors
+    /// [`SetupError`].
+    pub fn for_build(expected_core: &Path) -> Result<CoreSignature, SetupError> {
+        let mode = SignatureMode::default_for_build();
+        if mode == SignatureMode::Off {
+            return Ok(CoreSignature::off());
+        }
+        let keys = PublisherKeys::compiled().map_err(|_| SetupError::NoPublisherKey)?;
+        CoreSignature::setup(mode, &default_manifest_path(expected_core), &keys)
+    }
+
+    /// Whether signatures are checked.
+    #[must_use]
+    pub fn mode(&self) -> SignatureMode {
+        match self.0 {
+            Check::Off => SignatureMode::Off,
+            _ => SignatureMode::Required,
+        }
+    }
+
+    /// The verdict on the core behind the endpoint, already accepted by its user and path.
+    ///
+    /// On Linux, a hardened core is not dumpable and the kernel hides its executable from the
+    /// client: the file hashed is then `expected_core`, the installed core whose path
+    /// [`crate::auth::check_server`] could not compare either. A core that shows its
+    /// executable is hashed through `/proc/<pid>/exe`, the inode it runs.
+    ///
+    /// # Errors
+    /// [`ServerRefusal::SignatureNotAccepted`], or [`ServerRefusal::UnknownPeer`] when the
+    /// core's process or executable cannot be read.
+    pub fn check(&self, peer: &PeerIdentity, expected_core: &Path) -> Result<(), ServerRefusal> {
+        match &self.0 {
+            Check::Off => Ok(()),
+            Check::Publisher(own) => {
+                let exe = peer
+                    .executable
+                    .as_deref()
+                    .ok_or(ServerRefusal::UnknownPeer)?;
+                let pid = peer.pid.ok_or(ServerRefusal::UnknownPeer)?;
+                match platform::process_code_signer(pid, exe) {
+                    Ok(core) if core == *own => Ok(()),
+                    _ => Err(ServerRefusal::SignatureNotAccepted),
+                }
+            }
+            Check::Manifest(manifest) => {
+                let name = format!("{CORE_EXECUTABLE}{}", std::env::consts::EXE_SUFFIX);
+                let entry = manifest
+                    .file(&name)
+                    .ok_or(ServerRefusal::SignatureNotAccepted)?;
+                let running = match (peer.pid, peer.executable_hidden) {
+                    (Some(pid), false) => PathBuf::from(format!("/proc/{pid}/exe")),
+                    _ => expected_core.to_path_buf(),
+                };
+                let file = std::fs::File::open(&running).map_err(|_| ServerRefusal::UnknownPeer)?;
+                if matches_entry(file, entry) {
+                    Ok(())
+                } else {
+                    Err(ServerRefusal::SignatureNotAccepted)
+                }
+            }
+        }
+    }
+}
+
 /// Whether `content` has exactly the size and SHA-384 of `entry` (compared in constant
 /// time).
 #[must_use]
@@ -228,6 +332,98 @@ mod tests {
         .unwrap();
         assert_eq!(s.mode(), SignatureMode::Off);
         assert_eq!(s.check(&peer(PathBuf::from("/nonexistent"))), Ok(()));
+    }
+
+    #[test]
+    fn core_signature_off_accepts_without_looking() {
+        let s = CoreSignature::setup(
+            SignatureMode::Off,
+            Path::new("/nonexistent"),
+            &PublisherKeys::new(vec![]),
+        )
+        .unwrap();
+        assert_eq!(s.mode(), SignatureMode::Off);
+        let p = PathBuf::from("/nonexistent");
+        assert_eq!(s.check(&peer(p.clone()), &p), Ok(()));
+        // A development build checks nothing.
+        if !release::DELIVERY_BUILD {
+            assert_eq!(
+                CoreSignature::for_build(&p).unwrap().mode(),
+                SignatureMode::Off
+            );
+        }
+    }
+
+    /// Linux, the client's side (ADR 0055): the installed core is hashed when the kernel
+    /// hides the running one; a core absent from the manifest, modified, or unreadable is
+    /// refused.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_client_checks_the_core_against_the_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let core = dir.path().join(CORE_EXECUTABLE);
+        std::fs::write(&core, b"the published core").unwrap();
+        let key = PublisherSigningKey::generate().unwrap();
+        let keys = PublisherKeys::new(vec![key.verifying_key().clone()]);
+        let good = entry_for(CORE_EXECUTABLE, &core, true).unwrap();
+        let path = manifest_file(dir.path(), &key, vec![good]);
+        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
+        assert_eq!(s.mode(), SignatureMode::Required);
+        let hidden = PeerIdentity {
+            same_user: true,
+            pid: Some(1),
+            executable: None,
+            executable_hidden: true,
+        };
+        assert_eq!(s.check(&hidden, &core), Ok(()));
+        // The installed core replaced by another program.
+        std::fs::write(&core, b"a substituted core").unwrap();
+        assert_eq!(
+            s.check(&hidden, &core),
+            Err(ServerRefusal::SignatureNotAccepted)
+        );
+        // Removed.
+        std::fs::remove_file(&core).unwrap();
+        assert_eq!(s.check(&hidden, &core), Err(ServerRefusal::UnknownPeer));
+        // A manifest that names no core.
+        let client = dir.path().join("hirzla");
+        std::fs::write(&client, b"client").unwrap();
+        let path = manifest_file(
+            dir.path(),
+            &key,
+            vec![entry_for("hirzla", &client, true).unwrap()],
+        );
+        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
+        std::fs::write(&core, b"the published core").unwrap();
+        assert_eq!(
+            s.check(&hidden, &core),
+            Err(ServerRefusal::SignatureNotAccepted)
+        );
+        // A visible running process is hashed through /proc: this test binary is not the
+        // core of the manifest.
+        let me = std::env::current_exe().unwrap();
+        let visible = peer(me.clone());
+        let path = manifest_file(
+            dir.path(),
+            &key,
+            vec![entry_for(CORE_EXECUTABLE, &core, true).unwrap()],
+        );
+        let s = CoreSignature::setup(SignatureMode::Required, &path, &keys).unwrap();
+        assert_eq!(
+            s.check(&visible, &core),
+            Err(ServerRefusal::SignatureNotAccepted)
+        );
+        // Another publisher's manifest is refused at setup: the client talks to no core.
+        let other = PublisherSigningKey::generate().unwrap();
+        let path = manifest_file(
+            dir.path(),
+            &other,
+            vec![entry_for(CORE_EXECUTABLE, &core, true).unwrap()],
+        );
+        assert_eq!(
+            CoreSignature::setup(SignatureMode::Required, &path, &keys).err(),
+            Some(SetupError::Manifest(ReleaseError::Signature))
+        );
     }
 
     #[test]

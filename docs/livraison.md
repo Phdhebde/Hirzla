@@ -62,8 +62,12 @@ cp target/release/hirzla-core "apps/desktop/src-tauri/binaries/hirzla-core-$trip
 cp target/release/hirzla      "apps/desktop/src-tauri/binaries/hirzla-$triple"
 # 3. Les installeurs du système courant.
 cd apps/desktop/src-tauri
-cargo tauri build --config tauri.livraison.conf.json
+cargo tauri build --config tauri.livraison.conf.json --features livraison
 ```
+
+La fonctionnalité `livraison` de l'application, de la ligne de commande et de l'hôte natif
+fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : même
+éditeur sous Windows et macOS, empreinte du manifeste des clients sous Linux.
 
 Le flux `.github/workflows/livraison.yml` (lancé à la main) fait ces étapes sur les trois
 systèmes et publie les installeurs comme artefacts. La compilation Cargo elle-même ne
@@ -164,12 +168,14 @@ exécutables (aucun `strip` ensuite) et installé à côté de `hirzla-core` :
 
 ```sh
 hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 \
-  --sortie hirzla-clients.manifest hirzla hirzla-desktop hirzla-native-host
+  --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
 ```
 
 Format, identique à l'enveloppe du § 8 avec le type `C` : en-tête, manifeste CBOR des
 exécutables (nom, taille, SHA-384), signature hybride. Le noyau refuse de démarrer si le
-manifeste manque, ne vérifie pas avec une clé compilée ou est altéré.
+manifeste manque, ne vérifie pas avec une clé compilée ou est altéré. Le manifeste nomme aussi
+`hirzla-core` : les clients d'une version de livraison vérifient le noyau installé contre lui
+et refusent de lui parler s'il manque ou diffère (ADR 0055).
 
 ## 8. Mises à jour hors ligne signées (ADR 0043)
 

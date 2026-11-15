@@ -13,6 +13,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Delivery build (ADR 0055): the core's signature is checked before anything is sent to it
+# (compiled publisher keys only, as for the core and the command line).
+livraison = ["hirzla-core/livraison"]
+
 [dependencies]
 hirzla-core = { path = "../../crates/hirzla-core" }
 hirzla-keystore = { path = "../../crates/hirzla-keystore" }

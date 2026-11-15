@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command as Process, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
+use hirzla_core::auth::ServerRefusal;
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, Reply, Request, Selector, StatusInfo,
@@ -101,6 +102,11 @@ fn client_message(e: &ClientError) -> String {
         }
         ClientError::UnsafeEndpoint => {
             "le point de connexion n'est pas réservé à votre compte : connexion refusée.".into()
+        }
+        ClientError::UntrustedCore(ServerRefusal::SignatureNotAccepted) => {
+            "la signature du noyau n'est pas reconnue (éditeur différent ou manifeste des \
+             clients non conforme) : connexion refusée, rien n'a été envoyé."
+                .into()
         }
         ClientError::UntrustedCore(_) => {
             "le processus à l'écoute n'est pas le noyau Hirzla attendu : connexion refusée.".into()
