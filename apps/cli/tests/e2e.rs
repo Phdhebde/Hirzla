@@ -63,8 +63,12 @@ fn socket(dir: &Path) -> String {
     }
     #[cfg(windows)]
     {
-        let _ = dir;
-        format!(r"\\.\pipe\hirzla-e2e-{}", std::process::id())
+        // One pipe per test: the tests of this file run in parallel in one process.
+        let tag = dir
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        format!(r"\\.\pipe\hirzla-e2e-{}-{tag}", std::process::id())
     }
 }
 

@@ -524,8 +524,6 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
-        // A second core is refused while the first listens.
-        assert!(matches!(Listener::bind(&ep), Err(TransportError::InUse)));
         let client = std::thread::spawn({
             let ep = ep.clone();
             move || connect(&ep).unwrap()
@@ -535,6 +533,9 @@ mod tests {
         assert_eq!(peer.pid, Some(std::process::id()));
         let (_c, server) = client.join().unwrap();
         assert!(server.same_user);
+        // A second core is refused while the first listens. Checked after the accept: its
+        // probe connection is queued, then closed, and macOS gives no PID for a closed peer.
+        assert!(matches!(Listener::bind(&ep), Err(TransportError::InUse)));
         drop(listener);
         assert!(matches!(connect(&ep), Err(TransportError::NotRunning)));
     }
