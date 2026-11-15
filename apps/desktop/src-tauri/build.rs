@@ -32,6 +32,17 @@ const COMMANDS: &[&str] = &[
     "remove_recovery_kit",
     "choose_kdbx_file",
     "import_kdbx",
+    "server_status",
+    "server_identity",
+    "export_server_identity",
+    "choose_server_ca",
+    "server_join",
+    "server_confirm",
+    "server_sync",
+    "create_shared_locker",
+    "locker_members",
+    "grant_role",
+    "revoke_role",
 ];
 
 fn main() {

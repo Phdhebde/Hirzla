@@ -11,6 +11,8 @@
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
+//! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
+//!   state of the key transparency log (local API version 4, ADR 0041);
 //! - `events` (Linux): sleep and session lock reported to the core (ADR 0033).
 
 #![forbid(unsafe_code)]
@@ -24,6 +26,7 @@ pub mod events;
 pub mod import;
 pub mod link;
 pub mod selfmode;
+pub mod servermode;
 
 use commands::AppState;
 use link::{CoreLink, LinkConfig};
@@ -85,6 +88,17 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::remove_recovery_kit,
             selfmode::choose_kdbx_file,
             selfmode::import_kdbx,
+            servermode::server_status,
+            servermode::server_identity,
+            servermode::export_server_identity,
+            servermode::choose_server_ca,
+            servermode::server_join,
+            servermode::server_confirm,
+            servermode::server_sync,
+            servermode::create_shared_locker,
+            servermode::locker_members,
+            servermode::grant_role,
+            servermode::revoke_role,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

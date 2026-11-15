@@ -488,3 +488,80 @@ fn the_self_mode_commands_drive_a_real_core() {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
 }
+
+/// The server mode commands (local API version 4) against a real core, without a server:
+/// state before joining, public identity, checks before the core, an unreachable server and
+/// the refusals that need a joined server.
+#[test]
+fn the_server_mode_commands_drive_a_real_core() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+
+    let status = serde_json::to_value(state.server_status().unwrap()).unwrap();
+    assert_eq!(status["joined"], false);
+    assert!(status["keylog"].is_null());
+    assert_eq!(status["lockers"].as_array().unwrap().len(), 0);
+
+    let id = serde_json::to_value(state.server_identity().unwrap()).unwrap();
+    assert_eq!(id["member"].as_str().unwrap().len(), 32);
+    assert_eq!(id["fingerprint"].as_str().unwrap().len(), 20);
+    let out = dir.path().join("membre.hirzla-membre");
+    assert_eq!(state.export_identity(&out).unwrap(), "membre.hirzla-membre");
+    assert!(!std::fs::read(&out).unwrap().is_empty());
+
+    // No CA chosen yet, then a CA and a server that does not answer.
+    assert_eq!(
+        state
+            .join_server("hirzla://127.0.0.1:9", None)
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    let ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ac-essai.pem");
+    assert_eq!(state.set_server_ca(&ca).unwrap(), "ac-essai.pem");
+    assert_eq!(
+        state
+            .join_server("hirzla://127.0.0.1:9", Some("pas une empreinte"))
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    let e = state.join_server("hirzla://127.0.0.1:9", None).unwrap_err();
+    assert_eq!(e.code(), "server_unreachable");
+    assert!(e.message().contains("injoignable"));
+    assert_eq!(
+        serde_json::to_value(state.server_status().unwrap()).unwrap()["joined"],
+        false
+    );
+
+    // Everything else needs a joined server.
+    assert_eq!(state.sync_server().unwrap_err().code(), "not_joined");
+    assert_eq!(
+        state
+            .confirm_server("ABCDE FGHIJ KLMNO PQRST")
+            .unwrap_err()
+            .code(),
+        "not_joined"
+    );
+    assert_eq!(
+        state.create_shared_locker("Équipe").unwrap_err().code(),
+        "not_joined"
+    );
+    let locker = "00".repeat(16);
+    assert_eq!(
+        state.locker_members(&locker).unwrap_err().code(),
+        "not_joined"
+    );
+}
