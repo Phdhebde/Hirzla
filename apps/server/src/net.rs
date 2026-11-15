@@ -30,7 +30,7 @@ use hirzla_crypto::util::sha384;
 use rustls::{ServerConfig, ServerConnection, StreamOwned};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::core::{Core, Session};
+use crate::core::{Core, LateRetention, Session};
 use crate::proto::{
     self, code, kind, AdminStatus, FrameBuffer, Message, ALPN, EXPORTER_LABEL, EXPORTER_LEN,
 };
@@ -179,11 +179,14 @@ pub struct Config {
     pub tls: Arc<ServerConfig>,
     /// TLS of the administration port (client certificate required).
     pub admin_tls: Arc<ServerConfig>,
+    /// Retention of the bodies of `late` operations (ADR 0047, ADR 0058).
+    pub late_retention: LateRetention,
 }
 
 struct Shared {
     dir: PathBuf,
     header: SealHeader,
+    late_retention: LateRetention,
     core: Mutex<Option<Core>>,
     unsealer: Mutex<Unsealer>,
     /// Administration events seen while sealed, recorded once the audit log opens.
@@ -266,6 +269,7 @@ pub fn start_with_limits(
     let shared = Arc::new(Shared {
         dir: config.data_dir.clone(),
         header,
+        late_retention: config.late_retention,
         core: Mutex::new(None),
         unsealer: Mutex::new(Unsealer::new(dealer)),
         pending_admin: Mutex::new(Vec::new()),
@@ -481,7 +485,7 @@ fn unseal(shared: &Shared, share: &[u8]) -> Result<(), ServerError> {
     };
     let storage = seal.unwrap(&shared.header.wrapped_storage_key)?;
     drop(seal);
-    let mut core = Core::open(&shared.dir, &shared.header, storage)?;
+    let mut core = Core::open(&shared.dir, &shared.header, storage, shared.late_retention)?;
     for e in lock(&shared.pending_admin)?.drain(..) {
         core.audit_admin(e)?;
     }

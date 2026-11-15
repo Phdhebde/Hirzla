@@ -232,7 +232,7 @@ impl Client {
         self.request(kind::PING, proto::empty()).map(|_| ())
     }
 
-    /// Waits for a spontaneous message (`Ops` after `Subscribe`).
+    /// Waits for a spontaneous message (`Ops` after `Subscribe`, `Stable`, ADR 0057).
     ///
     /// # Errors
     /// I/O errors, including the read timeout.
@@ -294,8 +294,10 @@ impl Client {
 
     /// `Ack` (§ 11.5, § 10.2 step 4) of verified `Compact` operations, then `Ping`: the
     /// `Stable` the server sends back for those already stable are queued before the `Pong`
-    /// and returned, as `(locker, compact)`. `Ack` is idempotent; a device sends it again at
-    /// each synchronisation until the compaction is announced stable (ADR 0040).
+    /// and returned, as `(locker, compact)`, with every `Stable` already queued for these
+    /// lockers (pushed by the server, ADR 0057); those of other lockers stay queued. `Ack` is
+    /// idempotent; a device sends it again at each synchronisation until the compaction is
+    /// announced stable (ADR 0040).
     ///
     /// # Errors
     /// [`NetError::Refused`], I/O errors.
@@ -322,18 +324,30 @@ impl Client {
                 return Err(NetError::Protocol);
             }
         }
-        Ok(self.take_stable())
+        Ok(self.take_stable_where(|l| acks.iter().any(|(a, _)| a == l)))
     }
 
-    /// Takes the `Stable` messages (§ 11.5) received so far, as `(locker, compact)`;
-    /// other spontaneous messages stay queued. A malformed one is dropped.
+    /// Takes the `Stable` messages (§ 11.5) received so far, as `(locker, compact)`:
+    /// answers to `Ack` and announcements pushed by the server to the open session
+    /// (ADR 0057). Other spontaneous messages stay queued. A malformed one is dropped.
     pub fn take_stable(&mut self) -> Vec<(Id16, OpId)> {
+        self.take_stable_where(|_| true)
+    }
+
+    /// Takes the `Stable` messages received so far for `locker`; the others stay queued.
+    pub fn take_stable_for(&mut self, locker: &Id16) -> Vec<(Id16, OpId)> {
+        self.take_stable_where(|l| l == locker)
+    }
+
+    fn take_stable_where(&mut self, keep: impl Fn(&Id16) -> bool) -> Vec<(Id16, OpId)> {
         let mut out = Vec::new();
         let mut rest = VecDeque::new();
         while let Some(m) = self.queued.pop_front() {
             if m.kind == kind::STABLE {
-                if let Ok(s) = proto::read_ack(&m.body) {
-                    out.push(s);
+                match proto::read_ack(&m.body) {
+                    Ok(s) if keep(&s.0) => out.push(s),
+                    Ok(_) => rest.push_back(m),
+                    Err(_) => {}
                 }
             } else {
                 rest.push_back(m);
