@@ -9,8 +9,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# ADR 0052: the TPM 2.0 prototype (tss-esapi, hence the C library tpm2-tss) is built only on
+# request, by its dedicated CI job « TPM prototype (swtpm) ». Off in every shipped binary.
+tpm2-prototype = ["dep:tss-esapi", "dep:hirzla-crypto"]
+
 [dependencies]
-hirzla-crypto = { path = "../hirzla-crypto" }
+# Only the TPM prototype uses it (`tpm2-prototype`).
+hirzla-crypto = { path = "../hirzla-crypto", optional = true }
 thiserror = "2.0"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
@@ -22,9 +28,10 @@ libc = "0.2.191"
 # ADR 0014. TPM 2.0 through tpm2-tss (>= 4.1.3, found by pkg-config, see
 # .github/scripts/install-tpm2-tss.sh; no
 # source download at build time). Windows is not built yet: no released tss-esapi opens the
-# TBS TCTI (see docs/keystore-prototypes.md).
+# TBS TCTI (see docs/keystore-prototypes.md). Optional (feature `tpm2-prototype`, ADR 0052):
+# the prototype is not wired to the core, so the C library is not linked into it.
 [target.'cfg(target_os = "linux")'.dependencies]
-tss-esapi = "=7.7.0"
+tss-esapi = { version = "=7.7.0", optional = true }
 
 # ADR 0014. Secure Enclave, only ever combined with the master password (decision 1).
 # OSX_10_15: the data protection keychain, the only one that holds enclave keys.

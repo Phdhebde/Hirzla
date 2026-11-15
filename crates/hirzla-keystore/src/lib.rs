@@ -13,7 +13,9 @@
 
 pub mod platform;
 
-#[cfg(target_os = "linux")]
+// ADR 0052: behind the `tpm2-prototype` feature, off by default, so that tpm2-tss is not
+// linked into the core while the prototype is wired to nothing.
+#[cfg(all(target_os = "linux", feature = "tpm2-prototype"))]
 pub mod tpm2_prototype;
 
 #[cfg(target_os = "macos")]

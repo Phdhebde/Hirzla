@@ -45,7 +45,8 @@ cargo install tauri-cli --version 2.12.4 --locked
 
 Prérequis propres : WiX Toolset 3 sous Windows (installé par la CLI Tauri au premier MSI, ou
 fourni hors ligne dans `%LOCALAPPDATA%\tauri\WixTools`), Xcode sous macOS, et sous Linux
-`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev rpm` plus tpm2-tss (voir la CI).
+`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev rpm` (tpm2-tss n'est plus nécessaire : le
+prototype TPM est hors des binaires livrés, ADR 0052).
 
 ```sh
 # 0. La clé publique d'éditeur (§ 7), compilée dans le noyau et la ligne de commande.
