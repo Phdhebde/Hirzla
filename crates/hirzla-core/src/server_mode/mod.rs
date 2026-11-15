@@ -6,7 +6,10 @@
 //! - Each shared locker is a [`Replica`] of `hirzla-sync`, validated with the rules of
 //!   `hirzla-access`; the network client is `hirzla_sync::net` (TLS 1.3 hybrid group only,
 //!   channel binding by the TLS exporter, pinned hybrid server key).
-//! - The state lives in the sealed annex file of `format.md` § 15, next to the vault.
+//! - The state lives in the sealed annex file of `format.md` § 15, next to the vault: the
+//!   operations of the shared lockers, the causal past of the operations pruned after a stable
+//!   compaction, and the local key transparency log with its last verified head (ADR 0040).
+//!   A restart neither falls back to trust on first use nor forgets what was pruned.
 //! - No connection without a joined server, and only during a request that needs it
 //!   (`CLAUDE.md` rule 7).
 
@@ -15,20 +18,22 @@ pub mod proto;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use hirzla_access::authz::{Action, Author};
 use hirzla_access::keylog::{
-    device_cert_object, member_keys_object, EntryKind, ExpectedEntry, KeyLogProof,
+    device_cert_object, member_keys_object, Alert, EntryKind, ExpectedEntry, ForkEvidence,
+    KeyLogHead, KeyLogMonitor, KeyLogProof,
 };
-use hirzla_access::{Denial, Role};
+use hirzla_access::{AccessError, Denial, KeyLogFailure, Role};
 use hirzla_crypto::sign::VerifyingKey;
 use hirzla_crypto::util::sha384;
-use hirzla_sync::keylog::KeyLogTrust;
+use hirzla_sync::compact::PrunedPast;
+use hirzla_sync::keylog::{KeyLogTrust, RecipientGate};
 use hirzla_sync::net::client::{Client, Identity};
 use hirzla_sync::net::proto::{code, PushStatus, MAX_PUSH_OPS};
 use hirzla_sync::net::{tls, NetError};
-use hirzla_sync::wire::{OpItem, SyncState};
+use hirzla_sync::wire::{OpItem, Stub, SyncState};
 use hirzla_sync::{AccessAuthorizer, LocalDevice, OpStatus, Replica, SyncError};
 use hirzla_vault::cbor::{self, array_max, boolean, bytes_max, fixed, uint_in, Fields, Value};
 use hirzla_vault::model::{Id16, OpId, ServerInfo, MAX_SERVER_URL};
@@ -45,8 +50,8 @@ use crate::proto::ErrorCode;
 /// A replica of a shared locker.
 pub type SharedReplica = Replica<AccessAuthorizer>;
 
-/// Version of the annex file (`format.md` § 15.2).
-const ANNEX_VERSION: u64 = 1;
+/// Version of the annex file written (`format.md` § 15.2, ADR 0040). Version 1 is still read.
+const ANNEX_VERSION: u64 = 2;
 /// Most shared lockers.
 pub const MAX_LOCKERS: usize = 256;
 /// Default port of `hirzlad` (`sync-protocol.md` § 11.1).
@@ -57,6 +62,20 @@ const MAX_OP_LEN: usize = 4 * 1024 * 1024;
 const MAX_OPS_PER_LOCKER: usize = 1_000_000;
 /// Largest encoded `SyncState`.
 const MAX_SYNC_STATE: usize = 16 * 1024 * 1024;
+/// Most key log entries kept (`transparence.md` § 10: about 100 000 for a large site).
+const MAX_KEYLOG_ENTRIES: usize = 1_000_000;
+/// Largest encoded key log entry.
+const MAX_KEYLOG_ENTRY: usize = 4096;
+/// Most alerts kept about the member's own keys (`transparence.md` § 6.4).
+const MAX_ALERTS: usize = 4096;
+/// Most `Compact` operations of one locker remembered as stable.
+const MAX_STABLE: usize = 100_000;
+/// A device emits a `Compact` once a locker has at least this many prunable versions
+/// (`sync-protocol.md` § 10.1), and only when no earlier one waits for its stability.
+pub const COMPACT_MIN: usize = 16;
+/// Most elements of one `Compact` emitted here: about 350 bytes each, under the 4 MiB of an
+/// operation (`sync-protocol.md` § 10.2).
+const COMPACT_MAX: usize = 8192;
 
 fn general(c: ErrorCode) -> ServerCode {
     ServerCode::General(c)
@@ -68,6 +87,32 @@ fn internal<E>(_: E) -> ServerCode {
 
 fn corrupt<E>(_: E) -> ServerCode {
     general(ErrorCode::Corrupt)
+}
+
+/// A sorted list of distinct operation identifiers, at most `max`.
+fn op_id_list(v: &Value, max: usize) -> Result<Vec<OpId>, ServerCode> {
+    let ids: Vec<OpId> = array_max(v, max)
+        .map_err(corrupt)?
+        .iter()
+        .map(fixed::<48>)
+        .collect::<Result<_, _>>()
+        .map_err(corrupt)?;
+    if !strictly_sorted(ids.iter().copied()) {
+        return Err(general(ErrorCode::Corrupt));
+    }
+    Ok(ids)
+}
+
+/// Whether identifiers are sorted without duplicate.
+fn strictly_sorted(ids: impl Iterator<Item = OpId>) -> bool {
+    let mut last: Option<OpId> = None;
+    for i in ids {
+        if last.is_some_and(|l| l >= i) {
+            return false;
+        }
+        last = Some(i);
+    }
+    true
 }
 
 /// Maps a network failure: a code of the server, or "unreachable" for anything else (TLS,
@@ -167,11 +212,21 @@ pub fn annex_path(vault_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// A shared locker: its replica, its cursor, and whether the server still serves it.
+/// A shared locker: its replica, its cursor, whether the server still serves it, and the
+/// `Compact` operations announced stable and pruned here.
 struct Shared {
     replica: SharedReplica,
     sync: SyncState,
     access: bool,
+    stable: BTreeSet<OpId>,
+}
+
+/// The local key transparency log (`transparence.md` § 6.1, ADR 0040): the monitor, shared
+/// with the replicas as their recipient gate (§ 6.2), and the alerts about the member's own
+/// keys (§ 6.4) not yet shown.
+struct LocalKeyLog {
+    monitor: Arc<RwLock<KeyLogMonitor>>,
+    alerts: Vec<Alert>,
 }
 
 /// The joined server.
@@ -179,6 +234,20 @@ struct Joined {
     info: ServerInfo,
     roots: Vec<u8>,
     lockers: BTreeMap<Id16, Shared>,
+    keylog: LocalKeyLog,
+}
+
+/// A locked monitor: a poisoned lock (panic while updating) counts as a corrupt state.
+fn read_log(
+    m: &RwLock<KeyLogMonitor>,
+) -> Result<std::sync::RwLockReadGuard<'_, KeyLogMonitor>, ServerCode> {
+    m.read().map_err(internal)
+}
+
+fn write_log(
+    m: &RwLock<KeyLogMonitor>,
+) -> Result<std::sync::RwLockWriteGuard<'_, KeyLogMonitor>, ServerCode> {
+    m.write().map_err(internal)
 }
 
 /// The server mode of an unlocked vault.
@@ -239,19 +308,131 @@ impl ServerMode {
         })
     }
 
+    /// An empty local key log for the server `info`, watching this device's member.
+    fn new_keylog(&self, info: &ServerInfo) -> Result<LocalKeyLog, ServerCode> {
+        let key = VerifyingKey::from_bytes(&info.server_key).map_err(corrupt)?;
+        let mut m = KeyLogMonitor::new(info.server_id, key, self.device.member_keys().clone())
+            .map_err(internal)?;
+        m.expect_own_device(self.device.cert()).map_err(internal)?;
+        Ok(LocalKeyLog {
+            monitor: Arc::new(RwLock::new(m)),
+            alerts: Vec::new(),
+        })
+    }
+
+    /// A replica of `id` checked against the server's log: proofs (§ 6.3) and recipients
+    /// (§ 6.2) through the local key log.
+    fn new_replica(
+        &self,
+        id: Id16,
+        genesis: Option<OpId>,
+        trust: &KeyLogTrust,
+        keylog: &LocalKeyLog,
+    ) -> SharedReplica {
+        let mut r = Replica::join(Arc::clone(&self.device), AccessAuthorizer, id, genesis);
+        Self::wire(&mut r, trust, keylog);
+        r
+    }
+
+    fn wire(r: &mut SharedReplica, trust: &KeyLogTrust, keylog: &LocalKeyLog) {
+        r.set_keylog_trust(Some(trust.clone()));
+        let gate: Arc<dyn RecipientGate> = keylog.monitor.clone();
+        r.set_recipient_gate(Some(gate));
+    }
+
+    /// Rebuilds the local key log from what the annex kept: every entry is checked again
+    /// against the kept head (signature, root, rules R1 to R5), as if it came from the server.
+    fn decode_keylog(&self, info: &ServerInfo, v: &Value) -> Result<LocalKeyLog, ServerCode> {
+        let f = Fields::new(v, &[1, 2, 3, 4]).map_err(corrupt)?;
+        let entries: Vec<Vec<u8>> = array_max(f.req(1).map_err(corrupt)?, MAX_KEYLOG_ENTRIES)
+            .map_err(corrupt)?
+            .iter()
+            .map(|e| bytes_max(e, MAX_KEYLOG_ENTRY).map(<[u8]>::to_vec))
+            .collect::<Result<_, _>>()
+            .map_err(corrupt)?;
+        let head = f
+            .opt(2)
+            .map(KeyLogHead::from_value)
+            .transpose()
+            .map_err(corrupt)?;
+        let suspect = f
+            .opt(3)
+            .map(ForkEvidence::from_value)
+            .transpose()
+            .map_err(corrupt)?;
+        let alerts: Vec<Alert> = array_max(f.req(4).map_err(corrupt)?, MAX_ALERTS)
+            .map_err(corrupt)?
+            .iter()
+            .map(Alert::from_value)
+            .collect::<Result<_, _>>()
+            .map_err(corrupt)?;
+        let log = self.new_keylog(info)?;
+        {
+            let mut m = write_log(&log.monitor)?;
+            match &head {
+                // Own alerts were raised when the entries were first seen: not again.
+                Some(h) => {
+                    m.ingest(0, &entries, h).map_err(corrupt)?;
+                }
+                None if entries.is_empty() => {}
+                None => return Err(general(ErrorCode::Corrupt)),
+            }
+            if let Some(e) = suspect {
+                m.restore_suspect(e);
+            }
+        }
+        Ok(LocalKeyLog {
+            monitor: log.monitor,
+            alerts,
+        })
+    }
+
+    fn encode_keylog(log: &LocalKeyLog) -> Result<Value, ServerCode> {
+        let m = read_log(&log.monitor)?;
+        let entries = m
+            .entries()
+            .iter()
+            .map(|e| e.encode().map(|b| Value::bytes(&b)))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(internal)?;
+        let mut e = vec![(1, Value::Array(entries))];
+        if let Some(h) = m.head() {
+            e.push((2, h.to_value()));
+        }
+        if let Some(s) = m.suspect() {
+            e.push((3, s.to_value()));
+        }
+        e.push((
+            4,
+            Value::Array(log.alerts.iter().map(Alert::to_value).collect()),
+        ));
+        Ok(Value::map(e))
+    }
+
     fn decode(&self, content: &[u8]) -> Result<Joined, ServerCode> {
         let v = cbor::decode(content).map_err(corrupt)?;
-        let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(corrupt)?;
-        uint_in(f.req(1).map_err(corrupt)?, ANNEX_VERSION..=ANNEX_VERSION).map_err(corrupt)?;
+        let f = Fields::new(&v, &[1, 2, 3, 4, 5]).map_err(corrupt)?;
+        let version = uint_in(f.req(1).map_err(corrupt)?, 1..=ANNEX_VERSION).map_err(corrupt)?;
         let info = ServerInfo::from_value(f.req(2).map_err(corrupt)?).map_err(corrupt)?;
         let roots = bytes_max(f.req(3).map_err(corrupt)?, MAX_ROOTS)
             .map_err(corrupt)?
             .to_vec();
         let trust = Self::trust(&info)?;
+        // Version 1 kept no key log: it starts empty and is filled at the next session.
+        let keylog = match (version, f.opt(5)) {
+            (1, None) => self.new_keylog(&info)?,
+            (2, Some(k)) => self.decode_keylog(&info, k)?,
+            _ => return Err(general(ErrorCode::Corrupt)),
+        };
+        let locker_keys: &[u64] = if version == 1 {
+            &[1, 2, 3, 4, 5, 6]
+        } else {
+            &[1, 2, 3, 4, 5, 6, 7, 8, 9]
+        };
         let mut lockers = BTreeMap::new();
         let mut last: Option<Id16> = None;
         for l in array_max(f.req(4).map_err(corrupt)?, MAX_LOCKERS).map_err(corrupt)? {
-            let g = Fields::new(l, &[1, 2, 3, 4, 5, 6]).map_err(corrupt)?;
+            let g = Fields::new(l, locker_keys).map_err(corrupt)?;
             let id = fixed::<16>(g.req(1).map_err(corrupt)?).map_err(corrupt)?;
             if last.is_some_and(|p| p >= id) {
                 return Err(general(ErrorCode::Corrupt));
@@ -268,17 +449,39 @@ impl ServerMode {
                 .map(|o| bytes_max(o, MAX_OP_LEN).map(<[u8]>::to_vec))
                 .collect::<Result<_, _>>()
                 .map_err(corrupt)?;
-            let unsent: Vec<OpId> = array_max(g.req(5).map_err(corrupt)?, MAX_OPS_PER_LOCKER)
-                .map_err(corrupt)?
-                .iter()
-                .map(fixed::<48>)
-                .collect::<Result<_, _>>()
-                .map_err(corrupt)?;
+            let unsent = op_id_list(g.req(5).map_err(corrupt)?, MAX_OPS_PER_LOCKER)?;
             let access = boolean(g.req(6).map_err(corrupt)?).map_err(corrupt)?;
-            let mut replica =
-                Replica::join(Arc::clone(&self.device), AccessAuthorizer, id, genesis);
-            replica.set_keylog_trust(Some(trust.clone()));
+            let (pruned, stubs, stable) = if version == 1 {
+                (Vec::new(), Vec::new(), Vec::new())
+            } else {
+                let pruned: Vec<PrunedPast> =
+                    array_max(g.req(7).map_err(corrupt)?, MAX_OPS_PER_LOCKER)
+                        .map_err(corrupt)?
+                        .iter()
+                        .map(PrunedPast::from_value)
+                        .collect::<Result<_, _>>()
+                        .map_err(corrupt)?;
+                let stubs: Vec<Stub> = array_max(g.req(8).map_err(corrupt)?, MAX_OPS_PER_LOCKER)
+                    .map_err(corrupt)?
+                    .iter()
+                    .map(Stub::from_value)
+                    .collect::<Result<_, _>>()
+                    .map_err(corrupt)?;
+                if !strictly_sorted(pruned.iter().map(|p| p.op_id))
+                    || !strictly_sorted(stubs.iter().map(|s| s.op_id))
+                {
+                    return Err(general(ErrorCode::Corrupt));
+                }
+                let stable = op_id_list(g.req(9).map_err(corrupt)?, MAX_STABLE)?;
+                (pruned, stubs, stable)
+            };
+            let mut replica = self.new_replica(id, genesis, &trust, &keylog);
+            // What was pruned first, so that the operations citing it find their past.
+            replica.restore_pruned(pruned);
             replica.ingest(ops).map_err(corrupt)?;
+            if !stubs.is_empty() {
+                replica.ingest_stubs(stubs);
+            }
             replica.restore_unsent(&unsent);
             lockers.insert(
                 id,
@@ -286,6 +489,7 @@ impl ServerMode {
                     replica,
                     sync,
                     access,
+                    stable: stable.into_iter().collect(),
                 },
             );
         }
@@ -293,6 +497,7 @@ impl ServerMode {
             info,
             roots,
             lockers,
+            keylog,
         })
     }
 
@@ -321,6 +526,25 @@ impl ServerMode {
                 Value::Array(unsent.iter().map(|i| Value::bytes(i)).collect()),
             ));
             e.push((6, Value::Bool(s.access)));
+            e.push((
+                7,
+                Value::Array(
+                    s.replica
+                        .pruned()
+                        .iter()
+                        .map(PrunedPast::to_value)
+                        .collect::<Result<_, _>>()
+                        .map_err(internal)?,
+                ),
+            ));
+            e.push((
+                8,
+                Value::Array(s.replica.stubs().iter().map(Stub::to_value).collect()),
+            ));
+            e.push((
+                9,
+                Value::Array(s.stable.iter().map(|i| Value::bytes(i)).collect()),
+            ));
             lockers.push(Value::map(e));
         }
         cbor::encode(&Value::map(vec![
@@ -328,6 +552,7 @@ impl ServerMode {
             (2, joined.info.to_value()),
             (3, Value::bytes(&joined.roots)),
             (4, Value::Array(lockers)),
+            (5, Self::encode_keylog(&joined.keylog)?),
         ]))
         .map_err(internal)
     }
@@ -557,10 +782,12 @@ impl ServerMode {
         let _ = client.bye();
         let fp = fingerprint(&info.server_key);
         let (server_id, verified) = (info.server_id, info.server_key_verified);
+        let keylog = self.new_keylog(&info)?;
         self.joined = Some(Joined {
             info,
             roots,
             lockers: BTreeMap::new(),
+            keylog,
         });
         self.save(vault)?;
         let account = if verified { self.try_auth()? } else { false };
@@ -588,27 +815,31 @@ impl ServerMode {
 
     fn sync(&mut self, vault: &Vault) -> Result<ServerReply, ServerCode> {
         let mut client = self.session()?;
+        self.update_keylog(vault, &mut client)?;
         let listed: Vec<Id16> = client
             .auth
             .as_ref()
             .map(|a| a.lockers.iter().map(|c| c.locker).collect())
             .unwrap_or_default();
-        let device = Arc::clone(&self.device);
-        let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
+        let j = self.joined()?;
         let trust = Self::trust(&j.info)?;
-        for id in listed {
-            if !j.lockers.contains_key(&id) && j.lockers.len() < MAX_LOCKERS {
-                let mut replica = Replica::join(Arc::clone(&device), AccessAuthorizer, id, None);
-                replica.set_keylog_trust(Some(trust.clone()));
-                j.lockers.insert(
-                    id,
-                    Shared {
-                        replica,
-                        sync: SyncState::default(),
-                        access: true,
-                    },
-                );
-            }
+        let new: Vec<(Id16, SharedReplica)> = listed
+            .into_iter()
+            .filter(|id| !j.lockers.contains_key(id))
+            .take(MAX_LOCKERS.saturating_sub(j.lockers.len()))
+            .map(|id| (id, self.new_replica(id, None, &trust, &j.keylog)))
+            .collect();
+        let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
+        for (id, replica) in new {
+            j.lockers.insert(
+                id,
+                Shared {
+                    replica,
+                    sync: SyncState::default(),
+                    access: true,
+                    stable: BTreeSet::new(),
+                },
+            );
         }
         let mut reports = Vec::new();
         let mut failure = None;
@@ -622,11 +853,68 @@ impl ServerMode {
             }
         }
         let _ = client.bye();
+        self.compare_with_keylog()?;
         self.save(vault)?;
         match failure {
             Some(e) => Err(e),
             None => Ok(ServerReply::Synced(reports)),
         }
+    }
+
+    /// Updates the local key log (`transparence.md` § 6.1): every entry after the local
+    /// ones, checked and kept with the head only if everything holds. A head that goes back,
+    /// a root that differs or a broken rule makes the log suspect for good, and is kept
+    /// (§ 6.7); a malformed answer cuts the session.
+    ///
+    /// # Errors
+    /// [`ServerCode::ServerUnreachable`] for an invalid answer, network errors.
+    fn update_keylog(&mut self, vault: &Vault, client: &mut Client) -> Result<(), ServerCode> {
+        let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
+        let size = read_log(&j.keylog.monitor)?.size();
+        let (start, entries, head) = client.keylog(size).map_err(net)?;
+        let verdict = write_log(&j.keylog.monitor)?.ingest(start, &entries, &head);
+        match verdict {
+            Ok(alerts) => {
+                for a in alerts {
+                    if j.keylog.alerts.len() < MAX_ALERTS && !j.keylog.alerts.contains(&a) {
+                        j.keylog.alerts.push(a);
+                    }
+                }
+                self.save(vault)
+            }
+            Err(AccessError::KeyLog(KeyLogFailure::Inconsistent | KeyLogFailure::Suspect)) => {
+                // Reading and writing in the lockers go on; sharing stops (§ 6.7).
+                self.save(vault)
+            }
+            Err(_) => Err(ServerCode::ServerUnreachable),
+        }
+    }
+
+    /// Whether the local key log is sound: sharing (new envelopes for others, new grants)
+    /// stops once it is suspect (`transparence.md` § 6.7).
+    fn keylog_sound(&self) -> Result<(), ServerCode> {
+        let j = self.joined()?;
+        if read_log(&j.keylog.monitor)?.suspect().is_some() {
+            return Err(ServerCode::KeyLogRejected);
+        }
+        Ok(())
+    }
+
+    /// Compares the proofs and the `Checkpoint` heads of the applied operations with the
+    /// local key log (end of `transparence.md` § 6.3, § 6.6). A contradiction makes the log
+    /// suspect; a head ahead of the local log is checked at the next update.
+    fn compare_with_keylog(&mut self) -> Result<(), ServerCode> {
+        let j = self.joined.as_ref().ok_or(ServerCode::NotJoined)?;
+        let mut m = write_log(&j.keylog.monitor)?;
+        for s in j.lockers.values() {
+            for p in s.replica.keylog_proofs() {
+                let _ = m.compare_proof(&p);
+            }
+            for h in s.replica.checkpoints() {
+                let _ = m.observe_peer_head(&h, false);
+            }
+        }
+        Ok(())
     }
 
     /// Fetches a member's keys, devices and inclusion proof, and verifies the proof with the
@@ -680,8 +968,14 @@ impl ServerMode {
             });
         }
         let pinned = VerifyingKey::from_bytes(&j.info.server_key).map_err(corrupt)?;
-        KeyLogProof::decode(&proof_bytes)
-            .and_then(|p| p.verify(&pinned, &j.info.server_id, &expected))
+        let proof = KeyLogProof::decode(&proof_bytes).map_err(|_| ServerCode::KeyLogRejected)?;
+        proof
+            .verify(&pinned, &j.info.server_id, &expected)
+            .map_err(|_| ServerCode::KeyLogRejected)?;
+        // The proven entries must be those of the local log (end of § 6.3): a contradiction
+        // makes it suspect, and nothing is enveloped for this member.
+        write_log(&j.keylog.monitor)?
+            .compare_proof(&proof)
             .map_err(|_| ServerCode::KeyLogRejected)?;
         Ok((mk.keys, mk.devices, proof_bytes))
     }
@@ -691,6 +985,8 @@ impl ServerMode {
             return Err(general(ErrorCode::InvalidInput));
         }
         let mut client = self.session()?;
+        self.update_keylog(vault, &mut client)?;
+        self.keylog_sound()?;
         if self.joined()?.lockers.len() >= MAX_LOCKERS {
             return Err(general(ErrorCode::InvalidInput));
         }
@@ -720,7 +1016,7 @@ impl ServerMode {
             SyncError::InvalidInput | SyncError::EditRefused => general(ErrorCode::InvalidInput),
             _ => general(ErrorCode::Internal),
         })?;
-        replica.set_keylog_trust(Some(trust));
+        Self::wire(&mut replica, &trust, &self.joined()?.keylog);
         let id = replica.locker_id();
         let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
         j.lockers.insert(
@@ -729,6 +1025,7 @@ impl ServerMode {
                 replica,
                 sync: SyncState::default(),
                 access: true,
+                stable: BTreeSet::new(),
             },
         );
         self.publish(vault, &mut client, &id)?;
@@ -811,6 +1108,8 @@ impl ServerMode {
             }
         }
         let mut client = self.session()?;
+        self.update_keylog(vault, &mut client)?;
+        self.keylog_sound()?;
         let (fp, devices) = match present {
             Some(e) => {
                 let s = self.shared_mut(&locker)?;
@@ -849,6 +1148,7 @@ impl ServerMode {
     ) -> Result<ServerReply, ServerCode> {
         self.check(&locker, &Action::Remove(member))?;
         let mut client = self.session()?;
+        self.update_keylog(vault, &mut client)?;
         let s = self.shared_mut(&locker)?;
         s.replica.revoke(member, None).map_err(emit_error)?;
         self.publish(vault, &mut client, &locker)?;
@@ -995,7 +1295,9 @@ fn genesis_unsent(r: &Replica<AccessAuthorizer>) -> bool {
 }
 
 /// One synchronisation round of a locker in an open session (`sync-protocol.md` § 11.6,
-/// § 5, § 8.4): pull to the end, reissue what never left and went stale, push, reseal.
+/// § 5, § 8.4, § 10): pull to the end, reissue what never left and went stale, reseal,
+/// compact if enough versions are prunable, push, then acknowledge the verified `Compact`
+/// operations and prune those the server announces stable (ADR 0040).
 fn sync_locker(client: &mut Client, s: &mut Shared) -> Result<SyncReport, ServerCode> {
     let locker = s.replica.locker_id();
     let mut report = SyncReport {
@@ -1065,6 +1367,7 @@ fn sync_locker(client: &mut Client, s: &mut Shared) -> Result<SyncReport, Server
                 break;
             }
         }
+        compact_if_due(s);
     }
     let unsent = s.replica.unsent();
     for chunk in unsent.chunks(MAX_PUSH_OPS) {
@@ -1091,7 +1394,63 @@ fn sync_locker(client: &mut Client, s: &mut Shared) -> Result<SyncReport, Server
         }
         s.replica.mark_sent(&sent);
     }
+    acknowledge(client, s)?;
     Ok(report)
+}
+
+/// Emits a `Compact` (`sync-protocol.md` § 10.2) when at least [`COMPACT_MIN`] versions are
+/// prunable and every earlier `Compact` of the locker is already stable here: one compaction
+/// at a time per locker, never a flood. Best effort: a refusal leaves the journal as it is.
+fn compact_if_due(s: &mut Shared) {
+    let waiting = s
+        .replica
+        .applied_compacts()
+        .iter()
+        .any(|c| !s.stable.contains(c));
+    if waiting {
+        return;
+    }
+    let mut candidates = s.replica.prune_candidates();
+    if candidates.len() < COMPACT_MIN {
+        return;
+    }
+    candidates.sort_unstable();
+    candidates.truncate(COMPACT_MAX);
+    let _ = s.replica.compact(candidates);
+}
+
+/// Acknowledges every applied `Compact` the server holds and that is not stable yet
+/// (§ 10.2, step 4; again at each synchronisation, `Ack` being idempotent), then prunes those
+/// the server announces stable (step 6): their bodies are replaced by the causal past they
+/// carry, kept in the annex (ADR 0017, ADR 0040).
+fn acknowledge(client: &mut Client, s: &mut Shared) -> Result<(), ServerCode> {
+    let locker = s.replica.locker_id();
+    let unsent: BTreeSet<OpId> = s.replica.unsent().into_iter().map(|(i, _)| i).collect();
+    let acks: Vec<(Id16, OpId)> = s
+        .replica
+        .applied_compacts()
+        .into_iter()
+        .filter(|c| !s.stable.contains(c) && !unsent.contains(c))
+        .map(|c| (locker, c))
+        .collect();
+    let announced = match client.ack(&acks) {
+        Ok(a) => a,
+        Err(NetError::Refused(c)) if c == code::ACCESS => return Ok(()),
+        Err(e) => return Err(net(e)),
+    };
+    for (l, c) in announced {
+        if l != locker
+            || s.stable.contains(&c)
+            || s.stable.len() >= MAX_STABLE
+            || s.replica.status(&c) != Some(OpStatus::Applied)
+        {
+            continue;
+        }
+        if s.replica.prune_stable(&c).is_ok() {
+            s.stable.insert(c);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

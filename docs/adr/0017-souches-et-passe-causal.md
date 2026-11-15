@@ -94,5 +94,7 @@ là, l'élagage reste désactivé en mode Serveur.
   `a_device_joining_after_pruning_reaches_the_same_state` n'est plus ignoré.
 - La taille réelle est d'environ 350 octets par élément, pas 150 : une `Compact` de 4 Mio
   liste environ 10 000 opérations. L'émetteur découpe au-delà.
-- Reste au noyau : persister les `PrunedPast` des opérations élaguées (aujourd'hui en
-  mémoire), et réactiver l'élagage en mode Serveur.
+- ~~Reste au noyau : persister les `PrunedPast` des opérations élaguées (aujourd'hui en
+  mémoire), et réactiver l'élagage en mode Serveur.~~ Fait par l'ADR 0040 : annexe v2
+  (`format.md` § 15.2, clés 7 à 9 de `LockerState`), compaction réactivée en mode Serveur,
+  stabilité décidée par `hirzlad`.

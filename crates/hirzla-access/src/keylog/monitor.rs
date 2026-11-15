@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 
 use hirzla_crypto::sign::VerifyingKey;
+use hirzla_vault::cbor::{fixed, uint, uint_in, CborError, Fields, Value};
 use hirzla_vault::model::{DeviceCert, Id16, MemberKeys, OpId};
 
 use super::directory::{Directory, RuleViolation};
@@ -83,6 +84,125 @@ pub enum PeerHead {
     Consistent,
     /// The peer has seen more: update the log, then compare again.
     Ahead,
+}
+
+impl RuleViolation {
+    fn code(self) -> u64 {
+        match self {
+            RuleViolation::Malformed => 1,
+            RuleViolation::SecondMemberKey => 2,
+            RuleViolation::UnknownMember => 3,
+            RuleViolation::DeviceHistory => 4,
+            RuleViolation::DuplicateRemoval => 5,
+        }
+    }
+
+    fn from_code(c: u64) -> Result<Self, CborError> {
+        Ok(match c {
+            1 => RuleViolation::Malformed,
+            2 => RuleViolation::SecondMemberKey,
+            3 => RuleViolation::UnknownMember,
+            4 => RuleViolation::DeviceHistory,
+            5 => RuleViolation::DuplicateRemoval,
+            _ => return Err(CborError::Malformed),
+        })
+    }
+}
+
+impl ForkEvidence {
+    /// Canonical value, kept by the device (`format.md` § 15.2, ADR 0040):
+    /// `{1: local (KeyLogHead)?, 2: other (KeyLogHead), 3: reason, 4: index?, 5: rule?}`,
+    /// `reason` 1 root, 2 size decrease, 3 rule (with 4 and 5), 4 peer head, 5 unserved,
+    /// 6 proof entry; `rule` 1 to 5 for R1 to R5.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        let mut e = Vec::new();
+        if let Some(l) = &self.local {
+            e.push((1, l.to_value()));
+        }
+        e.push((2, self.other.to_value()));
+        let reason = match self.reason {
+            ForkReason::RootMismatch => 1,
+            ForkReason::SizeDecrease => 2,
+            ForkReason::RuleViolation { .. } => 3,
+            ForkReason::PeerHead => 4,
+            ForkReason::Unserved => 5,
+            ForkReason::ProofEntry => 6,
+        };
+        e.push((3, Value::Uint(reason)));
+        if let ForkReason::RuleViolation { index, rule } = self.reason {
+            e.push((4, Value::Uint(index)));
+            e.push((5, Value::Uint(rule.code())));
+        }
+        Value::map(e)
+    }
+
+    /// Strict decoding.
+    ///
+    /// # Errors
+    /// [`CborError`] on any unknown key, wrong type or inconsistency.
+    pub fn from_value(v: &Value) -> Result<Self, CborError> {
+        let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
+        let reason = uint_in(f.req(3)?, 1..=6)?;
+        let rule = (f.opt(4), f.opt(5));
+        let reason = match (reason, rule) {
+            (3, (Some(i), Some(r))) => ForkReason::RuleViolation {
+                index: uint(i)?,
+                rule: RuleViolation::from_code(uint(r)?)?,
+            },
+            (_, (Some(_), _) | (_, Some(_))) | (3, _) => return Err(CborError::Malformed),
+            (1, _) => ForkReason::RootMismatch,
+            (2, _) => ForkReason::SizeDecrease,
+            (4, _) => ForkReason::PeerHead,
+            (5, _) => ForkReason::Unserved,
+            _ => ForkReason::ProofEntry,
+        };
+        Ok(ForkEvidence {
+            local: f.opt(1).map(KeyLogHead::from_value).transpose()?,
+            other: KeyLogHead::from_value(f.req(2)?)?,
+            reason,
+        })
+    }
+}
+
+impl Alert {
+    /// Canonical value, kept by the device (`format.md` § 15.2, ADR 0040):
+    /// `{1: kind, 2: index, 3: device?}`, `kind` 1 foreign member key, 2 unknown own device,
+    /// 3 unknown own revocation.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        match self {
+            Alert::ForeignMemberKey { index } => {
+                Value::map(vec![(1, Value::Uint(1)), (2, Value::Uint(*index))])
+            }
+            Alert::UnknownOwnDevice { device, index } => Value::map(vec![
+                (1, Value::Uint(2)),
+                (2, Value::Uint(*index)),
+                (3, Value::bytes(device)),
+            ]),
+            Alert::UnknownOwnRevocation { device, index } => Value::map(vec![
+                (1, Value::Uint(3)),
+                (2, Value::Uint(*index)),
+                (3, Value::bytes(device)),
+            ]),
+        }
+    }
+
+    /// Strict decoding.
+    ///
+    /// # Errors
+    /// [`CborError`] on any unknown key, wrong type or inconsistency.
+    pub fn from_value(v: &Value) -> Result<Self, CborError> {
+        let f = Fields::new(v, &[1, 2, 3])?;
+        let index = uint(f.req(2)?)?;
+        let device = f.opt(3).map(fixed::<16>).transpose()?;
+        Ok(match (uint_in(f.req(1)?, 1..=3)?, device) {
+            (1, None) => Alert::ForeignMemberKey { index },
+            (2, Some(device)) => Alert::UnknownOwnDevice { device, index },
+            (3, Some(device)) => Alert::UnknownOwnRevocation { device, index },
+            _ => return Err(CborError::Malformed),
+        })
+    }
 }
 
 /// The key log as one device sees it.
@@ -169,6 +289,15 @@ impl KeyLogMonitor {
     #[must_use]
     pub fn suspect(&self) -> Option<&ForkEvidence> {
         self.suspect.as_ref()
+    }
+
+    /// Restores the proof of inconsistency kept by the device across a restart
+    /// (`format.md` § 15.2): a suspect log never becomes sound again by itself
+    /// (`transparence.md` § 6.7). The first proof kept wins.
+    pub fn restore_suspect(&mut self, evidence: ForkEvidence) {
+        if self.suspect.is_none() {
+            self.suspect = Some(evidence);
+        }
     }
 
     fn mark_suspect(&mut self, other: &KeyLogHead, reason: ForkReason) -> AccessError {

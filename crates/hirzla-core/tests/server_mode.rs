@@ -12,8 +12,8 @@ use std::sync::Arc;
 
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
-use hirzla_core::server_mode::annex_path;
 use hirzla_core::server_mode::proto::{Role, ServerCode, ServerReply, ServerRequest};
+use hirzla_core::server_mode::{annex_path, COMPACT_MIN};
 use hirzla_core::service::{Config, Core};
 use hirzla_crypto::password::{MIN_M_KIB, MIN_T};
 use hirzla_keystore::platform::{HardeningReport, HardeningStatus};
@@ -120,6 +120,9 @@ struct Server {
     ca_pem: Vec<u8>,
     device_tls: Arc<rustls::ClientConfig>,
     admin_tls: Arc<rustls::ClientConfig>,
+    pki: Pki,
+    data: PathBuf,
+    shares: Vec<hirzla_crypto::shamir::SignedShare>,
 }
 
 impl Server {
@@ -128,10 +131,38 @@ impl Server {
         let data = dir.join("data");
         let setup = ShamirSeal::generate(2, 3).unwrap();
         Store::init(&data, &setup.seal, Some(setup.dealer.clone())).unwrap();
+        let any: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        Server::launch(pki, data, setup.shares, any, any)
+    }
+
+    /// Stops the server and starts it again on the same data directory and ports.
+    fn restart(self) -> Server {
+        let (addr, admin) = (self.running.addr, self.running.admin_addr);
+        self.running.stop();
+        Server::launch(self.pki, self.data, self.shares, addr, admin)
+    }
+
+    /// Stops the server, puts back a copy of its data directory taken earlier (a restore
+    /// from backup: everything written since is lost), and starts it again.
+    fn restore(self, backup: &Path) -> Server {
+        let (addr, admin) = (self.running.addr, self.running.admin_addr);
+        self.running.stop();
+        std::fs::remove_dir_all(&self.data).unwrap();
+        copy_tree(backup, &self.data);
+        Server::launch(self.pki, self.data, self.shares, addr, admin)
+    }
+
+    fn launch(
+        pki: Pki,
+        data: PathBuf,
+        shares: Vec<hirzla_crypto::shamir::SignedShare>,
+        listen: SocketAddr,
+        admin_listen: SocketAddr,
+    ) -> Server {
         let running = net::start(net::Config {
-            data_dir: data,
-            listen: "127.0.0.1:0".parse().unwrap(),
-            admin_listen: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+            data_dir: data.clone(),
+            listen,
+            admin_listen,
             tls: tls::device_server_config(
                 tls::load_certs(&pki.cert).unwrap(),
                 tls::load_key(&pki.key).unwrap(),
@@ -158,11 +189,19 @@ impl Server {
                 )),
             )
             .unwrap(),
+            pki,
+            data,
+            shares,
         };
         let mut admin = server.admin();
-        admin.unseal(setup.shares[0].as_bytes()).unwrap();
-        assert!(!admin.unseal(setup.shares[1].as_bytes()).unwrap().sealed);
+        admin.unseal(server.shares[0].as_bytes()).unwrap();
+        assert!(!admin.unseal(server.shares[1].as_bytes()).unwrap().sealed);
         server
+    }
+
+    /// Operations of a locker the server serves as stubs.
+    fn pruned_in(&self, locker: &Id16) -> usize {
+        self.running.with_core(|c| c.pruned_in(locker)).unwrap()
     }
 
     fn admin(&self) -> AdminClient {
@@ -182,9 +221,34 @@ impl Server {
     }
 }
 
+fn copy_tree(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for e in std::fs::read_dir(from).unwrap() {
+        let p = e.unwrap().path();
+        let dst = to.join(p.file_name().unwrap());
+        if p.is_dir() {
+            copy_tree(&p, &dst);
+        } else {
+            std::fs::copy(&p, &dst).unwrap();
+        }
+    }
+}
+
 // -----------------------------------------------------------------------------------------
 // Cores
 // -----------------------------------------------------------------------------------------
+
+fn config(vault: &Path) -> Config {
+    Config {
+        vault_path: vault.to_path_buf(),
+        auto_lock: None,
+        hardening: HardeningReport {
+            memory_locked: HardeningStatus::Unsupported,
+            dumps_disabled: HardeningStatus::Unsupported,
+            tracing_blocked: HardeningStatus::Unsupported,
+        },
+    }
+}
 
 struct Member {
     core: Core,
@@ -197,16 +261,10 @@ struct Member {
 impl Member {
     fn new(dir: &Path, name: &str) -> Member {
         let vault = dir.join(name).join("coffre.hirzla");
-        let config = Config {
-            vault_path: vault.clone(),
-            auto_lock: None,
-            hardening: HardeningReport {
-                memory_locked: HardeningStatus::Unsupported,
-                dumps_disabled: HardeningStatus::Unsupported,
-                tracing_blocked: HardeningStatus::Unsupported,
-            },
-        };
-        let mut core = Core::new(config, Arc::new(Log::new(Box::new(std::io::sink()))));
+        let mut core = Core::new(
+            config(&vault),
+            Arc::new(Log::new(Box::new(std::io::sink()))),
+        );
         core.handle(Request::Init {
             password: z(PASSWORD),
             kdf: Some(KdfParams {
@@ -238,6 +296,27 @@ impl Member {
 
     fn server(&mut self, r: ServerRequest) -> Result<ServerReply, ServerCode> {
         self.core.handle_server(r)
+    }
+
+    /// Stops the core and starts a new one on the same vault, then unlocks it: everything
+    /// the server mode knows comes back from the annex.
+    fn restart(&mut self) {
+        self.core = Core::new(
+            config(&self.vault),
+            Arc::new(Log::new(Box::new(std::io::sink()))),
+        );
+        self.core
+            .handle(Request::Unlock {
+                password: z(PASSWORD),
+            })
+            .unwrap();
+    }
+
+    fn status(&mut self) -> Vec<hirzla_core::server_mode::proto::LockerStatus> {
+        match self.server(ServerRequest::ServerStatus).unwrap() {
+            ServerReply::Status { lockers, .. } => lockers,
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     fn join(
@@ -702,4 +781,215 @@ fn refusals() {
     assert!(lockers
         .iter()
         .any(|l| l.id == locker && l.role == Some(Role::Owner) && l.unsent == 0));
+}
+
+/// Alice, Bob and Carol on a verified server, Alice owner of a shared locker where Bob reads.
+fn three_members(tmp: &Path) -> (Server, Member, Member, Member, Id16) {
+    let server = Server::start(tmp);
+    let mut alice = Member::new(tmp, "alice");
+    let mut bob = Member::new(tmp, "bob");
+    let mut carol = Member::new(tmp, "carol");
+    for m in [&alice, &bob, &carol] {
+        server.register(&m.member_keys);
+    }
+    alice.join(&server, None).unwrap();
+    let fp = server_fingerprint(&mut alice);
+    alice
+        .server(ServerRequest::ServerConfirm {
+            fingerprint: fp.clone(),
+        })
+        .unwrap();
+    bob.join(&server, Some(&fp)).unwrap();
+    carol.join(&server, Some(&fp)).unwrap();
+    let ServerReply::LockerCreated(locker) = alice
+        .server(ServerRequest::SharedLockerCreate {
+            name: z("Historique"),
+        })
+        .unwrap()
+    else {
+        panic!("locker expected");
+    };
+    grant(&mut alice, locker, bob.id, Role::Reader, None).unwrap();
+    (server, alice, bob, carol, locker)
+}
+
+fn annex_len(m: &Member) -> u64 {
+    std::fs::metadata(annex_path(&m.vault)).unwrap().len()
+}
+
+fn clean(m: &mut Member, locker: Id16) {
+    let st = m.status();
+    let l = st.iter().find(|l| l.id == locker).expect("locker listed");
+    assert!(l.access, "still served");
+    assert_eq!((l.pending, l.quarantined, l.unsent), (0, 0, 0));
+}
+
+/// Compaction is active in Server mode (ADR 0017, ADR 0040): Alice's core compacts once
+/// enough versions are prunable; nothing is pruned while Bob has not received and
+/// acknowledged everything, whatever the restarts; then every device prunes, keeps the causal
+/// past across restarts of its core, and Carol, who joins afterwards, reads from the stubs.
+#[test]
+fn compaction_in_server_mode_survives_core_restarts() {
+    let tmp = tempdir();
+    let (server, mut alice, mut bob, mut carol, locker) = three_members(tmp.path());
+    let secret = alice.create(locker, "Routeur", "v0").unwrap();
+    // 20 versions are kept by default (`sync-protocol.md` § 10.1).
+    let last = 20 + COMPACT_MIN;
+    for i in 1..=last {
+        alice.update(locker, secret, &format!("v{i}")).unwrap();
+    }
+    assert!(alice.sync().iter().all(|r| r.refused == 0 && r.access));
+    // Alice compacted and acknowledged; Bob has received nothing: nothing is stable.
+    assert_eq!(server.pruned_in(&locker), 0);
+    alice.restart();
+    alice.sync();
+    assert_eq!(server.pruned_in(&locker), 0, "Bob has not acknowledged");
+    clean(&mut alice, locker);
+
+    // Bob receives everything, verifies the `Compact`, acknowledges: it becomes stable, and
+    // Bob prunes at once.
+    bob.sync();
+    let pruned = server.pruned_in(&locker);
+    assert!(pruned >= COMPACT_MIN, "{pruned} stubs");
+    bob.restart();
+    assert_eq!(bob.password(locker, secret).unwrap(), format!("v{last}"));
+    clean(&mut bob, locker);
+
+    // Alice learns it at her next synchronisation: her annex shrinks, her state does not.
+    let before = annex_len(&alice);
+    alice.sync();
+    assert!(annex_len(&alice) < before, "pruned bodies left the annex");
+    alice.restart();
+    assert_eq!(alice.password(locker, secret).unwrap(), format!("v{last}"));
+    clean(&mut alice, locker);
+    // Nothing more to compact: a second synchronisation emits nothing.
+    assert!(alice.sync().iter().all(|r| r.sent == 0));
+
+    // Writing after the pruning still works across restarts.
+    alice.update(locker, secret, "après").unwrap();
+    alice.restart();
+    alice.sync();
+    bob.sync();
+    assert_eq!(bob.password(locker, secret).unwrap(), "après");
+
+    // Carol joins afterwards: stubs and the `Compact` give her the same secret, also after a
+    // restart of her core and of the server (deferred purge at start).
+    grant(&mut alice, locker, carol.id, Role::Reader, None).unwrap();
+    carol.sync();
+    assert_eq!(carol.password(locker, secret).unwrap(), "après");
+    carol.restart();
+    assert_eq!(carol.password(locker, secret).unwrap(), "après");
+    clean(&mut carol, locker);
+    let server = server.restart();
+    assert_eq!(server.pruned_in(&locker), pruned);
+    for m in [&mut alice, &mut bob, &mut carol] {
+        assert!(m.sync().iter().all(|r| r.refused == 0 && r.access));
+        assert_eq!(m.password(locker, secret).unwrap(), "après");
+        clean(m, locker);
+    }
+}
+
+/// The local key log survives a restart of the core (`transparence.md` § 12, point 9): a
+/// server restored from an old backup shows a smaller head, which the restarted core detects
+/// (§ 6.7) instead of trusting it as a first contact; sharing stops, for good.
+#[test]
+fn a_server_rolled_back_is_detected_after_a_core_restart() {
+    let tmp = tempdir();
+    let server = Server::start(tmp.path());
+    let mut alice = Member::new(tmp.path(), "alice");
+    let mut bob = Member::new(tmp.path(), "bob");
+    server.register(&alice.member_keys);
+    alice.join(&server, None).unwrap();
+    let fp = server_fingerprint(&mut alice);
+    alice
+        .server(ServerRequest::ServerConfirm {
+            fingerprint: fp.clone(),
+        })
+        .unwrap();
+    alice.sync();
+    let backup = tmp.path().join("sauvegarde");
+    copy_tree(&server.data, &backup);
+
+    // The log grows: Bob's account and device.
+    server.register(&bob.member_keys);
+    bob.join(&server, Some(&fp)).unwrap();
+    alice.sync();
+    alice.restart();
+
+    // The server is restored from the backup: its log goes back two entries.
+    let server = server.restore(&backup);
+    // Synchronisation goes on (the operations verify by themselves) ...
+    alice.sync();
+    // ... but sharing stops: no new locker, no new grant.
+    assert_eq!(
+        alice.server(ServerRequest::SharedLockerCreate { name: z("Après") }),
+        Err(ServerCode::KeyLogRejected)
+    );
+    // A suspect log never becomes sound again by itself, not even after a restart.
+    alice.restart();
+    alice.sync();
+    assert_eq!(
+        alice.server(ServerRequest::SharedLockerCreate { name: z("Après") }),
+        Err(ServerCode::KeyLogRejected)
+    );
+    drop(server);
+}
+
+/// The annex is sealed and bound to its vault: a byte changed, a file cut or an annex of
+/// another vault leaves the server mode unavailable (the vault itself still opens), and
+/// nothing is sent with a state that does not open.
+#[test]
+fn an_altered_annex_is_refused() {
+    let tmp = tempdir();
+    let (_server, mut alice, mut bob, _carol, locker) = three_members(tmp.path());
+    let secret = alice.create(locker, "Routeur", "v0").unwrap();
+    alice.sync();
+    bob.sync();
+    let path = annex_path(&alice.vault);
+    let good = std::fs::read(&path).unwrap();
+
+    // One byte changed.
+    let mut bad = good.clone();
+    let i = bad.len() / 2;
+    bad[i] ^= 1;
+    std::fs::write(&path, &bad).unwrap();
+    alice.restart();
+    assert_eq!(
+        alice.server(ServerRequest::ServerStatus),
+        Err(ServerCode::General(ErrorCode::Corrupt))
+    );
+    assert_eq!(
+        alice.server(ServerRequest::ServerSync),
+        Err(ServerCode::General(ErrorCode::Corrupt))
+    );
+    // The vault opens: its own lockers stay readable.
+    assert!(alice
+        .core
+        .handle(Request::List {
+            query: None,
+            include_trash: false,
+        })
+        .is_ok());
+
+    // Cut short.
+    std::fs::write(&path, &good[..good.len() - 16]).unwrap();
+    alice.restart();
+    assert_eq!(
+        alice.server(ServerRequest::ServerStatus),
+        Err(ServerCode::General(ErrorCode::Corrupt))
+    );
+
+    // Bob's annex, copied next to Alice's vault: bound to Bob's vault, it does not open.
+    std::fs::copy(annex_path(&bob.vault), &path).unwrap();
+    alice.restart();
+    assert_eq!(
+        alice.server(ServerRequest::ServerStatus),
+        Err(ServerCode::General(ErrorCode::Corrupt))
+    );
+
+    // The good one back: everything is there.
+    std::fs::write(&path, &good).unwrap();
+    alice.restart();
+    clean(&mut alice, locker);
+    assert_eq!(alice.password(locker, secret).unwrap(), "v0");
 }

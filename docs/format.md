@@ -1171,7 +1171,10 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
     contre les en-têtes du journal, avec reconstruction.
 
-## 15. Fichier annexe du mode Serveur (v1)
+## 15. Fichier annexe du mode Serveur (v2)
+
+Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
+stable).
 
 Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
@@ -1195,10 +1198,11 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | `1` |
+| 1 | `v` | `uint` | `2` écrit ; `1` encore lu |
 | 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
 | 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
 | 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
+| 5 | `keylog` | `KeyLogState` | Requis en v2, absent en v1 |
 
 `LockerState` :
 
@@ -1210,6 +1214,30 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 | 4 | `ops` | `array<bstr>` | Opérations encodées (§ 7.1) que la réplique garde, chacune ≤ 4 Mio |
 | 5 | `unsent` | `array<OpId>` | Opérations locales pas encore accusées par le serveur (statut 4 du § 5.2), triées |
 | 6 | `access` | `bool` | `false` après un refus du serveur (code 4 : membre retiré) |
+| 7 | `pruned` | `array<PrunedPast>` | v2 : passé causal des opérations que le poste a élaguées (`sync-protocol.md` § 10.2), triés par `op_id`, sans doublon |
+| 8 | `stubs` | `array<Stub>` | v2 : souches reçues (`sync-protocol.md` § 11.5), triées par `op_id`, sans doublon |
+| 9 | `stable` | `array<OpId>` | v2 : `Compact` dont la stabilité est acquise (au plus 100 000), triées |
+
+Une annexe v1 n'a que les clés 1 à 6 de `LockerState`.
+
+`KeyLogState` (registre de transparence local, `transparence.md` § 6.1) :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `entries` | `array<bstr>` | `KeyLogEntry` encodées (`transparence.md` § 3.1), dans l'ordre du registre ; au plus 1 000 000, chacune ≤ 4 Kio |
+| 2 | `head` | `KeyLogHead?` | Dernière tête vérifiée (`transparence.md` § 3.3) ; absente si aucune |
+| 3 | `suspect` | `ForkEvidence?` | Preuve d'un registre suspect (`transparence.md` § 6.7) ; absente sinon |
+| 4 | `alerts` | `array<Alert>` | Alertes de surveillance (§ 6.4), au plus 4 096, sans doublon |
+
+`ForkEvidence` = `{1: local (KeyLogHead)?, 2: other (KeyLogHead), 3: reason, 4: index?,
+5: rule?}`. `reason` : 1 racine différente, 2 taille en baisse, 3 entrée contraire aux
+règles, 4 tête d'un autre poste incohérente (§ 6.6), 5 tête d'un autre poste plus grande que ce que sert le serveur, 6 preuve contraire à
+une entrée. Les clés 4 (rang de l'entrée) et 5 (règle : 1 décodage R1, 2 à 5 règles R2 à R5)
+sont présentes si et seulement si `reason = 3`.
+
+`Alert` = `{1: kind, 2: index, 3: device?}`. `kind` : 1 clé de membre étrangère au poste,
+2 appareil du membre inconnu du poste, 3 retrait d'un appareil du membre inconnu du poste ;
+`device` présent si et seulement si `kind` vaut 2 ou 3 ; `index` = rang de l'entrée.
 
 ### 15.3 Lecture
 
@@ -1221,9 +1249,26 @@ chaque réplique en **réingérant** ses opérations : chacune est revalidée (`
 (`sync-protocol.md` § 16, point 28) : une écriture interrompue juste après un envoi ne peut pas
 créer de bifurcation.
 
+Version 2, dans cet ordre :
+
+1. **Registre** : les entrées de `keylog` sont réingérées en entier contre `head` (signature
+   par la clé épinglée, `MTH` des entrées = `head.root`, règles R1 à R5). Un écart rend
+   l'annexe corrompue. `suspect` est remis tel quel : un registre suspect le reste après un
+   redémarrage (`transparence.md` § 12, point 7). Une annexe v1 part d'un registre vide.
+2. **Passé élagué** : les `PrunedPast` de `pruned` sont remis avant les opérations, pour que
+   les opérations qui en dépendent se valident.
+3. **Opérations** (`ops`), puis **souches** (`stubs`), revalidées comme à la réception (une
+   souche exige une `Compact` qui la liste, `sync-protocol.md` § 10.3).
+4. `unsent`, puis `stable`.
+
+Une réplique reconstruite ainsi, à n'importe quel moment de sa vie, a le même état, les mêmes
+statuts, le même passé élagué et les mêmes opérations à envoyer que celle qui a été écrite.
+
 ### 15.4 Limites
 
 - Un retour en arrière du fichier n'est pas détecté localement (§ 14, point 11) : la
-  synchronisation suivante récupère auprès du serveur ce qui manque.
+  synchronisation suivante récupère auprès du serveur ce qui manque, y compris les entrées du
+  registre. Un registre suspect perdu ainsi redevient suspect dès que le serveur montre la même
+  incohérence.
 - Le fichier grossit avec les journaux des casiers partagés ; il est réécrit en entier à chaque
   changement. À remplacer par les tables du coffre (ADR 0032, point 3).

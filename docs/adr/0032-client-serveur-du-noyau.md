@@ -135,8 +135,9 @@ demandée ; à revoir avec la synchronisation de fond.
 - L'annexe double un temps le stockage spécifié par `format.md` § 5.2 ; sa migration vers les
   tables du coffre est due.
 - Reste à faire, hors de ce lot : enrôlement d'un second appareil par la boîte aux lettres
-  (§ 14) ; tenue et surveillance du registre de transparence local (`transparence.md` § 6.1,
-  § 6.4 à § 6.6) ; quarantaine et décisions des propriétaires ; accords et quorum ; fichiers
+  (§ 14) ; ~~tenue et surveillance du registre de transparence local (`transparence.md` § 6.1,
+  § 6.4 à § 6.6)~~ (tenue, alertes et comparaison des preuves faites par l'ADR 0040 ; restent
+  le gel du § 6.5, l'échange de têtes du § 6.6 et les délais d'une heure) ; quarantaine et décisions des propriétaires ; accords et quorum ; fichiers
   joints (`PutChunk`) ; synchronisation de fond et `Subscribe` ; écrans de l'application de
   poste ; outil d'administration de `hirzlad` pour créer les comptes en ligne de commande.
 

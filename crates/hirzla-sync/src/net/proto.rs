@@ -829,7 +829,13 @@ pub fn read_subscribe(v: &Value) -> Result<Vec<(Id16, u64)>, NetError> {
         .collect()
 }
 
-/// `Ack` (15) body: `(locker, compact)`.
+/// `Ack` (15) and `Stable` (16) body: `{1: locker, 2: compact}`.
+#[must_use]
+pub fn ack_value(locker: &Id16, compact: &OpId) -> Value {
+    Value::map(vec![(1, Value::bytes(locker)), (2, Value::bytes(compact))])
+}
+
+/// `Ack` (15) or `Stable` (16) body: `(locker, compact)`.
 ///
 /// # Errors
 /// [`NetError::Malformed`].
@@ -1039,6 +1045,44 @@ pub fn keylog_entries_value(start: u64, entries: &[Vec<u8>], head: Value, more: 
         (3, head),
         (4, Value::Bool(more)),
     ])
+}
+
+/// Most entries in one `KeyLogEntries` (`transparence.md` § 4).
+pub const MAX_KEYLOG_ENTRIES: usize = 10_000;
+/// Largest encoded key log entry.
+const MAX_KEYLOG_ENTRY: usize = 4096;
+
+/// A `KeyLogEntries` (61) answer, decoded strictly. The entries stay encoded: the device
+/// checks them itself (`transparence.md` § 6.1).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyLogEntries {
+    /// Rank of the first entry.
+    pub start: u64,
+    /// Encoded `KeyLogEntry`.
+    pub entries: Vec<Vec<u8>>,
+    /// Current head.
+    pub head: hirzla_access::keylog::KeyLogHead,
+    /// Whether more entries follow.
+    pub more: bool,
+}
+
+impl KeyLogEntries {
+    /// Strict decoding.
+    ///
+    /// # Errors
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
+        let f = Fields::new(v, &[1, 2, 3, 4])?;
+        Ok(KeyLogEntries {
+            start: uint(f.req(1)?)?,
+            entries: array_max(f.req(2)?, MAX_KEYLOG_ENTRIES)?
+                .iter()
+                .map(|e| bytes(e, MAX_KEYLOG_ENTRY))
+                .collect::<Result<_, _>>()?,
+            head: hirzla_access::keylog::KeyLogHead::from_value(f.req(3)?)?,
+            more: boolean(f.req(4)?)?,
+        })
+    }
 }
 
 /// `GetKeyLogProof` (62) body.

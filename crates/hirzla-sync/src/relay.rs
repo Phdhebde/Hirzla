@@ -12,6 +12,8 @@ use std::collections::BTreeMap;
 use hirzla_crypto::util::sha384;
 use hirzla_vault::model::{Id16, OpId, Operation};
 
+use crate::wire::Stub;
+
 /// Error code `gap` (§ 11.7): `prev` unknown or `seq` not contiguous.
 pub const CODE_GAP: u8 = 5;
 /// Error code `fork` (§ 11.7): `seq` already taken by another operation.
@@ -35,10 +37,12 @@ pub struct RelayItem {
     pub server_seq: u64,
     /// `op_id`.
     pub op_id: OpId,
-    /// The bytes received, never re-encoded (`format.md` § 7.1).
+    /// The bytes received, never re-encoded (`format.md` § 7.1); empty once pruned.
     pub bytes: Vec<u8>,
     /// Marked `late` (§ 11.8): served to the `Owner` devices only.
     pub late: bool,
+    /// What remains after a stable compaction (§ 10.2, step 6): served instead of the body.
+    pub stub: Option<Stub>,
 }
 
 /// The journal of one locker.
@@ -115,8 +119,50 @@ impl LockerLog {
             op_id,
             bytes,
             late,
+            stub: None,
         });
         server_seq
+    }
+
+    /// Appends the stub of an operation pruned before the journal was written again
+    /// (replay of a purged journal, ADR 0040). The chain of its device is kept.
+    pub fn append_stub(&mut self, stub: Stub, late: bool) -> u64 {
+        self.last_seq += 1;
+        let server_seq = self.last_seq;
+        let r = stub.opref;
+        self.chains.insert((r.member, r.device, r.seq), stub.op_id);
+        self.by_id.insert(stub.op_id, server_seq);
+        self.items.push(RelayItem {
+            server_seq,
+            op_id: stub.op_id,
+            bytes: Vec::new(),
+            late,
+            stub: Some(stub),
+        });
+        server_seq
+    }
+
+    /// Replaces the body of a stored operation with its stub (§ 10.2, step 6). Returns the
+    /// number of bytes freed, or `None` if the operation is not held in full.
+    pub fn prune(&mut self, stub: Stub) -> Option<usize> {
+        let seq = *self.by_id.get(&stub.op_id)?;
+        let i = self.items.partition_point(|it| it.server_seq < seq);
+        let it = self.items.get_mut(i).filter(|it| it.server_seq == seq)?;
+        if it.stub.is_some() {
+            return None;
+        }
+        let freed = it.bytes.len();
+        it.bytes = Vec::new();
+        it.stub = Some(stub);
+        Some(freed)
+    }
+
+    /// The stored item of an operation.
+    #[must_use]
+    pub fn get(&self, op_id: &OpId) -> Option<&RelayItem> {
+        let seq = *self.by_id.get(op_id)?;
+        let i = self.items.partition_point(|it| it.server_seq < seq);
+        self.items.get(i).filter(|it| it.server_seq == seq)
     }
 
     /// Appends raw bytes with no check at all. For the misbehaving relay of the tests and for
@@ -137,6 +183,7 @@ impl LockerLog {
             op_id,
             bytes,
             late,
+            stub: None,
         });
         server_seq
     }
