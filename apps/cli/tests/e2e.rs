@@ -299,3 +299,117 @@ fn locked_core_refuses_reads_without_starting() {
     assert!(ok(&hirzla(&sock, &["status"], None)).contains("arrêté"));
     assert!(ok(&hirzla(&sock, &["lock"], None)).contains("verrouillé"));
 }
+
+#[test]
+fn self_mode_v5_commands() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+
+    // KeePass import: the password on the standard input.
+    let kdbx = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../crates/hirzla-vault/tests/kdbx/keepassxc-chacha20-argon2id.kdbx");
+    let kdbx = kdbx.to_str().unwrap();
+    assert!(fails(&hirzla(&sock, &["import-kdbx", kdbx], Some("faux"))).contains("incorrect"));
+    let out = ok(&hirzla(&sock, &["import-kdbx", kdbx], Some("hirzla-test")));
+    assert!(out.contains("5 secret(s) importé(s)"), "{out}");
+    assert!(out.contains("1 pièce(s) jointe(s)"), "{out}");
+    assert_eq!(ok(&hirzla(&sock, &["get", "Banque"], None)), "Pa55w0rd!\n");
+
+    // History and restore of a version.
+    ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));
+    let history = ok(&hirzla(&sock, &["history", "Banque"], None));
+    assert!(
+        history.contains("actuelle") && history.contains("mot de passe"),
+        "{history}"
+    );
+    assert!(!history.contains(SECRET) && !history.contains("Pa55w0rd!"));
+    assert_eq!(
+        ok(&hirzla(
+            &sock,
+            &[
+                "history",
+                "Banque",
+                "--version",
+                "2",
+                "--champ",
+                "mot-de-passe"
+            ],
+            None
+        )),
+        "Pa55w0rd!\n"
+    );
+    ok(&hirzla(
+        &sock,
+        &["restore", "Banque", "--version", "2"],
+        None,
+    ));
+    assert_eq!(ok(&hirzla(&sock, &["get", "Banque"], None)), "Pa55w0rd!\n");
+    // Trash and back.
+    ok(&hirzla(&sock, &["rm", "Banque"], None));
+    let id = ok(&hirzla(&sock, &["ls", "--corbeille"], None))
+        .lines()
+        .find(|l| l.contains("Banque"))
+        .unwrap()[..8]
+        .to_owned();
+    ok(&hirzla(&sock, &["restore", "--id", &id], None));
+    assert!(ok(&hirzla(&sock, &["ls"], None)).contains("Banque"));
+
+    // Settings.
+    let s = ok(&hirzla(&sock, &["settings", "--veille", "non"], None));
+    assert!(s.contains("mise en veille : non"), "{s}");
+    assert!(
+        fails(&hirzla(&sock, &["settings", "--verrouillage", "5"], None))
+            .contains("réglage refusé")
+    );
+
+    // Recovery kit: 2 of 3, then open with two parts and a new password.
+    let parts = dir.path().join("parts");
+    std::fs::create_dir(&parts).unwrap();
+    let out = ok(&hirzla(
+        &sock,
+        &["recovery", "create", "2", "3", parts.to_str().unwrap()],
+        None,
+    ));
+    let files: Vec<String> = out
+        .lines()
+        .filter(|l| l.ends_with(".hirzla-part"))
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(files.len(), 3);
+    assert!(ok(&hirzla(&sock, &["recovery", "status"], None)).contains("2 parts sur 3"));
+    ok(&hirzla(&sock, &["lock"], None));
+    const RECOVERED: &str = "Mot-de-passe-après-recouvrement-77";
+    assert!(fails(&hirzla(
+        &sock,
+        &["recovery", "unlock", &files[0]],
+        Some(RECOVERED)
+    ))
+    .contains("déverrouillage refusé"));
+    ok(&hirzla(
+        &sock,
+        &["recovery", "unlock", &files[0], &files[2]],
+        Some(RECOVERED),
+    ));
+    ok(&hirzla(&sock, &["lock"], None));
+    ok(&hirzla(&sock, &["unlock"], Some(RECOVERED)));
+
+    // Password change: current, then new, one per line.
+    ok(&hirzla(
+        &sock,
+        &["passwd"],
+        Some(&format!("{RECOVERED}\n{MASTER}\n")),
+    ));
+    ok(&hirzla(&sock, &["lock"], None));
+    ok(&hirzla(&sock, &["unlock"], Some(MASTER)));
+    ok(&hirzla(&sock, &["recovery", "remove"], None));
+    assert!(ok(&hirzla(&sock, &["recovery", "status"], None)).contains("Aucun kit"));
+
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    for leak in [MASTER, RECOVERED, SECRET, "hirzla-test", "Banque"] {
+        assert!(!log.contains(leak), "{leak} in the log");
+    }
+}

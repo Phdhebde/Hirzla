@@ -8,6 +8,7 @@
 
 mod args;
 mod clipboard;
+mod selfmode;
 mod term;
 
 use std::io::{IsTerminal, Write};
@@ -534,6 +535,25 @@ fn run(args: &Args) -> Result<(), String> {
             *note,
             *generate,
         ),
+        Command::History {
+            name,
+            id,
+            version,
+            field,
+            stdout,
+        } => match (version, field) {
+            (Some(v), Some(f)) => {
+                selfmode::read_version(&session, name.as_deref(), id.as_deref(), *v, f, *stdout)
+            }
+            _ => selfmode::history(&session, name.as_deref(), id.as_deref()),
+        },
+        Command::Restore { name, id, version } => {
+            selfmode::restore(&session, name.as_deref(), id.as_deref(), *version)
+        }
+        Command::ImportKdbx { file } => selfmode::import_kdbx(&session, file),
+        Command::Passwd => selfmode::change_password(&session),
+        Command::Settings(change) => selfmode::settings(&session, change),
+        Command::Recovery(what) => selfmode::recovery(&session, what),
         Command::ClipboardHelper { .. } => Ok(()),
     }
 }
