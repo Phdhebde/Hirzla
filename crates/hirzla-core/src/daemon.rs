@@ -205,7 +205,6 @@ fn open_log(path: Option<&PathBuf>) -> std::io::Result<Box<dyn std::io::Write + 
 }
 
 /// Entry point of `hirzla-core`. Hardens the process before anything else.
-#[must_use]
 pub fn main() -> ExitCode {
     let hardening = platform::harden_process();
     let options = match parse_args(std::env::args_os().skip(1)) {
