@@ -3,7 +3,8 @@
 //! The file is read in this process into an erasing buffer, parsed by [`crate::csv`], and
 //! each row becomes one `Create` request to the core: the core creates the secrets, the web
 //! view only receives counts and line numbers. Columns are recognised by their header, in
-//! French or English. Direct KDBX import is not provided (ADR 0025).
+//! French or English. A KeePass KDBX 4 database is not read here: the core reads and
+//! decrypts it itself ([`crate::selfmode`], ADR 0025 option 2).
 
 use std::io::Read;
 use std::path::Path;

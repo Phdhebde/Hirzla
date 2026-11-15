@@ -330,7 +330,7 @@ l'enveloppe séparément.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello |
+| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034) |
 | 2 | `params` | map | Selon `kind`, ci-dessous |
 | 3 | `wrapped_device_key` | `bstr(40)` | AES-256-KW-pad(`KEK_unlock`, `DeviceKey`) |
 
@@ -353,12 +353,26 @@ Paramètres matériels (`kind` 2 à 5) :
 | --- | --- | --- | --- |
 | 1 | `keystore_blob` | `bstr(≤65536)` | Objet opaque défini par `hirzla-keystore` (étape 5) |
 
+Paramètres du kit de recouvrement (`kind = 6`, ADR 0034), publics, une méthode au plus par
+en-tête :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `kit_id` | `bstr(16)` | Aléa, tiré à chaque nouveau kit ; répété dans chaque fichier de part (§ 4.4) |
+| 2 | `threshold` | `uint` | 2 ≤ t ≤ 16 : parts nécessaires |
+| 3 | `count` | `uint` | t ≤ n ≤ 16 : parts faites |
+| 4 | `dealer` | `bstr` | `SigPublicKey` (§ 3.1) de l'appareil qui a signé les parts ; épinglée à la recombinaison |
+
 Le **secret de méthode** fait 32 octets :
 
 - mot de passe : `Argon2id(mot de passe en UTF-8 normalisé NFC, salt, m, t, p)`, sortie de 32 octets.
   C'est `hirzla-vault` qui normalise : il reçoit le mot de passe comme texte et le passe en NFC
   avant de le confier à `hirzla-crypto`. Un mot de passe vide est refusé ;
-- matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob`.
+- matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob` ;
+- kit de recouvrement : la clé de recouvrement de 32 octets d'aléa, partagée par Shamir
+  authentifié (`hirzla-crypto`, module `shamir`) en `count` parts dont `threshold` suffisent,
+  puis effacée. Elle se reconstitue à partir des parts, dont chaque signature est vérifiée
+  contre `dealer`.
 
 `KEK_unlock = HKDF-SHA-512(ikm = secret de méthode, salt = vault_id,
 info = len ‖ "hirzla/v1/unlock" ‖ len ‖ rang de la méthode (1 octet) ‖ len ‖ kind (1 octet), L = 32)`,
@@ -377,6 +391,24 @@ Ces `info` sont les étiquettes typées de `hirzla-crypto` (module `kdf`) : aucu
 
 La `DeviceKey` ne sert qu'à cette dérivation. `K_dev_wrap` sert de `KEK` à toutes les boîtes
 locales du § 5 et du § 10.
+
+### 4.4 Fichier de part de recouvrement
+
+Décision : ADR 0034. Un fichier `.hirzla-part` par dépositaire, hors du coffre. CBOR canonique
+(§ 2.1), 16 Kio au plus :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `magic` | `tstr` | `"hirzla-part"` |
+| 2 | `version` | `uint` | `1` |
+| 3 | `vault_id` | `bstr(16)` | Le coffre (§ 5.5) |
+| 4 | `kit_id` | `bstr(16)` | Le kit (§ 4.2, `kind = 6`) |
+| 5 | `share` | `bstr` | `SignedShare` de `hirzla-crypto` (module `shamir`) : suite, identifiant de partage, t, n, rang, empreinte du secret, empreinte du signataire, part, signature hybride |
+
+Une part est un secret : elle n'est authentifiée qu'à la recombinaison. Des parts d'un autre
+coffre ou d'un autre kit, en nombre insuffisant ou qui ne se recombinent pas, font refuser
+l'ouverture, sans dire laquelle est en cause. Un nouveau kit remplace l'ancien à la même place
+de l'en-tête : les anciennes parts n'ouvrent plus rien.
 
 ## 5. Conteneur SQLite
 
@@ -568,10 +600,14 @@ Contenu : map à clés `uint`.
 
 | Clé | Nom | Type | Défaut |
 | --- | --- | --- | --- |
-| 1 | `auto_lock_s` | `uint` | 300 |
-| 2 | `clipboard_clear_s` | `uint` | 30 |
+| 1 | `auto_lock_s` | `uint` | 300 ; 0 (défaut) ou 30 à 86 400 |
+| 2 | `clipboard_clear_s` | `uint` | 30 ; 5 à 600 |
+| 3 | `lock_on_sleep` | `bool` | `true` ; écrite seulement quand elle vaut `false` (ADR 0033) |
+| 4 | `lock_on_session_lock` | `bool` | `true` ; écrite seulement quand elle vaut `false` (ADR 0033) |
 
-D'autres réglages s'ajoutent par révision de ce tableau, avec un nouveau numéro de format.
+D'autres réglages s'ajoutent par révision de ce tableau, avec un nouveau numéro de format. Les
+clés 3 et 4 et la méthode `kind = 6` (§ 4.2) ont été ajoutées **sans** changer
+`FORMAT_VERSION`, aucun coffre n'étant encore livré (ADR 0034, point 7, à confirmer).
 
 ### 5.7 Cache des clés de casier
 

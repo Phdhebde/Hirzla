@@ -5,6 +5,7 @@
 //! hosts, tags), the one field it asked to reveal, or a generated password; never a key.
 //! Copies go from the core to the clipboard without passing through the web view.
 
+use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hirzla_core::proto::{
@@ -28,11 +29,15 @@ pub const MIN_MASTER_CHARS: usize = 12;
 /// State shared by the commands.
 pub struct AppState {
     link: Mutex<Result<CoreLink, DesktopError>>,
-    clipboard: SecretClipboard,
+    pub(crate) clipboard: SecretClipboard,
     generated: Mutex<Option<Zeroizing<String>>>,
+    /// KeePass database chosen with the file picker, waiting for its password.
+    pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
+    /// Recovery share files chosen with the file picker, waiting for the new password.
+    pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
 }
 
-fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     // A panic elsewhere cannot leave these values half-written in a way that matters.
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -45,11 +50,13 @@ impl AppState {
             link: Mutex::new(link),
             clipboard: SecretClipboard::default(),
             generated: Mutex::new(None),
+            pending_kdbx: Mutex::new(None),
+            pending_shares: Mutex::new(Vec::new()),
         }
     }
 
     /// Runs `f` with the link to the core.
-    fn with_link<T>(
+    pub(crate) fn with_link<T>(
         &self,
         f: impl FnOnce(&mut CoreLink) -> Result<T, DesktopError>,
     ) -> Result<T, DesktopError> {
@@ -65,7 +72,7 @@ impl AppState {
 
     /// Forgets what this process holds for the interface: the clipboard copy and the last
     /// generated password.
-    fn forget(&self) {
+    pub(crate) fn forget(&self) {
         self.clipboard.clear_now();
         *guard(&self.generated) = None;
     }
@@ -92,7 +99,7 @@ pub struct SecretRef {
     pub id: String,
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -102,7 +109,7 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-fn id16(s: &str) -> Result<Id16, DesktopError> {
+pub(crate) fn id16(s: &str) -> Result<Id16, DesktopError> {
     let bad = DesktopError::Invalid("Identifiant de secret non valide.");
     let b = s.as_bytes();
     if b.len() != 32 {
@@ -123,6 +130,11 @@ fn id16(s: &str) -> Result<Id16, DesktopError> {
 }
 
 impl SecretRef {
+    /// Locker and secret identifiers.
+    pub(crate) fn ids(&self) -> Result<(Id16, Id16), DesktopError> {
+        Ok((id16(&self.locker)?, id16(&self.id)?))
+    }
+
     fn selector(&self) -> Result<Selector, DesktopError> {
         Ok(Selector::Id {
             locker: id16(&self.locker)?,
@@ -150,7 +162,7 @@ pub enum FieldName {
 }
 
 impl FieldName {
-    fn field(self) -> Field {
+    pub(crate) fn field(self) -> Field {
         match self {
             FieldName::Title => Field::Title,
             FieldName::Username => Field::Username,
@@ -454,7 +466,7 @@ impl SecretChanges {
     }
 }
 
-fn check_master(password: &str) -> Result<(), DesktopError> {
+pub(crate) fn check_master(password: &str) -> Result<(), DesktopError> {
     if password.is_empty() || password.len() > MAX_PASSWORD {
         return Err(DesktopError::Invalid(
             "Le mot de passe maître doit compter de 1 à 4 096 octets.",
@@ -702,7 +714,25 @@ pub struct GenerateOptions {
 // Tauri commands
 // -----------------------------------------------------------------------------------------
 
-type State<'a> = tauri::State<'a, AppState>;
+pub(crate) type State<'a> = tauri::State<'a, AppState>;
+
+/// Runs `f` on the main thread (where the system's dialogs must open) and waits for its
+/// answer; `None` is a dialog closed without a choice.
+pub(crate) fn on_main_thread<T: Send + 'static>(
+    window: &tauri::WebviewWindow,
+    f: impl FnOnce(&tauri::WebviewWindow) -> Option<T> + Send + 'static,
+) -> Result<T, DesktopError> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let parent = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(f(&parent));
+        })
+        .map_err(|_| DesktopError::Invalid("Le sélecteur de fichier n'a pas pu s'ouvrir."))?;
+    rx.recv()
+        .map_err(|_| DesktopError::Cancelled)?
+        .ok_or(DesktopError::Cancelled)
+}
 
 /// See [`AppState::status`].
 #[tauri::command(async, rename_all = "snake_case")]
@@ -806,22 +836,13 @@ pub fn import_csv(
     state: State<'_>,
     window: tauri::WebviewWindow,
 ) -> Result<ImportReport, DesktopError> {
-    let (tx, rx) = std::sync::mpsc::channel();
-    let parent = window.clone();
-    window
-        .run_on_main_thread(move || {
-            let picked = rfd::FileDialog::new()
-                .set_title("Importer un fichier CSV")
-                .add_filter("CSV", &["csv", "txt"])
-                .set_parent(&parent)
-                .pick_file();
-            let _ = tx.send(picked);
-        })
-        .map_err(|_| DesktopError::Import("Le sélecteur de fichier n'a pas pu s'ouvrir."))?;
-    let path = rx
-        .recv()
-        .map_err(|_| DesktopError::Cancelled)?
-        .ok_or(DesktopError::Cancelled)?;
+    let path = on_main_thread(&window, |parent| {
+        rfd::FileDialog::new()
+            .set_title("Importer un fichier CSV")
+            .add_filter("CSV", &["csv", "txt"])
+            .set_parent(parent)
+            .pick_file()
+    })?;
     state.import_csv_file(&path)
 }
 

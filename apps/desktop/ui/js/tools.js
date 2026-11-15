@@ -1,9 +1,10 @@
 // @ts-check
-// Generator, settings and import.
+// Generator, settings (display, vault, master password, recovery kit) and import.
 
 import { api } from "./api.js";
 import { announce, byId, h, showError } from "./dom.js";
 import { applyTheme, savePrefs } from "./prefs.js";
+import { confirmDialog } from "./vault.js";
 
 /** @typedef {import("./prefs.js").Prefs} Prefs */
 
@@ -78,15 +79,6 @@ const HARDENING = {
   not_attempted: "Non tentée (moteur web)",
 };
 
-/** @param {number} s */
-function duration(s) {
-  if (s % 60 === 0 && s >= 60) {
-    const m = s / 60;
-    return m === 1 ? "1 minute" : `${m} minutes`;
-  }
-  return `${s} secondes`;
-}
-
 export class SettingsView {
   /**
    * @param {Prefs} prefs
@@ -114,15 +106,265 @@ export class SettingsView {
       savePrefs(prefs);
     });
     byId("import-csv").addEventListener("click", () => void this.importCsv());
-    byId("import-kdbx").addEventListener("click", () => {
-      /** @type {HTMLDialogElement} */ (byId("dialogue-kdbx")).showModal();
+    byId("import-kdbx").addEventListener("click", () => this.openKdbx());
+    byId("kdbx-choisir").addEventListener("click", () => void this.chooseKdbx());
+    byId("form-kdbx").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.importKdbx();
     });
+    byId("dialogue-kdbx").addEventListener("close", () => {
+      /** @type {HTMLInputElement} */ (byId("kdbx-mdp")).value = "";
+    });
+    byId("form-reglages-coffre").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.saveVaultSettings();
+    });
+    byId("form-mdp").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.changePassword();
+    });
+    byId("form-recouvrement").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.createKit();
+    });
+    byId("recouvrement-retirer").addEventListener("click", () => void this.removeKit());
+    /** @type {import("./api.js").RecoveryKit | null} */
+    this.kit = null;
+  }
+
+  /** Reads the vault's settings and recovery kit: when the settings view opens. */
+  async load() {
+    showError(byId("reglages-coffre-erreur"), null);
+    showError(byId("recouvrement-erreur"), null);
+    try {
+      const s = await api.getSettings();
+      /** @type {HTMLInputElement} */ (byId("reglage-auto")).value = String(s.auto_lock_s);
+      /** @type {HTMLInputElement} */ (byId("reglage-pp")).value = String(s.clipboard_clear_s);
+      /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked = s.lock_on_sleep;
+      /** @type {HTMLInputElement} */ (byId("reglage-session")).checked = s.lock_on_session_lock;
+      this.renderKit(await api.recoveryStatus());
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("reglages-coffre-erreur"), err.message);
+    }
+  }
+
+  /** Forgets what the settings view holds: called when the vault locks. */
+  wipe() {
+    for (const id of ["mdp-actuel", "mdp-nouveau", "mdp-confirmation", "kdbx-mdp"]) {
+      /** @type {HTMLInputElement} */ (byId(id)).value = "";
+    }
+    byId("recouvrement-resultat").hidden = true;
+    byId("kdbx-fichier").textContent = "";
+    /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
+  }
+
+  /** @param {string} id */
+  number(id) {
+    return Number(/** @type {HTMLInputElement} */ (byId(id)).value);
+  }
+
+  async saveVaultSettings() {
+    const error = byId("reglages-coffre-erreur");
+    showError(error, null);
+    const settings = {
+      auto_lock_s: this.number("reglage-auto"),
+      clipboard_clear_s: this.number("reglage-pp"),
+      lock_on_sleep: /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked,
+      lock_on_session_lock: /** @type {HTMLInputElement} */ (byId("reglage-session")).checked,
+    };
+    if (!Number.isInteger(settings.auto_lock_s) || !Number.isInteger(settings.clipboard_clear_s)) {
+      showError(error, "Les délais s'expriment en secondes entières.");
+      return;
+    }
+    try {
+      await api.setSettings(settings);
+      announce("Réglages du coffre enregistrés.");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(error, err.message);
+    }
+  }
+
+  async changePassword() {
+    const current = /** @type {HTMLInputElement} */ (byId("mdp-actuel"));
+    const next = /** @type {HTMLInputElement} */ (byId("mdp-nouveau"));
+    const confirm = /** @type {HTMLInputElement} */ (byId("mdp-confirmation"));
+    const error = byId("mdp-erreur");
+    const button = /** @type {HTMLButtonElement} */ (byId("form-mdp").querySelector("button[type=submit]"));
+    showError(error, null);
+    if (!current.value) {
+      showError(error, "Saisissez votre mot de passe actuel.");
+      current.focus();
+      return;
+    }
+    if ([...next.value].length < 12) {
+      showError(error, "Le mot de passe maître doit compter au moins 12 caractères.");
+      next.focus();
+      return;
+    }
+    if (next.value !== confirm.value) {
+      showError(error, "Les deux saisies du mot de passe maître diffèrent.");
+      confirm.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Changement…";
+    try {
+      await api.changePassword(current.value, next.value, confirm.value);
+      announce("Mot de passe maître changé.");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(error, err.message);
+    } finally {
+      current.value = "";
+      next.value = "";
+      confirm.value = "";
+      button.disabled = false;
+      button.textContent = "Changer le mot de passe";
+    }
+  }
+
+  /** @param {import("./api.js").RecoveryKit | null} kit */
+  renderKit(kit) {
+    this.kit = kit;
+    byId("recouvrement-etat").textContent = kit
+      ? `Kit ${kit.kit} en place : ${kit.threshold} parts sur ${kit.count} rouvrent le coffre.`
+      : "Aucun kit de recouvrement : sans le mot de passe maître, le coffre ne peut pas être rouvert.";
+    byId("recouvrement-retirer").hidden = !kit;
+    byId("recouvrement-creer").textContent = kit ? "Remplacer le kit…" : "Créer le kit…";
+  }
+
+  async createKit() {
+    const error = byId("recouvrement-erreur");
+    const box = byId("recouvrement-resultat");
+    showError(error, null);
+    box.hidden = true;
+    const count = this.number("recouvrement-parts");
+    const threshold = this.number("recouvrement-seuil");
+    if (!Number.isInteger(count) || !Number.isInteger(threshold) || threshold < 2 || threshold > count || count > 16) {
+      showError(error, "Un kit compte de 2 à 16 parts, et il en faut au moins 2 pour rouvrir le coffre.");
+      return;
+    }
+    if (this.kit) {
+      const ok = await confirmDialog(
+        "Remplacer le kit de recouvrement ?",
+        `Les parts du kit ${this.kit.kit} n'ouvriront plus le coffre.`,
+        "Remplacer",
+      );
+      if (!ok) return;
+    }
+    try {
+      const made = await api.createRecoveryKit(threshold, count);
+      box.replaceChildren(
+        h("p", { text: `Kit ${made.kit} créé : ${made.threshold} parts sur ${made.count} rouvrent le coffre.` }),
+        h("p", { text: `Parts écrites dans ${made.folder} :` }),
+        h("ul", { class: "liste-puces mono" }, made.files.map((f) => h("li", { text: f }))),
+        h("p", {
+          text: "Remettez chaque part à une personne différente (clé USB, coffre papier…), puis effacez-les de ce dossier.",
+        }),
+      );
+      box.hidden = false;
+      this.renderKit({ kit: made.kit, threshold: made.threshold, count: made.count });
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(error, err.message);
+      // A kit may have been made before a share failed to be written.
+      try {
+        this.renderKit(await api.recoveryStatus());
+      } catch {
+        // Already reported.
+      }
+    }
+  }
+
+  async removeKit() {
+    if (!this.kit) return;
+    const ok = await confirmDialog(
+      "Retirer le kit de recouvrement ?",
+      `Les parts du kit ${this.kit.kit} n'ouvriront plus le coffre.`,
+      "Retirer le kit",
+    );
+    if (!ok) return;
+    try {
+      await api.removeRecoveryKit();
+      byId("recouvrement-resultat").hidden = true;
+      this.renderKit(null);
+      announce("Kit de recouvrement retiré.");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("recouvrement-erreur"), err.message);
+    }
+  }
+
+  openKdbx() {
+    showError(byId("kdbx-erreur"), null);
+    byId("kdbx-fichier").textContent = "";
+    /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
+    /** @type {HTMLDialogElement} */ (byId("dialogue-kdbx")).showModal();
+    byId("kdbx-choisir").focus();
+  }
+
+  async chooseKdbx() {
+    showError(byId("kdbx-erreur"), null);
+    try {
+      const name = await api.chooseKdbxFile();
+      byId("kdbx-fichier").textContent = name;
+      /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = false;
+      byId("kdbx-mdp").focus();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
+    }
+  }
+
+  async importKdbx() {
+    const pw = /** @type {HTMLInputElement} */ (byId("kdbx-mdp"));
+    const button = /** @type {HTMLButtonElement} */ (byId("kdbx-importer"));
+    const error = byId("kdbx-erreur");
+    showError(error, null);
+    button.disabled = true;
+    button.textContent = "Import…";
+    try {
+      const r = await api.importKdbx(pw.value);
+      pw.value = "";
+      /** @type {HTMLDialogElement} */ (byId("dialogue-kdbx")).close();
+      /** @type {string[]} */
+      const lines = [
+        r.imported === 0 ? "Aucun secret importé." : r.imported === 1 ? "1 secret importé." : `${r.imported} secrets importés.`,
+      ];
+      /** @type {[number, string][]} */
+      const notes = [
+        [r.empty, "entrée(s) vide(s) ignorée(s) (ni mot de passe ni notes)."],
+        [r.recycled, "entrée(s) de la corbeille KeePass ignorée(s)."],
+        [r.refused, "entrée(s) refusée(s) par le coffre (valeur trop longue ou non permise)."],
+        [r.attachments, "pièce(s) jointe(s) non importée(s)."],
+        [r.history, "version(s) antérieure(s) d'entrées non importée(s)."],
+        [r.custom_skipped, "champ(s) personnalisé(s) au-delà des limites du coffre, non importé(s)."],
+        [r.totp, "configuration(s) TOTP non importée(s) : ce type arrive dans une prochaine version."],
+      ];
+      for (const [n, text] of notes) if (n) lines.push(`${n} ${text}`);
+      const box = byId("import-resultat");
+      box.replaceChildren(...lines.map((t) => h("p", { text: t })));
+      box.hidden = false;
+      this.onImported();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      pw.value = "";
+      if (!this.onError(err)) {
+        showError(error, err.message);
+        pw.focus();
+      }
+    } finally {
+      button.disabled = !byId("kdbx-fichier").textContent;
+      button.textContent = "Importer";
+    }
   }
 
   /** @param {import("./api.js").Status} s */
   render(s) {
-    byId("reglage-auto").textContent = `après ${duration(s.auto_lock_s)} d'inactivité`;
-    byId("reglage-pp").textContent = `après ${duration(s.clipboard_clear_s || 30)}`;
     byId("reglage-version").textContent = s.core_version;
     byId("reglage-version-app").textContent = s.app_version;
     /** @type {[string, keyof import("./api.js").Hardening][]} */

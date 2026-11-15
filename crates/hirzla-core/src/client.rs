@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use crate::agent::proto::{AgentCode, AgentReply, AgentRequest};
 use crate::auth::{self, ServerRefusal, CORE_EXECUTABLE};
 use crate::proto::{read_frame, write_frame, ErrorReply, FrameError, Reply, Request};
+use crate::selfmode::proto::{SelfCode, SelfReply, SelfRequest};
 use crate::server_mode::proto::{ServerCode, ServerReply, ServerRequest};
 use crate::transport::{self, Connection, Endpoint, TransportError};
 
@@ -149,6 +150,33 @@ impl Client {
         })?;
         let (reply_id, result) =
             AgentReply::decode(request.op(), &frame).map_err(|_| ClientError::Protocol)?;
+        if reply_id != id {
+            return Err(ClientError::Protocol);
+        }
+        Ok(result)
+    }
+
+    /// Sends one Self-mode request (`docs/api-locale.md` § 16) and waits for its reply. The
+    /// inner result carries the core's refusal, with its code and, for `Throttled`, the
+    /// seconds to wait.
+    ///
+    /// # Errors
+    /// A transport or protocol error.
+    pub fn call_self(
+        &mut self,
+        request: &SelfRequest,
+    ) -> Result<Result<SelfReply, (SelfCode, Option<u64>)>, ClientError> {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let body = request.encode(id).map_err(|_| ClientError::Protocol)?;
+        write_frame(&mut self.conn, &body).map_err(ClientError::Io)?;
+        let frame = read_frame(&mut self.conn).map_err(|e| match e {
+            FrameError::Closed => ClientError::Io(std::io::ErrorKind::UnexpectedEof.into()),
+            FrameError::TooLarge => ClientError::Protocol,
+            FrameError::Io(e) => ClientError::Io(e),
+        })?;
+        let (reply_id, result) =
+            SelfReply::decode(request.op(), &frame).map_err(|_| ClientError::Protocol)?;
         if reply_id != id {
             return Err(ClientError::Protocol);
         }

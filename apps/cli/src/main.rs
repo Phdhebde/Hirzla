@@ -8,6 +8,7 @@
 
 mod args;
 mod clipboard;
+mod selfmode;
 mod server;
 mod term;
 
@@ -279,8 +280,18 @@ fn print_entries(entries: &[ListEntry]) {
 /// Finds the secret meant by a name (exact title, case-insensitive, active secrets) or by
 /// an identifier prefix (as shown by `ls`, trash included).
 fn resolve(client: &mut Client, name: Option<&str>, id: Option<&str>) -> Result<ListEntry, String> {
+    resolve_in(client, name, id, false)
+}
+
+/// Like [`resolve`]; a title is also looked for in the trash when `trash` is set.
+fn resolve_in(
+    client: &mut Client,
+    name: Option<&str>,
+    id: Option<&str>,
+    trash: bool,
+) -> Result<ListEntry, String> {
     let hits: Vec<ListEntry> = match (name, id) {
-        (Some(name), _) => list(client, Some(name), false)?
+        (Some(name), _) => list(client, Some(name), trash)?
             .into_iter()
             .filter(|e| {
                 e.title
@@ -522,6 +533,25 @@ fn run(args: &Args) -> Result<(), String> {
         command @ Command::Set { .. } => set(&session, command),
         Command::Server(command) => server::run_server(&session, command),
         Command::Locker(command) => server::run_locker(&session, command),
+        Command::History {
+            name,
+            id,
+            version,
+            field,
+            stdout,
+        } => match (version, field) {
+            (Some(v), Some(f)) => {
+                selfmode::read_version(&session, name.as_deref(), id.as_deref(), *v, f, *stdout)
+            }
+            _ => selfmode::history(&session, name.as_deref(), id.as_deref()),
+        },
+        Command::Restore { name, id, version } => {
+            selfmode::restore(&session, name.as_deref(), id.as_deref(), *version)
+        }
+        Command::ImportKdbx { file } => selfmode::import_kdbx(&session, file),
+        Command::Passwd => selfmode::change_password(&session),
+        Command::Settings(change) => selfmode::settings(&session, change),
+        Command::Recovery(what) => selfmode::recovery(&session, what),
         Command::ClipboardHelper { .. } => Ok(()),
     }
 }

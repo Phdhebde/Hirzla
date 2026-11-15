@@ -99,6 +99,8 @@ pub struct SecretVersion {
 pub struct Vault {
     conn: Connection,
     vault_id: Id16,
+    /// Kept to wrap it under a new unlock method (password change, recovery kit).
+    device_key: SymmetricKey,
     dev_wrap: SymmetricKey,
     identity: Identity,
     device_kem: kem::PrivateKey,
@@ -451,6 +453,7 @@ impl Vault {
         let mut vault = Vault {
             conn,
             vault_id,
+            device_key,
             dev_wrap,
             identity,
             device_kem,
@@ -470,7 +473,12 @@ impl Vault {
     /// [`VaultError::NotAVault`], [`VaultError::UnsupportedVersion`], [`VaultError::Corrupt`],
     /// [`VaultError::Unlock`], [`VaultError::Unsupported`] (no password method), or storage.
     pub fn open(path: &Path, password: &str) -> Result<Vault, VaultError> {
-        let conn = store::open(path)?;
+        let pwd = nfc(password)?;
+        Self::open_with(path, |header| unlock_device_key(header, &pwd))
+    }
+
+    /// Reads and decodes the clear header (§ 5.4).
+    fn read_header(conn: &Connection) -> Result<(Vec<u8>, Vec<u8>, Header), VaultError> {
         let (body, auth): (Vec<u8>, Vec<u8>) = conn
             .query_row("SELECT body, auth FROM header WHERE id = 1", [], |r| {
                 Ok((r.get(0)?, r.get(1)?))
@@ -481,8 +489,18 @@ impl Vault {
             HeaderError::UnsupportedVersion => VaultError::UnsupportedVersion,
             HeaderError::Malformed => VaultError::Corrupt,
         })?;
-        let pwd = nfc(password)?;
-        let device_key = unlock_device_key(&header, &pwd)?;
+        Ok((body, auth, header))
+    }
+
+    /// Opens the vault with the device key obtained by `unlock` from the header (one unlock
+    /// method), then runs steps 7 and 8 of § 5.3 and unseals the index fragments.
+    fn open_with(
+        path: &Path,
+        unlock: impl FnOnce(&Header) -> Result<SymmetricKey, VaultError>,
+    ) -> Result<Vault, VaultError> {
+        let conn = store::open(path)?;
+        let (body, auth, header) = Self::read_header(&conn)?;
+        let device_key = unlock(&header)?;
         let vault_id = header.vault_id;
         let dev_wrap = kdf::derive_key(&device_key, &vault_id, KdfLabel::DeviceWrap)?;
 
@@ -575,6 +593,7 @@ impl Vault {
         let mut vault = Vault {
             conn,
             vault_id,
+            device_key,
             dev_wrap,
             identity,
             device_kem,
@@ -1654,6 +1673,14 @@ impl Vault {
     }
 }
 
+mod keys;
+mod restore;
+
+pub use keys::{
+    recovery_params, RecoveryKit, RecoveryShare, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S,
+    MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
+};
+
 #[cfg(test)]
 pub(crate) mod test_hooks {
     //! Internal access for the tests of `tests.rs`.
@@ -1681,3 +1708,6 @@ pub(crate) mod test_hooks {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_keys;

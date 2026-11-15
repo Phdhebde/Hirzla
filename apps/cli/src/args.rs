@@ -4,6 +4,8 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use crate::selfmode::{Recovery, SettingsChange};
+
 pub const USAGE: &str = "\
 Usage : hirzla [OPTIONS GLOBALES] COMMANDE [ARGUMENTS]
 
@@ -23,6 +25,19 @@ Commandes :
                           --id ID.
   gen [LONGUEUR]          Génère un mot de passe (24 caractères par défaut).
                           --sans-symboles, --sans-chiffres, --sans-majuscules, --stdout.
+  history NOM             Versions d'un secret, la plus récente en premier. --id ID.
+                          --version N --champ CHAMP : un champ d'une version (comme get).
+  restore NOM             Sort un secret de la corbeille. --id ID.
+                          --version N : rétablit la version N (voir history).
+  import-kdbx FICHIER     Importe une base KeePass KDBX 4 ; son mot de passe est demandé.
+  passwd                  Change le mot de passe maître.
+  settings                Affiche les réglages ; les change avec --verrouillage S,
+                          --presse-papiers S, --veille oui|non, --session oui|non.
+  recovery status         État du kit de recouvrement à quorum.
+  recovery create T N DOSSIER
+                          Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
+  recovery unlock PART…   Ouvre le coffre avec T parts ; un nouveau mot de passe est demandé.
+  recovery remove         Retire le kit : ses parts n'ouvrent plus le coffre.
   status                  État du noyau et du coffre.
 
 Mode Serveur :
@@ -131,6 +146,24 @@ pub enum Command {
         classes: u64,
         stdout: bool,
     },
+    History {
+        name: Option<String>,
+        id: Option<String>,
+        version: Option<usize>,
+        field: Option<String>,
+        stdout: bool,
+    },
+    Restore {
+        name: Option<String>,
+        id: Option<String>,
+        version: Option<usize>,
+    },
+    ImportKdbx {
+        file: PathBuf,
+    },
+    Passwd,
+    Settings(SettingsChange),
+    Recovery(Recovery),
     Status,
     Stop,
     Server(ServerCommand),
@@ -194,6 +227,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--kdf-memory",
         "--kdf-passes",
         "--kdf-lanes",
+        "--version",
+        "--verrouillage",
+        "--presse-papiers",
+        "--veille",
+        "--session",
         "--casier",
         "--sortie",
         "--ac",
@@ -239,6 +277,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte"],
         "rm" => &["--purger", "--id"],
+        "history" => &["--id", "--version", "--champ", "--stdout"],
+        "restore" => &["--id", "--version"],
+        "settings" => &[
+            "--verrouillage",
+            "--presse-papiers",
+            "--veille",
+            "--session",
+        ],
         "gen" => &[
             "--sans-symboles",
             "--sans-chiffres",
@@ -318,6 +364,80 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 query: positional.first().cloned(),
                 trash: has("--corbeille"),
             }
+        }
+        "history" | "restore" => {
+            max_positional(1)?;
+            let name = positional.first().cloned();
+            let id = one("--id")?;
+            if name.is_some() == id.is_some() {
+                return Err(format!(
+                    "« {command} » attend un NOM ou --id ID, l'un des deux."
+                ));
+            }
+            let version = one("--version")?
+                .map(|v| number::<usize>(&v, "--version"))
+                .transpose()?;
+            if version == Some(0) {
+                return Err("--version : les versions sont numérotées à partir de 1.".into());
+            }
+            if command == "history" {
+                let field = one("--champ")?;
+                if field.is_some() != version.is_some() {
+                    return Err("--version et --champ vont ensemble avec « history ».".into());
+                }
+                Command::History {
+                    name,
+                    id,
+                    version,
+                    field,
+                    stdout: has("--stdout"),
+                }
+            } else {
+                Command::Restore { name, id, version }
+            }
+        }
+        "import-kdbx" => {
+            max_positional(1)?;
+            let file = positional.first().cloned().ok_or_else(|| {
+                "« import-kdbx » attend le FICHIER de la base KeePass.".to_owned()
+            })?;
+            Command::ImportKdbx {
+                file: PathBuf::from(file),
+            }
+        }
+        "passwd" => {
+            max_positional(0)?;
+            Command::Passwd
+        }
+        "settings" => {
+            max_positional(0)?;
+            Command::Settings(SettingsChange {
+                auto_lock_s: one("--verrouillage")?
+                    .map(|v| number(&v, "--verrouillage"))
+                    .transpose()?,
+                clipboard_clear_s: one("--presse-papiers")?
+                    .map(|v| number(&v, "--presse-papiers"))
+                    .transpose()?,
+                lock_on_sleep: one("--veille")?,
+                lock_on_session_lock: one("--session")?,
+            })
+        }
+        "recovery" => {
+            let usage = "« recovery » attend status, create T N DOSSIER, unlock PART… ou remove.";
+            let (action, rest) = positional.split_first().ok_or_else(|| usage.to_owned())?;
+            Command::Recovery(match (action.as_str(), rest) {
+                ("status", []) => Recovery::Status,
+                ("remove", []) => Recovery::Remove,
+                ("create", [t, n, dir]) => Recovery::Create {
+                    threshold: number(t, "T")?,
+                    count: number(n, "N")?,
+                    dir: PathBuf::from(dir),
+                },
+                ("unlock", files) if !files.is_empty() => Recovery::Unlock {
+                    files: files.iter().map(PathBuf::from).collect(),
+                },
+                _ => return Err(usage.to_owned()),
+            })
         }
         "get" | "rm" => {
             max_positional(1)?;
@@ -627,5 +747,79 @@ mod tests {
         assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());
         assert!(p(&["casier", "ajouter", "Ops", "00ff"]).is_err());
         assert!(p(&["casier", "retirer", "Ops", "00ff", "--empreinte", "E"]).is_err());
+        assert!(p(&["history"]).is_err());
+        assert!(p(&["history", "a", "--version", "2"]).is_err());
+        assert!(p(&["restore", "a", "--version", "0"]).is_err());
+        assert!(p(&["import-kdbx"]).is_err());
+        assert!(p(&["recovery"]).is_err());
+        assert!(p(&["recovery", "create", "2", "3"]).is_err());
+        assert!(p(&["recovery", "unlock"]).is_err());
+        assert!(p(&["settings", "--veille"]).is_err());
+    }
+
+    #[test]
+    fn parses_self_mode_commands() {
+        assert_eq!(
+            p(&["restore", "--id", "abcd", "--version", "2"])
+                .unwrap()
+                .command,
+            Command::Restore {
+                name: None,
+                id: Some("abcd".into()),
+                version: Some(2)
+            }
+        );
+        assert_eq!(
+            p(&[
+                "history",
+                "Banque",
+                "--version",
+                "3",
+                "--champ",
+                "mot-de-passe"
+            ])
+            .unwrap()
+            .command,
+            Command::History {
+                name: Some("Banque".into()),
+                id: None,
+                version: Some(3),
+                field: Some("mot-de-passe".into()),
+                stdout: false
+            }
+        );
+        assert_eq!(
+            p(&["import-kdbx", "base.kdbx"]).unwrap().command,
+            Command::ImportKdbx {
+                file: "base.kdbx".into()
+            }
+        );
+        assert_eq!(
+            p(&["settings", "--veille", "non", "--verrouillage", "600"])
+                .unwrap()
+                .command,
+            Command::Settings(SettingsChange {
+                auto_lock_s: Some(600),
+                lock_on_sleep: Some("non".into()),
+                ..SettingsChange::default()
+            })
+        );
+        assert_eq!(
+            p(&["recovery", "create", "2", "3", "/parts"])
+                .unwrap()
+                .command,
+            Command::Recovery(Recovery::Create {
+                threshold: 2,
+                count: 3,
+                dir: "/parts".into()
+            })
+        );
+        assert_eq!(
+            p(&["recovery", "unlock", "a", "b"]).unwrap().command,
+            Command::Recovery(Recovery::Unlock {
+                files: vec!["a".into(), "b".into()]
+            })
+        );
+        assert_eq!(p(&["passwd"]).unwrap().command, Command::Passwd);
     }
 }

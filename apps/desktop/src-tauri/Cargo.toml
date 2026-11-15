@@ -35,5 +35,10 @@ zeroize = { version = "1.8", features = ["serde"] }
 # ADR 0016: same clipboard crate as the command line, with history and cloud exclusion.
 arboard = { version = "3.7.0", default-features = false }
 
+# ADR 0033: sleep and session lock from logind and the screen saver over D-Bus. Already
+# in the graph through Tauri's GTK web view (same version); no new crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18.4"
+
 [dev-dependencies]
 tempfile = "3.27.0"

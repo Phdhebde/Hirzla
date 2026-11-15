@@ -8,6 +8,7 @@
 
 pub mod envelope;
 mod error;
+pub mod kdbx;
 pub mod kdf;
 pub mod kem;
 pub mod password;

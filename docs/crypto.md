@@ -190,6 +190,16 @@ refusées. Test de temps constant de type dudect (test t de Welch, deux classes 
 lancé à la demande en mode release : |t| ≤ 2,4 sur trois passes de 50 000 mesures (seuil
 d'alerte 4,5).
 
+### Lecture des bases KeePass (KDBX 4)
+
+Module `kdbx` (ADR 0025), utilisé **uniquement pour l'import**, jamais pour sceller un coffre
+Hirzla. AES-256-CBC, HMAC-SHA-256 et SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de
+`argon2` ; ChaCha20 brut (RFC 8439) de RustCrypto `chacha20` (version figée `=0.10.2`), faute
+d'un ChaCha20 sans authentification dans AWS-LC. Les HMAC d'en-tête et de blocs sont comparés
+en temps constant avant tout déchiffrement. Risque résiduel accepté par le mainteneur
+(2026-11-15) : `chacha20` contient du code SIMD `unsafe` ; c'est la base auditée par NCC Group
+en 2020 avec `chacha20poly1305`.
+
 ## Hiérarchie de clés
 
 1. **Clé du poste** : gardée par la puce de sécurité ou une clé FIDO2, à défaut dérivée du

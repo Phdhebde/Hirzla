@@ -82,6 +82,7 @@
         <p></p>
       </div>
       <button class="bouton bouton-principal bouton-large" type="submit">Ouvrir</button>
+      <button id="lien-recouvrement" class="lien" type="button" hidden>Mot de passe perdu ? Ouvrir avec le kit de recouvrement</button>
     </form>
   </main>
 
@@ -141,6 +142,8 @@
             <div class="fiche-actions">
               <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false">Favori</button>
               <button id="fiche-modifier" class="bouton bouton-secondaire" type="button">Modifier</button>
+              <button id="fiche-historique" class="bouton bouton-secondaire" type="button">Historique</button>
+              <button id="fiche-restaurer" class="bouton bouton-secondaire" type="button" hidden>Restaurer</button>
               <button id="fiche-supprimer" class="bouton bouton-secondaire bouton-danger" type="button">Mettre à la corbeille</button>
             </div>
           </header>
@@ -202,14 +205,95 @@
       </section>
       <section class="carte" aria-labelledby="reglages-coffre">
         <h2 id="reglages-coffre" class="titre-carte">Coffre</h2>
+        <form id="form-reglages-coffre" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Verrouillage automatique après inactivité (secondes)</span>
+            <input id="reglage-auto" class="saisie" type="number" min="0" max="86400" step="1" required
+                   aria-describedby="reglage-auto-aide">
+          </label>
+          <p id="reglage-auto-aide" class="aide">De 30 s à 24 h (86 400 s) ; 0 rend le délai par défaut du noyau.</p>
+          <label class="champ">
+            <span class="champ-libelle">Effacement du presse-papiers après une copie (secondes)</span>
+            <input id="reglage-pp" class="saisie" type="number" min="5" max="600" step="1" required>
+          </label>
+          <fieldset class="cases">
+            <legend class="champ-libelle">Verrouiller aussi le coffre</legend>
+            <label class="case"><input type="checkbox" id="reglage-veille"> à la mise en veille du poste</label>
+            <label class="case"><input type="checkbox" id="reglage-session"> au verrouillage de votre session</label>
+          </fieldset>
+          <div id="reglages-coffre-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button class="bouton bouton-principal" type="submit">Enregistrer les réglages</button>
+          </div>
+        </form>
         <dl class="tableau-etat">
-          <dt>Verrouillage automatique</dt><dd id="reglage-auto"></dd>
-          <dt>Effacement du presse-papiers</dt><dd id="reglage-pp"></dd>
           <dt>Version du noyau</dt><dd id="reglage-version" class="mono"></dd>
           <dt>Version de l'application</dt><dd id="reglage-version-app" class="mono"></dd>
         </dl>
-        <p class="aide">Ces délais sont des réglages du coffre ; ils ne se modifient pas encore depuis l'application.
-          Le coffre est aussi verrouillé à la fermeture de l'application.</p>
+        <p class="aide">Ces réglages sont enregistrés dans le coffre. Le coffre est aussi verrouillé à la fermeture de
+          l'application.</p>
+      </section>
+      <section class="carte" aria-labelledby="reglages-mdp">
+        <h2 id="reglages-mdp" class="titre-carte">Mot de passe maître</h2>
+        <form id="form-mdp" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Mot de passe actuel</span>
+            <input id="mdp-actuel" class="saisie saisie-mono" type="password" autocomplete="current-password"
+                   spellcheck="false" required maxlength="1024">
+          </label>
+          <label class="champ">
+            <span class="champ-libelle">Nouveau mot de passe</span>
+            <input id="mdp-nouveau" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                   spellcheck="false" required minlength="12" maxlength="1024">
+          </label>
+          <label class="champ">
+            <span class="champ-libelle">Confirmation</span>
+            <input id="mdp-confirmation" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                   spellcheck="false" required minlength="12" maxlength="1024">
+          </label>
+          <div id="mdp-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button class="bouton bouton-principal" type="submit">Changer le mot de passe</button>
+          </div>
+        </form>
+        <p class="aide">Le noyau rescelle la clé du coffre sous le nouveau mot de passe ; vos secrets ne sont pas
+          rechiffrés. L'ancien mot de passe n'ouvre plus le coffre.</p>
+      </section>
+      <section class="carte" aria-labelledby="reglages-recouvrement">
+        <h2 id="reglages-recouvrement" class="titre-carte">Kit de recouvrement</h2>
+        <p class="texte-secondaire">Le kit partage une clé de secours en plusieurs parts : il en faut un nombre choisi
+          pour rouvrir le coffre sans le mot de passe maître. Remettez chaque part à une personne de confiance
+          différente ; une part seule ne révèle rien.</p>
+        <p id="recouvrement-etat" class="encadre" role="status"></p>
+        <form id="form-recouvrement" novalidate>
+          <div class="cases cases-ligne">
+            <label class="champ">
+              <span class="champ-libelle">Parts à créer</span>
+              <input id="recouvrement-parts" class="saisie" type="number" min="2" max="16" value="3" required>
+            </label>
+            <label class="champ">
+              <span class="champ-libelle">Parts nécessaires</span>
+              <input id="recouvrement-seuil" class="saisie" type="number" min="2" max="16" value="2" required>
+            </label>
+          </div>
+          <div id="recouvrement-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="recouvrement-creer" class="bouton bouton-principal" type="submit">Créer le kit…</button>
+            <button id="recouvrement-retirer" class="bouton bouton-secondaire bouton-danger" type="button" hidden>Retirer le kit</button>
+          </div>
+        </form>
+        <div id="recouvrement-resultat" class="encadre" role="status" hidden></div>
+        <p class="aide">Les parts sont écrites dans le dossier de votre choix, lisibles par votre seul compte. Un nouveau
+          kit remplace l'ancien, dont les parts n'ouvrent plus le coffre.</p>
       </section>
       <section class="carte" aria-labelledby="reglages-durcissement">
         <h2 id="reglages-durcissement" class="titre-carte">Protection des processus</h2>
@@ -220,8 +304,8 @@
       </section>
       <section class="carte" aria-labelledby="reglages-import">
         <h2 id="reglages-import" class="titre-carte">Importer</h2>
-        <p class="texte-secondaire">Le fichier est lu par l'application et chaque entrée est créée par le noyau dans
-          votre casier personnel. Rien n'est envoyé hors de ce poste.</p>
+        <p class="texte-secondaire">Chaque entrée est créée par le noyau dans votre casier personnel. Une base KeePass
+          est lue et déchiffrée par le noyau lui-même. Rien n'est envoyé hors de ce poste.</p>
         <div class="ligne-actions">
           <button id="import-csv" class="bouton bouton-secondaire" type="button">Importer un fichier CSV…</button>
           <button id="import-kdbx" class="bouton bouton-secondaire" type="button">Importer depuis KeePass (KDBX)…</button>
@@ -296,20 +380,75 @@
     </form>
   </dialog>
 
-  <!-- KDBX: not available yet (ADR 0025). -->
+  <!-- KeePass import (ADR 0025): the file is chosen by the application, read by the core. -->
   <dialog id="dialogue-kdbx" class="dialogue dialogue-etroit" aria-labelledby="kdbx-titre">
-    <form method="dialog">
-      <h2 id="kdbx-titre" class="titre-carte">Import KeePass (KDBX)</h2>
-      <p>L'import direct d'une base KeePass n'est pas encore disponible : il demande une bibliothèque de
-        déchiffrement que nous n'avons pas encore validée.</p>
-      <p>En attendant, exportez votre base au format CSV, importez le fichier, puis supprimez-le :</p>
-      <ul class="liste-puces">
-        <li>KeePassXC : Base de données › Exporter › Fichier CSV ;</li>
-        <li>KeePass 2 : Fichier › Exporter › KeePass CSV (1.x).</li>
-      </ul>
-      <p class="aide">Un fichier CSV contient vos mots de passe en clair : gardez-le le moins longtemps possible.</p>
+    <form id="form-kdbx" method="dialog" novalidate>
+      <h2 id="kdbx-titre" class="titre-carte">Importer depuis KeePass (KDBX)</h2>
+      <p class="texte-secondaire">Bases KDBX 4 (KeePass 2.35 et suivants, KeePassXC) protégées par un mot de passe
+        seul, chiffrées en AES-256 ou ChaCha20 avec Argon2. Le noyau lit la base et crée les entrées dans votre
+        casier personnel.</p>
+      <div class="ligne-actions">
+        <button id="kdbx-choisir" class="bouton bouton-secondaire" type="button">Choisir la base…</button>
+        <span id="kdbx-fichier" class="mono"></span>
+      </div>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe de la base KeePass</span>
+        <input id="kdbx-mdp" class="saisie saisie-mono" type="password" autocomplete="off" spellcheck="false"
+               maxlength="1024">
+      </label>
+      <p class="aide">Les pièces jointes, l'historique des entrées et les codes TOTP ne sont pas importés ;
+        le compte rendu les signale.</p>
+      <div id="kdbx-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
       <div class="ligne-actions ligne-actions-fin">
-        <button class="bouton bouton-principal" value="ok" autofocus>J'ai compris</button>
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="kdbx-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Versions of a secret. -->
+  <dialog id="dialogue-historique" class="dialogue" aria-labelledby="historique-titre">
+    <form method="dialog">
+      <h2 id="historique-titre" class="titre-carte">Historique</h2>
+      <p class="texte-secondaire">Chaque modification garde la version précédente. Rétablir une version crée une
+        nouvelle version : rien n'est effacé.</p>
+      <ol id="historique-liste" class="versions"></ol>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-principal" value="ok">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Open the vault with the recovery kit (ADR 0034). -->
+  <dialog id="dialogue-recouvrement" class="dialogue dialogue-etroit" aria-labelledby="recouvrement-titre">
+    <form id="form-recouvrement-ouvrir" method="dialog" novalidate>
+      <h2 id="recouvrement-titre" class="titre-carte">Ouvrir avec le kit de recouvrement</h2>
+      <p id="recouvrement-ouvrir-texte" class="texte-secondaire">Réunissez les parts nécessaires, puis choisissez un
+        nouveau mot de passe maître : il remplacera l'ancien.</p>
+      <div class="ligne-actions">
+        <button id="recouvrement-choisir" class="bouton bouton-secondaire" type="button">Choisir les parts…</button>
+      </div>
+      <ul id="recouvrement-fichiers" class="liste-puces mono"></ul>
+      <label class="champ">
+        <span class="champ-libelle">Nouveau mot de passe maître</span>
+        <input id="recouvrement-mdp" class="saisie saisie-mono" type="password" autocomplete="new-password"
+               spellcheck="false" minlength="12" maxlength="1024">
+      </label>
+      <label class="champ">
+        <span class="champ-libelle">Confirmation</span>
+        <input id="recouvrement-confirmation" class="saisie saisie-mono" type="password" autocomplete="new-password"
+               spellcheck="false" minlength="12" maxlength="1024">
+      </label>
+      <div id="recouvrement-ouvrir-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="recouvrement-ouvrir" class="bouton bouton-principal" type="submit" disabled>Ouvrir le coffre</button>
       </div>
     </form>
   </dialog>

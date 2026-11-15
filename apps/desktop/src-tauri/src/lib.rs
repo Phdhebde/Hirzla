@@ -8,7 +8,10 @@
 //! - [`link`]: the connection to the core, hardening of this process after it is accepted;
 //! - [`commands`]: what the web view may ask, checked strictly;
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
-//! - [`csv`] and [`import`]: import of CSV exports through the core.
+//! - [`csv`] and [`import`]: import of CSV exports through the core;
+//! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
+//!   (local API version 5);
+//! - `events` (Linux): sleep and session lock reported to the core (ADR 0033).
 
 #![forbid(unsafe_code)]
 
@@ -16,8 +19,11 @@ pub mod clipboard;
 pub mod commands;
 pub mod csv;
 pub mod error;
+#[cfg(target_os = "linux")]
+pub mod events;
 pub mod import;
 pub mod link;
+pub mod selfmode;
 
 use commands::AppState;
 use link::{CoreLink, LinkConfig};
@@ -64,7 +70,28 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::generate_password,
             commands::copy_generated,
             commands::import_csv,
+            selfmode::get_settings,
+            selfmode::set_settings,
+            selfmode::change_password,
+            selfmode::restore_secret,
+            selfmode::secret_history,
+            selfmode::reveal_version,
+            selfmode::copy_version,
+            selfmode::restore_version,
+            selfmode::recovery_status,
+            selfmode::create_recovery_kit,
+            selfmode::choose_recovery_shares,
+            selfmode::recovery_unlock,
+            selfmode::remove_recovery_kit,
+            selfmode::choose_kdbx_file,
+            selfmode::import_kdbx,
         ])
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            events::start(app.handle());
+            let _ = app;
+            Ok(())
+        })
         .build(tauri::generate_context!())?;
     app.run(|handle, event| {
         if let tauri::RunEvent::Exit = event {

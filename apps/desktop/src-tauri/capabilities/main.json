@@ -2,7 +2,9 @@
   "identifier": "main",
   "description": "Ce que la fenêtre principale peut demander : les commandes de l'application, rien d'autre (ni fichiers, ni réseau, ni greffon).",
   "local": true,
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "allow-app-status",
     "allow-create-vault",
@@ -16,6 +18,21 @@
     "allow-delete-secret",
     "allow-generate-password",
     "allow-copy-generated",
-    "allow-import-csv"
+    "allow-import-csv",
+    "allow-get-settings",
+    "allow-set-settings",
+    "allow-change-password",
+    "allow-restore-secret",
+    "allow-secret-history",
+    "allow-reveal-version",
+    "allow-copy-version",
+    "allow-restore-version",
+    "allow-recovery-status",
+    "allow-create-recovery-kit",
+    "allow-choose-recovery-shares",
+    "allow-recovery-unlock",
+    "allow-remove-recovery-kit",
+    "allow-choose-kdbx-file",
+    "allow-import-kdbx"
   ]
 }

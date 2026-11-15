@@ -15,6 +15,14 @@
  * @typedef {{ locker: string, id: string }} SecretRef
  * @typedef {"title" | "username" | "password" | "notes" | "ssh_public_key" | "ssh_passphrase"} FieldName
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
+ * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
+ *   lock_on_session_lock: boolean }} VaultSettings
+ * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
+ *   username: string | null, fields: string[], changed: string[], custom: number }} Version
+ * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
+ * @typedef {{ kit: string, threshold: number, count: number, folder: string, files: string[] }} CreatedKit
+ * @typedef {{ imported: number, empty: number, recycled: number, attachments: number, history: number,
+ *   custom_skipped: number, totp: number, refused: number }} KdbxReport
  */
 
 /**
@@ -82,4 +90,36 @@ export const api = {
   copyGenerated: () => call("copy_generated"),
   /** @returns {Promise<ImportReport>} */
   importCsv: () => call("import_csv"),
+
+  // Self mode (local API version 5).
+  /** @returns {Promise<VaultSettings>} */
+  getSettings: () => call("get_settings"),
+  /** @param {VaultSettings} settings @returns {Promise<void>} */
+  setSettings: (settings) => call("set_settings", { settings }),
+  /** @param {string} current @param {string} password @param {string} confirmation @returns {Promise<void>} */
+  changePassword: (current, password, confirmation) => call("change_password", { current, password, confirmation }),
+  /** @param {SecretRef} target @returns {Promise<void>} */
+  restore: (target) => call("restore_secret", { target }),
+  /** @param {SecretRef} target @returns {Promise<Version[]>} */
+  history: (target) => call("secret_history", { target }),
+  /** @param {SecretRef} target @param {string} version @param {FieldName} field @returns {Promise<string>} */
+  revealVersion: (target, version, field) => call("reveal_version", { target, version, field }),
+  /** @param {SecretRef} target @param {string} version @param {FieldName} field @returns {Promise<number>} */
+  copyVersion: (target, version, field) => call("copy_version", { target, version, field }),
+  /** @param {SecretRef} target @param {string} version @returns {Promise<void>} */
+  restoreVersion: (target, version) => call("restore_version", { target, version }),
+  /** @returns {Promise<RecoveryKit | null>} */
+  recoveryStatus: () => call("recovery_status"),
+  /** @param {number} threshold @param {number} count @returns {Promise<CreatedKit>} */
+  createRecoveryKit: (threshold, count) => call("create_recovery_kit", { threshold, count }),
+  /** @returns {Promise<string[]>} */
+  chooseRecoveryShares: () => call("choose_recovery_shares"),
+  /** @param {string} password @param {string} confirmation @returns {Promise<void>} */
+  recoveryUnlock: (password, confirmation) => call("recovery_unlock", { password, confirmation }),
+  /** @returns {Promise<void>} */
+  removeRecoveryKit: () => call("remove_recovery_kit"),
+  /** @returns {Promise<string>} */
+  chooseKdbxFile: () => call("choose_kdbx_file"),
+  /** @param {string} password @returns {Promise<KdbxReport>} */
+  importKdbx: (password) => call("import_kdbx", { password }),
 };

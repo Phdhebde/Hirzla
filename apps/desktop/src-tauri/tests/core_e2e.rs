@@ -25,8 +25,19 @@ fn core_exe() -> PathBuf {
     static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let deps = std::env::current_exe().unwrap();
-            let dir = deps.parent().unwrap().parent().unwrap();
+            // The test runs from `<profile>/deps/` (Cargo before 1.100) or from
+            // `<profile>/build/<package>/<hash>/out/` (Cargo 1.100): the core sits in `<profile>`.
+            let me = std::env::current_exe().unwrap();
+            let dir = me
+                .ancestors()
+                .find(|d| {
+                    matches!(
+                        d.file_name().and_then(|n| n.to_str()),
+                        Some("deps" | "build")
+                    )
+                })
+                .and_then(std::path::Path::parent)
+                .expect("test executable outside the target directory");
             let path = dir.join(format!("hirzla-core{}", std::env::consts::EXE_SUFFIX));
             if !path.exists() {
                 let status = Command::new(env!("CARGO"))
@@ -306,4 +317,174 @@ fn no_core_and_no_start_is_reported() {
     let sock = socket(dir.path());
     let state = AppState::new(Ok(CoreLink::new(config(&sock))));
     assert_eq!(state.status().unwrap_err().code(), "core_not_running");
+}
+
+/// The Self-mode commands (local API version 5) against a real core: KeePass import,
+/// history, trash, settings and system events, recovery kit, password change.
+#[test]
+fn the_self_mode_commands_drive_a_real_core() {
+    use hirzla_core::selfmode::proto::SystemEventKind;
+    use hirzla_desktop::selfmode::SettingsDto;
+
+    const RECOVERED: &str = "Mot-de-passe-après-recouvrement-bureau";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+
+    // KeePass import: the core reads the file.
+    let kdbx = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../crates/hirzla-vault/tests/kdbx/keepassxc-chacha20-argon2id.kdbx");
+    let refused = state.import_kdbx_file(&kdbx, z("faux")).unwrap_err();
+    assert_eq!(refused.code(), "import");
+    assert!(refused.message().contains("incorrect"));
+    let report =
+        serde_json::to_value(state.import_kdbx_file(&kdbx, z("hirzla-test")).unwrap()).unwrap();
+    assert_eq!(report["imported"], 5);
+    assert_eq!(report["attachments"], 1);
+    let list = serde_json::to_value(state.list(Some(z("Banque")), false).unwrap()).unwrap();
+    let bank = &list["entries"][0];
+    let target = SecretRef {
+        locker: bank["locker"].as_str().unwrap().to_owned(),
+        id: bank["id"].as_str().unwrap().to_owned(),
+    };
+    let field = |name: &str| serde_json::from_value(serde_json::json!(name)).unwrap();
+
+    // History: a new password, then back to the imported version.
+    state
+        .update_secret(
+            &target,
+            serde_json::from_value(serde_json::json!({ "password": SECRET })).unwrap(),
+        )
+        .unwrap();
+    let history = serde_json::to_value(state.history(&target).unwrap()).unwrap();
+    let versions = history.as_array().unwrap();
+    assert!(versions.len() >= 2);
+    assert_eq!(versions[0]["changed"], serde_json::json!(["password"]));
+    assert!(
+        !history.to_string().contains(SECRET),
+        "no value in a history"
+    );
+    let older = versions[1]["version"].as_str().unwrap().to_owned();
+    assert_eq!(
+        state
+            .reveal_version(&target, &older, field("password"))
+            .unwrap()
+            .as_str(),
+        "Pa55w0rd!"
+    );
+    assert_eq!(
+        state
+            .reveal_version(&target, "pas-une-version", field("password"))
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    state.restore_version(&target, &older).unwrap();
+    assert_eq!(
+        state.reveal(&target, field("password")).unwrap().as_str(),
+        "Pa55w0rd!"
+    );
+
+    // Trash and back.
+    state.delete_secret(&target, false).unwrap();
+    state.restore_secret(&target).unwrap();
+    let list = serde_json::to_value(state.list(Some(z("Banque")), false).unwrap()).unwrap();
+    assert_eq!(list["entries"][0]["trash"], false);
+
+    // Settings and a relayed session lock.
+    let mut settings = state.settings().unwrap();
+    assert!(settings.lock_on_sleep && settings.lock_on_session_lock);
+    assert_eq!(
+        state
+            .set_settings(SettingsDto {
+                auto_lock_s: 5,
+                ..settings
+            })
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    settings.lock_on_session_lock = false;
+    state.set_settings(settings).unwrap();
+    assert!(!state.system_event(SystemEventKind::SessionLock).unwrap());
+    settings.lock_on_session_lock = true;
+    state.set_settings(settings).unwrap();
+    assert!(state.system_event(SystemEventKind::SessionLock).unwrap());
+    assert_eq!(state.list(None, false).unwrap_err().code(), "locked");
+    state.unlock(z(MASTER)).unwrap();
+
+    // Recovery kit: 2 of 3, written private; then open with two parts.
+    let parts = dir.path().join("parts");
+    std::fs::create_dir(&parts).unwrap();
+    let kit = serde_json::to_value(state.create_recovery_kit(2, 3, &parts).unwrap()).unwrap();
+    let files: Vec<PathBuf> = kit["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| parts.join(f.as_str().unwrap()))
+        .collect();
+    assert_eq!(files.len(), 3);
+    assert!(files.iter().all(|f| f.exists()));
+    let status = serde_json::to_value(state.recovery_status().unwrap()).unwrap();
+    assert_eq!(status["threshold"], 2);
+    assert_eq!(status["kit"], kit["kit"]);
+    state.lock().unwrap();
+    assert_eq!(
+        state
+            .recovery_unlock(&files[..1], z(RECOVERED), z(RECOVERED))
+            .unwrap_err()
+            .code(),
+        "unlock_failed"
+    );
+    state
+        .recovery_unlock(
+            &[files[0].clone(), files[2].clone()],
+            z(RECOVERED),
+            z(RECOVERED),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(state.status().unwrap()).unwrap()["state"],
+        "unlocked"
+    );
+
+    // Password change back to the first one.
+    assert_eq!(
+        state
+            .change_password(z(MASTER), z(MASTER), z(MASTER))
+            .unwrap_err()
+            .code(),
+        "unlock_failed"
+    );
+    state
+        .change_password(z(RECOVERED), z(MASTER), z(MASTER))
+        .unwrap();
+    state.remove_recovery_kit().unwrap();
+    assert!(state.recovery_status().unwrap().is_none());
+    state.lock().unwrap();
+    state.unlock(z(MASTER)).unwrap();
+    state.shutdown();
+
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    for needle in [
+        MASTER,
+        RECOVERED,
+        SECRET,
+        "Pa55w0rd!",
+        "hirzla-test",
+        "Banque",
+    ] {
+        assert!(!log.contains(needle), "the core log holds {needle:?}");
+    }
 }

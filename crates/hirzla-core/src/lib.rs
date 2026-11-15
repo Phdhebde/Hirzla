@@ -10,8 +10,9 @@
 //! - [`daemon`]: the `hirzla-core` process;
 //! - [`client`]: the client side, used by `hirzla` and `hirzla-native-host`;
 //! - [`origin`]: web origins of the browser operations (version 2);
-//! - [`agent`]: the machine member of a Hornn agent (`docs/integration-hornn.md`).
-//! - [`server_mode`]: the client of `hirzlad` and the local API version 4 (ADR 0032).
+//! - [`agent`]: the machine member of a Hornn agent (`docs/integration-hornn.md`);
+//! - [`server_mode`]: the client of `hirzlad` and the local API version 4 (ADR 0032);
+//! - [`selfmode`]: the Self-mode operations (version 5): settings, history, recovery, import.
 
 #![forbid(unsafe_code)]
 
@@ -23,6 +24,7 @@ pub mod events;
 pub mod generator;
 pub mod origin;
 pub mod proto;
+pub mod selfmode;
 pub mod server_mode;
 pub mod service;
 pub mod transport;
