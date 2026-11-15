@@ -34,8 +34,13 @@ opération et ne l'effaçait jamais (ADR 0040, « reste à faire »).
   Le `LateSeen` correspondant tombe à la réécriture.
 - Un `Pruned` avec `late = true` n'est jamais servi : une souche n'a de sens qu'avec la
   `Compact` qui la liste (§ 10.3), et aucune `Compact` n'élague une opération `late`.
-- Contrôle de l'échéance : à l'ouverture et à chaque authentification d'appareil (coût : la
-  plus ancienne échéance, gardée triée en mémoire).
+- Contrôle de l'échéance : à l'ouverture et à chaque authentification d'appareil (coût : un
+  parcours des opérations tardives encore entières, dont l'heure est gardée en mémoire ; elles
+  sont rares).
+
+### 4. Lien d'invitation produit par `hirzlad`
+
+Voir ADR 0046 § 3 : `hirzlad invitation` est livré avec ce lot.
 
 ### 3. Durée non configurable dans ce lot
 

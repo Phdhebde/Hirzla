@@ -54,6 +54,9 @@ const SEEN_EVERY_MS: u64 = 24 * 3600 * 1000;
 /// The journal is written again (deferred purge) once the bodies pruned in memory but still
 /// on disk reach this many bytes, and at every start (ADR 0040).
 pub const PURGE_REWRITE_BYTES: u64 = 64 * 1024 * 1024;
+/// The body of an operation marked `late` is no longer served after this long, then leaves
+/// the disk at the next rewrite (`sync-protocol.md` § 11.8, ADR 0047): 30 days.
+pub const LATE_RETENTION_MS: u64 = 30 * 24 * 3600 * 1000;
 
 /// Milliseconds since the Unix epoch.
 #[must_use]
@@ -163,6 +166,9 @@ pub struct Core {
     seen: BTreeMap<(Id16, Id16), u64>,
     /// Bytes of bodies pruned in memory and still in the journal on disk.
     purgeable: u64,
+    /// Reception time of each operation marked `late` still held in full (ADR 0047); `None`
+    /// while replaying, until its `LateSeen` record.
+    late_seen: BTreeMap<(Id16, OpId), Option<u64>>,
     clock: fn() -> u64,
 }
 
@@ -222,11 +228,29 @@ impl Core {
             chunks: BTreeMap::new(),
             seen: BTreeMap::new(),
             purgeable: 0,
+            late_seen: BTreeMap::new(),
             clock: now_ms,
         };
         for r in records {
             core.replay(r)?;
         }
+        // Late operations received before version 3 have no time: from now (ADR 0047).
+        let now = (core.clock)();
+        let undated: Vec<(Id16, OpId)> = core
+            .late_seen
+            .iter()
+            .filter(|(_, t)| t.is_none())
+            .map(|(k, _)| *k)
+            .collect();
+        for (locker, op_id) in undated {
+            core.store.append(&Record::LateSeen {
+                locker,
+                op_id,
+                at_ms: now,
+            })?;
+            core.late_seen.insert((locker, op_id), Some(now));
+        }
+        core.expire_late(now)?;
         // Deferred purge: what became stable before the stop leaves the disk now.
         if core.purgeable > 0 {
             core.purge_journal()?;
@@ -287,11 +311,55 @@ impl Core {
                     .is_some_and(|c| c.stable) => {}
                 Record::Seen { member, device, .. }
                     if last_seen.get(&(member, device)) != Some(&i) => {}
+                Record::LateSeen { locker, op_id, .. }
+                    if !self.late_seen.contains_key(&(locker, op_id)) => {}
                 other => out.push(other),
             }
         }
         self.store.rewrite(&out)?;
         self.purgeable = 0;
+        Ok(())
+    }
+
+    /// Stops serving the bodies of the operations marked `late` received more than
+    /// [`LATE_RETENTION_MS`] ago, at `now` (ADR 0047): each becomes a stub that is never
+    /// served, and its record leaves the disk at the next rewrite.
+    ///
+    /// # Errors
+    /// [`ServerError::Storage`], [`ServerError::Io`] (rewrite).
+    pub fn expire_late(&mut self, now: u64) -> Result<(), ServerError> {
+        let due: Vec<(Id16, OpId)> = self
+            .late_seen
+            .iter()
+            .filter(|(_, t)| t.is_some_and(|t| t.saturating_add(LATE_RETENTION_MS) <= now))
+            .map(|(k, _)| *k)
+            .collect();
+        for (locker, op_id) in due {
+            self.late_seen.remove(&(locker, op_id));
+            let Some(l) = self.lockers.get_mut(&locker) else {
+                continue;
+            };
+            let Some(op) = l
+                .log
+                .get(&op_id)
+                .and_then(|it| Operation::decode(&it.bytes).ok())
+            else {
+                continue;
+            };
+            let stub = Stub {
+                op_id,
+                opref: op.opref,
+                prev: op.prev,
+            };
+            if let Some(n) = l.log.prune(stub) {
+                l.bytes = l.bytes.saturating_sub(n as u64);
+                // At least one rewrite, so that the body leaves the disk.
+                self.purgeable += (n as u64).max(1);
+            }
+        }
+        if self.purgeable >= PURGE_REWRITE_BYTES {
+            self.purge_journal()?;
+        }
         Ok(())
     }
 
@@ -361,6 +429,18 @@ impl Core {
                 let op_id = sha384(&bytes);
                 let ctrl = self.prepare_control(&op, op_id)?;
                 self.apply(op, op_id, bytes, late, ctrl);
+                if late {
+                    self.late_seen.insert((locker, op_id), None);
+                }
+            }
+            Record::LateSeen {
+                locker,
+                op_id,
+                at_ms,
+            } => {
+                if let Some(t) = self.late_seen.get_mut(&(locker, op_id)) {
+                    *t = Some(at_ms);
+                }
             }
             Record::Chunk {
                 locker,
@@ -832,6 +912,7 @@ impl Core {
         m: &Message,
         now: u64,
     ) -> Result<Vec<Message>, ServerError> {
+        self.expire_late(now)?;
         let State::Hello {
             hello,
             server_nonce,
@@ -958,7 +1039,10 @@ impl Core {
     ) -> Option<(Message, u64)> {
         let l = self.lockers.get(locker)?;
         let limit = usize::try_from(limit).unwrap_or(1000);
-        let (items, more) = l.log.after(after, limit, |it| owner || !it.late);
+        // A late operation whose body was erased (ADR 0047) is served to nobody.
+        let (items, more) = l.log.after(after, limit, |it| {
+            (owner || !it.late) && !(it.late && it.stub.is_some())
+        });
         let last = items
             .last()
             .map_or(if more { after } else { l.log.head_seq() }, |it| {
@@ -1411,6 +1495,16 @@ impl Core {
                 bytes: bytes.clone(),
             })
             .map_err(|_| code::UNAVAILABLE)?;
+        if late {
+            self.store
+                .append(&Record::LateSeen {
+                    locker: op.locker_id,
+                    op_id: *op_id,
+                    at_ms: now,
+                })
+                .map_err(|_| code::UNAVAILABLE)?;
+            self.late_seen.insert((op.locker_id, *op_id), Some(now));
+        }
         let locker_id = op.locker_id;
         let server_seq = self.apply(op, *op_id, bytes, late, ctrl);
         let receipt = Receipt::sign(
