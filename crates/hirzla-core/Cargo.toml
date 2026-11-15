@@ -2,6 +2,7 @@
 name = "hirzla-core"
 description = "The core: the only process that ever holds keys."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true

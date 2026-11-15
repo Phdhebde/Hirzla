@@ -50,4 +50,4 @@ Hirzla est conçu selon les recommandations de l'ANSSI. Il n'est ni certifié ni
 
 ## Licence
 
-À définir.
+Apache 2.0 : voir [LICENSE](LICENSE) et [NOTICE](NOTICE). Choix et raisons : ADR 0062.

@@ -22,10 +22,10 @@
 | --- | --- |
 | Nom commercial | Hirzla |
 | Version évaluée | `À COMPLÉTER (Max)` — à figer au gel de la phase 5 ; l'espace de travail Cargo porte aujourd'hui `0.0.0` |
-| Éditeur (raison sociale) | `À COMPLÉTER (Max)` — l'identifiant d'application `app.hirzla.desktop` et l'éditeur « Hirzla » des installeurs sont provisoires (`livraison.md` § 9) |
-| Licence du produit | `À COMPLÉTER (Max)` — non choisie (`deny.toml`, `[licenses.private]`) |
+| Éditeur (raison sociale) | Max, éditeur en nom propre (décision du 2026-11-15) ; dénomination exacte `À COMPLÉTER (Max)` — l'identifiant d'application `app.hirzla.desktop` et l'éditeur « Hirzla » des installeurs sont provisoires (`livraison.md` § 9) |
+| Licence du produit | Apache 2.0 (ADR 0062) |
 | Gamme | Hornn (bastion de gestion des accès à privilèges) |
-| Catégorie CSPN visée | `À COMPLÉTER (Max)` — la v1 proposait « Stockage sécurisé », secondaire « Identification, authentification et contrôle d'accès » ; à confirmer avec le CESTI |
+| Catégorie CSPN visée | `À COMPLÉTER (Max)` — évaluation reportée (décision du 2026-11-15) ; la v1 proposait « Stockage sécurisé », secondaire « Identification, authentification et contrôle d'accès » ; à confirmer avec le CESTI |
 | Composants livrés | Noyau `hirzla-core`, ligne de commande `hirzla`, serveur `hirzlad`, application de poste `hirzla-desktop`, hôte natif `hirzla-native-host`, extension navigateur. `hirzla-signer` reste chez l'éditeur (jamais livré aux postes) |
 | Plateforme de référence de l'évaluation | `À COMPLÉTER (Max)` — l'ADR 0050 recommande Linux x86-64 pour le poste et le serveur |
 | Plateformes supportées du poste | Windows 10 et 11 (x86-64), macOS 11 ou plus, Linux x86-64 (`livraison.md` § 1) |
@@ -372,7 +372,10 @@ supérieure exigée (aucun retour en arrière), noms de fichiers fermés, emprei
 comparées à temps constant, mise en place atomique (ADR 0043). Le noyau vérifie la signature
 de chaque client (Authenticode, signature Apple, manifeste signé sous Linux) et échoue fermé
 (ADR 0042) ; chaque client vérifie de même la signature du noyau avant tout envoi, dans les
-versions de livraison (ADR 0055). Binaires signés (Authenticode, Apple, GPG) ; dépendances
+versions de livraison (ADR 0055). L'ADR 0063 fait du manifeste signé par la clé d'éditeur le
+contrôle par défaut sur les trois systèmes (mise en œuvre à venir pour Windows et macOS) ;
+empreintes des livraisons signées en GPG, provenance de compilation Sigstore, signatures
+Authenticode et Apple facultatives ; dépendances
 figées (`Cargo.lock`, `cargo deny`) ; exécutables Linux compilés de façon reproductible et
 nomenclature logicielle CycloneDX publiée avec chaque livraison (ADR 0056).
 

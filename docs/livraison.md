@@ -101,6 +101,11 @@ exécutable, produite hors ligne par `.github/scripts/sbom.py PAQUET --target TR
 (bibliothèque standard de Python, aucun outil à installer). Elle est déterministe : la
 régénérer depuis l'étiquette donne le même fichier.
 
+> **ADR 0063.** Les signatures de système des § 3 et § 4 demandent un certificat payant ;
+> elles deviennent facultatives. La racine de confiance est la clé d'éditeur hybride (§ 7) ;
+> les empreintes sont signées en GPG (§ 5) et chaque installeur porte une attestation de
+> provenance Sigstore. Marche à suivre de l'éditeur : `docs/guide-signature.md`.
+
 ## 3. macOS : signature et notarisation
 
 1. **Certificat** « Developer ID Application » du compte Apple Developer de l'éditeur, exporté
