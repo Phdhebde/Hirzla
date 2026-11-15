@@ -131,6 +131,21 @@ hirzlad serve --data /var/lib/hirzlad --listen 192.0.2.10:7443 \
   d'administration ; poignée de main TLS en 10 s au plus ; un appareil doit s'authentifier
   dans la minute. Au-delà, la connexion est fermée aussitôt. Filtrer et limiter le débit en
   amont (pare-feu) reste recommandé.
+- Ces bornes se règlent au lancement (la configuration évaluée garde les valeurs par défaut) :
+
+  | Option de `hirzlad serve` | Par défaut | Valeurs admises |
+  | --- | --- | --- |
+  | `--max-connections N` (appareils, total) | 1 024 | 1 à 65 536 |
+  | `--max-per-source N` (appareils, par source) | 32 | 1 à 65 536, au plus le total |
+  | `--auth-timeout SECONDES` (appareils, délai pour s'authentifier) | 60 | 10 à 3 600 |
+  | `--admin-max-connections N` (administration, total) | 16 | 1 à 65 536 |
+  | `--admin-max-per-source N` (administration, par source) | 4 | 1 à 65 536, au plus le total |
+
+  Un site dont beaucoup de postes sortent par une même adresse (NAT) relève
+  `--max-per-source`. Une valeur nulle, hors bornes, non entière, une borne par source
+  supérieure au total ou une option inconnue est une erreur de configuration : `hirzlad`
+  s'arrête (code 2) avant de lire les clés et d'ouvrir les ports. Au démarrage, il affiche les
+  bornes appliquées sur la sortie d'erreur (`bounds: devices … ; administration …`).
 - Compte de service dédié, sans shell ; répertoire de données en `0700` ; clés TLS en `0600`.
   Les fichiers `*.pem`, `*.key` et les parts ne sont jamais versionnés.
 
