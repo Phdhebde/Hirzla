@@ -87,3 +87,35 @@ pub fn process_executable(pid: u32) -> io::Result<PathBuf> {
     buf.truncate(n);
     Ok(PathBuf::from(OsString::from_vec(buf)))
 }
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::{AsFd, AsRawFd};
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn local_peerpid_reports_this_process() {
+        let (a, _b) = UnixStream::pair().unwrap();
+        let mut pid: libc::pid_t = -1;
+        let mut len = std::mem::size_of::<libc::pid_t>() as libc::socklen_t;
+        // SAFETY: `a` is open; `pid` is writable and `len` holds its size.
+        #[allow(unsafe_code)]
+        let rc = unsafe {
+            libc::getsockopt(
+                a.as_raw_fd(),
+                libc::SOL_LOCAL,
+                libc::LOCAL_PEERPID,
+                (&mut pid as *mut libc::pid_t).cast(),
+                &mut len,
+            )
+        };
+        let err = std::io::Error::last_os_error();
+        assert_eq!(
+            (rc, pid, len),
+            (0, std::process::id() as libc::pid_t, 4),
+            "getsockopt(LOCAL_PEERPID): {err}"
+        );
+        let creds = super::peer_credentials(a.as_fd()).unwrap();
+        assert_eq!(creds.pid, Some(std::process::id()));
+    }
+}
