@@ -754,6 +754,80 @@ impl<A: Authorizer> Replica<A> {
         }
     }
 
+    /// The causal past of every operation this replica pruned itself (ADR 0017): what it
+    /// must keep across a restart, sorted by `op_id`.
+    #[must_use]
+    pub fn pruned(&self) -> Vec<PrunedPast> {
+        self.entries
+            .values()
+            .filter_map(|e| match &e.body {
+                Body::Pruned(m) => Some((**m).clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The stubs held (accepted or not yet), sorted by `op_id`: what the replica received
+    /// for operations pruned before it saw them (§ 10.3).
+    #[must_use]
+    pub fn stubs(&self) -> Vec<Stub> {
+        self.entries
+            .values()
+            .filter_map(|e| match &e.body {
+                Body::Stub(s) => Some(*s),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Restores operations this replica pruned before a restart, from the causal past it kept
+    /// (`format.md` § 15.2, ADR 0040). The caller vouches for them: they come from the sealed
+    /// state of this device, never from the network. An operation already held is left as
+    /// it is.
+    pub fn restore_pruned<I>(&mut self, pasts: I)
+    where
+        I: IntoIterator<Item = PrunedPast>,
+    {
+        let now = (self.clock)();
+        let mut added = false;
+        for p in pasts {
+            if self.entries.contains_key(&p.op_id) {
+                continue;
+            }
+            self.entries.insert(
+                p.op_id,
+                Entry {
+                    body: Body::Pruned(Box::new(p)),
+                    received_ms: now,
+                    unsent: false,
+                    shared: true,
+                },
+            );
+            added = true;
+        }
+        if added {
+            self.recompute();
+        }
+    }
+
+    /// The applied `Compact` operations, in total order (§ 10.2): those this device has
+    /// verified and acknowledges.
+    #[must_use]
+    pub fn applied_compacts(&self) -> Vec<OpId> {
+        self.causality
+            .total_order()
+            .iter()
+            .filter(|id| self.status.get(*id) == Some(&OpStatus::Applied))
+            .filter(|id| {
+                matches!(
+                    self.decoded.get(*id),
+                    Some(Ok(d)) if matches!(d.control, Some(ControlBody::Compact(_)))
+                )
+            })
+            .copied()
+            .collect()
+    }
+
     /// Differential exchange (§ 3 of the step, § 13.2): the full operations this replica
     /// holds and `peer` lacks, in `seq` order per device, and stubs for pruned ones.
     /// Operations that are not signed by their device (or not decodable) are not

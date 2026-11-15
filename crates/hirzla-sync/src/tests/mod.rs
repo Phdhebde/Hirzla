@@ -9,6 +9,7 @@ mod convergence;
 mod exchange;
 mod keylog;
 mod network;
+mod persistence;
 mod refusals;
 mod revocation;
 mod support;
