@@ -471,7 +471,12 @@ impl Core {
                     && e.secret_type == SecretType::Password
                     && e.hosts.contains(&host)
                 {
-                    entries.push(list_entry(l.id, &e));
+                    // Only what the browser needs: neither the secret's other hosts nor its
+                    // tags (docs/api-locale.md § 6, `Match`).
+                    let mut entry = list_entry(l.id, &e);
+                    entry.hosts = vec![host.clone()];
+                    entry.tags = Vec::new();
+                    entries.push(entry);
                 }
             }
         }

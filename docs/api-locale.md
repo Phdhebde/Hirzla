@@ -234,8 +234,10 @@ Détails :
     un tirage qui manque une classe demandée est refait en entier.
 
 11. **`Match`** (v2) — les secrets **actifs** de type mot de passe dont les `hosts` de l'index
-    (`format.md` § 10, règle des `hosts`) contiennent **exactement** l'hôte de l'origine. Mêmes
-    entrées et même ordre que `List` ; liste vide si rien ne correspond. Aucun rapprochement :
+    (`format.md` § 10, règle des `hosts`) contiennent **exactement** l'hôte de l'origine. Même
+    ordre que `List` ; mêmes entrées, réduites à ce dont le navigateur a besoin : `hôtes` ne
+    contient que l'hôte demandé (pas les autres hôtes du secret) et `étiquettes` est vide.
+    Liste vide si rien ne correspond. Aucun rapprochement :
     ni sous-domaine, ni domaine parent, ni « www. », ni domaine enregistrable, ni casse ou
     Unicode autre que la forme ASCII de l'index.
 12. **`Fill`** (v2) — l'identifiant (s'il existe) et le mot de passe d'**un** secret, **si et
@@ -397,13 +399,15 @@ détient aucune clé, ne garde aucun état entre deux lancements et n'écrit auc
 protocole JSON, ses refus et son installation sont décrits dans `apps/extension/README.md` ;
 l'encodage JSON par l'ADR 0027 (proposé).
 
-- Il se connecte au noyau `hirzla-core` situé à côté de lui (ou `HIRZLA_CORE`), au point de
-  connexion par défaut (ou `HIRZLA_SOCKET`), vérifie le noyau (§ 3.2), fait un aller-retour
+- Il se connecte au noyau `hirzla-core` situé à côté de lui (aucune variable ne change ce
+  chemin), au point de connexion par défaut (ou `HIRZLA_SOCKET`), vérifie le noyau (§ 3.2), fait un aller-retour
   `Status` accepté, **puis seulement** durcit son processus (comme la ligne de commande : un
   processus non vidable masque son exécutable au noyau sous Linux).
 - Il ne démarre pas le noyau et n'ouvre pas le coffre : verrouillé, il répond `locked` et
   l'extension invite à ouvrir le coffre avec l'application ou `hirzla unlock`.
 - Il revérifie lui-même la forme de l'origine (§ 6.1) avant de la transmettre.
+- Il lit et écrit ses messages sans les tampons de la bibliothèque standard (qui ne sont
+  jamais effacés), dans des tampons effacés à leur libération.
 
 ## 13. Points ouverts
 

@@ -291,3 +291,12 @@ fn a_large_listing_is_cut_to_fit_one_message() {
     assert!(out.len() <= MAX_REPLY);
     assert!(out.ends_with("\"truncated\":true}"));
 }
+
+#[test]
+fn debug_hides_what_the_extension_sent() {
+    let r = parse_request(
+        br#"{"type":"save","origin":"https://bank.example","username":"hunter2-user","password":"hunter2-pass"}"#,
+    )
+    .unwrap();
+    assert!(!format!("{r:?}").contains("hunter2"));
+}

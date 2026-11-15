@@ -11,6 +11,7 @@
 mod host;
 mod json;
 
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -131,11 +132,32 @@ fn write_message(w: &mut impl Write, json: &str) -> std::io::Result<()> {
     w.flush()
 }
 
+/// Unbuffered handles on the standard input and output. The standard library buffers
+/// `stdin` and `stdout` in static buffers that are never erased; a password read or written
+/// through them would stay behind. These handles go straight to the pipes.
+fn raw_stdio() -> std::io::Result<(File, File)> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd;
+        let input = std::io::stdin().as_fd().try_clone_to_owned()?;
+        let output = std::io::stdout().as_fd().try_clone_to_owned()?;
+        Ok((File::from(input), File::from(output)))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle;
+        let input = std::io::stdin().as_handle().try_clone_to_owned()?;
+        let output = std::io::stdout().as_handle().try_clone_to_owned()?;
+        Ok((File::from(input), File::from(output)))
+    }
+}
+
 fn main() -> ExitCode {
     // The browser's arguments (caller origin, manifest path, parent window) are ignored:
     // the browser itself enforces which extension may start this host.
-    let mut input = std::io::stdin().lock();
-    let mut output = std::io::stdout().lock();
+    let Ok((mut input, mut output)) = raw_stdio() else {
+        return ExitCode::FAILURE;
+    };
     let mut link = Link {
         client: None,
         failed: None,

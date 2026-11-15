@@ -38,7 +38,6 @@ pub trait CoreLink {
 }
 
 /// A message of the extension, checked.
-#[derive(Debug)]
 pub enum HostRequest {
     /// State of the vault.
     Status,
@@ -76,6 +75,20 @@ pub enum HostRequest {
     },
     /// Lock the vault.
     Lock,
+}
+
+impl std::fmt::Debug for HostRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The kind only: a user name or a password must never reach a Debug output.
+        f.write_str(match self {
+            HostRequest::Status => "HostRequest::Status",
+            HostRequest::Match { .. } => "HostRequest::Match",
+            HostRequest::Fill { .. } => "HostRequest::Fill",
+            HostRequest::Save { .. } => "HostRequest::Save",
+            HostRequest::Generate { .. } => "HostRequest::Generate",
+            HostRequest::Lock => "HostRequest::Lock",
+        })
+    }
 }
 
 /// Why a message was refused by the host itself.

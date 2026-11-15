@@ -455,6 +455,20 @@ fn origin_operations_are_exact() {
     .unwrap();
 
     assert_eq!(matches(&mut c, origin), vec!["Banque", "Banque bis"]);
+    // The other hosts of a secret are not revealed to whoever names one of them.
+    match c
+        .handle(Request::Match {
+            origin: origin.into(),
+        })
+        .unwrap()
+    {
+        Reply::Matches(e) => {
+            assert!(e
+                .iter()
+                .all(|e| e.hosts == ["bank.example"] && e.tags.is_empty()));
+        }
+        _ => panic!(),
+    }
     assert_eq!(
         matches(&mut c, "https://bank.example:8443"),
         vec!["Banque", "Banque bis"]
