@@ -16,7 +16,7 @@
 //! | --- | --- |
 //! | [`MemberSigningKey`] | device certificate, device revocation |
 //! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share, device audit checkpoint |
-//! | [`ServerSigningKey`] | server authentication, receipt, audit checkpoint |
+//! | [`ServerSigningKey`] | server authentication, receipt, audit checkpoint, key transparency log head |
 //!
 //! | Object | Layout | Length |
 //! | --- | --- | --- |
@@ -75,6 +75,8 @@ pub enum Domain {
     DeviceEnrol,
     /// A secret share for recovery (ADR 0012).
     RecoveryShare,
+    /// A signed head of the key transparency log (`docs/transparence.md` § 3.3).
+    KeyLogHead,
     /// A checkpoint of the server audit log (`docs/evenements.md`, ADR 0021).
     AuditCheckpoint,
     /// A checkpoint of a device's local audit log (`docs/evenements.md`, ADR 0021).
@@ -96,6 +98,7 @@ impl Domain {
             Domain::ExchangeFile => b"hirzla/v1/exchange-file",
             Domain::DeviceEnrol => b"hirzla/v1/device-enrol",
             Domain::RecoveryShare => b"hirzla/v1/recovery-share",
+            Domain::KeyLogHead => b"hirzla/v1/keylog-head",
             Domain::AuditCheckpoint => b"hirzla/v1/audit-checkpoint",
             Domain::DeviceAuditCheckpoint => b"hirzla/v1/device-audit-checkpoint",
         }
@@ -146,6 +149,8 @@ pub enum ServerDomain {
     ServerAuth,
     /// A receipt.
     Receipt,
+    /// A key transparency log head.
+    KeyLogHead,
     /// A checkpoint of the server audit log.
     AuditCheckpoint,
 }
@@ -178,6 +183,7 @@ impl From<ServerDomain> for Domain {
         match d {
             ServerDomain::ServerAuth => Domain::ServerAuth,
             ServerDomain::Receipt => Domain::Receipt,
+            ServerDomain::KeyLogHead => Domain::KeyLogHead,
             ServerDomain::AuditCheckpoint => Domain::AuditCheckpoint,
         }
     }

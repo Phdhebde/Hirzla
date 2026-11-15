@@ -763,6 +763,11 @@ name = "hirzla-access"
 version = "0.0.0"
 dependencies = [
  "hirzla-crypto",
+ "hirzla-vault",
+ "proptest",
+ "sha2",
+ "thiserror",
+ "zeroize",
 ]
 
 [[package]]
