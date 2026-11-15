@@ -25,8 +25,19 @@ fn core_exe() -> PathBuf {
     static BUILT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     BUILT
         .get_or_init(|| {
-            let deps = std::env::current_exe().unwrap();
-            let dir = deps.parent().unwrap().parent().unwrap();
+            // The test runs from `<profile>/deps/` (Cargo before 1.100) or from
+            // `<profile>/build/<package>/<hash>/out/` (Cargo 1.100): the core sits in `<profile>`.
+            let me = std::env::current_exe().unwrap();
+            let dir = me
+                .ancestors()
+                .find(|d| {
+                    matches!(
+                        d.file_name().and_then(|n| n.to_str()),
+                        Some("deps" | "build")
+                    )
+                })
+                .and_then(std::path::Path::parent)
+                .expect("test executable outside the target directory");
             let path = dir.join(format!("hirzla-core{}", std::env::consts::EXE_SUFFIX));
             if !path.exists() {
                 let status = Command::new(env!("CARGO"))
