@@ -78,6 +78,21 @@ impl Limits {
         handshake_timeout: HANDSHAKE_TIMEOUT,
         auth_timeout: HANDSHAKE_TIMEOUT,
     };
+
+    /// Checks that no ceiling and no deadline is zero: a zero ceiling would refuse every
+    /// connection, a zero deadline would close each one at once.
+    ///
+    /// # Errors
+    /// [`ServerError::Config`] naming the zero bound.
+    pub fn validate(&self) -> Result<(), ServerError> {
+        if self.max_connections == 0 || self.max_per_source == 0 {
+            return Err(ServerError::Config("a connection ceiling cannot be zero"));
+        }
+        if self.handshake_timeout.is_zero() || self.auth_timeout.is_zero() {
+            return Err(ServerError::Config("a connection deadline cannot be zero"));
+        }
+        Ok(())
+    }
 }
 
 /// The key a source is counted under: the IPv4 address, or the /64 prefix of an IPv6 address
@@ -247,18 +262,16 @@ pub fn start(config: Config) -> Result<Running, ServerError> {
 /// Binds both ports and starts serving, sealed, with the given bounds.
 ///
 /// # Errors
-/// [`ServerError::Config`] if both ports are the same or a ceiling is zero,
+/// [`ServerError::Config`] if both ports are the same or a bound is zero
+/// ([`Limits::validate`]),
 /// [`ServerError::Io`], header errors.
 pub fn start_with_limits(
     config: Config,
     device_limits: Limits,
     admin_limits: Limits,
 ) -> Result<Running, ServerError> {
-    for l in [device_limits, admin_limits] {
-        if l.max_connections == 0 || l.max_per_source == 0 {
-            return Err(ServerError::Config("a connection ceiling cannot be zero"));
-        }
-    }
+    device_limits.validate()?;
+    admin_limits.validate()?;
     if config.listen.port() != 0 && config.listen.port() == config.admin_listen.port() {
         return Err(ServerError::Config(
             "the administration port must differ from the device port",
@@ -619,6 +632,24 @@ mod tests {
             max_per_source: per,
             ..Limits::DEVICE
         }
+    }
+
+    #[test]
+    fn zero_bounds_are_refused() {
+        assert!(Limits::DEVICE.validate().is_ok());
+        assert!(Limits::ADMIN.validate().is_ok());
+        assert!(limits(0, 1).validate().is_err());
+        assert!(limits(1, 0).validate().is_err());
+        let no_auth = Limits {
+            auth_timeout: Duration::ZERO,
+            ..Limits::DEVICE
+        };
+        assert!(no_auth.validate().is_err());
+        let no_handshake = Limits {
+            handshake_timeout: Duration::ZERO,
+            ..Limits::ADMIN
+        };
+        assert!(no_handshake.validate().is_err());
     }
 
     #[test]

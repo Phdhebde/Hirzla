@@ -99,7 +99,10 @@ sont les exécutables, identifiés par le manifeste des clients signé (§ 7), q
 Chaque livraison publie la **nomenclature logicielle** (SBOM, CycloneDX 1.5) de chaque
 exécutable, produite hors ligne par `.github/scripts/sbom.py PAQUET --target TRIPLET`
 (bibliothèque standard de Python, aucun outil à installer). Elle est déterministe : la
-régénérer depuis l'étiquette donne le même fichier.
+régénérer depuis l'étiquette donne le même fichier. Les paquets npm de l'interface et de
+l'extension ont la leur, lue dans le fichier de verrouillage sans rien installer
+(`sbom.py --npm apps/desktop`, `sbom.py --npm apps/extension`, ADR 0061) : portée `required`
+pour un paquet livré, `excluded` pour un outil de développement.
 
 > **ADR 0063.** Les signatures de système des § 3 et § 4 demandent un certificat payant ;
 > elles deviennent facultatives. La racine de confiance est la clé d'éditeur hybride (§ 7) ;

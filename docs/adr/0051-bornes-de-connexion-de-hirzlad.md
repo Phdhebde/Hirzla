@@ -38,8 +38,11 @@ Chaque port (appareils, administration) est borné par un `net::Limits` :
    succès. Une création de fil refusée par le système suit la même temporisation.
 5. **Configuration** : `net::start` applique les valeurs ci-dessus ;
    `net::start_with_limits` permet d'autres valeurs (tests, sites de grande taille). Une
-   valeur nulle est une erreur de configuration. Aucune option de ligne de commande pour
-   l'instant : les valeurs par défaut couvrent la configuration évaluée.
+   valeur nulle est une erreur de configuration. ~~Aucune option de ligne de commande pour
+   l'instant~~ Mise à jour : `hirzlad serve` accepte `--max-connections`, `--max-per-source`,
+   `--auth-timeout`, `--admin-max-connections` et `--admin-max-per-source`, validées avant le
+   démarrage (`guide-agd.md` § 5.1) ; les valeurs par défaut restent celles de la
+   configuration évaluée.
 
 ## Conséquences
 
@@ -47,7 +50,7 @@ Chaque port (appareils, administration) est borné par un `net::Limits` :
   elle sature au plus 1 024 connexions, et le port d'administration, compté à part, reste
   disponible pour arrêter ou observer le serveur.
 - Un site dont plus de 32 postes partagent une même adresse (NAT) doit relever la borne par
-  source : il faudra alors une option de `hirzlad serve` (« Reste à faire »).
+  source : option `--max-per-source` de `hirzlad serve` (test `apps/server/tests/serve_cli.rs`).
 - Le plafond global reste une ressource partagée : une attaque distribuée peut toujours
   empêcher de nouveaux postes de se connecter tant qu'elle dure. Le filtrage en amont
   (pare-feu, limitation de débit réseau) reste recommandé par le guide.

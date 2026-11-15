@@ -76,6 +76,11 @@ jobs:
             "$py" .github/scripts/sbom.py "$p" --target "$triple" \
               --output "target/release/bundle/sbom/$p-$triple.cdx.json"
           done
+          # npm packages of the desktop interface and of the extension (ADR 0061).
+          for a in desktop extension; do
+            "$py" .github/scripts/sbom.py --npm "apps/$a" \
+              --output "target/release/bundle/sbom/$a.npm.cdx.json"
+          done
       - name: Build provenance (Sigstore)
         uses: actions/attest-build-provenance@v2
         with:
