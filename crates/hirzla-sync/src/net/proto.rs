@@ -6,20 +6,20 @@
 //! (`OpItem`, `Stub`) are those of `hirzla_sync::wire`; the control bodies, keys and
 //! certificates those of `hirzla-access` and `hirzla-vault`.
 //!
-//! This module is the reference codec of the protocol. It lives in `apps/server` until the
-//! core gets its network client; it then moves to `hirzla-sync` (ADR 0028, point 9).
+//! This module is the reference codec of the protocol, shared by `hirzlad` and the network
+//! client of the core (ADR 0028, point 9; ADR 0032).
 
 use std::io::{Read, Write};
 
 use hirzla_crypto::sign::{ServerDomain, ServerSigningKey, Signature, VerifyingKey};
-use hirzla_sync::control::DeviceRevocation;
-use hirzla_sync::wire::OpItem;
 use hirzla_vault::cbor::{self, array_max, bytes_max, fixed, uint, uint_in, Fields, Value};
 use hirzla_vault::model::{lens, DeviceCert, Id16, MemberKeys, OpId};
 
 use zeroize::Zeroize;
 
-use crate::ServerError;
+use super::NetError;
+use crate::control::DeviceRevocation;
+use crate::wire::OpItem;
 
 /// ALPN of the protocol (§ 11.1).
 pub const ALPN: &[u8] = b"hirzla/1";
@@ -141,17 +141,17 @@ impl Message {
     /// Canonical encoding of the frame, length prefix included.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`] if the body does not encode or the frame is too large.
-    pub fn to_frame(&self) -> Result<Vec<u8>, ServerError> {
+    /// [`NetError::Malformed`] if the body does not encode or the frame is too large.
+    pub fn to_frame(&self) -> Result<Vec<u8>, NetError> {
         let enc = cbor::encode(&Value::map(vec![
             (1, Value::Uint(self.kind)),
             (2, Value::Uint(self.req)),
             (3, self.body.clone()),
         ]))?;
         if enc.len() > MAX_FRAME {
-            return Err(ServerError::Malformed);
+            return Err(NetError::Malformed);
         }
-        let len = u32::try_from(enc.len()).map_err(|_| ServerError::Malformed)?;
+        let len = u32::try_from(enc.len()).map_err(|_| NetError::Malformed)?;
         let mut out = Vec::with_capacity(4 + enc.len());
         out.extend_from_slice(&len.to_be_bytes());
         out.extend_from_slice(&enc);
@@ -161,13 +161,13 @@ impl Message {
     /// Strict decoding of a frame body (without its length prefix).
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn decode(bytes: &[u8]) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn decode(bytes: &[u8]) -> Result<Self, NetError> {
         let v = cbor::decode(bytes)?;
         let f = Fields::new(&v, &[1, 2, 3])?;
         let body = f.req(3)?.clone();
         if !matches!(body, Value::Map(_)) {
-            return Err(ServerError::Malformed);
+            return Err(NetError::Malformed);
         }
         Ok(Message {
             kind: uint(f.req(1)?)?,
@@ -180,8 +180,8 @@ impl Message {
 /// Writes one frame.
 ///
 /// # Errors
-/// [`ServerError::Io`] or [`ServerError::Malformed`].
-pub fn write_message<W: Write>(w: &mut W, m: &Message) -> Result<(), ServerError> {
+/// [`NetError::Io`] or [`NetError::Malformed`].
+pub fn write_message<W: Write>(w: &mut W, m: &Message) -> Result<(), NetError> {
     w.write_all(&m.to_frame()?)?;
     w.flush()?;
     Ok(())
@@ -190,13 +190,13 @@ pub fn write_message<W: Write>(w: &mut W, m: &Message) -> Result<(), ServerError
 /// Reads one frame, blocking.
 ///
 /// # Errors
-/// [`ServerError::Io`] or [`ServerError::Malformed`].
-pub fn read_message<R: Read>(r: &mut R) -> Result<Message, ServerError> {
+/// [`NetError::Io`] or [`NetError::Malformed`].
+pub fn read_message<R: Read>(r: &mut R) -> Result<Message, NetError> {
     let mut len = [0u8; 4];
     r.read_exact(&mut len)?;
-    let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| ServerError::Malformed)?;
+    let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| NetError::Malformed)?;
     if len > MAX_FRAME {
-        return Err(ServerError::Malformed);
+        return Err(NetError::Malformed);
     }
     let mut buf = vec![0u8; len];
     r.read_exact(&mut buf)?;
@@ -218,16 +218,16 @@ impl FrameBuffer {
     /// The next complete frame, if any.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`] on an oversized or malformed frame: the connection is cut.
-    pub fn next_message(&mut self) -> Result<Option<Message>, ServerError> {
+    /// [`NetError::Malformed`] on an oversized or malformed frame: the connection is cut.
+    pub fn next_message(&mut self) -> Result<Option<Message>, NetError> {
         let Some(head) = self.buf.get(..4) else {
             return Ok(None);
         };
         let mut len = [0u8; 4];
         len.copy_from_slice(head);
-        let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| ServerError::Malformed)?;
+        let len = usize::try_from(u32::from_be_bytes(len)).map_err(|_| NetError::Malformed)?;
         if len > MAX_FRAME {
-            return Err(ServerError::Malformed);
+            return Err(NetError::Malformed);
         }
         if self.buf.len() < 4 + len {
             return Ok(None);
@@ -256,30 +256,30 @@ impl Drop for FrameBuffer {
 // Small helpers
 // -----------------------------------------------------------------------------------------
 
-fn id(v: &Value) -> Result<Id16, ServerError> {
+fn id(v: &Value) -> Result<Id16, NetError> {
     Ok(fixed::<16>(v)?)
 }
 
-fn op_id(v: &Value) -> Result<OpId, ServerError> {
+fn op_id(v: &Value) -> Result<OpId, NetError> {
     Ok(fixed::<48>(v)?)
 }
 
-fn bytes(v: &Value, max: usize) -> Result<Vec<u8>, ServerError> {
+fn bytes(v: &Value, max: usize) -> Result<Vec<u8>, NetError> {
     Ok(bytes_max(v, max)?.to_vec())
 }
 
-fn exact(v: &Value, len: usize) -> Result<Vec<u8>, ServerError> {
+fn exact(v: &Value, len: usize) -> Result<Vec<u8>, NetError> {
     match v {
         Value::Bytes(b) if b.len() == len => Ok(b.clone()),
-        _ => Err(ServerError::Malformed),
+        _ => Err(NetError::Malformed),
     }
 }
 
-fn boolean(v: &Value) -> Result<bool, ServerError> {
+fn boolean(v: &Value) -> Result<bool, NetError> {
     Ok(cbor::boolean(v)?)
 }
 
-fn encode(v: &Value) -> Result<Vec<u8>, ServerError> {
+fn encode(v: &Value) -> Result<Vec<u8>, NetError> {
     Ok(cbor::encode(v)?.to_vec())
 }
 
@@ -318,8 +318,8 @@ impl Hello {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4])?;
         Ok(Hello {
             versions: array_max(f.req(1)?, 16)?
@@ -336,7 +336,7 @@ impl Hello {
 /// `transcript` of § 11.3, encoded: what both sides sign.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
+/// [`NetError::Malformed`].
 pub fn transcript(
     exporter: &[u8; EXPORTER_LEN],
     client_nonce: &[u8; 32],
@@ -344,7 +344,7 @@ pub fn transcript(
     server_id: &Id16,
     member: &Id16,
     device: &Id16,
-) -> Result<Vec<u8>, ServerError> {
+) -> Result<Vec<u8>, NetError> {
     encode(&Value::map(vec![
         (1, Value::bytes(exporter)),
         (2, Value::bytes(client_nonce)),
@@ -386,8 +386,8 @@ impl HelloAck {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
         Ok(HelloAck {
             version: uint(f.req(1)?)?,
@@ -422,8 +422,8 @@ impl Auth {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2])?;
         Ok(Auth {
             sig: exact(f.req(1)?, lens::SIGNATURE)?,
@@ -479,8 +479,8 @@ impl AuthOk {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2])?;
         let mut lockers = Vec::new();
         for c in array_max(f.req(1)?, 1 << 20)? {
@@ -527,8 +527,8 @@ impl Pull {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3])?;
         Ok(Pull {
             locker: id(f.req(1)?)?,
@@ -566,8 +566,8 @@ impl Ops {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3])?;
         Ok(Ops {
             locker: id(f.req(1)?)?,
@@ -592,8 +592,8 @@ pub fn push_value(ops: &[Vec<u8>]) -> Value {
 /// Reads a `Push` (12) body: at most 64 operations of at most 4 MiB each.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_push(v: &Value) -> Result<Vec<Vec<u8>>, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_push(v: &Value) -> Result<Vec<Vec<u8>>, NetError> {
     let f = Fields::new(v, &[1])?;
     array_max(f.req(1)?, MAX_PUSH_OPS)?
         .iter()
@@ -632,7 +632,7 @@ impl Receipt {
     /// Signs a receipt with the server key (`hirzla/v1/receipt`).
     ///
     /// # Errors
-    /// [`ServerError::Crypto`].
+    /// [`NetError::Crypto`].
     pub fn sign(
         key: &ServerSigningKey,
         server_id: Id16,
@@ -640,7 +640,7 @@ impl Receipt {
         op_id: OpId,
         server_seq: u64,
         server_time_ms: u64,
-    ) -> Result<Self, ServerError> {
+    ) -> Result<Self, NetError> {
         let mut r = Receipt {
             server_id,
             locker_id,
@@ -659,8 +659,8 @@ impl Receipt {
     /// Verifies the receipt with the pinned server key.
     ///
     /// # Errors
-    /// [`ServerError::Crypto`].
-    pub fn verify(&self, server_key: &VerifyingKey) -> Result<(), ServerError> {
+    /// [`NetError::Crypto`].
+    pub fn verify(&self, server_key: &VerifyingKey) -> Result<(), NetError> {
         let sig = Signature::from_bytes(&self.sig)?;
         server_key
             .verify(
@@ -668,7 +668,7 @@ impl Receipt {
                 &encode(&self.signed_value())?,
                 &sig,
             )
-            .map_err(|_| ServerError::Crypto)
+            .map_err(|_| NetError::Crypto)
     }
 
     /// Value.
@@ -687,8 +687,8 @@ impl Receipt {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5, 6])?;
         Ok(Receipt {
             server_id: id(f.req(1)?)?,
@@ -758,8 +758,8 @@ impl PushItem {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
         let status = match (uint(f.req(2)?)?, f.opt(3), f.opt(4), f.opt(5)) {
             (0, Some(s), None, Some(r)) => PushStatus::Accepted {
@@ -770,7 +770,7 @@ impl PushItem {
                 server_seq: uint(s)?,
             },
             (2, None, Some(c), None) => PushStatus::Refused(uint(c)?),
-            _ => return Err(ServerError::Malformed),
+            _ => return Err(NetError::Malformed),
         };
         Ok(PushItem {
             op_id: op_id(f.req(1)?)?,
@@ -791,8 +791,8 @@ pub fn push_result_value(items: &[PushItem]) -> Value {
 /// Reads a `PushResult` (13) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_push_result(v: &Value) -> Result<Vec<PushItem>, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_push_result(v: &Value) -> Result<Vec<PushItem>, NetError> {
     let f = Fields::new(v, &[1])?;
     array_max(f.req(1)?, MAX_PUSH_OPS)?
         .iter()
@@ -817,8 +817,8 @@ pub fn subscribe_value(lockers: &[(Id16, u64)]) -> Value {
 /// Reads a `Subscribe` (14) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_subscribe(v: &Value) -> Result<Vec<(Id16, u64)>, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_subscribe(v: &Value) -> Result<Vec<(Id16, u64)>, NetError> {
     let f = Fields::new(v, &[1])?;
     array_max(f.req(1)?, 65_536)?
         .iter()
@@ -832,8 +832,8 @@ pub fn read_subscribe(v: &Value) -> Result<Vec<(Id16, u64)>, ServerError> {
 /// `Ack` (15) body: `(locker, compact)`.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_ack(v: &Value) -> Result<(Id16, OpId), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_ack(v: &Value) -> Result<(Id16, OpId), NetError> {
     let f = Fields::new(v, &[1, 2])?;
     Ok((id(f.req(1)?)?, op_id(f.req(2)?)?))
 }
@@ -869,8 +869,8 @@ impl PutChunk {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
         let chunks = uint_in(f.req(4)?, 1..=1 << 20)?;
         Ok(PutChunk {
@@ -886,8 +886,8 @@ impl PutChunk {
 /// `GetChunk` (21) body: `(locker, attachment, chunk)`.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_get_chunk(v: &Value) -> Result<(Id16, Id16, u64), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_get_chunk(v: &Value) -> Result<(Id16, Id16, u64), NetError> {
     let f = Fields::new(v, &[1, 2, 3])?;
     Ok((id(f.req(1)?)?, id(f.req(2)?)?, uint(f.req(3)?)?))
 }
@@ -912,8 +912,8 @@ pub fn blob_value(b: &[u8]) -> Value {
 /// Reads a body with a single byte string at key 1.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_blob(v: &Value, max: usize) -> Result<Vec<u8>, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_blob(v: &Value, max: usize) -> Result<Vec<u8>, NetError> {
     let f = Fields::new(v, &[1])?;
     bytes(f.req(1)?, max)
 }
@@ -927,8 +927,8 @@ pub fn id_value(i: &Id16) -> Value {
 /// Reads a body with a single identifier at key 1.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_id(v: &Value) -> Result<Id16, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_id(v: &Value) -> Result<Id16, NetError> {
     let f = Fields::new(v, &[1])?;
     id(f.req(1)?)
 }
@@ -942,8 +942,8 @@ pub fn mailbox_put_value(device: &Id16, blob: &[u8]) -> Value {
 /// Reads a `MailboxPut` (32) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_mailbox_put(v: &Value) -> Result<(Id16, Vec<u8>), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_mailbox_put(v: &Value) -> Result<(Id16, Vec<u8>), NetError> {
     let f = Fields::new(v, &[1, 2])?;
     Ok((id(f.req(1)?)?, bytes(f.req(2)?, MAX_MAILBOX_BLOB)?))
 }
@@ -990,8 +990,8 @@ impl MemberKeysResult {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4])?;
         Ok(MemberKeysResult {
             keys: MemberKeys::from_value(f.req(1)?)?,
@@ -1021,8 +1021,8 @@ pub fn pair_value(a: u64, b: u64) -> Value {
 /// Reads two unsigned integers at keys 1 and 2.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_pair(v: &Value) -> Result<(u64, u64), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_pair(v: &Value) -> Result<(u64, u64), NetError> {
     let f = Fields::new(v, &[1, 2])?;
     Ok((uint(f.req(1)?)?, uint(f.req(2)?)?))
 }
@@ -1057,15 +1057,15 @@ pub fn get_keylog_proof_value(indices: &[u64], size: Option<u64>) -> Value {
 /// Reads a `GetKeyLogProof` (62) body: 1 to 65 indices, optional size.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_get_keylog_proof(v: &Value) -> Result<(Vec<u64>, Option<u64>), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_get_keylog_proof(v: &Value) -> Result<(Vec<u64>, Option<u64>), NetError> {
     let f = Fields::new(v, &[1, 2])?;
     let indices: Vec<u64> = array_max(f.req(1)?, 65)?
         .iter()
         .map(uint)
         .collect::<Result<_, _>>()?;
     if indices.is_empty() {
-        return Err(ServerError::Malformed);
+        return Err(NetError::Malformed);
     }
     Ok((indices, f.opt(2).map(uint).transpose()?))
 }
@@ -1073,8 +1073,8 @@ pub fn read_get_keylog_proof(v: &Value) -> Result<(Vec<u64>, Option<u64>), Serve
 /// Reads a `GetKeyLogObject` (64) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_object_hash(v: &Value) -> Result<[u8; 48], ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_object_hash(v: &Value) -> Result<[u8; 48], NetError> {
     let f = Fields::new(v, &[1])?;
     Ok(fixed::<48>(f.req(1)?)?)
 }
@@ -1126,8 +1126,8 @@ impl AdminStatus {
     /// Strict decoding.
     ///
     /// # Errors
-    /// [`ServerError::Malformed`].
-    pub fn from_value(v: &Value) -> Result<Self, ServerError> {
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
         let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
         Ok(AdminStatus {
             sealed: boolean(f.req(1)?)?,
@@ -1148,8 +1148,8 @@ pub fn create_account_value(keys: &MemberKeys) -> Value {
 /// Reads an `AdminCreateAccount` (103) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_create_account(v: &Value) -> Result<MemberKeys, ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_create_account(v: &Value) -> Result<MemberKeys, NetError> {
     let f = Fields::new(v, &[1])?;
     Ok(MemberKeys::from_value(f.req(1)?)?)
 }
@@ -1163,8 +1163,8 @@ pub fn account_value(account: &Id16, index: u64) -> Value {
 /// Reads an `AdminAccount` (104) body.
 ///
 /// # Errors
-/// [`ServerError::Malformed`].
-pub fn read_account(v: &Value) -> Result<(Id16, u64), ServerError> {
+/// [`NetError::Malformed`].
+pub fn read_account(v: &Value) -> Result<(Id16, u64), NetError> {
     let f = Fields::new(v, &[1, 2])?;
     Ok((id(f.req(1)?)?, uint(f.req(2)?)?))
 }

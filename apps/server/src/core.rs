@@ -489,6 +489,7 @@ impl Core {
                 // enrolment package, readable only with its own private key (§ 14, ADR 0028).
                 let own = hello.device;
                 proto::read_id(&m.body)
+                    .map_err(ServerError::from)
                     .and_then(|d| self.on_mailbox_get(own, d, req, now))
                     .or_else(|_| Ok(vec![Message::error(req, code::ACCESS)]))
             }

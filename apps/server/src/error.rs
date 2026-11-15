@@ -78,3 +78,18 @@ impl From<rustls::Error> for ServerError {
         ServerError::Tls
     }
 }
+
+impl From<hirzla_sync::net::NetError> for ServerError {
+    fn from(e: hirzla_sync::net::NetError) -> Self {
+        use hirzla_sync::net::NetError;
+        match e {
+            NetError::Crypto => ServerError::Crypto,
+            NetError::Tls => ServerError::Tls,
+            NetError::Config(c) => ServerError::Config(c),
+            NetError::Refused(c) => ServerError::Refused(c),
+            NetError::Protocol => ServerError::Protocol,
+            NetError::Io(e) => ServerError::Io(e),
+            _ => ServerError::Malformed,
+        }
+    }
+}

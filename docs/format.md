@@ -145,6 +145,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/keylog-head` | Signature d'une tête du registre de transparence | `transparence.md` |
 | `hirzla/v1/recovery-kit` | AAD, kit de récupération (clé privée du membre) | `roles.md` |
 | `hirzla/v1/recovery-parcel` | Contexte KEM et AAD, colis d'une part de récupération | `roles.md` |
+| `hirzla/v1/server-state` | AAD, fichier annexe du mode Serveur | § 15 |
 
 Une étiquette n'a qu'un seul usage. Toute nouvelle étiquette s'ajoute à ce registre.
 
@@ -1133,3 +1134,60 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     purge ne recopie plus le secret ; élagage, suppression des fichiers joints et entrée d'index
     réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
     contre les en-têtes du journal, avec reconstruction.
+
+## 15. Fichier annexe du mode Serveur (v1)
+
+Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
+casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
+garde l'état du mode Serveur dans un fichier **à côté** du coffre : `<chemin du coffre>.serveur`
+(par exemple `coffre.hirzla.serveur`). Ce fichier ne change pas le format du coffre :
+`format_version` reste 1. Sans serveur rattaché, il n'existe pas.
+
+### 15.1 Enveloppe
+
+Le fichier entier est une `SealedBox` (§ 3.2) :
+
+- `KEK` = `K_dev_wrap` (§ 4.3) : le fichier ne s'ouvre qu'avec le coffre déverrouillé ;
+- AAD = `CBOR({1: "hirzla/v1/server-state", 2: vault_id})` : un fichier copié d'un autre coffre
+  ne s'ouvre pas ;
+- contenu = `CBOR(ServerState)` bourré (§ 11).
+
+Écriture atomique : fichier temporaire dans le même répertoire, puis renommage ; mode `0600`
+sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
+
+### 15.2 `ServerState`
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `1` |
+| 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
+| 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
+| 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
+
+`LockerState` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `locker_id` | `ID16` | |
+| 2 | `genesis` | `OpId?` | `LockerCreate` épinglée (`sync-protocol.md` § 7.3), si connue |
+| 3 | `sync` | `bstr` | `CBOR(SyncState)`, `sync-protocol.md` § 11.4 (le curseur du serveur) |
+| 4 | `ops` | `array<bstr>` | Opérations encodées (§ 7.1) que la réplique garde, chacune ≤ 4 Mio |
+| 5 | `unsent` | `array<OpId>` | Opérations locales pas encore accusées par le serveur (statut 4 du § 5.2), triées |
+| 6 | `access` | `bool` | `false` après un refus du serveur (code 4 : membre retiré) |
+
+### 15.3 Lecture
+
+À l'ouverture du coffre, le noyau descelle le fichier (échec : le mode Serveur est indisponible
+et signalé, le coffre s'ouvre quand même), décode strictement `ServerState`, puis reconstruit
+chaque réplique en **réingérant** ses opérations : chacune est revalidée (`sync-protocol.md`
+§ 6) comme si elle arrivait du réseau. Les opérations listées dans `unsent` redeviennent
+« à envoyer » ; elles sont tenues pour déjà sorties du poste et ne sont jamais réécrites
+(`sync-protocol.md` § 16, point 28) : une écriture interrompue juste après un envoi ne peut pas
+créer de bifurcation.
+
+### 15.4 Limites
+
+- Un retour en arrière du fichier n'est pas détecté localement (§ 14, point 11) : la
+  synchronisation suivante récupère auprès du serveur ce qui manque.
+- Le fichier grossit avec les journaux des casiers partagés ; il est réécrit en entier à chaque
+  changement. À remplacer par les tables du coffre (ADR 0032, point 3).

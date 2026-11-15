@@ -13,6 +13,9 @@ workspace = true
 # In-memory relay and identities for tests (here and in dependent crates).
 # Never enabled in a shipped binary.
 test-support = []
+# Network client of `sync-protocol.md` § 11 (frames, TLS 1.3 hybrid profile, session), shared
+# by `hirzlad` and the core (ADR 0028 point 9, ADR 0032).
+net = ["dep:rustls"]
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
@@ -21,6 +24,9 @@ hirzla-vault = { path = "../hirzla-vault" }
 # maintainer): `access ← sync`, one definition of `ControlBody`.
 hirzla-access = { path = "../hirzla-access" }
 thiserror = "2.0"
+# Same version and features as `hirzlad` (ADR 0022, ADR 0028): AWS-LC provider, TLS 1.3 only,
+# no logging. Already in Cargo.lock; optional (`net`).
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"], optional = true }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 [dev-dependencies]
