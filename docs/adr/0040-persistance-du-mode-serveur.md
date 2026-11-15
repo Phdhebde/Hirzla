@@ -103,9 +103,8 @@ ni le registre local ne quittent le poste.
   vraie protection.
 - Reste à faire : ~~gel sur révocation manquante (§ 6.5) et délais d'une heure~~ (ADR 0045) ;
   exposition des alertes dans l'API locale (faite : ADR 0041, clé 8 de `ServerStatus`) ;
-  ~~effacement des corps `late` après 30 jours~~ (ADR 0047) ; `Stable` poussé aux autres
-  sessions ouvertes (aujourd'hui : à la session suivante, point ouvert 37 de
-  `sync-protocol.md`) ; ~~synchronisation de fond~~ (ADR 0048).
+  ~~effacement des corps `late` après 30 jours~~ (ADR 0047) ; ~~`Stable` poussé aux autres
+  sessions ouvertes~~ (ADR 0057) ; ~~synchronisation de fond~~ (ADR 0048).
 
 ## Alternatives écartées
 

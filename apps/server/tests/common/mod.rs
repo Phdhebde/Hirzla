@@ -161,6 +161,7 @@ pub fn config(pki: &Pki, data: &Data) -> Config {
             tls::roots(tls::load_certs(&pki.admin_ca).unwrap()).unwrap(),
         )
         .unwrap(),
+        late_retention: hirzla_server::core::LateRetention::DEFAULT,
     }
 }
 
@@ -183,7 +184,23 @@ impl Server {
         device_limits: net::Limits,
         admin_limits: net::Limits,
     ) -> Server {
-        let config = config(&pki, data);
+        Server::start_with(pki, data, device_limits, admin_limits, |_| {})
+    }
+
+    /// Starts with the default bounds and the configuration changed by `change`.
+    pub fn start_configured(pki: Pki, data: &Data, change: impl FnOnce(&mut Config)) -> Server {
+        Server::start_with(pki, data, net::Limits::DEVICE, net::Limits::ADMIN, change)
+    }
+
+    fn start_with(
+        pki: Pki,
+        data: &Data,
+        device_limits: net::Limits,
+        admin_limits: net::Limits,
+        change: impl FnOnce(&mut Config),
+    ) -> Server {
+        let mut config = config(&pki, data);
+        change(&mut config);
         let running = net::start_with_limits(config, device_limits, admin_limits);
         let running = running.expect("server starts");
         let device_tls = pki.device_tls();

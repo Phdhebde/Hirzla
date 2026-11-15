@@ -9,6 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::net::IpAddr;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use hirzla_access::authz::ControlStatus;
@@ -50,13 +51,86 @@ const QUOTA_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 /// (`sync-protocol.md` § 10.2, step 5; § 16, point 15): 90 days.
 pub const INACTIVE_MS: u64 = 90 * 24 * 3600 * 1000;
 /// The last authentication of a device is recorded at most this often: one day.
-const SEEN_EVERY_MS: u64 = 24 * 3600 * 1000;
+const SEEN_EVERY_MS: u64 = DAY_MS;
 /// The journal is written again (deferred purge) once the bodies pruned in memory but still
 /// on disk reach this many bytes, and at every start (ADR 0040).
 pub const PURGE_REWRITE_BYTES: u64 = 64 * 1024 * 1024;
+/// One day, in milliseconds.
+const DAY_MS: u64 = 24 * 3600 * 1000;
 /// The body of an operation marked `late` is no longer served after this long, then leaves
-/// the disk at the next rewrite (`sync-protocol.md` § 11.8, ADR 0047): 30 days.
-pub const LATE_RETENTION_MS: u64 = 30 * 24 * 3600 * 1000;
+/// the disk at the next rewrite (`sync-protocol.md` § 11.8, ADR 0047): 30 days by default,
+/// see [`LateRetention`] (ADR 0058).
+pub const LATE_RETENTION_MS: u64 = 30 * DAY_MS;
+/// Most stability announcements kept in memory for the sessions already open (ADR 0057). A
+/// session that falls further behind misses the oldest ones and learns them by `Ack`.
+const STABLE_FEED: usize = 1024;
+
+/// How long the server keeps the body of an operation marked `late` (`sync-protocol.md`
+/// § 11.8, ADR 0047, ADR 0058): whole days, from [`LateRetention::MIN_DAYS`] to
+/// [`LateRetention::MAX_DAYS`], 30 by default.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LateRetention {
+    days: u16,
+}
+
+impl LateRetention {
+    /// Shortest retention: one day more than the default quarantine delay of a locker
+    /// (7 days, `format.md` § 7.4), which the server cannot read (it is sealed).
+    pub const MIN_DAYS: u16 = 8;
+    /// Longest retention: one year. The writes of a removed member are not kept for ever.
+    pub const MAX_DAYS: u16 = 365;
+    /// The default of ADR 0047.
+    pub const DEFAULT: LateRetention = LateRetention { days: 30 };
+
+    /// A retention of `days` days.
+    ///
+    /// # Errors
+    /// [`ServerError::Config`] outside [`Self::MIN_DAYS`]..=[`Self::MAX_DAYS`].
+    pub fn from_days(days: u16) -> Result<Self, ServerError> {
+        if (Self::MIN_DAYS..=Self::MAX_DAYS).contains(&days) {
+            Ok(LateRetention { days })
+        } else {
+            Err(ServerError::Config(
+                "the retention of late operations is 8 to 365 days",
+            ))
+        }
+    }
+
+    /// Reads a number of days written with one to three decimal digits only (no sign, no
+    /// space, no unit).
+    ///
+    /// # Errors
+    /// [`ServerError::Config`] for anything else, or a value out of bounds.
+    pub fn parse_days(text: &str) -> Result<Self, ServerError> {
+        if text.is_empty() || text.len() > 3 || !text.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(ServerError::Config(
+                "the retention of late operations is a number of days",
+            ));
+        }
+        let days: u16 = text.parse().map_err(|_| {
+            ServerError::Config("the retention of late operations is 8 to 365 days")
+        })?;
+        Self::from_days(days)
+    }
+
+    /// The retention in days.
+    #[must_use]
+    pub fn days(self) -> u16 {
+        self.days
+    }
+
+    /// The retention in milliseconds.
+    #[must_use]
+    pub fn as_ms(self) -> u64 {
+        u64::from(self.days) * DAY_MS
+    }
+}
+
+impl Default for LateRetention {
+    fn default() -> Self {
+        Self::DEFAULT
+    }
+}
 
 /// Milliseconds since the Unix epoch.
 #[must_use]
@@ -95,12 +169,19 @@ enum State {
     },
 }
 
+/// Identifiers of the sessions, unique in the process.
+static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
+
 /// One device connection, as the core sees it.
 pub struct Session {
+    id: u64,
     ip: IpAddr,
     exporter: [u8; EXPORTER_LEN],
     state: State,
     subs: BTreeMap<Id16, u64>,
+    /// Rank of the next stability announcement this session has not been offered yet
+    /// (ADR 0057); set when the device authenticates.
+    stable_next: u64,
     closed: bool,
 }
 
@@ -109,10 +190,12 @@ impl Session {
     #[must_use]
     pub fn new(ip: IpAddr, exporter: [u8; EXPORTER_LEN]) -> Self {
         Session {
+            id: NEXT_SESSION.fetch_add(1, Ordering::Relaxed),
             ip,
             exporter,
             state: State::Start,
             subs: BTreeMap::new(),
+            stable_next: 0,
             closed: false,
         }
     }
@@ -142,6 +225,16 @@ struct CompactState {
     stable: bool,
 }
 
+/// A `Compact` that became stable while sessions may be open (ADR 0057): pushed to the other
+/// open sessions of the devices that read the locker. `by` is the session whose `Ack` made it
+/// stable, and which already got `Stable` in answer.
+struct StableNote {
+    rank: u64,
+    locker: Id16,
+    compact: OpId,
+    by: Option<u64>,
+}
+
 struct Locker {
     log: LockerLog,
     view: LockerView,
@@ -169,6 +262,13 @@ pub struct Core {
     /// Reception time of each operation marked `late` still held in full (ADR 0047); `None`
     /// while replaying, until its `LateSeen` record.
     late_seen: BTreeMap<(Id16, OpId), Option<u64>>,
+    /// Retention of the bodies of `late` operations (ADR 0047, ADR 0058).
+    late_retention: LateRetention,
+    /// The latest compactions that became stable, for the open sessions (ADR 0057); in
+    /// memory only, at most [`STABLE_FEED`].
+    stable_feed: VecDeque<StableNote>,
+    /// Rank of the next entry of `stable_feed`.
+    stable_rank: u64,
     clock: fn() -> u64,
 }
 
@@ -196,7 +296,8 @@ fn audit_role(r: Role) -> hirzla_audit::field::Role {
 
 impl Core {
     /// Opens the server with the storage key the seal released: opens the signing key,
-    /// replays the storage, opens (or creates) the audit log.
+    /// replays the storage, opens (or creates) the audit log. The bodies of the `late`
+    /// operations are kept for `late_retention`.
     ///
     /// # Errors
     /// [`ServerError::Crypto`] (wrong key), [`ServerError::Storage`], [`ServerError::Audit`].
@@ -204,6 +305,7 @@ impl Core {
         dir: &Path,
         header: &SealHeader,
         storage_key: hirzla_crypto::sym::SymmetricKey,
+        late_retention: LateRetention,
     ) -> Result<Self, ServerError> {
         let key = Arc::new(header.open_server_key(&storage_key)?);
         let (store, records) = Store::open(dir, header, storage_key)?;
@@ -229,6 +331,9 @@ impl Core {
             seen: BTreeMap::new(),
             purgeable: 0,
             late_seen: BTreeMap::new(),
+            late_retention,
+            stable_feed: VecDeque::new(),
+            stable_rank: 0,
             clock: now_ms,
         };
         for r in records {
@@ -321,17 +426,19 @@ impl Core {
         Ok(())
     }
 
-    /// Stops serving the bodies of the operations marked `late` received more than
-    /// [`LATE_RETENTION_MS`] ago, at `now` (ADR 0047): each becomes a stub that is never
-    /// served, and its record leaves the disk at the next rewrite.
+    /// Stops serving the bodies of the operations marked `late` received more than the
+    /// retention ago ([`LateRetention`], 30 days by default), at `now` (ADR 0047, ADR 0058):
+    /// each becomes a stub that is never served, and its record leaves the disk at the next
+    /// rewrite.
     ///
     /// # Errors
     /// [`ServerError::Storage`], [`ServerError::Io`] (rewrite).
     pub fn expire_late(&mut self, now: u64) -> Result<(), ServerError> {
+        let retention = self.late_retention.as_ms();
         let due: Vec<(Id16, OpId)> = self
             .late_seen
             .iter()
-            .filter(|(_, t)| t.is_some_and(|t| t.saturating_add(LATE_RETENTION_MS) <= now))
+            .filter(|(_, t)| t.is_some_and(|t| t.saturating_add(retention) <= now))
             .map(|(k, _)| *k)
             .collect();
         for (locker, op_id) in due {
@@ -361,6 +468,12 @@ impl Core {
             self.purge_journal()?;
         }
         Ok(())
+    }
+
+    /// Retention of the bodies of `late` operations.
+    #[must_use]
+    pub fn late_retention(&self) -> LateRetention {
+        self.late_retention
     }
 
     /// Replaces the clock (tests).
@@ -544,9 +657,12 @@ impl Core {
     /// `Ack` (§ 10.2, step 4) of a device that reads the locker: recorded once, then every
     /// `Compact` of the locker acknowledged by all the devices it waits for becomes stable
     /// (step 5), its bodies are pruned (step 6), and the journal is written again once enough
-    /// bytes wait on disk. Answers `Stable` (spontaneous) if this `Compact` is stable.
+    /// bytes wait on disk. Answers `Stable` (spontaneous) if this `Compact` is stable; every
+    /// `Compact` that becomes stable here is also announced to the other open sessions
+    /// ([`Core::pending`], ADR 0057).
     fn on_ack(
         &mut self,
+        session: u64,
         locker: Id16,
         compact: OpId,
         member: Id16,
@@ -607,6 +723,7 @@ impl Core {
             })?;
             let freed = self.prune_compact(&locker, &c)?;
             self.purgeable += freed;
+            self.announce_stable(locker, c, (c == compact).then_some(session));
         }
         if self.purgeable >= PURGE_REWRITE_BYTES {
             self.purge_journal()?;
@@ -617,6 +734,21 @@ impl Core {
             .and_then(|l| l.compacts.get(&compact))
             .is_some_and(|c| c.stable);
         Ok(if stable { stable_msg() } else { Vec::new() })
+    }
+
+    /// Keeps a `Compact` that just became stable for the open sessions (ADR 0057), dropping
+    /// the oldest announcement beyond [`STABLE_FEED`].
+    fn announce_stable(&mut self, locker: Id16, compact: OpId, by: Option<u64>) {
+        if self.stable_feed.len() >= STABLE_FEED {
+            self.stable_feed.pop_front();
+        }
+        self.stable_feed.push_back(StableNote {
+            rank: self.stable_rank,
+            locker,
+            compact,
+            by,
+        });
+        self.stable_rank += 1;
     }
 
     /// The control operation of `op` for the view, with its signing certificate.
@@ -998,6 +1130,8 @@ impl Core {
             ip: s.ip,
         })?;
         s.state = State::Ready { member, device };
+        // What became stable before this session is learned by `Ack` (ADR 0057).
+        s.stable_next = self.stable_rank;
         let lockers = self
             .lockers
             .iter()
@@ -1132,7 +1266,7 @@ impl Core {
                 if self.reader(&l, &member, &device).is_none() {
                     return err(code::ACCESS);
                 }
-                self.on_ack(l, c, member, device, now)
+                self.on_ack(s.id, l, c, member, device, now)
             }
             kind::PUT_CHUNK => {
                 let c = PutChunk::from_value(&m.body)?;
@@ -1314,12 +1448,29 @@ impl Core {
         })
     }
 
-    /// Spontaneous `Ops` for the subscribed lockers that moved (§ 11.5, `Subscribe`).
+    /// Spontaneous messages for an open session: `Stable` for each `Compact` of a locker the
+    /// device reads that became stable since the last call, unless this session's own `Ack`
+    /// made it stable (ADR 0057), then `Ops` for the subscribed lockers that moved (§ 11.5,
+    /// `Subscribe`).
     pub fn pending(&mut self, s: &mut Session) -> Vec<Message> {
         let Some((member, device)) = s.device() else {
             return Vec::new();
         };
         let mut out = Vec::new();
+        if s.stable_next < self.stable_rank {
+            let fresh: Vec<(Id16, OpId)> = self
+                .stable_feed
+                .iter()
+                .filter(|n| n.rank >= s.stable_next && n.by != Some(s.id))
+                .map(|n| (n.locker, n.compact))
+                .collect();
+            for (l, c) in fresh {
+                if self.reader(&l, &member, &device).is_some() {
+                    out.push(Message::new(kind::STABLE, 0, proto::ack_value(&l, &c)));
+                }
+            }
+            s.stable_next = self.stable_rank;
+        }
         let subs: Vec<(Id16, u64)> = s.subs.iter().map(|(l, c)| (*l, *c)).collect();
         for (l, cursor) in subs {
             let head = self.lockers.get(&l).map_or(0, |x| x.log.head_seq());
@@ -1712,5 +1863,72 @@ impl Core {
             .get(locker)
             .map(|l| l.view.members())
             .unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn late_retention_defaults_to_30_days() {
+        assert_eq!(LateRetention::default().days(), 30);
+        assert_eq!(LateRetention::DEFAULT.as_ms(), LATE_RETENTION_MS);
+    }
+
+    #[test]
+    fn late_retention_accepts_its_bounds() {
+        for d in [LateRetention::MIN_DAYS, 30, 90, LateRetention::MAX_DAYS] {
+            assert_eq!(LateRetention::from_days(d).unwrap().days(), d);
+            assert_eq!(LateRetention::parse_days(&d.to_string()).unwrap().days(), d);
+        }
+        assert_eq!(
+            LateRetention::from_days(LateRetention::MAX_DAYS)
+                .unwrap()
+                .as_ms(),
+            365 * DAY_MS
+        );
+    }
+
+    #[test]
+    fn late_retention_refuses_values_out_of_bounds() {
+        for d in [0, 1, 7, 366, 1000, u16::MAX] {
+            assert!(
+                matches!(LateRetention::from_days(d), Err(ServerError::Config(_))),
+                "{d}"
+            );
+        }
+    }
+
+    #[test]
+    fn late_retention_refuses_what_is_not_a_number_of_days() {
+        for t in [
+            "",
+            " ",
+            "0",
+            "7",
+            "366",
+            "999",
+            "-30",
+            "+30",
+            " 30",
+            "30 ",
+            "30j",
+            "30d",
+            "3.5",
+            "3e1",
+            "0x1e",
+            "trente",
+            "٣٠",
+            "0030",
+            "65536",
+            "99999999999999999999",
+        ] {
+            assert!(
+                matches!(LateRetention::parse_days(t), Err(ServerError::Config(_))),
+                "{t:?}"
+            );
+        }
     }
 }

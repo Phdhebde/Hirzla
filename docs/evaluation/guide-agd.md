@@ -119,6 +119,7 @@ hirzlad serve --data /var/lib/hirzlad --listen 192.0.2.10:7443 \
   --cert serveur.pem --key serveur.key \
   --admin-listen 127.0.0.1:7444 --admin-cert admin.pem --admin-key admin.key \
   --admin-client-ca ac-admin.pem
+# Option : --late-retention-days 30   (8 à 365 jours, 30 par défaut, ADR 0058)
 ```
 
 - Adresses IP seulement : un nom demanderait une résolution, donc une requête sortante.
@@ -131,6 +132,11 @@ hirzlad serve --data /var/lib/hirzlad --listen 192.0.2.10:7443 \
   d'administration ; poignée de main TLS en 10 s au plus ; un appareil doit s'authentifier
   dans la minute. Au-delà, la connexion est fermée aussitôt. Filtrer et limiter le débit en
   amont (pare-feu) reste recommandé.
+- Les écritures d'un membre déjà retiré (opérations tardives) sont gardées 30 jours, puis
+  effacées (ADR 0047). `--late-retention-days` change cette durée, de 8 à 365 jours : choisir
+  une valeur **supérieure au plus long délai de quarantaine** réglé dans les casiers du site
+  (7 jours par défaut), que le serveur ne peut pas lire. Une valeur hors bornes fait refuser
+  le démarrage.
 - Compte de service dédié, sans shell ; répertoire de données en `0700` ; clés TLS en `0600`.
   Les fichiers `*.pem`, `*.key` et les parts ne sont jamais versionnés.
 
