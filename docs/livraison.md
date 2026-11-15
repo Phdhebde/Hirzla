@@ -104,6 +104,11 @@ l'extension ont la leur, lue dans le fichier de verrouillage sans rien installer
 (`sbom.py --npm apps/desktop`, `sbom.py --npm apps/extension`, ADR 0061) : portée `required`
 pour un paquet livré, `excluded` pour un outil de développement.
 
+> **ADR 0063.** Les signatures de système des § 3 et § 4 demandent un certificat payant ;
+> elles deviennent facultatives. La racine de confiance est la clé d'éditeur hybride (§ 7) ;
+> les empreintes sont signées en GPG (§ 5) et chaque installeur porte une attestation de
+> provenance Sigstore. Marche à suivre de l'éditeur : `docs/guide-signature.md`.
+
 ## 3. macOS : signature et notarisation
 
 1. **Certificat** « Developer ID Application » du compte Apple Developer de l'éditeur, exporté

@@ -8,11 +8,18 @@ on:
 
 permissions:
   contents: read
+  # Build provenance (ADR 0063 § 3): keyless Sigstore signature and its attestation.
+  id-token: write
+  attestations: write
 
 jobs:
   installers:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    env:
+      # Public publisher keys compiled into the core (ADR 0042, docs/guide-signature.md § 2).
+      # A repository variable, not a secret: these are public keys.
+      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
     strategy:
       fail-fast: false
       matrix:
@@ -74,6 +81,16 @@ jobs:
             "$py" .github/scripts/sbom.py --npm "apps/$a" \
               --output "target/release/bundle/sbom/$a.npm.cdx.json"
           done
+      - name: Build provenance (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            target/release/bundle/sbom/*.cdx.json
+            target/release/bundle/**/*.msi
+            target/release/bundle/**/*.dmg
+            target/release/bundle/**/*.deb
+            target/release/bundle/**/*.rpm
+            target/release/bundle/**/*.AppImage
       - uses: actions/upload-artifact@v4
         with:
           name: hirzla-${{ matrix.os }}
