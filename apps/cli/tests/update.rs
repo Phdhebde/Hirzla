@@ -12,6 +12,11 @@ use hirzla_core::release::update::{write_package, PackageInput};
 use hirzla_core::release::{current_platform, Version};
 use hirzla_crypto::sign::PublisherSigningKey;
 
+/// An executable name as installed on this machine (`.exe` under Windows).
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
 fn hirzla(args: &[&std::ffi::OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_hirzla"))
         .args(args)
@@ -21,10 +26,10 @@ fn hirzla(args: &[&std::ffi::OsStr]) -> Output {
 }
 
 fn package(dir: &Path, key: &PublisherSigningKey, version: &str, out: &Path) {
-    let inputs: Vec<PackageInput> = ["hirzla", "hirzla-core"]
+    let inputs: Vec<PackageInput> = [exe("hirzla"), exe("hirzla-core")]
         .iter()
         .map(|n| PackageInput {
-            name: (*n).to_owned(),
+            name: n.clone(),
             path: dir.join("src").join(n),
             executable: true,
         })
@@ -46,9 +51,9 @@ fn verifies_applies_and_refuses_rollback() {
     let d = dir.path();
     fs::create_dir_all(d.join("src")).unwrap();
     fs::create_dir_all(d.join("install")).unwrap();
-    fs::write(d.join("src/hirzla"), b"new cli").unwrap();
-    fs::write(d.join("src/hirzla-core"), b"new core").unwrap();
-    fs::write(d.join("install/hirzla"), b"old cli").unwrap();
+    fs::write(d.join("src").join(exe("hirzla")), b"new cli").unwrap();
+    fs::write(d.join("src").join(exe("hirzla-core")), b"new core").unwrap();
+    fs::write(d.join("install").join(exe("hirzla")), b"old cli").unwrap();
 
     let key = PublisherSigningKey::generate().unwrap();
     let public = d.join("editeur.pub");
@@ -86,7 +91,7 @@ fn verifies_applies_and_refuses_rollback() {
         out.contains("Paquet authentique") && out.contains("0.1.0"),
         "{out}"
     );
-    assert_eq!(fs::read(install.join("hirzla")).unwrap(), b"old cli");
+    assert_eq!(fs::read(install.join(exe("hirzla"))).unwrap(), b"old cli");
 
     // Another publisher's key.
     let other = PublisherSigningKey::generate().unwrap();
@@ -103,13 +108,16 @@ fn verifies_applies_and_refuses_rollback() {
     let altered = d.join("altere.hirzla-maj");
     fs::write(&altered, &bytes).unwrap();
     assert!(!apply(&altered).status.success());
-    assert_eq!(fs::read(install.join("hirzla")).unwrap(), b"old cli");
+    assert_eq!(fs::read(install.join(exe("hirzla"))).unwrap(), b"old cli");
 
     // Applied, then not again, nor an older one.
     let o = apply(&pkg);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
-    assert_eq!(fs::read(install.join("hirzla")).unwrap(), b"new cli");
-    assert_eq!(fs::read(install.join("hirzla-core")).unwrap(), b"new core");
+    assert_eq!(fs::read(install.join(exe("hirzla"))).unwrap(), b"new cli");
+    assert_eq!(
+        fs::read(install.join(exe("hirzla-core"))).unwrap(),
+        b"new core"
+    );
     let o = apply(&pkg);
     assert!(!o.status.success());
     assert!(String::from_utf8_lossy(&o.stderr).contains("retour en arrière refusé"));

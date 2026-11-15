@@ -9,6 +9,11 @@ use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
 
+/// An executable name as installed on this machine (`.exe` under Windows).
+fn exe(name: &str) -> String {
+    format!("{name}{}", std::env::consts::EXE_SUFFIX)
+}
+
 fn signer(args: &[&std::ffi::OsStr]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_hirzla-signer"))
         .args(args)
@@ -59,8 +64,8 @@ fn signs_and_verifies_manifests_and_packages() {
     let hex = ok(&run(&[&a("cle-hex"), &a("--publique"), &p("editeur.pub")]));
     assert_eq!(hex.trim().len(), 2 * 2691);
 
-    fs::write(p("hirzla"), b"command line v1").unwrap();
-    fs::write(p("hirzla-core"), b"core v1").unwrap();
+    fs::write(p(&exe("hirzla")), b"command line v1").unwrap();
+    fs::write(p(&exe("hirzla-core")), b"core v1").unwrap();
     ok(&run(&[
         &a("manifeste-clients"),
         &a("--cle"),
@@ -69,8 +74,8 @@ fn signs_and_verifies_manifests_and_packages() {
         &a("1.0.0"),
         &a("--sortie"),
         &p("hirzla-clients.manifest"),
-        &p("hirzla"),
-        &p("hirzla-core"),
+        &p(&exe("hirzla")),
+        &p(&exe("hirzla-core")),
     ]));
     let out = ok(&run(&[
         &a("verifier"),
@@ -88,8 +93,8 @@ fn signs_and_verifies_manifests_and_packages() {
         &a("1.0.0"),
         &a("--sortie"),
         &p("maj.hirzla-maj"),
-        &p("hirzla"),
-        &p("hirzla-core"),
+        &p(&exe("hirzla")),
+        &p(&exe("hirzla-core")),
         &p("hirzla-clients.manifest"),
     ]));
     let out = ok(&run(&[

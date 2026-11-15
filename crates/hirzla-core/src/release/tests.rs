@@ -265,6 +265,10 @@ fn publisher_keys_from_hex_and_file() {
 // Update packages
 // -----------------------------------------------------------------------------------------
 
+/// An executable name as installed on this machine (`.exe` under Windows).
+fn exe(name: &str) -> &'static str {
+    Box::leak(format!("{name}{}", std::env::consts::EXE_SUFFIX).into_boxed_str())
+}
 struct Fixture {
     _dir: tempfile::TempDir,
     src: std::path::PathBuf,
@@ -278,10 +282,10 @@ fn fixture() -> Fixture {
     let install = dir.path().join("install");
     fs::create_dir_all(&src).unwrap();
     fs::create_dir_all(&install).unwrap();
-    fs::write(src.join("hirzla"), b"new command line").unwrap();
-    fs::write(src.join("hirzla-core"), vec![7u8; 200_000]).unwrap();
-    fs::write(install.join("hirzla"), b"old command line").unwrap();
-    fs::write(install.join("hirzla-core"), b"old core").unwrap();
+    fs::write(src.join(exe("hirzla")), b"new command line").unwrap();
+    fs::write(src.join(exe("hirzla-core")), vec![7u8; 200_000]).unwrap();
+    fs::write(install.join(exe("hirzla")), b"old command line").unwrap();
+    fs::write(install.join(exe("hirzla-core")), b"old core").unwrap();
     let package = dir.path().join("update.hirzla-maj");
     Fixture {
         src,
@@ -307,7 +311,7 @@ fn build(f: &Fixture, k: &PublisherSigningKey, version: &str, platform: &str) ->
     write_package(
         v(version),
         platform,
-        &inputs(&f.src, &["hirzla-core", "hirzla"]),
+        &inputs(&f.src, &[exe("hirzla-core"), exe("hirzla")]),
         k,
         &mut out,
     )
@@ -320,11 +324,11 @@ fn here() -> String {
 
 fn unchanged(f: &Fixture) {
     assert_eq!(
-        fs::read(f.install.join("hirzla")).unwrap(),
+        fs::read(f.install.join(exe("hirzla"))).unwrap(),
         b"old command line"
     );
     assert_eq!(
-        fs::read(f.install.join("hirzla-core")).unwrap(),
+        fs::read(f.install.join(exe("hirzla-core"))).unwrap(),
         b"old core"
     );
     let names: Vec<String> = fs::read_dir(&f.install)
@@ -346,7 +350,11 @@ fn package_verifies_and_applies() {
             .iter()
             .map(|e| e.name.as_str())
             .collect::<Vec<_>>(),
-        ["hirzla", "hirzla-core"]
+        {
+            let mut names = [exe("hirzla"), exe("hirzla-core")];
+            names.sort_unstable();
+            names
+        }
     );
     let m = verify_package(&f.package, &keys).unwrap();
     assert_eq!(m, built);
@@ -356,11 +364,11 @@ fn package_verifies_and_applies() {
     let applied = apply_package(&f.package, &keys, &f.install, &here()).unwrap();
     assert_eq!(applied.version, v("0.1.0"));
     assert_eq!(
-        fs::read(f.install.join("hirzla")).unwrap(),
+        fs::read(f.install.join(exe("hirzla"))).unwrap(),
         b"new command line"
     );
     assert_eq!(
-        fs::read(f.install.join("hirzla-core")).unwrap(),
+        fs::read(f.install.join(exe("hirzla-core"))).unwrap(),
         vec![7u8; 200_000]
     );
     assert_eq!(installed_version(&f.install), v("0.1.0"));
@@ -371,7 +379,7 @@ fn package_verifies_and_applies() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mode = fs::metadata(f.install.join("hirzla"))
+        let mode = fs::metadata(f.install.join(exe("hirzla")))
             .unwrap()
             .permissions()
             .mode();
@@ -502,8 +510,8 @@ fn embedded_client_manifest_must_match_the_package() {
     let version = v("0.1.0");
     let entries = |src: &Path| {
         vec![
-            update::entry_for("hirzla", &src.join("hirzla"), true).unwrap(),
-            update::entry_for("hirzla-core", &src.join("hirzla-core"), true).unwrap(),
+            update::entry_for(exe("hirzla"), &src.join(exe("hirzla")), true).unwrap(),
+            update::entry_for(exe("hirzla-core"), &src.join(exe("hirzla-core")), true).unwrap(),
         ]
     };
     let write_clients = |m: &Manifest, signer: &PublisherSigningKey| {
@@ -517,7 +525,7 @@ fn embedded_client_manifest_must_match_the_package() {
         let mut out = fs::File::create(&f.package).unwrap();
         write_package(version, &here(), &inputs(&f.src, names), &k, &mut out).unwrap();
     };
-    let all = ["hirzla", "hirzla-core", CLIENT_MANIFEST_FILE];
+    let all = [exe("hirzla"), exe("hirzla-core"), CLIENT_MANIFEST_FILE];
     let clients = Manifest {
         version,
         platform: here(),
@@ -560,7 +568,7 @@ fn embedded_client_manifest_must_match_the_package() {
         Some(ReleaseError::Inconsistent)
     );
     write_clients(&clients, &k);
-    package(&["hirzla", CLIENT_MANIFEST_FILE]);
+    package(&[exe("hirzla"), CLIENT_MANIFEST_FILE]);
     assert_eq!(
         verify_package(&f.package, &keys).err(),
         Some(ReleaseError::Inconsistent)
