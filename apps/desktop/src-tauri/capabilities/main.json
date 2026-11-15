@@ -45,6 +45,7 @@
     "allow-locker-members",
     "allow-grant-role",
     "allow-revoke-role",
+    "allow-revoke-device",
     "allow-server-join-link",
     "allow-quorum-prepare",
     "allow-quorum-inspect",

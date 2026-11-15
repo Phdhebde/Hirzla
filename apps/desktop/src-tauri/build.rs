@@ -43,6 +43,7 @@ const COMMANDS: &[&str] = &[
     "locker_members",
     "grant_role",
     "revoke_role",
+    "revoke_device",
     "server_join_link",
     "quorum_prepare",
     "quorum_inspect",

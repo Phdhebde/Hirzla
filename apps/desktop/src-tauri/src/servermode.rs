@@ -474,6 +474,10 @@ fn member_arg(typed: &str) -> Result<Id16, DesktopError> {
     })
 }
 
+fn device_arg(typed: &str) -> Result<Id16, DesktopError> {
+    id16(typed).map_err(|_| DesktopError::Invalid("Identifiant d'appareil non valide."))
+}
+
 fn locker_arg(typed: &str) -> Result<Id16, DesktopError> {
     id16(typed).map_err(|_| DesktopError::Invalid("Identifiant de casier non valide."))
 }
@@ -760,6 +764,20 @@ impl AppState {
             member: member_arg(member)?,
         };
         self.call_server(&request).map(drop)
+    }
+
+    /// Revokes another device of the member, from the alert « appareil inconnu inscrit à
+    /// votre nom » (ADR 0059). Returns the number of lockers where the revocation was
+    /// published.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn revoke_device(&self, device: &str) -> Result<u64, DesktopError> {
+        let device = device_arg(device)?;
+        match self.call_server(&ServerRequest::DeviceRevoke { device })? {
+            ServerReply::DeviceRevoked { lockers } => Ok(lockers),
+            _ => Err(DesktopError::Protocol),
+        }
     }
 
     /// Joins with an invitation link (ADR 0046).
@@ -1057,6 +1075,12 @@ pub fn revoke_role(state: State<'_>, locker: String, member: String) -> Result<(
     state.revoke_role(&locker, &member)
 }
 
+/// See [`AppState::revoke_device`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn revoke_device(state: State<'_>, device: String) -> Result<u64, DesktopError> {
+    state.revoke_device(&device)
+}
+
 /// See [`AppState::join_server_link`].
 #[tauri::command(async, rename_all = "snake_case")]
 pub fn server_join_link(state: State<'_>, link: String) -> Result<JoinedDto, DesktopError> {
@@ -1160,6 +1184,8 @@ mod tests {
         );
         assert!(member_arg("0f").is_err());
         assert!(locker_arg("zz").is_err());
+        assert_eq!(device_arg(&"ab".repeat(16)).unwrap(), [0xab; 16]);
+        assert!(device_arg("ab").is_err());
         assert!(locker_name_arg("  ").is_err());
         assert!(locker_name_arg(&"é".repeat(129)).is_err());
         assert_eq!(locker_name_arg(" Équipe ").unwrap().as_str(), "Équipe");

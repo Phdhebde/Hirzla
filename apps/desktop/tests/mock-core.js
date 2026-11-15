@@ -295,6 +295,12 @@
       const i = list.findIndex((x) => x.member === a.member);
       if (i >= 0) list.splice(i, 1);
     },
+    revoke_device: (a) => {
+      const i = S.alerts.findIndex((x) => x.kind === "unknown_device" && x.device === a.device);
+      if (i < 0) return refuse("not_found", "Appareil introuvable sur ce poste. Synchronisez, puis réessayez.");
+      S.alerts.splice(i, 1);
+      return 1;
+    },
     server_join_link: (a) => {
       const link = (a.link || "").replace(/\s/g, "");
       if (!link.startsWith("hirzla-invitation:") || link.includes("XX")) return refuse("invitation_invalid", SERVER_MSG.invitation_invalid);
