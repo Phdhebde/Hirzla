@@ -26,9 +26,10 @@
  * @typedef {"owner" | "manager" | "editor" | "reader" | "blind_user" | "auditor"} RoleName
  * @typedef {"role" | "quorum" | "last_owner" | "access_lost"} Refusal
  * @typedef {{ id: string, name: string | null, role: RoleName | null, unsent: number, pending: number,
- *   quarantined: number, access: boolean }} SharedLocker
- * @typedef {{ kind: "foreign_member_key" | "unknown_device" | "unknown_revocation", index: number,
- *   device: string | null }} KeyLogAlert
+ *   quarantined: number, access: boolean, frozen: boolean }} SharedLocker
+ * @typedef {"foreign_member_key" | "unknown_device" | "unknown_revocation" | "withheld_removal" |
+ *   "uninscribed_removal" | "withheld_inscription" | "withheld_operation"} AlertKind
+ * @typedef {{ kind: AlertKind, index: number | null, device: string | null, locker: string | null }} KeyLogAlert
  * @typedef {{ suspect: boolean, reason: "root" | "shorter" | "rule" | "peer" | "proof" | null, entries: number,
  *   alerts: KeyLogAlert[] }} KeyLog
  * @typedef {{ joined: boolean, url: string | null, server_id: string | null, fingerprint: string | null,
@@ -38,7 +39,19 @@
  * @typedef {{ locker: string, received: number, sent: number, refused: number, access: boolean }} SyncReport
  * @typedef {{ member: string, me: boolean, role: RoleName, devices: number, fingerprint: string, proven: boolean,
  *   change_to: RoleName[], change_refusal: Refusal | null, remove_refusal: Refusal | null }} Member
- * @typedef {{ me: string, members: Member[], grantable: RoleName[], grant_refusal: Refusal | null }} Members
+ * @typedef {{ me: string, members: Member[], grantable: RoleName[], grant_refusal: Refusal | null,
+ *   quorum: number | null }} Members
+ * @typedef {"owner_removal" | "owner_role_change" | "policy"} QuorumActionName
+ * @typedef {{ request: string, locker: string, action: QuorumActionName, target: string | null,
+ *   role: RoleName | null, quorum: number | null, counted: string[], required: number, offer: string,
+ *   created_ms: number }} QuorumRequest
+ * @typedef {{ locker: string, name: string | null, action: QuorumActionName, target: string | null,
+ *   target_fingerprint: string | null, role: RoleName | null, quorum: number | null, issuer: string,
+ *   issuer_fingerprint: string | null, can_sign: boolean }} Inspected
+ * @typedef {{ op_id: string, member: string, device: string, cause: "removal" | "fork", class: "data" | "control",
+ *   wall_ms: number | null, title: string | null, secret: string | null, received_ms: number,
+ *   due_ms: number }} QuarantinedOp
+ * @typedef {{ ops: QuarantinedOp[], can_decide: boolean }} Quarantine
  */
 
 /**
@@ -162,4 +175,29 @@ export const api = {
   grantRole: (locker, member, role, fingerprint) => call("grant_role", { locker, member, role, fingerprint }),
   /** @param {string} locker @param {string} member @returns {Promise<void>} */
   revokeRole: (locker, member) => call("revoke_role", { locker, member }),
+
+  // Governance (ADR 0044 to 0046).
+  /** @param {string} link @returns {Promise<Joined>} */
+  serverJoinLink: (link) => call("server_join_link", { link }),
+  /**
+   * @param {string} locker @param {QuorumActionName} action @param {string | null} target
+   * @param {RoleName | null} role @param {number | null} quorum @returns {Promise<QuorumRequest>}
+   */
+  quorumPrepare: (locker, action, target, role, quorum) => call("quorum_prepare", { locker, action, target, role, quorum }),
+  /** @param {string} offer @returns {Promise<Inspected>} */
+  quorumInspect: (offer) => call("quorum_inspect", { offer }),
+  /** @param {string} offer @returns {Promise<string>} */
+  quorumApprove: (offer) => call("quorum_approve", { offer }),
+  /** @param {string} token @returns {Promise<QuorumRequest>} */
+  quorumCollect: (token) => call("quorum_collect", { token }),
+  /** @param {string | null} locker @returns {Promise<QuorumRequest[]>} */
+  quorumList: (locker) => call("quorum_list", { locker }),
+  /** @param {string} request @returns {Promise<void>} */
+  quorumApply: (request) => call("quorum_apply", { request }),
+  /** @param {string} request @returns {Promise<void>} */
+  quorumCancel: (request) => call("quorum_cancel", { request }),
+  /** @param {string} locker @returns {Promise<Quarantine>} */
+  quarantineList: (locker) => call("quarantine_list", { locker }),
+  /** @param {string} locker @param {string[]} ops @param {boolean} accept @returns {Promise<void>} */
+  quarantineDecide: (locker, ops, accept) => call("quarantine_decide", { locker, ops, accept }),
 };

@@ -106,6 +106,7 @@ fn record_bytes(r: &Record, out: &mut Vec<u8>) {
         Record::Chunk { sealed, .. } => out.extend(sealed),
         Record::Ack { compact, .. } | Record::Stable { compact, .. } => out.extend(compact),
         Record::Pruned { stub, .. } => out.extend(stub.op_id),
+        Record::LateSeen { op_id, .. } => out.extend(op_id),
         Record::Seen { device, .. } => out.extend(device),
     }
 }

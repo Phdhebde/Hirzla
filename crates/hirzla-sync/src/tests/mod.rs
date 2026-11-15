@@ -7,6 +7,7 @@ mod codec;
 mod compaction;
 mod convergence;
 mod exchange;
+mod governance;
 mod keylog;
 mod network;
 mod persistence;

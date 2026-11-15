@@ -5,13 +5,13 @@
 use hirzla_core::client::Client;
 use hirzla_core::proto::{ErrorReply, LockerEntry, Reply, Request};
 use hirzla_core::server_mode::proto::{
-    normalise_fingerprint, AlertKind, KeyLogStatus, Role, ServerCode, ServerReply, ServerRequest,
-    SuspectReason,
+    normalise_fingerprint, AlertKind, KeyLogStatus, QuarantinedOp, QuorumAction, QuorumState, Role,
+    ServerCode, ServerReply, ServerRequest, SuspectReason,
 };
-use hirzla_vault::model::Id16;
+use hirzla_vault::model::{Id16, OpId};
 use zeroize::Zeroizing;
 
-use crate::args::{LockerCommand, ServerCommand};
+use crate::args::{LockerCommand, QuarantineCommand, QuorumCommand, QuorumWhat, ServerCommand};
 use crate::{client_message, hex, refusal_message, say, Session};
 
 fn server_message(code: ServerCode) -> String {
@@ -41,7 +41,39 @@ fn server_message(code: ServerCode) -> String {
              refusée."
                 .into()
         }
+        ServerCode::ApprovalInvalid => "accord ou demande non valide : texte altéré, signature \
+             fausse, signataire qui n'est pas propriétaire, accord déjà compté ou destiné à \
+             une autre demande."
+            .into(),
+        ServerCode::QuorumNotMet(counted, required) => format!(
+            "quorum non atteint : {counted} propriétaire(s) sur {required}. Transmettez la \
+             demande à d'autres propriétaires, puis ajoutez leurs accords."
+        ),
+        ServerCode::LockerFrozen => "écritures gelées dans ce casier : une révocation annoncée \
+             par le registre des clés n'a pas été reçue. Synchronisez ; si le gel persiste, \
+             prévenez votre administrateur de sécurité."
+            .into(),
+        ServerCode::InvitationInvalid => "lien d'invitation non valide ou altéré : demandez-le \
+             à nouveau à l'administrateur du serveur."
+            .into(),
     }
+}
+
+/// A text argument: the text itself, or `@FILE` to read it from a file.
+fn text_arg(typed: &str) -> Result<String, String> {
+    match typed.strip_prefix('@') {
+        Some(path) => std::fs::read_to_string(path)
+            .map(|t| t.trim().to_owned())
+            .map_err(|_| format!("lecture de {path} impossible.")),
+        None => Ok(typed.trim().to_owned()),
+    }
+}
+
+/// Explanations go to standard error, so that the text to hand over is alone on standard
+/// output.
+fn note(text: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{text}");
 }
 
 fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, String> {
@@ -220,6 +252,23 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
             }
             Ok(())
         }
+        ServerCommand::JoinLink { link } => {
+            let link = text_arg(link)?;
+            let ServerReply::Joined {
+                fingerprint,
+                account,
+                ..
+            } = call_server(&mut c, &ServerRequest::ServerJoinLink { link })?
+            else {
+                return bad_reply();
+            };
+            say(&format!(
+                "Serveur rattaché par le lien d'invitation. Empreinte vérifiée : {}.",
+                grouped(&fingerprint)
+            ));
+            say_account(account);
+            Ok(())
+        }
         ServerCommand::Confirm { fingerprint } => {
             let fingerprint = fingerprint_arg(fingerprint)?;
             let ServerReply::Confirmed { account } =
@@ -276,6 +325,9 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
                 }
                 if !l.access {
                     line.push_str(", accès retiré");
+                }
+                if l.frozen {
+                    line.push_str(", écritures gelées");
                 }
                 say(&line);
             }
@@ -338,8 +390,28 @@ fn keylog_lines(k: &KeyLogStatus) -> String {
                 "révocation inconnue ({})",
                 a.device.map_or_else(String::new, |d| hex(&d))
             ),
+            AlertKind::WithheldRemoval => {
+                "retrait annoncé et non reçu depuis plus d'une heure : écritures gelées".to_owned()
+            }
+            AlertKind::UninscribedRemoval => {
+                "retrait que vous avez publié, non inscrit au registre depuis plus d'une heure"
+                    .to_owned()
+            }
+            AlertKind::WithheldInscription => {
+                "ce poste n'est pas inscrit au registre depuis plus d'une heure".to_owned()
+            }
+            AlertKind::WithheldOperation => {
+                "opérations en attente d'une dépendance que le serveur ne sert pas".to_owned()
+            }
         };
-        out.push_str(&format!("\nAlerte : {what}, entrée {}.", a.index));
+        let mut place = String::new();
+        if let Some(i) = a.index {
+            place.push_str(&format!(", entrée {i}"));
+        }
+        if let Some(l) = a.locker {
+            place.push_str(&format!(", casier {}", hex(&l[..4])));
+        }
+        out.push_str(&format!("\nAlerte : {what}{place}."));
     }
     out
 }
@@ -444,6 +516,292 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
     }
 }
 
+fn action_line(
+    action: QuorumAction,
+    target: Option<&Id16>,
+    detail: Option<u64>,
+    name: impl Fn(&Id16) -> String,
+) -> String {
+    match action {
+        QuorumAction::OwnerRemoval => format!(
+            "retrait du propriétaire {}",
+            target.map_or_else(String::new, &name)
+        ),
+        QuorumAction::OwnerRoleChange => format!(
+            "le propriétaire {} devient {}",
+            target.map_or_else(String::new, &name),
+            detail
+                .and_then(Role::from_code)
+                .map_or("(rôle inconnu)", role_name)
+        ),
+        QuorumAction::Policy => format!(
+            "quorum de propriétaires porté à {}",
+            detail.unwrap_or_default()
+        ),
+    }
+}
+
+fn state_line(q: &QuorumState) -> String {
+    format!(
+        "{}  casier {}  {}  {} accord(s) sur {}",
+        hex(&q.request[..4]),
+        hex(&q.locker[..4]),
+        action_line(q.action, q.target.as_ref(), q.detail, |m| hex(m)),
+        q.counted.len(),
+        q.required
+    )
+}
+
+fn requests(c: &mut Client, locker: Option<Id16>) -> Result<Vec<QuorumState>, String> {
+    match call_server(c, &ServerRequest::QuorumList { locker })? {
+        ServerReply::Requests(r) => Ok(r),
+        _ => bad_reply(),
+    }
+}
+
+/// A request by the start of its identifier (4 hexadecimal digits at least).
+fn resolve_request(c: &mut Client, typed: &str) -> Result<Id16, String> {
+    let lower = typed.to_ascii_lowercase();
+    if lower.len() < 4 || !lower.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("ID : 4 chiffres hexadécimaux au moins.".into());
+    }
+    let hits: Vec<Id16> = requests(c, None)?
+        .into_iter()
+        .map(|q| q.request)
+        .filter(|id| hex(id).starts_with(&lower))
+        .collect();
+    match hits.as_slice() {
+        [one] => Ok(*one),
+        [] => Err(format!(
+            "demande introuvable : {typed}. Voir « hirzla accord liste »."
+        )),
+        _ => Err("plusieurs demandes correspondent : précisez l'ID.".into()),
+    }
+}
+
+pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), String> {
+    let mut c = session.connect(false)?;
+    match command {
+        QuorumCommand::Prepare { locker, what } => {
+            let locker = resolve_locker(&mut c, locker)?;
+            let (action, target, detail) = match what {
+                QuorumWhat::Removal { member } => {
+                    (QuorumAction::OwnerRemoval, Some(member_arg(member)?), None)
+                }
+                QuorumWhat::RoleChange { member, role } => (
+                    QuorumAction::OwnerRoleChange,
+                    Some(member_arg(member)?),
+                    Some(role_by_name(role)?.code()),
+                ),
+                QuorumWhat::Policy { quorum } => (QuorumAction::Policy, None, Some(*quorum)),
+            };
+            let ServerReply::Request(q) = call_server(
+                &mut c,
+                &ServerRequest::QuorumPrepare {
+                    locker,
+                    action,
+                    target,
+                    detail,
+                },
+            )?
+            else {
+                return bad_reply();
+            };
+            note(&format!(
+                "Demande {} préparée : {}.\nTransmettez le texte ci-dessous à {} autre(s) \
+                 propriétaire(s) ; ils le signent avec « hirzla accord signer ».",
+                hex(&q.request[..4]),
+                action_line(q.action, q.target.as_ref(), q.detail, |m| hex(m)),
+                q.required.saturating_sub(1)
+            ));
+            say(&q.offer);
+            Ok(())
+        }
+        QuorumCommand::Inspect { offer } | QuorumCommand::Approve { offer } => {
+            let offer = text_arg(offer)?;
+            let ServerReply::Inspected {
+                locker,
+                name,
+                action,
+                target,
+                target_fingerprint,
+                detail,
+                issuer,
+                issuer_fingerprint,
+                can_sign,
+            } = call_server(
+                &mut c,
+                &ServerRequest::QuorumInspect {
+                    offer: offer.clone(),
+                },
+            )?
+            else {
+                return bad_reply();
+            };
+            let who = |m: &Id16, fp: &Option<String>| match fp {
+                Some(fp) => format!("{} (empreinte {})", hex(m), grouped(fp)),
+                None => format!("{} (empreinte inconnue ici)", hex(m)),
+            };
+            note(&format!(
+                "Casier : {} ({})\nAction : {}\nDemandée par : {}",
+                name.as_deref().map_or("(nom illisible)", |n| n.as_str()),
+                hex(&locker[..4]),
+                action_line(action, target.as_ref(), detail, |m| who(
+                    m,
+                    &target_fingerprint
+                )),
+                who(&issuer, &issuer_fingerprint)
+            ));
+            if matches!(command, QuorumCommand::Inspect { .. }) {
+                note(if can_sign {
+                    "Vous pouvez la signer avec « hirzla accord signer »."
+                } else {
+                    "Vous ne pouvez pas la signer (rôle, demandeur ou membre visé)."
+                });
+                return Ok(());
+            }
+            let ServerReply::Approved(token) =
+                call_server(&mut c, &ServerRequest::QuorumApprove { offer })?
+            else {
+                return bad_reply();
+            };
+            note("Accord signé. Rendez le texte ci-dessous au demandeur.");
+            say(&token);
+            Ok(())
+        }
+        QuorumCommand::Collect { token } => {
+            let token = text_arg(token)?;
+            let ServerReply::Request(q) =
+                call_server(&mut c, &ServerRequest::QuorumCollect { token })?
+            else {
+                return bad_reply();
+            };
+            say(&format!("Accord ajouté.\n{}", state_line(&q)));
+            if q.counted.len() as u64 >= q.required {
+                say(&format!(
+                    "Quorum atteint : « hirzla accord appliquer {} ».",
+                    hex(&q.request[..4])
+                ));
+            }
+            Ok(())
+        }
+        QuorumCommand::List { locker } => {
+            let locker = locker
+                .as_deref()
+                .map(|l| resolve_locker(&mut c, l))
+                .transpose()?;
+            let list = requests(&mut c, locker)?;
+            if list.is_empty() {
+                say("Aucune demande en cours.");
+            }
+            for q in &list {
+                say(&state_line(q));
+            }
+            Ok(())
+        }
+        QuorumCommand::Apply { request } => {
+            let request = resolve_request(&mut c, request)?;
+            call_server(&mut c, &ServerRequest::QuorumApply { request })?;
+            say("Action publiée avec les accords.");
+            Ok(())
+        }
+        QuorumCommand::Cancel { request } => {
+            let request = resolve_request(&mut c, request)?;
+            call_server(&mut c, &ServerRequest::QuorumCancel { request })?;
+            say("Demande abandonnée.");
+            Ok(())
+        }
+    }
+}
+
+fn quarantine_line(o: &QuarantinedOp) -> String {
+    let what = match (&o.title, o.class) {
+        (Some(t), _) => format!("« {} »", t.as_str()),
+        (None, 2) => "opération de contrôle".to_owned(),
+        (None, _) => "donnée illisible".to_owned(),
+    };
+    format!(
+        "{}  membre {}  {}  {}",
+        hex(&o.op_id[..4]),
+        hex(&o.member[..4]),
+        if o.cause == 2 {
+            "bifurcation"
+        } else {
+            "retrait concurrent"
+        },
+        what
+    )
+}
+
+/// Operations by the start of their identifier (8 hexadecimal digits at least).
+fn resolve_ops(listed: &[QuarantinedOp], typed: &[String]) -> Result<Vec<OpId>, String> {
+    let mut out = Vec::new();
+    for t in typed {
+        let lower = t.to_ascii_lowercase();
+        if lower.len() < 8 || !lower.chars().all(|ch| ch.is_ascii_hexdigit()) {
+            return Err("OP : 8 chiffres hexadécimaux au moins.".into());
+        }
+        let hits: Vec<OpId> = listed
+            .iter()
+            .map(|o| o.op_id)
+            .filter(|id| hex(id).starts_with(&lower))
+            .collect();
+        match hits.as_slice() {
+            [one] => out.push(*one),
+            [] => return Err(format!("opération introuvable en quarantaine : {t}.")),
+            _ => return Err(format!("plusieurs opérations commencent par {t}.")),
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    Ok(out)
+}
+
+pub fn run_quarantine(session: &Session<'_>, command: &QuarantineCommand) -> Result<(), String> {
+    let mut c = session.connect(false)?;
+    let locker = resolve_locker(&mut c, &command.locker)?;
+    let ServerReply::Quarantine { ops, can_decide } =
+        call_server(&mut c, &ServerRequest::QuarantineList { locker })?
+    else {
+        return bad_reply();
+    };
+    match &command.decide {
+        None => {
+            if ops.is_empty() {
+                say("Aucune opération en quarantaine.");
+            }
+            for o in &ops {
+                say(&quarantine_line(o));
+            }
+            if !ops.is_empty() && !can_decide {
+                say("Seul un propriétaire du casier peut les accepter ou les rejeter.");
+            }
+            Ok(())
+        }
+        Some((accept, typed)) => {
+            let chosen = resolve_ops(&ops, typed)?;
+            let n = chosen.len();
+            call_server(
+                &mut c,
+                &ServerRequest::QuarantineDecide {
+                    locker,
+                    ops: chosen,
+                    accept: *accept,
+                },
+            )?;
+            say(&format!(
+                "{n} opération(s) {}.",
+                if *accept {
+                    "acceptée(s)"
+                } else {
+                    "rejetée(s)"
+                }
+            ));
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -463,5 +821,35 @@ mod tests {
             fingerprint_arg("abcde-fghij-klmno-pqr23").unwrap(),
             "ABCDEFGHIJKLMNOPQR23"
         );
+    }
+
+    #[test]
+    fn operations_are_found_by_prefix() {
+        let op = |b: u8| QuarantinedOp {
+            op_id: [b; 48],
+            member: [1; 16],
+            device: [2; 16],
+            cause: 1,
+            class: 1,
+            wall_ms: None,
+            title: None,
+            secret: None,
+            received_ms: 0,
+            due_ms: 0,
+        };
+        let listed = vec![op(0xab), op(0xcd)];
+        assert_eq!(
+            resolve_ops(&listed, &["CDCDCDCD".into(), "abababab".into()]).unwrap(),
+            vec![[0xab; 48], [0xcd; 48]]
+        );
+        assert!(resolve_ops(&listed, &["abab".into()]).is_err());
+        assert!(resolve_ops(&listed, &["efefefef".into()]).is_err());
+        assert!(quarantine_line(&listed[0]).contains("retrait concurrent"));
+    }
+
+    #[test]
+    fn text_arguments_are_trimmed_or_read() {
+        assert_eq!(text_arg("  hirzla-accord:x \n").unwrap(), "hirzla-accord:x");
+        assert!(text_arg("@/nonexistent/lien.txt").is_err());
     }
 }

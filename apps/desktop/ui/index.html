@@ -212,6 +212,24 @@
         <p class="texte-secondaire">Ce coffre fonctionne seul (mode Self). Relié au serveur <span class="mono">hirzlad</span>
           de votre organisation, il synchronise vos casiers partagés. Le serveur est aveugle : il transporte des
           opérations scellées sur ce poste et ne reçoit jamais un secret en clair ni une clé capable d'en desceller un.</p>
+        <form id="form-lien" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Lien d'invitation</span>
+            <textarea id="lien-saisie" class="saisie saisie-mono saisie-texte" rows="3" autocomplete="off" spellcheck="false"
+                      placeholder="hirzla-invitation:…" aria-describedby="lien-aide"></textarea>
+          </label>
+          <p id="lien-aide" class="aide">Collez le lien que l'administrateur vous a remis : il contient l'adresse du serveur,
+            le certificat de l'autorité du site et l'empreinte du serveur. Le noyau compare l'empreinte à la clé du
+            serveur avant de lui envoyer quoi que ce soit ; un lien altéré est refusé.</p>
+          <div id="lien-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="lien-envoyer" class="bouton bouton-principal" type="submit">Rejoindre avec le lien</button>
+          </div>
+        </form>
+        <p class="separateur"><span>ou, sans lien, saisissez les trois éléments</span></p>
         <form id="form-rejoindre" novalidate>
           <label class="champ">
             <span class="champ-libelle">Adresse du serveur</span>
@@ -241,7 +259,7 @@
             <p></p>
           </div>
           <div class="ligne-actions">
-            <button id="rejoindre-envoyer" class="bouton bouton-principal" type="submit">Rejoindre le serveur</button>
+            <button id="rejoindre-envoyer" class="bouton bouton-secondaire" type="submit">Rejoindre le serveur</button>
           </div>
         </form>
       </section>
@@ -289,10 +307,20 @@
         <div id="connexion-resultat" class="encadre" role="status" hidden></div>
         <div class="ligne-actions">
           <button id="connexion-synchroniser" class="bouton bouton-principal" type="button">Synchroniser</button>
+          <label class="champ champ-en-ligne">
+            <span class="champ-libelle">Synchronisation automatique</span>
+            <select id="reglage-synchro" class="saisie">
+              <option value="0">Désactivée</option>
+              <option value="1">Toutes les minutes</option>
+              <option value="5">Toutes les 5 minutes</option>
+              <option value="15">Toutes les 15 minutes</option>
+              <option value="60">Toutes les heures</option>
+            </select>
+          </label>
         </div>
-        <p class="aide">Le noyau ne se connecte au serveur que pendant une synchronisation ou une action de partage.
-          Hors ligne, vos casiers restent lisibles et modifiables sur ce poste ; les modifications partent à la
-          synchronisation suivante.</p>
+        <p class="aide">Le noyau ne se connecte au serveur que pendant une synchronisation ou une action de partage,
+          et seulement vers le serveur rattaché. Hors ligne, vos casiers restent lisibles et modifiables sur ce poste ;
+          les modifications partent à la synchronisation suivante.</p>
       </section>
 
       <section id="serveur-registre" class="carte" aria-labelledby="serveur-registre-titre" hidden>
@@ -315,6 +343,34 @@
         <div class="ligne-actions">
           <button id="casiers-nouveau" class="bouton bouton-secondaire" type="button">Nouveau casier partagé…</button>
         </div>
+      </section>
+
+      <section id="serveur-accords" class="carte" aria-labelledby="serveur-accords-titre" hidden>
+        <h2 id="serveur-accords-titre" class="titre-carte">Accords entre propriétaires</h2>
+        <p class="texte-secondaire">Retirer un propriétaire plus ancien que vous, changer son rôle ou changer le quorum
+          exige l'accord d'autres propriétaires. Chacun signe la demande sur son propre poste ; l'accord, signé par sa
+          clé d'appareil, vous revient par le canal de votre choix. Le noyau vérifie chaque signature.</p>
+        <table class="tableau">
+          <thead><tr><th scope="col">Demande</th><th scope="col">Accords</th><th scope="col"><span class="visuellement-cache">Actions</span></th></tr></thead>
+          <tbody id="accords-lignes"></tbody>
+        </table>
+        <p id="accords-vide" class="texte-secondaire">Aucune demande en cours. Une demande se prépare depuis les membres
+          d'un casier, quand le noyau répond que l'action exige l'accord de plusieurs propriétaires.</p>
+        <form id="form-accord-ajout" class="encadre" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Ajouter un accord reçu</span>
+            <textarea id="accord-ajout-saisie" class="saisie saisie-mono saisie-texte" rows="2" autocomplete="off"
+                      spellcheck="false" placeholder="hirzla-accord:…"></textarea>
+          </label>
+          <div id="accord-ajout-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="accord-ajout-envoyer" class="bouton bouton-secondaire" type="submit">Ajouter l'accord</button>
+            <button id="accords-signer" class="bouton bouton-secondaire" type="button">Signer une demande reçue…</button>
+          </div>
+        </form>
       </section>
 
       <section id="serveur-identite" class="carte" aria-labelledby="serveur-identite-titre">
@@ -592,6 +648,7 @@
     <form id="form-membres" method="dialog" novalidate>
       <h2 id="membres-titre" class="titre-carte">Membres</h2>
       <p id="membres-role" class="texte-secondaire"></p>
+      <p id="membres-quorum" class="aide"></p>
       <div id="membres-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -625,7 +682,103 @@
         </div>
       </fieldset>
       <div class="ligne-actions ligne-actions-fin">
+        <button id="membres-quorum-changer" class="bouton bouton-secondaire" type="button" hidden>Changer le quorum…</button>
         <button class="bouton bouton-secondaire" value="ok">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Preparing an approval request (ADR 0044). -->
+  <dialog id="dialogue-accord-preparer" class="dialogue" aria-labelledby="preparer-titre">
+    <form id="form-preparer" method="dialog" novalidate>
+      <h2 id="preparer-titre" class="titre-carte">Demander l'accord des propriétaires</h2>
+      <p id="preparer-action" class="texte-secondaire"></p>
+      <label id="preparer-quorum-champ" class="champ" hidden>
+        <span class="champ-libelle">Nouveau quorum (propriétaires qui doivent agréer)</span>
+        <input id="preparer-quorum" class="saisie" type="number" min="2" max="16" value="2">
+      </label>
+      <div id="preparer-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+      <div id="preparer-resultat" hidden>
+        <p class="etat etat-ouvert etat-gauche"><span class="forme forme-rond" aria-hidden="true"></span><span id="preparer-compte"></span></p>
+        <label class="champ">
+          <span class="champ-libelle">Demande à transmettre aux autres propriétaires</span>
+          <textarea id="preparer-demande" class="saisie saisie-mono saisie-texte" rows="4" readonly></textarea>
+        </label>
+        <p class="aide">Elle ne contient aucun secret. Chaque propriétaire la colle dans « Signer une demande reçue »,
+          vérifie avec vous de vive voix qu'elle vient bien de vous, puis vous renvoie son accord, que vous ajoutez dans
+          Serveur, Accords entre propriétaires.</p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Fermer</button>
+        <button id="preparer-copier" class="bouton bouton-secondaire" type="button" hidden>Copier la demande</button>
+        <button id="preparer-envoyer" class="bouton bouton-principal" type="submit">Préparer la demande</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Signing an approval request received (ADR 0044). -->
+  <dialog id="dialogue-accord-signer" class="dialogue" aria-labelledby="signer-titre">
+    <form id="form-signer" method="dialog" novalidate>
+      <h2 id="signer-titre" class="titre-carte">Signer une demande d'accord</h2>
+      <label class="champ">
+        <span class="champ-libelle">Demande reçue</span>
+        <textarea id="signer-saisie" class="saisie saisie-mono saisie-texte" rows="3" autocomplete="off" spellcheck="false"
+                  placeholder="hirzla-demande:…"></textarea>
+      </label>
+      <div id="signer-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+      <div id="signer-detail" class="encadre" hidden>
+        <dl class="tableau-etat">
+          <dt>Casier</dt><dd id="signer-casier"></dd>
+          <dt>Action</dt><dd id="signer-action"></dd>
+          <dt>Demandée par</dt><dd id="signer-demandeur" class="mono"></dd>
+          <dt>Membre visé</dt><dd id="signer-cible" class="mono"></dd>
+        </dl>
+        <p id="signer-avertissement" class="aide">Avant de signer, vérifiez avec le demandeur, par un autre canal, que la
+          demande vient bien de lui : comparez l'empreinte de sa clé. Votre accord est signé par la clé de ce poste et
+          ne vaut que pour cette demande.</p>
+      </div>
+      <div id="signer-resultat" hidden>
+        <label class="champ">
+          <span class="champ-libelle">Accord à rendre au demandeur</span>
+          <textarea id="signer-accord" class="saisie saisie-mono saisie-texte" rows="4" readonly></textarea>
+        </label>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Fermer</button>
+        <button id="signer-examiner" class="bouton bouton-secondaire" type="button">Examiner</button>
+        <button id="signer-copier" class="bouton bouton-secondaire" type="button" hidden>Copier l'accord</button>
+        <button id="signer-envoyer" class="bouton bouton-principal" type="submit" disabled>Signer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Quarantine of a shared locker (ADR 0045). -->
+  <dialog id="dialogue-quarantaine" class="dialogue dialogue-large" aria-labelledby="quarantaine-titre">
+    <form id="form-quarantaine" method="dialog" novalidate>
+      <h2 id="quarantaine-titre" class="titre-carte">Quarantaine</h2>
+      <p class="texte-secondaire">Ces modifications ont été écrites en même temps que le retrait de leur auteur, ou sur
+        une branche divergente. Elles restent hors du casier tant qu'un propriétaire ne les a pas acceptées ; sans
+        décision, elles sont rejetées automatiquement à l'échéance. Une acceptation explicite l'emporte sur un rejet
+        automatique.</p>
+      <div id="quarantaine-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+      <table class="tableau">
+        <thead><tr><th scope="col"><span class="visuellement-cache">Choisir</span></th><th scope="col">Modification</th><th scope="col">Auteur</th><th scope="col">Cause</th><th scope="col">Rejet automatique</th></tr></thead>
+        <tbody id="quarantaine-lignes"></tbody>
+      </table>
+      <p id="quarantaine-aide" class="aide"></p>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Fermer</button>
+        <button id="quarantaine-rejeter" class="bouton bouton-secondaire bouton-danger" type="button">Rejeter</button>
+        <button id="quarantaine-accepter" class="bouton bouton-principal" type="button">Accepter</button>
       </div>
     </form>
   </dialog>

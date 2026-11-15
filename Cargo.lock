@@ -2007,6 +2007,7 @@ dependencies = [
 name = "hirzla-sync"
 version = "0.0.0"
 dependencies = [
+ "base64 0.23.1",
  "hirzla-access",
  "hirzla-crypto",
  "hirzla-vault",

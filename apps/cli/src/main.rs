@@ -538,6 +538,8 @@ fn run(args: &Args) -> Result<(), String> {
         command @ Command::Set { .. } => set(&session, command),
         Command::Server(command) => server::run_server(&session, command),
         Command::Locker(command) => server::run_locker(&session, command),
+        Command::Quorum(command) => server::run_quorum(&session, command),
+        Command::Quarantine(command) => server::run_quarantine(&session, command),
         Command::History {
             name,
             id,

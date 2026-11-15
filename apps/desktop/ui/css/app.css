@@ -354,3 +354,13 @@ textarea.saisie { resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* Governance: invitation link, approvals, quarantine (ADR 0044 to 0046). */
+.saisie-texte { font-size: 12px; word-break: break-all; min-height: 64px; }
+.separateur {
+  display: flex; align-items: center; gap: 12px; color: var(--hz-texte-secondaire); font-size: 13px; margin: 0;
+}
+.separateur::before, .separateur::after { content: ""; flex: 1; border-top: 1px solid var(--hz-bordure); }
+.champ-en-ligne { flex-direction: row; align-items: center; gap: 8px; margin-left: auto; }
+.champ-en-ligne .saisie { width: auto; min-height: 36px; padding: 6px 10px; }
+.tableau input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--hz-braise-foncee); margin: 0; }

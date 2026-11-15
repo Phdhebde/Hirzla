@@ -518,6 +518,7 @@ impl<A: Authorizer> Replica<A> {
                             kind: p.kind,
                             lamport: p.lamport,
                             deps: p.deps.clone(),
+                            wall_ms: p.wall_ms,
                             content,
                         },
                     );

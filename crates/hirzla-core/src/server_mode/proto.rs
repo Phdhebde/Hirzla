@@ -1,12 +1,13 @@
 //! Server mode operations of the local API (`docs/api-locale.md` § 15): version 4, operation
-//! codes 40 to 48, error codes 40 to 48. Same frames, same CBOR profile and same strict
-//! decoding as the rest of the API (`crate::proto`).
+//! codes 40 to 48 and 90 to 98 (approvals and quarantine, ADR 0044 and 0045), error codes 40
+//! to 48 and 90 to 93. Same frames, same CBOR profile and same strict decoding as the rest of
+//! the API (`crate::proto`).
 
 pub use hirzla_access::Role;
 use hirzla_vault::cbor::{
     self, array_max, boolean, bytes_max, fixed, text_max, uint, Fields, Value,
 };
-use hirzla_vault::model::{Id16, MAX_SERVER_URL};
+use hirzla_vault::model::{Id16, OpId, MAX_SERVER_URL};
 use zeroize::Zeroizing;
 
 use crate::proto::ErrorCode;
@@ -15,6 +16,12 @@ use crate::proto::ErrorCode;
 pub const SERVER_VERSION: u64 = 4;
 /// Operation codes reserved for the server mode.
 pub const SERVER_OPS: std::ops::RangeInclusive<u64> = 40..=49;
+/// Operation codes of the approvals and the quarantine, also version 4 (ADR 0044, 0045).
+pub const GOVERNANCE_OPS: std::ops::RangeInclusive<u64> = 90..=99;
+/// Longest text object accepted (`sync-protocol.md` § 11.10).
+pub const MAX_TEXT: usize = hirzla_sync::text::MAX_TEXT;
+/// Most pending approval requests (`format.md` § 15.2).
+pub const MAX_REQUESTS: usize = 64;
 /// Largest site CA file, in bytes.
 pub const MAX_ROOTS: usize = 64 * 1024;
 /// Largest shared locker name, in bytes.
@@ -49,10 +56,28 @@ pub enum ServerOp {
     RoleRevoke = 47,
     /// Members and roles of a shared locker.
     LockerMembers = 48,
+    /// Prepare an approval request (ADR 0044).
+    QuorumPrepare = 90,
+    /// Read an approval request before signing it.
+    QuorumInspect = 91,
+    /// Sign an approval request.
+    QuorumApprove = 92,
+    /// Add an approval to a pending request.
+    QuorumCollect = 93,
+    /// Publish the operation of a request whose quorum is met.
+    QuorumApply = 94,
+    /// Pending requests.
+    QuorumList = 95,
+    /// Drop a pending request.
+    QuorumCancel = 96,
+    /// Quarantined operations of a locker (ADR 0045).
+    QuarantineList = 97,
+    /// Accept or reject quarantined operations.
+    QuarantineDecide = 98,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 9] = [
+    const ALL: [ServerOp; 18] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -62,6 +87,15 @@ impl ServerOp {
         ServerOp::RoleGrant,
         ServerOp::RoleRevoke,
         ServerOp::LockerMembers,
+        ServerOp::QuorumPrepare,
+        ServerOp::QuorumInspect,
+        ServerOp::QuorumApprove,
+        ServerOp::QuorumCollect,
+        ServerOp::QuorumApply,
+        ServerOp::QuorumList,
+        ServerOp::QuorumCancel,
+        ServerOp::QuarantineList,
+        ServerOp::QuarantineDecide,
     ];
 
     /// The operation from its number.
@@ -83,11 +117,21 @@ impl ServerOp {
             ServerOp::RoleGrant => "role_grant",
             ServerOp::RoleRevoke => "role_revoke",
             ServerOp::LockerMembers => "locker_members",
+            ServerOp::QuorumPrepare => "quorum_prepare",
+            ServerOp::QuorumInspect => "quorum_inspect",
+            ServerOp::QuorumApprove => "quorum_approve",
+            ServerOp::QuorumCollect => "quorum_collect",
+            ServerOp::QuorumApply => "quorum_apply",
+            ServerOp::QuorumList => "quorum_list",
+            ServerOp::QuorumCancel => "quorum_cancel",
+            ServerOp::QuarantineList => "quarantine_list",
+            ServerOp::QuarantineDecide => "quarantine_decide",
         }
     }
 }
 
-/// Error codes of the server mode (40 to 48). The general codes of § 7 keep their numbers.
+/// Error codes of the server mode (40 to 48, 90 to 93). The general codes of § 7 keep their
+/// numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ServerCode {
     /// A general code of § 7.
@@ -110,6 +154,14 @@ pub enum ServerCode {
     UnknownMember,
     /// 48: transparency proof missing or invalid for the key received.
     KeyLogRejected,
+    /// 90: approval or request refused (ADR 0044).
+    ApprovalInvalid,
+    /// 91: the approvals collected do not reach the quorum: counted, required.
+    QuorumNotMet(u64, u64),
+    /// 92: writes to the locker are frozen (ADR 0045, `transparence.md` § 6.5).
+    LockerFrozen,
+    /// 93: invitation link malformed, altered or of an unknown version (ADR 0046).
+    InvitationInvalid,
 }
 
 impl ServerCode {
@@ -127,6 +179,10 @@ impl ServerCode {
             ServerCode::Forbidden => 46,
             ServerCode::UnknownMember => 47,
             ServerCode::KeyLogRejected => 48,
+            ServerCode::ApprovalInvalid => 90,
+            ServerCode::QuorumNotMet(..) => 91,
+            ServerCode::LockerFrozen => 92,
+            ServerCode::InvitationInvalid => 93,
         }
     }
 
@@ -144,6 +200,10 @@ impl ServerCode {
             ServerCode::Forbidden => "forbidden",
             ServerCode::UnknownMember => "unknown_member",
             ServerCode::KeyLogRejected => "keylog_rejected",
+            ServerCode::ApprovalInvalid => "approval_invalid",
+            ServerCode::QuorumNotMet(..) => "quorum_not_met",
+            ServerCode::LockerFrozen => "locker_frozen",
+            ServerCode::InvitationInvalid => "invitation_invalid",
         }
     }
 }
@@ -169,6 +229,11 @@ pub enum ServerRequest {
         roots: Vec<u8>,
         /// Fingerprint from the invitation, normalised.
         fingerprint: Option<String>,
+    },
+    /// 42, with an invitation link (ADR 0046).
+    ServerJoinLink {
+        /// `hirzla-invitation:…`, whitespace allowed.
+        link: String,
     },
     /// 43.
     ServerConfirm {
@@ -205,6 +270,134 @@ pub enum ServerRequest {
         /// Locker.
         locker: Id16,
     },
+    /// 90.
+    QuorumPrepare {
+        /// Locker.
+        locker: Id16,
+        /// Action.
+        action: QuorumAction,
+        /// Member targeted (actions 1 and 2).
+        target: Option<Id16>,
+        /// New role code (action 2) or new quorum (action 3).
+        detail: Option<u64>,
+    },
+    /// 91.
+    QuorumInspect {
+        /// `hirzla-demande:…`.
+        offer: String,
+    },
+    /// 92.
+    QuorumApprove {
+        /// `hirzla-demande:…`.
+        offer: String,
+    },
+    /// 93.
+    QuorumCollect {
+        /// `hirzla-accord:…`.
+        token: String,
+    },
+    /// 94.
+    QuorumApply {
+        /// Request identifier.
+        request: Id16,
+    },
+    /// 95.
+    QuorumList {
+        /// Only this locker, if given.
+        locker: Option<Id16>,
+    },
+    /// 96.
+    QuorumCancel {
+        /// Request identifier.
+        request: Id16,
+    },
+    /// 97.
+    QuarantineList {
+        /// Locker.
+        locker: Id16,
+    },
+    /// 98.
+    QuarantineDecide {
+        /// Locker.
+        locker: Id16,
+        /// Operations, sorted without duplicate.
+        ops: Vec<OpId>,
+        /// Accept (or reject).
+        accept: bool,
+    },
+}
+
+/// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuorumAction {
+    /// 1: remove an `Owner`.
+    OwnerRemoval = 1,
+    /// 2: change the role of an `Owner`.
+    OwnerRoleChange = 2,
+    /// 3: change the quorum.
+    Policy = 3,
+}
+
+impl QuorumAction {
+    /// The action from its code.
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<QuorumAction> {
+        [
+            QuorumAction::OwnerRemoval,
+            QuorumAction::OwnerRoleChange,
+            QuorumAction::Policy,
+        ]
+        .into_iter()
+        .find(|a| *a as u64 == n)
+    }
+}
+
+/// A pending approval request (`docs/api-locale.md` § 15.2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuorumState {
+    /// Request identifier.
+    pub request: Id16,
+    /// Locker.
+    pub locker: Id16,
+    /// Action.
+    pub action: QuorumAction,
+    /// Member targeted.
+    pub target: Option<Id16>,
+    /// New role or quorum.
+    pub detail: Option<u64>,
+    /// Members counted: the initiator first, then the approvers.
+    pub counted: Vec<Id16>,
+    /// Quorum in force.
+    pub required: u64,
+    /// The text to hand to the other owners.
+    pub offer: String,
+    /// When it was prepared, wall clock milliseconds.
+    pub created_ms: u64,
+}
+
+/// A quarantined operation, as an `Owner` judges it (ADR 0045). Never a secret value.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuarantinedOp {
+    /// Operation.
+    pub op_id: OpId,
+    /// Author member.
+    pub member: Id16,
+    /// Author device.
+    pub device: Id16,
+    /// 1 concurrent with a removal, 2 fork.
+    pub cause: u64,
+    /// 1 data, 2 control.
+    pub class: u64,
+    /// Wall clock time the author announced (readable data only).
+    pub wall_ms: Option<u64>,
+    /// Title of the secret (readable data only).
+    pub title: Option<Zeroizing<String>>,
+    /// Secret concerned (readable data only).
+    pub secret: Option<Id16>,
+    /// First local reception.
+    pub received_ms: u64,
+    /// Automatic rejection due.
+    pub due_ms: u64,
 }
 
 impl std::fmt::Debug for ServerRequest {
@@ -232,6 +425,8 @@ pub struct LockerStatus {
     pub quarantined: u64,
     /// Whether the server still serves the locker.
     pub access: bool,
+    /// Writes frozen: a removal announced in the key log was not received (ADR 0045).
+    pub frozen: bool,
 }
 
 impl std::fmt::Debug for LockerStatus {
@@ -244,6 +439,7 @@ impl std::fmt::Debug for LockerStatus {
             .field("pending", &self.pending)
             .field("quarantined", &self.quarantined)
             .field("access", &self.access)
+            .field("frozen", &self.frozen)
             .finish_non_exhaustive()
     }
 }
@@ -300,7 +496,7 @@ impl SuspectReason {
     }
 }
 
-/// Kind of an alert about the member's own keys (`transparence.md` § 6.4).
+/// Kind of an alert of the key log watch (`transparence.md` § 6.4, § 6.5; ADR 0045).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlertKind {
     /// 1: a key inscribed for the member is not the member's key.
@@ -309,6 +505,14 @@ pub enum AlertKind {
     UnknownOwnDevice = 2,
     /// 3: a revocation unknown to the member is inscribed in its name.
     UnknownOwnRevocation = 3,
+    /// 4: a removal inscribed for a locker was not received within the hour (locker frozen).
+    WithheldRemoval = 4,
+    /// 5: a removal this device issued is not inscribed within the hour.
+    UninscribedRemoval = 5,
+    /// 6: the certificate of this device is not inscribed within the hour.
+    WithheldInscription = 6,
+    /// 7: an operation waits for a dependency the server does not serve, for an hour.
+    WithheldOperation = 7,
 }
 
 impl AlertKind {
@@ -319,21 +523,55 @@ impl AlertKind {
             AlertKind::ForeignMemberKey,
             AlertKind::UnknownOwnDevice,
             AlertKind::UnknownOwnRevocation,
+            AlertKind::WithheldRemoval,
+            AlertKind::UninscribedRemoval,
+            AlertKind::WithheldInscription,
+            AlertKind::WithheldOperation,
         ]
         .into_iter()
         .find(|k| *k as u64 == n)
     }
+
+    /// Whether the alert names an entry of the log (key 2).
+    #[must_use]
+    pub fn has_index(self) -> bool {
+        (self as u64) <= 4
+    }
+
+    /// Whether the alert names a device (key 3).
+    #[must_use]
+    pub fn has_device(self) -> bool {
+        matches!(
+            self,
+            AlertKind::UnknownOwnDevice
+                | AlertKind::UnknownOwnRevocation
+                | AlertKind::WithheldInscription
+        )
+    }
+
+    /// Whether the alert names a locker (key 4).
+    #[must_use]
+    pub fn has_locker(self) -> bool {
+        matches!(
+            self,
+            AlertKind::WithheldRemoval
+                | AlertKind::UninscribedRemoval
+                | AlertKind::WithheldOperation
+        )
+    }
 }
 
-/// An alert about the member's own keys.
+/// An alert of the key log watch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct KeyLogAlert {
     /// Kind.
     pub kind: AlertKind,
-    /// Rank of the entry in the log.
-    pub index: u64,
-    /// Device concerned (kinds 2 and 3).
+    /// Rank of the entry in the log (kinds 1 to 4).
+    pub index: Option<u64>,
+    /// Device concerned (kinds 2, 3 and 6).
     pub device: Option<Id16>,
+    /// Locker concerned (kinds 4, 5 and 7).
+    pub locker: Option<Id16>,
 }
 
 /// State of the local key transparency log (`docs/api-locale.md` § 15.2, ADR 0041).
@@ -461,6 +699,42 @@ pub enum ServerReply {
         grantable: Vec<Role>,
         /// Why `grantable` is empty, when it is.
         grant_refusal: Option<Refusal>,
+        /// Quorum of owners in force (ADR 0044), once the state is known.
+        quorum: Option<u64>,
+    },
+    /// 90, 93: a pending request.
+    Request(QuorumState),
+    /// 91.
+    Inspected {
+        /// Locker.
+        locker: Id16,
+        /// Its name, if readable here.
+        name: Option<Zeroizing<String>>,
+        /// Action.
+        action: QuorumAction,
+        /// Member targeted.
+        target: Option<Id16>,
+        /// Fingerprint of the target, if known here.
+        target_fingerprint: Option<String>,
+        /// New role or quorum.
+        detail: Option<u64>,
+        /// Initiator.
+        issuer: Id16,
+        /// Fingerprint of the initiator, if known here.
+        issuer_fingerprint: Option<String>,
+        /// Whether the current member may sign it.
+        can_sign: bool,
+    },
+    /// 92: the approval to hand back.
+    Approved(String),
+    /// 95.
+    Requests(Vec<QuorumState>),
+    /// 97.
+    Quarantine {
+        /// Quarantined operations.
+        ops: Vec<QuarantinedOp>,
+        /// Whether the current member may decide.
+        can_decide: bool,
     },
 }
 
@@ -476,7 +750,7 @@ pub fn is_server_request(frame: &[u8]) -> bool {
     };
     f.req(3)
         .and_then(uint)
-        .is_ok_and(|op| SERVER_OPS.contains(&op))
+        .is_ok_and(|op| SERVER_OPS.contains(&op) || GOVERNANCE_OPS.contains(&op))
 }
 
 /// Normalises a typed fingerprint: spaces and dashes removed, upper case; then exactly 20
@@ -517,13 +791,24 @@ impl ServerRequest {
         match self {
             ServerRequest::ServerStatus => ServerOp::ServerStatus,
             ServerRequest::ServerIdentity => ServerOp::ServerIdentity,
-            ServerRequest::ServerJoin { .. } => ServerOp::ServerJoin,
+            ServerRequest::ServerJoin { .. } | ServerRequest::ServerJoinLink { .. } => {
+                ServerOp::ServerJoin
+            }
             ServerRequest::ServerConfirm { .. } => ServerOp::ServerConfirm,
             ServerRequest::ServerSync => ServerOp::ServerSync,
             ServerRequest::SharedLockerCreate { .. } => ServerOp::SharedLockerCreate,
             ServerRequest::RoleGrant { .. } => ServerOp::RoleGrant,
             ServerRequest::RoleRevoke { .. } => ServerOp::RoleRevoke,
             ServerRequest::LockerMembers { .. } => ServerOp::LockerMembers,
+            ServerRequest::QuorumPrepare { .. } => ServerOp::QuorumPrepare,
+            ServerRequest::QuorumInspect { .. } => ServerOp::QuorumInspect,
+            ServerRequest::QuorumApprove { .. } => ServerOp::QuorumApprove,
+            ServerRequest::QuorumCollect { .. } => ServerOp::QuorumCollect,
+            ServerRequest::QuorumApply { .. } => ServerOp::QuorumApply,
+            ServerRequest::QuorumList { .. } => ServerOp::QuorumList,
+            ServerRequest::QuorumCancel { .. } => ServerOp::QuorumCancel,
+            ServerRequest::QuarantineList { .. } => ServerOp::QuarantineList,
+            ServerRequest::QuarantineDecide { .. } => ServerOp::QuarantineDecide,
         }
     }
 
@@ -542,6 +827,9 @@ impl ServerRequest {
                     e.push((3, Value::text(f)));
                 }
                 Some(Value::map(e))
+            }
+            ServerRequest::ServerJoinLink { link } => {
+                Some(Value::map(vec![(4, Value::text(link))]))
             }
             ServerRequest::ServerConfirm { fingerprint } => {
                 Some(Value::map(vec![(1, Value::text(fingerprint))]))
@@ -569,9 +857,48 @@ impl ServerRequest {
                 (1, Value::bytes(locker)),
                 (2, Value::bytes(member)),
             ])),
-            ServerRequest::LockerMembers { locker } => {
+            ServerRequest::LockerMembers { locker } | ServerRequest::QuarantineList { locker } => {
                 Some(Value::map(vec![(1, Value::bytes(locker))]))
             }
+            ServerRequest::QuorumPrepare {
+                locker,
+                action,
+                target,
+                detail,
+            } => {
+                let mut e = vec![(1, Value::bytes(locker)), (2, Value::Uint(*action as u64))];
+                if let Some(t) = target {
+                    e.push((3, Value::bytes(t)));
+                }
+                if let Some(d) = detail {
+                    e.push((4, Value::Uint(*d)));
+                }
+                Some(Value::map(e))
+            }
+            ServerRequest::QuorumInspect { offer } | ServerRequest::QuorumApprove { offer } => {
+                Some(Value::map(vec![(1, Value::text(offer))]))
+            }
+            ServerRequest::QuorumCollect { token } => {
+                Some(Value::map(vec![(1, Value::text(token))]))
+            }
+            ServerRequest::QuorumApply { request } | ServerRequest::QuorumCancel { request } => {
+                Some(Value::map(vec![(1, Value::bytes(request))]))
+            }
+            ServerRequest::QuorumList { locker } => Some(Value::map(
+                locker.iter().map(|l| (1, Value::bytes(l))).collect(),
+            )),
+            ServerRequest::QuarantineDecide {
+                locker,
+                ops,
+                accept,
+            } => Some(Value::map(vec![
+                (1, Value::bytes(locker)),
+                (
+                    2,
+                    Value::Array(ops.iter().map(|o| Value::bytes(o)).collect()),
+                ),
+                (3, Value::Bool(*accept)),
+            ])),
         }
     }
 
@@ -626,7 +953,15 @@ impl ServerRequest {
             ServerOp::ServerIdentity => none(ServerRequest::ServerIdentity),
             ServerOp::ServerSync => none(ServerRequest::ServerSync),
             ServerOp::ServerJoin => {
-                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
+                let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
+                if let Some(link) = f.opt(4) {
+                    if f.opt(1).is_some() || f.opt(2).is_some() || f.opt(3).is_some() {
+                        return Err(malformed);
+                    }
+                    return Ok(ServerRequest::ServerJoinLink {
+                        link: m(text_max(link, MAX_TEXT))?.to_owned(),
+                    });
+                }
                 Ok(ServerRequest::ServerJoin {
                     url: m(f.req(1).and_then(|u| text_max(u, MAX_SERVER_URL)))?.to_owned(),
                     roots: m(f.req(2).and_then(|r| bytes_max(r, MAX_ROOTS)))?.to_vec(),
@@ -671,6 +1006,73 @@ impl ServerRequest {
                     locker: id16(&f, 1)?,
                 })
             }
+            ServerOp::QuarantineList => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::QuarantineList {
+                    locker: id16(&f, 1)?,
+                })
+            }
+            ServerOp::QuorumPrepare => {
+                let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
+                Ok(ServerRequest::QuorumPrepare {
+                    locker: id16(&f, 1)?,
+                    action: QuorumAction::from_u64(m(f.req(2).and_then(uint))?)
+                        .ok_or(ServerCode::General(ErrorCode::InvalidInput))?,
+                    target: f
+                        .opt(3)
+                        .map(fixed::<16>)
+                        .transpose()
+                        .map_err(|_| malformed)?,
+                    detail: f.opt(4).map(uint).transpose().map_err(|_| malformed)?,
+                })
+            }
+            ServerOp::QuorumInspect | ServerOp::QuorumApprove | ServerOp::QuorumCollect => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                let text = m(f.req(1).and_then(|t| text_max(t, MAX_TEXT)))?.to_owned();
+                Ok(match op {
+                    ServerOp::QuorumInspect => ServerRequest::QuorumInspect { offer: text },
+                    ServerOp::QuorumApprove => ServerRequest::QuorumApprove { offer: text },
+                    _ => ServerRequest::QuorumCollect { token: text },
+                })
+            }
+            ServerOp::QuorumApply | ServerOp::QuorumCancel => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                let request = id16(&f, 1)?;
+                Ok(if op == ServerOp::QuorumApply {
+                    ServerRequest::QuorumApply { request }
+                } else {
+                    ServerRequest::QuorumCancel { request }
+                })
+            }
+            ServerOp::QuorumList => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::QuorumList {
+                    locker: f
+                        .opt(1)
+                        .map(fixed::<16>)
+                        .transpose()
+                        .map_err(|_| malformed)?,
+                })
+            }
+            ServerOp::QuarantineDecide => {
+                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
+                let ops: Vec<OpId> = m(f.req(2).and_then(|a| array_max(a, MAX_LIST)))?
+                    .iter()
+                    .map(fixed::<48>)
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| malformed)?;
+                let mut sorted = ops.clone();
+                sorted.sort_unstable();
+                sorted.dedup();
+                if ops.is_empty() || sorted.len() != ops.len() {
+                    return Err(ServerCode::General(ErrorCode::InvalidInput));
+                }
+                Ok(ServerRequest::QuarantineDecide {
+                    locker: id16(&f, 1)?,
+                    ops: sorted,
+                    accept: m(f.req(3).and_then(boolean))?,
+                })
+            }
         }
     }
 }
@@ -688,11 +1090,12 @@ fn status_value(l: &LockerStatus) -> Value {
     e.push((6, Value::Uint(l.pending)));
     e.push((7, Value::Uint(l.quarantined)));
     e.push((8, Value::Bool(l.access)));
+    e.push((9, Value::Bool(l.frozen)));
     Value::map(e)
 }
 
 fn status_from(v: &Value) -> Result<LockerStatus, cbor::CborError> {
-    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8])?;
+    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9])?;
     Ok(LockerStatus {
         id: fixed::<16>(f.req(1)?)?,
         name: f
@@ -708,6 +1111,7 @@ fn status_from(v: &Value) -> Result<LockerStatus, cbor::CborError> {
         pending: uint(f.req(6)?)?,
         quarantined: uint(f.req(7)?)?,
         access: boolean(f.req(8)?)?,
+        frozen: boolean(f.req(9)?)?,
     })
 }
 
@@ -773,9 +1177,15 @@ fn keylog_value(k: &KeyLogStatus) -> Value {
             k.alerts
                 .iter()
                 .map(|a| {
-                    let mut f = vec![(1, Value::Uint(a.kind as u64)), (2, Value::Uint(a.index))];
+                    let mut f = vec![(1, Value::Uint(a.kind as u64))];
+                    if let Some(i) = a.index {
+                        f.push((2, Value::Uint(i)));
+                    }
                     if let Some(d) = &a.device {
                         f.push((3, Value::bytes(d)));
+                    }
+                    if let Some(l) = &a.locker {
+                        f.push((4, Value::bytes(l)));
                     }
                     Value::map(f)
                 })
@@ -797,22 +1207,117 @@ fn keylog_from(v: &Value) -> Result<KeyLogStatus, cbor::CborError> {
     }
     let mut alerts = Vec::new();
     for a in array_max(f.req(4)?, MAX_ALERTS)? {
-        let g = Fields::new(a, &[1, 2, 3])?;
+        let g = Fields::new(a, &[1, 2, 3, 4])?;
         let kind = AlertKind::from_u64(uint(g.req(1)?)?).ok_or(cbor::CborError::Malformed)?;
+        let index = g.opt(2).map(uint).transpose()?;
         let device = g.opt(3).map(fixed::<16>).transpose()?;
-        if device.is_some() == (kind == AlertKind::ForeignMemberKey) {
+        let locker = g.opt(4).map(fixed::<16>).transpose()?;
+        if index.is_some() != kind.has_index()
+            || device.is_some() != kind.has_device()
+            || locker.is_some() != kind.has_locker()
+        {
             return Err(cbor::CborError::Malformed);
         }
         alerts.push(KeyLogAlert {
             kind,
-            index: uint(g.req(2)?)?,
+            index,
             device,
+            locker,
         });
     }
     Ok(KeyLogStatus {
         suspect: reason,
         entries: uint(f.req(2)?)?,
         alerts,
+    })
+}
+
+fn opt_id(e: &mut Vec<(u64, Value)>, k: u64, v: Option<&Id16>) {
+    if let Some(v) = v {
+        e.push((k, Value::bytes(v)));
+    }
+}
+
+fn opt_uint(e: &mut Vec<(u64, Value)>, k: u64, v: Option<u64>) {
+    if let Some(v) = v {
+        e.push((k, Value::Uint(v)));
+    }
+}
+
+fn quorum_value(q: &QuorumState) -> Value {
+    let mut e = vec![
+        (1, Value::bytes(&q.request)),
+        (2, Value::bytes(&q.locker)),
+        (3, Value::Uint(q.action as u64)),
+    ];
+    opt_id(&mut e, 4, q.target.as_ref());
+    opt_uint(&mut e, 5, q.detail);
+    e.push((
+        6,
+        Value::Array(q.counted.iter().map(|m| Value::bytes(m)).collect()),
+    ));
+    e.push((7, Value::Uint(q.required)));
+    e.push((8, Value::text(&q.offer)));
+    e.push((9, Value::Uint(q.created_ms)));
+    Value::map(e)
+}
+
+fn action_from(v: &Value) -> Result<QuorumAction, cbor::CborError> {
+    QuorumAction::from_u64(uint(v)?).ok_or(cbor::CborError::Malformed)
+}
+
+fn quorum_from(v: &Value) -> Result<QuorumState, cbor::CborError> {
+    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9])?;
+    Ok(QuorumState {
+        request: fixed::<16>(f.req(1)?)?,
+        locker: fixed::<16>(f.req(2)?)?,
+        action: action_from(f.req(3)?)?,
+        target: f.opt(4).map(fixed::<16>).transpose()?,
+        detail: f.opt(5).map(uint).transpose()?,
+        counted: array_max(f.req(6)?, 16)?
+            .iter()
+            .map(fixed::<16>)
+            .collect::<Result<_, _>>()?,
+        required: uint(f.req(7)?)?,
+        offer: text_max(f.req(8)?, MAX_TEXT)?.to_owned(),
+        created_ms: uint(f.req(9)?)?,
+    })
+}
+
+fn quarantined_value(q: &QuarantinedOp) -> Value {
+    let mut e = vec![
+        (1, Value::bytes(&q.op_id)),
+        (2, Value::bytes(&q.member)),
+        (3, Value::bytes(&q.device)),
+        (4, Value::Uint(q.cause)),
+        (5, Value::Uint(q.class)),
+    ];
+    opt_uint(&mut e, 6, q.wall_ms);
+    if let Some(t) = &q.title {
+        e.push((7, Value::text(t)));
+    }
+    opt_id(&mut e, 8, q.secret.as_ref());
+    e.push((9, Value::Uint(q.received_ms)));
+    e.push((10, Value::Uint(q.due_ms)));
+    Value::map(e)
+}
+
+fn quarantined_from(v: &Value) -> Result<QuarantinedOp, cbor::CborError> {
+    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])?;
+    Ok(QuarantinedOp {
+        op_id: fixed::<48>(f.req(1)?)?,
+        member: fixed::<16>(f.req(2)?)?,
+        device: fixed::<16>(f.req(3)?)?,
+        cause: cbor::uint_in(f.req(4)?, 1..=2)?,
+        class: cbor::uint_in(f.req(5)?, 1..=2)?,
+        wall_ms: f.opt(6).map(uint).transpose()?,
+        title: f
+            .opt(7)
+            .map(|t| text_max(t, 4096).map(|s| Zeroizing::new(s.to_owned())))
+            .transpose()?,
+        secret: f.opt(8).map(fixed::<16>).transpose()?,
+        received_ms: uint(f.req(9)?)?,
+        due_ms: uint(f.req(10)?)?,
     })
 }
 
@@ -897,6 +1402,7 @@ impl ServerReply {
                 members,
                 grantable,
                 grant_refusal,
+                quorum,
             } => {
                 let mut e = vec![
                     (1, Value::Array(members.iter().map(member_value).collect())),
@@ -906,8 +1412,47 @@ impl ServerReply {
                 if let Some(r) = grant_refusal {
                     e.push((4, Value::Uint(*r as u64)));
                 }
+                opt_uint(&mut e, 5, *quorum);
                 Some(Value::map(e))
             }
+            ServerReply::Request(q) => Some(quorum_value(q)),
+            ServerReply::Requests(list) => Some(Value::map(vec![(
+                1,
+                Value::Array(list.iter().map(quorum_value).collect()),
+            )])),
+            ServerReply::Inspected {
+                locker,
+                name,
+                action,
+                target,
+                target_fingerprint,
+                detail,
+                issuer,
+                issuer_fingerprint,
+                can_sign,
+            } => {
+                let mut e = vec![(1, Value::bytes(locker))];
+                if let Some(n) = name {
+                    e.push((2, Value::text(n)));
+                }
+                e.push((3, Value::Uint(*action as u64)));
+                opt_id(&mut e, 4, target.as_ref());
+                if let Some(f) = target_fingerprint {
+                    e.push((5, Value::text(f)));
+                }
+                opt_uint(&mut e, 6, *detail);
+                e.push((7, Value::bytes(issuer)));
+                if let Some(f) = issuer_fingerprint {
+                    e.push((8, Value::text(f)));
+                }
+                e.push((9, Value::Bool(*can_sign)));
+                Some(Value::map(e))
+            }
+            ServerReply::Approved(token) => Some(Value::map(vec![(1, Value::text(token))])),
+            ServerReply::Quarantine { ops, can_decide } => Some(Value::map(vec![
+                (1, Value::Array(ops.iter().map(quarantined_value).collect())),
+                (2, Value::Bool(*can_decide)),
+            ])),
         }
     }
 
@@ -932,6 +1477,15 @@ impl ServerReply {
                 match c {
                     ServerCode::ServerRefused(code) => {
                         e.push((4, Value::map(vec![(1, Value::Uint(*code))])));
+                    }
+                    ServerCode::QuorumNotMet(counted, required) => {
+                        e.push((
+                            4,
+                            Value::map(vec![
+                                (1, Value::Uint(*counted)),
+                                (2, Value::Uint(*required)),
+                            ]),
+                        ));
                     }
                     ServerCode::General(ErrorCode::UnsupportedVersion) => {
                         e.push((
@@ -979,6 +1533,16 @@ impl ServerReply {
                 46 => ServerCode::Forbidden,
                 47 => ServerCode::UnknownMember,
                 48 => ServerCode::KeyLogRejected,
+                90 => ServerCode::ApprovalInvalid,
+                91 => {
+                    let d = Fields::new(body.ok_or(ErrorCode::Malformed)?, &[1, 2]).map_err(bad)?;
+                    ServerCode::QuorumNotMet(
+                        d.req(1).and_then(uint).map_err(bad)?,
+                        d.req(2).and_then(uint).map_err(bad)?,
+                    )
+                }
+                92 => ServerCode::LockerFrozen,
+                93 => ServerCode::InvitationInvalid,
                 n => ServerCode::General(ErrorCode::from_u64(n).ok_or(ErrorCode::Malformed)?),
             };
             return Ok((id, Err(code)));
@@ -986,7 +1550,10 @@ impl ServerReply {
         let body = || body.ok_or(ErrorCode::Malformed);
         let text = |v: &Value, max| text_max(v, max).map(str::to_owned).map_err(bad);
         let reply = match op {
-            ServerOp::RoleRevoke => {
+            ServerOp::RoleRevoke
+            | ServerOp::QuorumApply
+            | ServerOp::QuorumCancel
+            | ServerOp::QuarantineDecide => {
                 if f.opt(4).is_some() {
                     return Err(ErrorCode::Malformed);
                 }
@@ -1077,8 +1644,59 @@ impl ServerReply {
                     devices: b.req(2).and_then(uint).map_err(bad)?,
                 }
             }
+            ServerOp::QuorumPrepare | ServerOp::QuorumCollect => {
+                ServerReply::Request(quorum_from(body()?).map_err(bad)?)
+            }
+            ServerOp::QuorumList => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::Requests(
+                    b.req(1)
+                        .and_then(|x| array_max(x, MAX_REQUESTS))
+                        .map_err(bad)?
+                        .iter()
+                        .map(quorum_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(bad)?,
+                )
+            }
+            ServerOp::QuorumInspect => {
+                let b = Fields::new(body()?, &[1, 2, 3, 4, 5, 6, 7, 8, 9]).map_err(bad)?;
+                ServerReply::Inspected {
+                    locker: b.req(1).and_then(fixed::<16>).map_err(bad)?,
+                    name: b
+                        .opt(2)
+                        .map(|n| text_max(n, MAX_LOCKER_NAME).map(|s| Zeroizing::new(s.to_owned())))
+                        .transpose()
+                        .map_err(bad)?,
+                    action: b.req(3).and_then(action_from).map_err(bad)?,
+                    target: b.opt(4).map(fixed::<16>).transpose().map_err(bad)?,
+                    target_fingerprint: b.opt(5).map(|f| text(f, FINGERPRINT_LEN)).transpose()?,
+                    detail: b.opt(6).map(uint).transpose().map_err(bad)?,
+                    issuer: b.req(7).and_then(fixed::<16>).map_err(bad)?,
+                    issuer_fingerprint: b.opt(8).map(|f| text(f, FINGERPRINT_LEN)).transpose()?,
+                    can_sign: b.req(9).and_then(boolean).map_err(bad)?,
+                }
+            }
+            ServerOp::QuorumApprove => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::Approved(text(b.req(1).map_err(bad)?, MAX_TEXT)?)
+            }
+            ServerOp::QuarantineList => {
+                let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
+                ServerReply::Quarantine {
+                    ops: b
+                        .req(1)
+                        .and_then(|x| array_max(x, MAX_LIST))
+                        .map_err(bad)?
+                        .iter()
+                        .map(quarantined_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(bad)?,
+                    can_decide: b.req(2).and_then(boolean).map_err(bad)?,
+                }
+            }
             ServerOp::LockerMembers => {
-                let b = Fields::new(body()?, &[1, 2, 3, 4]).map_err(bad)?;
+                let b = Fields::new(body()?, &[1, 2, 3, 4, 5]).map_err(bad)?;
                 ServerReply::Members {
                     members: b
                         .req(1)
@@ -1091,6 +1709,7 @@ impl ServerReply {
                     me: b.req(2).and_then(fixed::<16>).map_err(bad)?,
                     grantable: b.req(3).and_then(roles_from).map_err(bad)?,
                     grant_refusal: refusal_from(b.opt(4)).map_err(bad)?,
+                    quorum: b.opt(5).map(uint).transpose().map_err(bad)?,
                 }
             }
         };
@@ -1139,6 +1758,36 @@ mod tests {
                 member: [2; 16],
             },
             ServerRequest::LockerMembers { locker: [3; 16] },
+            ServerRequest::ServerJoinLink {
+                link: "hirzla-invitation:AAAA".into(),
+            },
+            ServerRequest::QuorumPrepare {
+                locker: [1; 16],
+                action: QuorumAction::OwnerRemoval,
+                target: Some([2; 16]),
+                detail: None,
+            },
+            ServerRequest::QuorumInspect {
+                offer: "hirzla-demande:x".into(),
+            },
+            ServerRequest::QuorumApprove {
+                offer: "hirzla-demande:x".into(),
+            },
+            ServerRequest::QuorumCollect {
+                token: "hirzla-accord:x".into(),
+            },
+            ServerRequest::QuorumApply { request: [5; 16] },
+            ServerRequest::QuorumList { locker: None },
+            ServerRequest::QuorumList {
+                locker: Some([1; 16]),
+            },
+            ServerRequest::QuorumCancel { request: [5; 16] },
+            ServerRequest::QuarantineList { locker: [1; 16] },
+            ServerRequest::QuarantineDecide {
+                locker: [1; 16],
+                ops: vec![[1; 48], [2; 48]],
+                accept: true,
+            },
         ];
         for r in &all {
             assert_eq!(&round(r), r);
@@ -1197,8 +1846,45 @@ mod tests {
                 .1,
             ServerCode::General(ErrorCode::InvalidInput)
         );
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 99, None)).unwrap_err(),
+            (3, ServerCode::General(ErrorCode::UnknownOperation))
+        );
+        // A link together with the separate fields; an empty or duplicated decision list; an
+        // unknown action.
+        let both = Value::map(vec![
+            (1, Value::text("hirzla://h")),
+            (4, Value::text("hirzla-invitation:x")),
+        ]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 42, Some(both)))
+                .unwrap_err()
+                .1,
+            ServerCode::General(ErrorCode::Malformed)
+        );
+        for ops in [vec![], vec![Value::bytes(&[1; 48]), Value::bytes(&[1; 48])]] {
+            let decide = Value::map(vec![
+                (1, Value::bytes(&[1; 16])),
+                (2, Value::Array(ops)),
+                (3, Value::Bool(false)),
+            ]);
+            assert_eq!(
+                ServerRequest::decode(&enc(4, 98, Some(decide)))
+                    .unwrap_err()
+                    .1,
+                ServerCode::General(ErrorCode::InvalidInput)
+            );
+        }
+        let prepare = Value::map(vec![(1, Value::bytes(&[1; 16])), (2, Value::Uint(4))]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 90, Some(prepare)))
+                .unwrap_err()
+                .1,
+            ServerCode::General(ErrorCode::InvalidInput)
+        );
         // Not a server request.
         assert!(!is_server_request(&enc(1, 5, None)));
+        assert!(is_server_request(&enc(4, 95, None)));
     }
 
     #[test]
@@ -1234,13 +1920,33 @@ mod tests {
                         alerts: vec![
                             KeyLogAlert {
                                 kind: AlertKind::UnknownOwnDevice,
-                                index: 7,
+                                index: Some(7),
                                 device: Some([9; 16]),
+                                locker: None,
                             },
                             KeyLogAlert {
                                 kind: AlertKind::ForeignMemberKey,
-                                index: 2,
+                                index: Some(2),
                                 device: None,
+                                locker: None,
+                            },
+                            KeyLogAlert {
+                                kind: AlertKind::WithheldRemoval,
+                                index: Some(4),
+                                device: None,
+                                locker: Some([1; 16]),
+                            },
+                            KeyLogAlert {
+                                kind: AlertKind::WithheldInscription,
+                                index: None,
+                                device: Some([9; 16]),
+                                locker: None,
+                            },
+                            KeyLogAlert {
+                                kind: AlertKind::UninscribedRemoval,
+                                index: None,
+                                device: None,
+                                locker: Some([1; 16]),
                             },
                         ],
                     }),
@@ -1254,6 +1960,7 @@ mod tests {
                         pending: 0,
                         quarantined: 0,
                         access: true,
+                        frozen: true,
                     }],
                 },
             ),
@@ -1283,6 +1990,60 @@ mod tests {
                     }],
                     grantable: Vec::new(),
                     grant_refusal: Some(Refusal::AccessLost),
+                    quorum: Some(2),
+                },
+            ),
+            (
+                ServerOp::QuorumPrepare,
+                ServerReply::Request(QuorumState {
+                    request: [1; 16],
+                    locker: [2; 16],
+                    action: QuorumAction::OwnerRoleChange,
+                    target: Some([3; 16]),
+                    detail: Some(2),
+                    counted: vec![[4; 16], [5; 16]],
+                    required: 3,
+                    offer: "hirzla-demande:AAAA".into(),
+                    created_ms: 12,
+                }),
+            ),
+            (ServerOp::QuorumList, ServerReply::Requests(Vec::new())),
+            (
+                ServerOp::QuorumInspect,
+                ServerReply::Inspected {
+                    locker: [2; 16],
+                    name: Some(Zeroizing::new("Équipe".into())),
+                    action: QuorumAction::Policy,
+                    target: None,
+                    target_fingerprint: None,
+                    detail: Some(3),
+                    issuer: [4; 16],
+                    issuer_fingerprint: Some("C".repeat(20)),
+                    can_sign: true,
+                },
+            ),
+            (
+                ServerOp::QuorumApprove,
+                ServerReply::Approved("hirzla-accord:AAAA".into()),
+            ),
+            (ServerOp::QuorumApply, ServerReply::Done),
+            (ServerOp::QuarantineDecide, ServerReply::Done),
+            (
+                ServerOp::QuarantineList,
+                ServerReply::Quarantine {
+                    ops: vec![QuarantinedOp {
+                        op_id: [7; 48],
+                        member: [1; 16],
+                        device: [2; 16],
+                        cause: 1,
+                        class: 1,
+                        wall_ms: Some(5),
+                        title: Some(Zeroizing::new("Routeur".into())),
+                        secret: Some([3; 16]),
+                        received_ms: 10,
+                        due_ms: 20,
+                    }],
+                    can_decide: false,
                 },
             ),
         ];
@@ -1345,6 +2106,18 @@ mod tests {
             (4, Value::Array(Vec::new())),
         ]);
         assert!(ServerReply::decode(ServerOp::ServerStatus, &status(Some(healthy))).is_ok());
+        for code in [
+            ServerCode::ApprovalInvalid,
+            ServerCode::QuorumNotMet(1, 3),
+            ServerCode::LockerFrozen,
+            ServerCode::InvitationInvalid,
+        ] {
+            let f = ServerReply::encode(2, &Err(code)).unwrap();
+            assert_eq!(
+                ServerReply::decode(ServerOp::QuorumApply, &f).unwrap(),
+                (2, Err(code))
+            );
+        }
         let f = ServerReply::encode(2, &Err(ServerCode::ServerRefused(4))).unwrap();
         assert_eq!(
             ServerReply::decode(ServerOp::ServerSync, &f).unwrap(),
@@ -1363,6 +2136,7 @@ mod tests {
             pending: 0,
             quarantined: 0,
             access: true,
+            frozen: false,
         };
         let d = format!("{locker:?}");
         assert!(!d.contains("secret"), "{d}");

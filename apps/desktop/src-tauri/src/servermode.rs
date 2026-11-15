@@ -11,10 +11,11 @@ use std::io::Read;
 use std::path::Path;
 
 use hirzla_core::server_mode::proto::{
-    normalise_fingerprint, AlertKind, KeyLogStatus, LockerStatus, MemberInfo, Refusal, Role,
-    ServerReply, ServerRequest, SuspectReason, SyncReport, MAX_LOCKER_NAME, MAX_ROOTS,
+    normalise_fingerprint, AlertKind, KeyLogStatus, LockerStatus, MemberInfo, QuarantinedOp,
+    QuorumAction, QuorumState, Refusal, Role, ServerReply, ServerRequest, SuspectReason,
+    SyncReport, MAX_LOCKER_NAME, MAX_ROOTS, MAX_TEXT,
 };
-use hirzla_vault::model::{Id16, MemberKeys, MAX_SERVER_URL};
+use hirzla_vault::model::{Id16, MemberKeys, OpId, MAX_SERVER_URL};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -90,6 +91,8 @@ pub struct SharedLockerDto {
     quarantined: u64,
     /// `false` once the server refused the locker (member removed).
     access: bool,
+    /// Writes frozen: a removal announced by the key log was not received (ADR 0045).
+    frozen: bool,
 }
 
 impl From<LockerStatus> for SharedLockerDto {
@@ -102,18 +105,21 @@ impl From<LockerStatus> for SharedLockerDto {
             pending: l.pending,
             quarantined: l.quarantined,
             access: l.access,
+            frozen: l.frozen,
         }
     }
 }
 
-/// An alert about the member's own keys.
+/// An alert about the member's own keys, or a dated one (ADR 0045).
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AlertDto {
-    /// `foreign_member_key`, `unknown_device` or `unknown_revocation`.
+    /// `foreign_member_key`, `unknown_device`, `unknown_revocation`, `withheld_removal`,
+    /// `uninscribed_removal`, `withheld_inscription` or `withheld_operation`.
     kind: &'static str,
-    /// Rank of the entry in the log.
-    index: u64,
+    /// Rank of the entry in the log, when there is one.
+    index: Option<u64>,
     device: Option<String>,
+    locker: Option<String>,
 }
 
 /// The local key transparency log (ADR 0040, ADR 0041).
@@ -146,9 +152,14 @@ impl From<KeyLogStatus> for KeyLogDto {
                         AlertKind::ForeignMemberKey => "foreign_member_key",
                         AlertKind::UnknownOwnDevice => "unknown_device",
                         AlertKind::UnknownOwnRevocation => "unknown_revocation",
+                        AlertKind::WithheldRemoval => "withheld_removal",
+                        AlertKind::UninscribedRemoval => "uninscribed_removal",
+                        AlertKind::WithheldInscription => "withheld_inscription",
+                        AlertKind::WithheldOperation => "withheld_operation",
                     },
                     index: a.index,
                     device: a.device.as_ref().map(|d| hex(d)),
+                    locker: a.locker.as_ref().map(|l| hex(l)),
                 })
                 .collect(),
         }
@@ -245,6 +256,8 @@ pub struct MembersDto {
     members: Vec<MemberDto>,
     grantable: Vec<RoleName>,
     grant_refusal: Option<&'static str>,
+    /// Quorum of owners in force (ADR 0044).
+    quorum: Option<u64>,
 }
 
 fn members_dto(
@@ -252,6 +265,7 @@ fn members_dto(
     members: Vec<MemberInfo>,
     grantable: &[Role],
     grant_refusal: Option<Refusal>,
+    quorum: Option<u64>,
 ) -> MembersDto {
     MembersDto {
         me: hex(&me),
@@ -271,6 +285,142 @@ fn members_dto(
             .collect(),
         grantable: grantable.iter().map(|r| (*r).into()).collect(),
         grant_refusal: grant_refusal.map(refusal_name),
+        quorum,
+    }
+}
+
+/// An action that takes approvals, by a stable name (ADR 0044).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuorumActionName {
+    /// Removal of an `Owner`.
+    OwnerRemoval,
+    /// Role change of an `Owner`.
+    OwnerRoleChange,
+    /// Quorum change.
+    Policy,
+}
+
+impl From<QuorumAction> for QuorumActionName {
+    fn from(a: QuorumAction) -> Self {
+        match a {
+            QuorumAction::OwnerRemoval => QuorumActionName::OwnerRemoval,
+            QuorumAction::OwnerRoleChange => QuorumActionName::OwnerRoleChange,
+            QuorumAction::Policy => QuorumActionName::Policy,
+        }
+    }
+}
+
+/// A pending approval request kept by the core.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct QuorumStateDto {
+    request: String,
+    locker: String,
+    action: QuorumActionName,
+    target: Option<String>,
+    /// New role, for a role change.
+    role: Option<RoleName>,
+    /// New quorum, for a policy.
+    quorum: Option<u64>,
+    counted: Vec<String>,
+    required: u64,
+    /// The `hirzla-demande:` text to hand to the other owners.
+    offer: String,
+    created_ms: u64,
+}
+
+fn detail_names(action: QuorumAction, detail: Option<u64>) -> (Option<RoleName>, Option<u64>) {
+    match action {
+        QuorumAction::OwnerRoleChange => (detail.and_then(Role::from_code).map(Into::into), None),
+        QuorumAction::Policy => (None, detail),
+        QuorumAction::OwnerRemoval => (None, None),
+    }
+}
+
+impl From<QuorumState> for QuorumStateDto {
+    fn from(q: QuorumState) -> Self {
+        let (role, quorum) = detail_names(q.action, q.detail);
+        QuorumStateDto {
+            request: hex(&q.request),
+            locker: hex(&q.locker),
+            action: q.action.into(),
+            target: q.target.as_ref().map(|t| hex(t)),
+            role,
+            quorum,
+            counted: q.counted.iter().map(|m| hex(m)).collect(),
+            required: q.required,
+            offer: q.offer,
+            created_ms: q.created_ms,
+        }
+    }
+}
+
+/// What an approver would sign (`QuorumInspect`).
+#[derive(Clone, Serialize)]
+pub struct InspectedDto {
+    locker: String,
+    name: Option<Zeroizing<String>>,
+    action: QuorumActionName,
+    target: Option<String>,
+    target_fingerprint: Option<String>,
+    role: Option<RoleName>,
+    quorum: Option<u64>,
+    issuer: String,
+    issuer_fingerprint: Option<String>,
+    can_sign: bool,
+}
+
+impl std::fmt::Debug for InspectedDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "InspectedDto(can_sign: {})", self.can_sign)
+    }
+}
+
+/// A quarantined operation (ADR 0045). Never a secret value.
+#[derive(Clone, Serialize)]
+pub struct QuarantinedDto {
+    op_id: String,
+    member: String,
+    device: String,
+    /// `removal` (concurrent with a removal) or `fork`.
+    cause: &'static str,
+    /// `data` or `control`.
+    class: &'static str,
+    wall_ms: Option<u64>,
+    title: Option<Zeroizing<String>>,
+    secret: Option<String>,
+    received_ms: u64,
+    due_ms: u64,
+}
+
+impl From<QuarantinedOp> for QuarantinedDto {
+    fn from(o: QuarantinedOp) -> Self {
+        QuarantinedDto {
+            op_id: hex(&o.op_id),
+            member: hex(&o.member),
+            device: hex(&o.device),
+            cause: if o.cause == 2 { "fork" } else { "removal" },
+            class: if o.class == 2 { "control" } else { "data" },
+            wall_ms: o.wall_ms,
+            title: o.title,
+            secret: o.secret.as_ref().map(|s| hex(s)),
+            received_ms: o.received_ms,
+            due_ms: o.due_ms,
+        }
+    }
+}
+
+/// The quarantine of a locker.
+#[derive(Clone, Serialize)]
+pub struct QuarantineDto {
+    ops: Vec<QuarantinedDto>,
+    can_decide: bool,
+}
+
+impl std::fmt::Debug for QuarantineDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Titles stay out of debug output.
+        write!(f, "QuarantineDto({} ops)", self.ops.len())
     }
 }
 
@@ -326,6 +476,36 @@ fn member_arg(typed: &str) -> Result<Id16, DesktopError> {
 
 fn locker_arg(typed: &str) -> Result<Id16, DesktopError> {
     id16(typed).map_err(|_| DesktopError::Invalid("Identifiant de casier non valide."))
+}
+
+/// A pasted text object (`sync-protocol.md` § 11.10): its kind is checked by its prefix, the
+/// core checks the rest.
+fn text_arg(typed: &str, prefix: &str) -> Result<String, DesktopError> {
+    let t: String = typed.chars().filter(|c| !c.is_whitespace()).collect();
+    if t.len() > MAX_TEXT || !t.starts_with(prefix) {
+        return Err(DesktopError::Invalid(match prefix {
+            "hirzla-invitation:" => {
+                "Collez le lien d'invitation complet : il commence par « hirzla-invitation: »."
+            }
+            "hirzla-demande:" => {
+                "Collez la demande complète : elle commence par « hirzla-demande: »."
+            }
+            _ => "Collez l'accord complet : il commence par « hirzla-accord: ».",
+        }));
+    }
+    Ok(t)
+}
+
+fn hex_id<const N: usize>(typed: &str) -> Result<[u8; N], DesktopError> {
+    let bad = DesktopError::Invalid("Identifiant non valide.");
+    if typed.len() != 2 * N || !typed.is_ascii() {
+        return Err(bad);
+    }
+    let mut out = [0u8; N];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&typed[2 * i..2 * i + 2], 16).map_err(|_| bad.clone())?;
+    }
+    Ok(out)
 }
 
 fn locker_name_arg(typed: &str) -> Result<Zeroizing<String>, DesktopError> {
@@ -541,7 +721,8 @@ impl AppState {
                 members,
                 grantable,
                 grant_refusal,
-            } => Ok(members_dto(me, members, &grantable, grant_refusal)),
+                quorum,
+            } => Ok(members_dto(me, members, &grantable, grant_refusal, quorum)),
             _ => Err(DesktopError::Protocol),
         }
     }
@@ -579,6 +760,196 @@ impl AppState {
             member: member_arg(member)?,
         };
         self.call_server(&request).map(drop)
+    }
+
+    /// Joins with an invitation link (ADR 0046).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn join_server_link(&self, link: &str) -> Result<JoinedDto, DesktopError> {
+        let link = text_arg(link, "hirzla-invitation:")?;
+        let ServerReply::Joined {
+            fingerprint,
+            verified,
+            account,
+            ..
+        } = self.call_server(&ServerRequest::ServerJoinLink { link })?
+        else {
+            return Err(DesktopError::Protocol);
+        };
+        Ok(JoinedDto {
+            fingerprint,
+            verified,
+            account,
+        })
+    }
+
+    /// Prepares an approval request (ADR 0044).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_prepare(
+        &self,
+        locker: &str,
+        action: QuorumActionName,
+        target: Option<&str>,
+        role: Option<RoleName>,
+        quorum: Option<u64>,
+    ) -> Result<QuorumStateDto, DesktopError> {
+        let locker = locker_arg(locker)?;
+        let target = target.map(member_arg).transpose()?;
+        let (action, detail) = match action {
+            QuorumActionName::OwnerRemoval => (QuorumAction::OwnerRemoval, None),
+            QuorumActionName::OwnerRoleChange => (
+                QuorumAction::OwnerRoleChange,
+                role.map(|r| Role::from(r).code()),
+            ),
+            QuorumActionName::Policy => (QuorumAction::Policy, quorum),
+        };
+        match self.call_server(&ServerRequest::QuorumPrepare {
+            locker,
+            action,
+            target,
+            detail,
+        })? {
+            ServerReply::Request(q) => Ok(q.into()),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// What a request would do, without signing it.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_inspect(&self, offer: &str) -> Result<InspectedDto, DesktopError> {
+        let offer = text_arg(offer, "hirzla-demande:")?;
+        match self.call_server(&ServerRequest::QuorumInspect { offer })? {
+            ServerReply::Inspected {
+                locker,
+                name,
+                action,
+                target,
+                target_fingerprint,
+                detail,
+                issuer,
+                issuer_fingerprint,
+                can_sign,
+            } => {
+                let (role, quorum) = detail_names(action, detail);
+                Ok(InspectedDto {
+                    locker: hex(&locker),
+                    name,
+                    action: action.into(),
+                    target: target.as_ref().map(|t| hex(t)),
+                    target_fingerprint,
+                    role,
+                    quorum,
+                    issuer: hex(&issuer),
+                    issuer_fingerprint,
+                    can_sign,
+                })
+            }
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Signs a request; returns the `hirzla-accord:` text.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_approve(&self, offer: &str) -> Result<String, DesktopError> {
+        let offer = text_arg(offer, "hirzla-demande:")?;
+        match self.call_server(&ServerRequest::QuorumApprove { offer })? {
+            ServerReply::Approved(t) => Ok(t),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Adds an approval received to a pending request.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_collect(&self, token: &str) -> Result<QuorumStateDto, DesktopError> {
+        let token = text_arg(token, "hirzla-accord:")?;
+        match self.call_server(&ServerRequest::QuorumCollect { token })? {
+            ServerReply::Request(q) => Ok(q.into()),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Pending requests, of one locker or all.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_list(&self, locker: Option<&str>) -> Result<Vec<QuorumStateDto>, DesktopError> {
+        let locker = locker.map(locker_arg).transpose()?;
+        match self.call_server(&ServerRequest::QuorumList { locker })? {
+            ServerReply::Requests(r) => Ok(r.into_iter().map(Into::into).collect()),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Publishes a request whose quorum is met.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_apply(&self, request: &str) -> Result<(), DesktopError> {
+        let request = hex_id::<16>(request)?;
+        self.call_server(&ServerRequest::QuorumApply { request })
+            .map(drop)
+    }
+
+    /// Abandons a request.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_cancel(&self, request: &str) -> Result<(), DesktopError> {
+        let request = hex_id::<16>(request)?;
+        self.call_server(&ServerRequest::QuorumCancel { request })
+            .map(drop)
+    }
+
+    /// The quarantine of a locker.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quarantine_list(&self, locker: &str) -> Result<QuarantineDto, DesktopError> {
+        let locker = locker_arg(locker)?;
+        match self.call_server(&ServerRequest::QuarantineList { locker })? {
+            ServerReply::Quarantine { ops, can_decide } => Ok(QuarantineDto {
+                ops: ops.into_iter().map(Into::into).collect(),
+                can_decide,
+            }),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Accepts or rejects quarantined operations.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quarantine_decide(
+        &self,
+        locker: &str,
+        ops: &[String],
+        accept: bool,
+    ) -> Result<(), DesktopError> {
+        let locker = locker_arg(locker)?;
+        let mut ops: Vec<OpId> = ops
+            .iter()
+            .map(|o| hex_id::<48>(o))
+            .collect::<Result<_, _>>()?;
+        ops.sort_unstable();
+        ops.dedup();
+        if ops.is_empty() {
+            return Err(DesktopError::Invalid("Choisissez au moins une opération."));
+        }
+        self.call_server(&ServerRequest::QuarantineDecide {
+            locker,
+            ops,
+            accept,
+        })
+        .map(drop)
     }
 }
 
@@ -686,6 +1057,81 @@ pub fn revoke_role(state: State<'_>, locker: String, member: String) -> Result<(
     state.revoke_role(&locker, &member)
 }
 
+/// See [`AppState::join_server_link`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn server_join_link(state: State<'_>, link: String) -> Result<JoinedDto, DesktopError> {
+    state.join_server_link(&link)
+}
+
+/// See [`AppState::quorum_prepare`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_prepare(
+    state: State<'_>,
+    locker: String,
+    action: QuorumActionName,
+    target: Option<String>,
+    role: Option<RoleName>,
+    quorum: Option<u64>,
+) -> Result<QuorumStateDto, DesktopError> {
+    state.quorum_prepare(&locker, action, target.as_deref(), role, quorum)
+}
+
+/// See [`AppState::quorum_inspect`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_inspect(state: State<'_>, offer: String) -> Result<InspectedDto, DesktopError> {
+    state.quorum_inspect(&offer)
+}
+
+/// See [`AppState::quorum_approve`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_approve(state: State<'_>, offer: String) -> Result<String, DesktopError> {
+    state.quorum_approve(&offer)
+}
+
+/// See [`AppState::quorum_collect`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_collect(state: State<'_>, token: String) -> Result<QuorumStateDto, DesktopError> {
+    state.quorum_collect(&token)
+}
+
+/// See [`AppState::quorum_list`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_list(
+    state: State<'_>,
+    locker: Option<String>,
+) -> Result<Vec<QuorumStateDto>, DesktopError> {
+    state.quorum_list(locker.as_deref())
+}
+
+/// See [`AppState::quorum_apply`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_apply(state: State<'_>, request: String) -> Result<(), DesktopError> {
+    state.quorum_apply(&request)
+}
+
+/// See [`AppState::quorum_cancel`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_cancel(state: State<'_>, request: String) -> Result<(), DesktopError> {
+    state.quorum_cancel(&request)
+}
+
+/// See [`AppState::quarantine_list`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quarantine_list(state: State<'_>, locker: String) -> Result<QuarantineDto, DesktopError> {
+    state.quarantine_list(&locker)
+}
+
+/// See [`AppState::quarantine_decide`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quarantine_decide(
+    state: State<'_>,
+    locker: String,
+    ops: Vec<String>,
+    accept: bool,
+) -> Result<(), DesktopError> {
+    state.quarantine_decide(&locker, &ops, accept)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -761,6 +1207,7 @@ mod tests {
             }],
             &[Role::Editor, Role::Reader],
             None,
+            Some(2),
         );
         let json = serde_json::to_value(&dto).unwrap();
         assert_eq!(json["members"][0]["me"], true);
@@ -768,13 +1215,15 @@ mod tests {
         assert_eq!(json["members"][0]["change_to"][0], "manager");
         assert_eq!(json["members"][0]["remove_refusal"], "last_owner");
         assert_eq!(json["grantable"][1], "reader");
+        assert_eq!(json["quorum"], 2);
         let k: KeyLogDto = KeyLogStatus {
             suspect: Some(SuspectReason::SizeDecrease),
             entries: 4,
             alerts: vec![KeyLogAlert {
                 kind: AlertKind::UnknownOwnDevice,
-                index: 3,
+                index: Some(3),
                 device: Some([0xab; 16]),
+                locker: None,
             }],
         }
         .into();
@@ -783,5 +1232,50 @@ mod tests {
         assert_eq!(json["reason"], "shorter");
         assert_eq!(json["alerts"][0]["kind"], "unknown_device");
         assert_eq!(json["alerts"][0]["device"], "ab".repeat(16));
+    }
+
+    #[test]
+    fn governance_texts_and_identifiers_are_checked_before_the_core() {
+        assert_eq!(
+            text_arg(" hirzla-accord:ab\ncd ", "hirzla-accord:").unwrap(),
+            "hirzla-accord:abcd"
+        );
+        assert!(text_arg("hirzla-demande:x", "hirzla-accord:").is_err());
+        assert!(text_arg(&"a".repeat(MAX_TEXT + 1), "hirzla-accord:").is_err());
+        assert_eq!(hex_id::<2>("0aFF").unwrap(), [0x0a, 0xff]);
+        assert!(hex_id::<2>("0a").is_err());
+        assert!(hex_id::<2>("zzzz").is_err());
+        let q: QuorumStateDto = QuorumState {
+            request: [1; 16],
+            locker: [2; 16],
+            action: QuorumAction::OwnerRoleChange,
+            target: Some([3; 16]),
+            detail: Some(Role::Editor.code()),
+            counted: vec![[4; 16]],
+            required: 2,
+            offer: "hirzla-demande:x".into(),
+            created_ms: 5,
+        }
+        .into();
+        let json = serde_json::to_value(&q).unwrap();
+        assert_eq!(json["action"], "owner_role_change");
+        assert_eq!(json["role"], "editor");
+        assert_eq!(json["quorum"], serde_json::Value::Null);
+        let o: QuarantinedDto = QuarantinedOp {
+            op_id: [9; 48],
+            member: [1; 16],
+            device: [2; 16],
+            cause: 1,
+            class: 1,
+            wall_ms: None,
+            title: Some(Zeroizing::new("Routeur".into())),
+            secret: None,
+            received_ms: 1,
+            due_ms: 2,
+        }
+        .into();
+        let json = serde_json::to_value(&o).unwrap();
+        assert_eq!(json["cause"], "removal");
+        assert_eq!(json["op_id"], "09".repeat(48));
     }
 }

@@ -64,9 +64,9 @@ message français, dont « serveur injoignable », « empreinte inattendue », �
   l'écran Serveur ; `hirzla serveur etat` les affiche aussi.
 - Le calcul des droits coûte 6 contrôles par membre et par rôle : négligeable devant la taille
   d'un casier (au plus quelques centaines de membres).
-- Reste à faire : accords à plusieurs (quorum) depuis l'interface, décisions de quarantaine,
-  synchronisation de fond, lien d'invitation, révocation d'un appareil inconnu signalé par une
-  alerte.
+- Reste à faire : ~~accords à plusieurs (quorum) depuis l'interface, décisions de quarantaine,
+  synchronisation de fond, lien d'invitation~~ (ADR 0044 à 0048) ; révocation d'un appareil
+  inconnu signalé par une alerte.
 
 ## Alternatives écartées
 

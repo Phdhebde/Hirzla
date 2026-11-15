@@ -10,10 +10,12 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
 use hirzla_core::server_mode::proto::{
-    Refusal, Role, ServerCode, ServerReply, ServerRequest, SuspectReason,
+    AlertKind, QuarantinedOp, QuorumAction, QuorumState, Refusal, Role, ServerCode, ServerReply,
+    ServerRequest, SuspectReason,
 };
 use hirzla_core::server_mode::{annex_path, COMPACT_MIN};
 use hirzla_core::service::{Config, Core};
@@ -24,6 +26,7 @@ use hirzla_server::net::{self, Running};
 use hirzla_server::seal::ShamirSeal;
 use hirzla_server::store::Store;
 use hirzla_server::tls;
+use hirzla_sync::text::{ApprovalOffer, ApprovalToken, Invitation};
 use hirzla_sync::wire::OpItem;
 use hirzla_sync::{AccessAuthorizer, LocalDevice, Replica};
 use hirzla_vault::model::{Id16, MemberKeys};
@@ -538,6 +541,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
         members,
         grantable,
         grant_refusal,
+        ..
     } = bob.server(ServerRequest::LockerMembers { locker }).unwrap()
     else {
         panic!("members expected");
@@ -566,6 +570,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
         members,
         grantable,
         grant_refusal,
+        ..
     } = alice
         .server(ServerRequest::LockerMembers { locker })
         .unwrap()
@@ -1054,4 +1059,552 @@ fn an_altered_annex_is_refused() {
     alice.restart();
     clean(&mut alice, locker);
     assert_eq!(alice.password(locker, secret).unwrap(), "v0");
+}
+
+// -----------------------------------------------------------------------------------------
+// Governance (ADR 0044, ADR 0045, ADR 0046)
+// -----------------------------------------------------------------------------------------
+
+/// Members on a verified server, each joined; the first creates a shared locker.
+fn joined(tmp: &Path, names: &[&str]) -> (Server, Vec<Member>, Id16) {
+    let server = Server::start(tmp);
+    let mut members: Vec<Member> = names.iter().map(|n| Member::new(tmp, n)).collect();
+    for m in &members {
+        server.register(&m.member_keys);
+    }
+    members[0].join(&server, None).unwrap();
+    let fp = server_fingerprint(&mut members[0]);
+    members[0]
+        .server(ServerRequest::ServerConfirm {
+            fingerprint: fp.clone(),
+        })
+        .unwrap();
+    for m in members.iter_mut().skip(1) {
+        m.join(&server, Some(&fp)).unwrap();
+    }
+    let ServerReply::LockerCreated(locker) = members[0]
+        .server(ServerRequest::SharedLockerCreate { name: z("Racine") })
+        .unwrap()
+    else {
+        panic!("locker expected");
+    };
+    (server, members, locker)
+}
+
+fn request(reply: Result<ServerReply, ServerCode>) -> QuorumState {
+    match reply {
+        Ok(ServerReply::Request(q)) => q,
+        other => panic!("request expected, got {other:?}"),
+    }
+}
+
+fn approve(m: &mut Member, offer: &str) -> Result<String, ServerCode> {
+    match m.server(ServerRequest::QuorumApprove {
+        offer: offer.to_owned(),
+    })? {
+        ServerReply::Approved(t) => Ok(t),
+        other => panic!("approval expected, got {other:?}"),
+    }
+}
+
+fn collect(m: &mut Member, token: &str) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::QuorumCollect {
+        token: token.to_owned(),
+    })
+}
+
+fn prepare(
+    m: &mut Member,
+    locker: Id16,
+    action: QuorumAction,
+    target: Option<Id16>,
+    detail: Option<u64>,
+) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::QuorumPrepare {
+        locker,
+        action,
+        target,
+        detail,
+    })
+}
+
+fn quorum_of(m: &mut Member, locker: Id16) -> (Option<u64>, Vec<Id16>) {
+    match m.server(ServerRequest::LockerMembers { locker }).unwrap() {
+        ServerReply::Members {
+            quorum, members, ..
+        } => (quorum, members.iter().map(|i| i.member).collect()),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn inspect(m: &mut Member, offer: &str) -> ServerReply {
+    m.server(ServerRequest::QuorumInspect {
+        offer: offer.to_owned(),
+    })
+    .unwrap()
+}
+
+/// Bob, a junior owner, removes Alice, the senior one, with Carol's approval; every refusal
+/// on the way: quorum not met, the target and a reader cannot sign, a forged approval from a
+/// reader, an approval replayed or carried over to another request, an action that needs
+/// none. Then Bob raises the quorum with Carol's approval.
+#[test]
+fn quorum_removes_the_senior_owner() {
+    let tmp = tempdir();
+    let (_server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol", "dave"]);
+    let [alice, bob, carol, dave] = &mut m[..] else {
+        unreachable!()
+    };
+    let ids = (alice.id, bob.id, carol.id, dave.id);
+    grant(alice, locker, ids.1, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.2, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.3, Role::Reader, None).unwrap();
+    bob.sync();
+    carol.sync();
+    dave.sync();
+    assert_eq!(quorum_of(bob, locker).0, Some(2));
+
+    use QuorumAction::{OwnerRemoval, OwnerRoleChange, Policy};
+    let invalid = Err(ServerCode::General(ErrorCode::InvalidInput));
+    // Alice is the senior owner: removing Bob takes no approval.
+    assert_eq!(
+        prepare(alice, locker, OwnerRemoval, Some(ids.1), None),
+        invalid
+    );
+    // A malformed request; a target who is not an owner.
+    assert_eq!(prepare(bob, locker, OwnerRemoval, None, None), invalid);
+    assert_eq!(
+        prepare(bob, locker, OwnerRemoval, Some(ids.3), None),
+        invalid
+    );
+    assert_eq!(prepare(bob, locker, Policy, None, Some(1)), invalid);
+    // A reader cannot prepare anything.
+    assert_eq!(
+        prepare(dave, locker, Policy, None, Some(3)),
+        Err(ServerCode::Forbidden)
+    );
+
+    let q = request(prepare(bob, locker, OwnerRemoval, Some(ids.0), None));
+    assert_eq!((q.counted.clone(), q.required), (vec![ids.1], 2));
+    assert!(q.offer.starts_with("hirzla-demande:"));
+    // Not enough approvals yet.
+    assert_eq!(
+        bob.server(ServerRequest::QuorumApply { request: q.request }),
+        Err(ServerCode::QuorumNotMet(1, 2))
+    );
+
+    // The target and a reader cannot sign; the target sees the request for what it is.
+    match inspect(alice, &q.offer) {
+        ServerReply::Inspected {
+            target,
+            issuer,
+            can_sign,
+            ..
+        } => assert_eq!((target, issuer, can_sign), (Some(ids.0), ids.1, false)),
+        other => panic!("unexpected {other:?}"),
+    }
+    assert_eq!(approve(alice, &q.offer), Err(ServerCode::Forbidden));
+    assert_eq!(approve(dave, &q.offer), Err(ServerCode::Forbidden));
+    // An altered offer is not even read.
+    let mut altered: Vec<char> = q.offer.chars().collect();
+    let i = altered.len() / 2;
+    altered[i] = if altered[i] == 'A' { 'B' } else { 'A' };
+    let altered: String = altered.into_iter().collect();
+    assert_eq!(approve(carol, &altered), Err(ServerCode::ApprovalInvalid));
+
+    // Dave forges an approval with his own device, outside the core's checks.
+    dave.core.handle(Request::Lock).unwrap();
+    let offer = ApprovalOffer::decode(&q.offer).unwrap();
+    let device = dave.device();
+    let forged = ApprovalToken {
+        locker_id: locker,
+        request_id: q.request,
+        approval: device
+            .approve(&ApprovalRequest {
+                locker_id: locker,
+                request_id: q.request,
+                action: SensitiveAction::OwnerRemoval,
+                target: offer.target,
+                detail: None,
+                issuer: ids.1,
+                approver_member: ids.3,
+                approver_device: device.device_id(),
+            })
+            .unwrap(),
+    }
+    .encode()
+    .unwrap();
+    assert_eq!(collect(bob, &forged), Err(ServerCode::ApprovalInvalid));
+
+    // Carol reads, then signs.
+    match inspect(carol, &q.offer) {
+        ServerReply::Inspected {
+            name,
+            action,
+            can_sign,
+            issuer_fingerprint,
+            ..
+        } => {
+            assert_eq!(name.as_deref().map(String::as_str), Some("Racine"));
+            assert_eq!(action, OwnerRemoval);
+            assert!(can_sign);
+            assert_eq!(
+                issuer_fingerprint.as_deref(),
+                Some(bob.fingerprint.as_str())
+            );
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let token = approve(carol, &q.offer).unwrap();
+    assert!(token.starts_with("hirzla-accord:"));
+
+    // Carried over to another request of the same locker: the signature does not hold.
+    let other = request(prepare(
+        bob,
+        locker,
+        OwnerRoleChange,
+        Some(ids.0),
+        Some(Role::Editor.code()),
+    ));
+    let mut moved = ApprovalToken::decode(&token).unwrap();
+    moved.request_id = other.request;
+    assert_eq!(
+        collect(bob, &moved.encode().unwrap()),
+        Err(ServerCode::ApprovalInvalid)
+    );
+    // The request lives on Bob's core only.
+    assert_eq!(
+        collect(carol, &token),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+
+    let q2 = request(collect(bob, &token));
+    assert_eq!((q2.counted.clone(), q2.required), (vec![ids.1, ids.2], 2));
+    // Replayed: refused.
+    assert_eq!(collect(bob, &token), Err(ServerCode::ApprovalInvalid));
+    match bob
+        .server(ServerRequest::QuorumList { locker: None })
+        .unwrap()
+    {
+        ServerReply::Requests(r) => assert_eq!(r.len(), 2),
+        other => panic!("unexpected {other:?}"),
+    }
+    bob.server(ServerRequest::QuorumCancel {
+        request: other.request,
+    })
+    .unwrap();
+    assert_eq!(
+        bob.server(ServerRequest::QuorumCancel {
+            request: other.request,
+        }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+
+    // Restarted, the request is still there with its approval (annex v3).
+    bob.restart();
+    match bob
+        .server(ServerRequest::QuorumList {
+            locker: Some(locker),
+        })
+        .unwrap()
+    {
+        ServerReply::Requests(r) => assert_eq!(
+            r.iter()
+                .map(|x| (x.request, x.counted.len()))
+                .collect::<Vec<_>>(),
+            vec![(q.request, 2)]
+        ),
+        other => panic!("unexpected {other:?}"),
+    }
+
+    assert_eq!(
+        bob.server(ServerRequest::QuorumApply { request: q.request }),
+        Ok(ServerReply::Done)
+    );
+    assert_eq!(
+        bob.server(ServerRequest::QuorumApply { request: q.request }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+    assert_eq!(
+        collect(bob, &token),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+
+    carol.sync();
+    let (_, members) = quorum_of(carol, locker);
+    assert!(!members.contains(&ids.0));
+    assert!(members.contains(&ids.1));
+    alice.sync();
+    assert!(
+        !alice
+            .status()
+            .iter()
+            .find(|l| l.id == locker)
+            .unwrap()
+            .access
+    );
+
+    // Bob raises the quorum to 3, Carol approving.
+    let p = request(prepare(bob, locker, Policy, None, Some(3)));
+    let token = approve(carol, &p.offer).unwrap();
+    request(collect(bob, &token));
+    bob.server(ServerRequest::QuorumApply { request: p.request })
+        .unwrap();
+    carol.sync();
+    assert_eq!(quorum_of(carol, locker).0, Some(3));
+    // Two owners left: Carol, the junior, can no longer meet the quorum against Bob.
+    assert_eq!(
+        prepare(
+            carol,
+            locker,
+            OwnerRoleChange,
+            Some(ids.1),
+            Some(Role::Editor.code())
+        ),
+        Err(ServerCode::Forbidden)
+    );
+}
+
+thread_local! {
+    static CLOCK_SHIFT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn shifted_clock() -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    u64::try_from(now).unwrap() + CLOCK_SHIFT.with(std::cell::Cell::get)
+}
+
+fn quarantine(m: &mut Member, locker: Id16) -> Result<(Vec<QuarantinedOp>, bool), ServerCode> {
+    match m.server(ServerRequest::QuarantineList { locker })? {
+        ServerReply::Quarantine { ops, can_decide } => Ok((ops, can_decide)),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Carol writes two secrets while Alice, who has not seen them, removes her: both land in
+/// quarantine on Alice's core. A reader may not decide; Alice accepts one; the other is
+/// rejected on its own after the delay (§ 9.3).
+#[test]
+fn quarantine_is_decided_or_rejected_after_the_delay() {
+    let tmp = tempdir();
+    let (_server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol"]);
+    let [alice, bob, carol] = &mut m[..] else {
+        unreachable!()
+    };
+    alice.core.set_server_clock(shifted_clock);
+    grant(alice, locker, bob.id, Role::Reader, None).unwrap();
+    grant(alice, locker, carol.id, Role::Editor, None).unwrap();
+    bob.sync();
+    carol.sync();
+    let kept = carol.create(locker, "Gardé", "accepté").unwrap();
+    let dropped = carol.create(locker, "Rejeté", "rejeté").unwrap();
+    carol.sync();
+
+    // Alice removes Carol without having received her writes.
+    alice
+        .server(ServerRequest::RoleRevoke {
+            locker,
+            member: carol.id,
+        })
+        .unwrap();
+    alice.sync();
+    let (ops, can_decide) = quarantine(alice, locker).unwrap();
+    assert_eq!(ops.len(), 2);
+    assert!(can_decide);
+    assert!(ops.iter().all(|o| o.member == carol.id && o.cause == 1));
+    assert_eq!(
+        alice
+            .status()
+            .iter()
+            .find(|l| l.id == locker)
+            .unwrap()
+            .quarantined,
+        2
+    );
+
+    // Bob, a reader, cannot decide.
+    bob.sync();
+    if let Ok((_, can)) = quarantine(bob, locker) {
+        assert!(!can);
+    }
+    assert_eq!(
+        bob.server(ServerRequest::QuarantineDecide {
+            locker,
+            ops: vec![ops[0].op_id],
+            accept: true,
+        }),
+        Err(ServerCode::Forbidden)
+    );
+    // Unknown operation.
+    assert_eq!(
+        alice.server(ServerRequest::QuarantineDecide {
+            locker,
+            ops: vec![[0x55; 48]],
+            accept: true,
+        }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+
+    // Which operation is which: the readable title tells.
+    let keep = ops
+        .iter()
+        .find(|o| o.secret == Some(kept))
+        .expect("kept listed");
+    assert_eq!(keep.title.as_deref().map(String::as_str), Some("Gardé"));
+    alice
+        .server(ServerRequest::QuarantineDecide {
+            locker,
+            ops: vec![keep.op_id],
+            accept: true,
+        })
+        .unwrap();
+    assert_eq!(quarantine(alice, locker).unwrap().0.len(), 1);
+    assert_eq!(alice.password(locker, kept).unwrap(), "accepté");
+    assert!(alice.password(locker, dropped).is_err());
+
+    // Eight days later, the remaining one is rejected on Alice's next synchronisation.
+    CLOCK_SHIFT.with(|c| c.set(8 * 24 * 3_600_000));
+    alice.sync();
+    assert!(quarantine(alice, locker).unwrap().0.is_empty());
+    assert!(alice.password(locker, dropped).is_err());
+    assert_eq!(alice.password(locker, kept).unwrap(), "accepté");
+    CLOCK_SHIFT.with(|c| c.set(0));
+}
+
+/// The invitation link carries the address, the CA and the fingerprint (ADR 0046): a link
+/// altered by one character, or carrying another fingerprint, is refused before anything is
+/// stored.
+#[test]
+fn invitation_link() {
+    let tmp = tempdir();
+    let server = Server::start(tmp.path());
+    let mut alice = Member::new(tmp.path(), "alice");
+    let mut bob = Member::new(tmp.path(), "bob");
+    server.register(&alice.member_keys);
+    server.register(&bob.member_keys);
+    alice.join(&server, None).unwrap();
+    let fingerprint = server_fingerprint(&mut alice);
+
+    let link = |fingerprint: &str| {
+        Invitation {
+            address: server.url(),
+            roots: server.ca_pem.clone(),
+            fingerprint: fingerprint.to_owned(),
+        }
+        .encode()
+        .unwrap()
+    };
+    let good = link(&fingerprint);
+    assert!(good.starts_with("hirzla-invitation:"));
+
+    let mut altered: Vec<char> = good.chars().collect();
+    let i = altered.len() / 2;
+    altered[i] = if altered[i] == 'A' { 'B' } else { 'A' };
+    let altered: String = altered.into_iter().collect();
+    for bad in [
+        altered.as_str(),
+        "hirzla-invitation:",
+        "https://hirzlad.test",
+    ] {
+        assert_eq!(
+            bob.server(ServerRequest::ServerJoinLink {
+                link: bad.to_owned()
+            }),
+            Err(ServerCode::InvitationInvalid)
+        );
+    }
+    assert_eq!(
+        bob.server(ServerRequest::ServerJoinLink {
+            link: link("AAAAAAAAAAAAAAAAAAAA")
+        }),
+        Err(ServerCode::FingerprintMismatch)
+    );
+    assert!(!annex_path(&bob.vault).exists());
+
+    // Line breaks and blanks, as a paste leaves them, are tolerated.
+    let (head, tail) = good.split_at(40);
+    let ServerReply::Joined { account, .. } = bob
+        .server(ServerRequest::ServerJoinLink {
+            link: format!("  {head}\n{tail}\n"),
+        })
+        .unwrap()
+    else {
+        panic!("joined expected");
+    };
+    assert!(account);
+    match bob.server(ServerRequest::ServerStatus).unwrap() {
+        ServerReply::Status {
+            server: Some((_, _, fp, verified)),
+            ..
+        } => assert_eq!((fp, verified), (fingerprint, true)),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// A server that inscribes a removal in the key log and withholds the `Revoke`
+/// (`transparence.md` § 6.5): an hour after the device found it, writes in the locker are
+/// frozen, an alert says why, across a restart of the core.
+#[test]
+fn a_withheld_removal_freezes_the_locker_after_an_hour() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["alice", "bob"]);
+    let [alice, bob] = &mut m[..] else {
+        unreachable!()
+    };
+    bob.core.set_server_clock(shifted_clock);
+    grant(alice, locker, bob.id, Role::Editor, None).unwrap();
+    bob.sync();
+    let secret = bob.create(locker, "Avant", "v0").unwrap();
+    bob.sync();
+
+    server
+        .running
+        .with_core(|c| c.inscribe_withheld_removal_for_tests(locker, [0x42; 16], [0x24; 48]))
+        .unwrap();
+    bob.sync();
+    let frozen = |b: &mut Member| b.status().iter().find(|l| l.id == locker).unwrap().frozen;
+    // Found, not yet late.
+    assert!(!frozen(bob));
+    bob.update(locker, secret, "v1").unwrap();
+    bob.sync();
+
+    CLOCK_SHIFT.with(|c| c.set(2 * 3_600_000));
+    assert!(frozen(bob));
+    let alerts = match bob.server(ServerRequest::ServerStatus).unwrap() {
+        ServerReply::Status {
+            keylog: Some(k), ..
+        } => k.alerts,
+        other => panic!("unexpected {other:?}"),
+    };
+    assert!(alerts
+        .iter()
+        .any(|a| a.kind == AlertKind::WithheldRemoval && a.locker == Some(locker)));
+    assert!(bob.update(locker, secret, "v2").is_err());
+    assert!(bob.create(locker, "Après", "v3").is_err());
+    // Reading stays possible.
+    assert_eq!(bob.password(locker, secret).unwrap(), "v1");
+
+    // The watch is kept in the annex: still frozen after a restart.
+    bob.restart();
+    bob.core.set_server_clock(shifted_clock);
+    assert!(frozen(bob));
+    assert!(bob.update(locker, secret, "v2").is_err());
+    CLOCK_SHIFT.with(|c| c.set(0));
+
+    // Alice's core found it now: not frozen for another hour, then it refuses her grants.
+    alice.core.set_server_clock(shifted_clock);
+    alice.sync();
+    assert!(!frozen(alice));
+    CLOCK_SHIFT.with(|c| c.set(2 * 3_600_000));
+    assert_eq!(
+        alice.server(ServerRequest::RoleRevoke {
+            locker,
+            member: bob.id
+        }),
+        Err(ServerCode::LockerFrozen)
+    );
+    CLOCK_SHIFT.with(|c| c.set(0));
 }
