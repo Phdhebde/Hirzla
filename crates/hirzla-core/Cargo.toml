@@ -21,7 +21,6 @@ fuzzing = []
 hirzla-crypto = { path = "../hirzla-crypto" }
 hirzla-vault = { path = "../hirzla-vault" }
 hirzla-access = { path = "../hirzla-access" }
-hirzla-audit = { path = "../hirzla-audit" }
 hirzla-keystore = { path = "../hirzla-keystore" }
 hirzla-sync = { path = "../hirzla-sync", features = ["net"] }
 thiserror = "2.0"
