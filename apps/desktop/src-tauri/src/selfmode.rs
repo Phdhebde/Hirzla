@@ -152,11 +152,8 @@ fn op_id(s: &str) -> Result<OpId, DesktopError> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         _ => None,
     };
-    for (o, pair) in out.iter_mut().zip(b.chunks_exact(2)) {
-        let (Some(hi), Some(lo)) = (
-            pair.first().copied().and_then(digit),
-            pair.get(1).copied().and_then(digit),
-        ) else {
+    for (o, &[h, l]) in out.iter_mut().zip(b.as_chunks::<2>().0) {
+        let (Some(hi), Some(lo)) = (digit(h), digit(l)) else {
             return Err(bad);
         };
         *o = (hi << 4) | lo;
