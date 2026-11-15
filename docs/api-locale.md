@@ -568,8 +568,8 @@ l'autorisation) :
 
 Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
-partagés, rôles, accords et quarantaine. Codes : opérations **40 à 49** et **90 à 99**
-(ADR 0044, 0045), erreurs **40 à 49** et **90 à 99**. Toutes exigent un coffre
+partagés, rôles, accords, quarantaine et révocation d'un appareil. Codes : opérations **40 à
+49** et **90 à 99** (ADR 0044, 0045, 0059), erreurs **40 à 49** et **90 à 99**. Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
 pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
 
@@ -612,6 +612,7 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
 | 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
 | 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
+| 49 | `DeviceRevoke` | oui | `{1: appareil bstr(16)}` | `{1: casiers uint}` (ADR 0059) |
 
 Détails :
 
@@ -685,6 +686,20 @@ Détails :
 
    Ce n'est qu'une indication : `RoleGrant` et `RoleRevoke` refont le contrôle avant d'émettre.
    Un casier dont le serveur a retiré l'accès donne le motif 4 partout.
+10. **`DeviceRevoke`** (ADR 0059) — révoque un **autre appareil du membre**, depuis un appareil
+    de certification : la réponse à l'alerte 2 « appareil inconnu inscrit à votre nom ». La
+    clé du membre signe la `DeviceRevocation` (`format.md` § 3.6) à l'intérieur du coffre ; le
+    noyau émet une `DeviceRemove` (nouvelle époque, `sync-protocol.md` § 9.7) dans chaque
+    casier tenu ici que le serveur sert encore, où le membre a un rôle et où l'appareil est
+    actif, et la pousse ; puis il relit le registre, où la révocation est attendue (pas
+    d'alerte 3). Résultat : le nombre de casiers où la révocation a été émise. Refus, dans cet
+    ordre : `NotJoined` ; `NotFound` pour l'appareil du poste, un appareil inconnu du poste ou
+    d'un autre membre ; `AlreadyRevoked` si l'appareil est déjà révoqué (registre local ou
+    casier tenu ici) ; `Forbidden` si le poste n'a pas la clé du membre (pas un appareil de
+    certification) ; `KeyLogRejected` si le registre est suspect ; `Unsupported` si aucun
+    casier tenu ici ne porte l'appareil (rien n'est signé : le noyau ne tient pas de casier
+    personnel sur le serveur) ; `LockerFrozen` si tous les casiers porteurs sont gelés (un
+    casier gelé parmi d'autres est laissé de côté).
 
 Une opération réseau qui a déjà émis puis perd la connexion garde l'opération dans la réplique
 et l'annexe : elle part à la synchronisation suivante (« à envoyer » de `ServerStatus`).
@@ -718,6 +733,7 @@ casiers partagés, sans changer leurs messages :
 | 46 | `Forbidden` | Le rôle du membre ne permet pas l'action, ou elle exige un quorum | — |
 | 47 | `UnknownMember` | Membre inconnu de l'annuaire du serveur | — |
 | 48 | `KeyLogRejected` | Preuve d'inscription absente ou invalide pour la clé reçue | — |
+| 49 | `AlreadyRevoked` | Appareil déjà révoqué (ADR 0059) | — |
 | 90 | `ApprovalInvalid` | Accord ou demande refusé : mal formé, signature fausse, approbateur non `Owner`, cible ou initiateur, déjà compté, autre demande | — |
 | 91 | `QuorumNotMet` | Les accords recueillis ne suffisent pas | `{1: comptés uint, 2: requis uint}` |
 | 92 | `LockerFrozen` | Casier gelé : une révocation annoncée n'a pas été reçue | — |
@@ -726,9 +742,9 @@ casiers partagés, sans changer leurs messages :
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
 
-**Compatibilité** (ADR 0041, 0044 à 0046) : la clé 9 de l'état d'un casier, la clé 4 de
-l'alerte, la clé 5 de `LockerMembers`, la clé 4 de `ServerJoin` et les opérations 90 à 98
-étendent aussi la version 4. Les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
+**Compatibilité** (ADR 0041, 0044 à 0046, 0059) : la clé 9 de l'état d'un casier, la clé 4 de
+l'alerte, la clé 5 de `LockerMembers`, la clé 4 de `ServerJoin`, les opérations 90 à 98,
+l'opération 49 et l'erreur 49 étendent aussi la version 4. Les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
 étendent la version 4 sans changer son numéro. Un client v4 strict antérieur refuserait ces
 réponses ; la ligne de commande, l'application de poste et le noyau sont livrés ensemble, et
 aucun autre client de la version 4 n'existe.
@@ -757,13 +773,15 @@ aucun autre client de la version 4 n'existe.
 | `accord annuler ID` | `QuorumCancel` |
 | `quarantaine CASIER` | `QuarantineList` |
 | `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
+| `appareil revoquer APPAREIL [--oui]` | `DeviceRevoke` (sans `--oui`, confirmation « oui » au terminal ; sans terminal, `--oui` exigé) |
 
 `CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
 identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; `ROLE`, l'un de
 `proprietaire`, `gestionnaire`, `editeur`, `lecteur`, `sans-divulgation`, `auditeur`.
 `DEMANDE`, `ACCORD` et `LIEN` sont le texte lui-même, ou `@FICHIER` pour le lire dans un fichier ;
 `ID`, au moins 4 chiffres hexadécimaux du début du `request_id` ; `OP`, au moins 8 chiffres
-hexadécimaux du début de l'`op_id`.
+hexadécimaux du début de l'`op_id` ; `APPAREIL`, l'identifiant de l'appareil en hexadécimal
+(32 chiffres).
 
 ### 15.7 Points ouverts
 
@@ -775,10 +793,12 @@ hexadécimaux du début de l'`op_id`.
    partagés : à spécifier dans une version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
-5. Pas de révocation d'appareil depuis une alerte : seule la clé du membre signe une
-   révocation d'appareil (`roles.md`), le noyau n'a pas de chemin pour la publier. Proposition
-   (opération 49 `DeviceRevoke` pour ses propres appareils, retrait du membre depuis une
-   opération en quarantaine) : ADR 0059, proposé, non implémenté.
+5. Révocation d'appareil (ADR 0059) : seulement ses propres appareils (`DeviceRevoke`, seule
+   la clé du membre signe une révocation, `roles.md`), et seulement dans les casiers tenus ici
+   où l'appareil figure ; un appareil sans casier porteur ne peut pas encore être révoqué
+   (`Unsupported`). Pour l'appareil d'un autre membre, un `Owner` retire le membre du casier
+   (`RoleRevoke`). Une exclusion d'appareil signée par un `Owner` est reportée à un ADR
+   ultérieur.
 
 ### 15.8 Accords et quarantaine (opérations 90 à 98)
 

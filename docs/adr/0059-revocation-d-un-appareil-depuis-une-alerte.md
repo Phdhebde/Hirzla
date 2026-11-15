@@ -1,6 +1,6 @@
 # ADR 0059 — Révoquer un appareil depuis une alerte de sécurité, en mode Serveur
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur ; parties 1 et 2, la partie 3 est reportée)
 - Date : 2026-11-15
 
 ## Contexte
@@ -48,75 +48,118 @@ Il y a donc deux besoins distincts, de natures différentes :
   que le retrait du membre entier.
 
 Ce choix touche au modèle de rôles (qui peut retirer un appareil) et, selon l'option, au
-protocole de synchronisation et au format : il n'est tranché par aucun ADR. D'où cet ADR
-proposé, sans implémentation (`CLAUDE.md`, « Quand t'arrêter et demander »).
+protocole de synchronisation et au format : il n'était tranché par aucun ADR. Cet ADR a donc
+d'abord été proposé sans implémentation (`CLAUDE.md`, « Quand t'arrêter et demander ») ; le
+mainteneur a accepté les parties 1 et 2, qui ne changent ni le protocole ni les rôles, et
+reporté la partie 3 à un ADR ultérieur.
 
-## Décision (proposée)
+## Décision
 
-À trancher par le mainteneur. Proposition en deux parties, la première sans changement de
-protocole, la seconde sans changement de protocole non plus, en renvoyant l'option qui en
-exige un à un ADR ultérieur.
+Deux parties sans changement de protocole, de format ni de rôles ; la troisième, qui en
+exigerait, est reportée.
 
 ### 1. Opération 49 `DeviceRevoke` : révoquer son propre appareil (besoin A)
 
 Dans le profil Serveur de la v4 (dernier code libre de la plage 40 à 49 ; 99 reste réservé
-dans la plage de gouvernance).
+dans la plage de gouvernance). Spécifiée dans `api-locale.md` § 15.3, détail 10.
 
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 49 | `DeviceRevoke` | oui | `{1: appareil bstr(16)}` | `{1: casiers uint}` (casiers où la `DeviceRemove` a été émise) |
 
-- Le noyau ne révoque qu'un appareil **de son propre membre**, présent au registre (entrée
-  kind 2) ou dans le casier personnel, autre que l'appareil du poste.
-- Il fait signer la `DeviceRevocation` par la clé du membre **à l'intérieur de
-  `hirzla-vault`** (nouvelle méthode du coffre qui rend la révocation signée, jamais la clé),
-  émet la `DeviceRemove` dans le casier personnel puis dans chaque casier partagé où le
-  membre a un rôle (`Replica::device_remove`, nouvelle époque), et pousse. `hirzlad` inscrit
-  l'entrée kind 3 à la réception (`transparence.md` § 5.1) et refuse ensuite les sessions de
-  l'appareil (§ 9.7, dernier alinéa) : il n'apprend rien qu'il ne sache déjà.
-- Refus :
+- Le noyau ne révoque qu'un appareil **de son propre membre**, connu du poste (entrée kind 2
+  du registre local, ou appareil présent dans un casier tenu ici), autre que l'appareil du
+  poste.
+- La `DeviceRevocation` est signée par la clé du membre **à l'intérieur de `hirzla-vault`** :
+  `Vault::sign_device_revocation(appareil, heure)` construit lui-même le corps (clés 1 à 3 de
+  `format.md` § 3.6, membre du coffre, jamais l'appareil du poste) et ne rend que la
+  signature ; la clé ne sort pas du coffre, et rien d'autre ne peut être signé par ce chemin.
+- Le noyau émet la `DeviceRemove` (`Replica::device_remove`, nouvelle époque pour les
+  lecteurs restants) dans chaque casier tenu ici que le serveur sert encore, où le membre a un
+  rôle et où l'appareil est actif, puis la pousse. `hirzlad` inscrit l'entrée kind 3 à la
+  première qu'il accepte (`transparence.md` § 5.1) et refuse ensuite les sessions de
+  l'appareil : il n'apprend rien qu'il ne sache déjà (les corps de contrôle sont en clair pour
+  lui, `sync-protocol.md` § 12).
+- La révocation émise ici est déclarée attendue au registre local avant l'envoi
+  (`KeyLogMonitor::expect_own`), et le registre est relu dans la même session : son
+  inscription ne lève pas l'alerte 3 « révocation inconnue ».
+- Refus, dans cet ordre :
+  - aucun serveur rattaché : `NotJoined` ;
+  - appareil du poste, appareil inconnu du poste ou d'un autre membre : `NotFound` ;
+  - appareil déjà révoqué (entrée kind 3 au registre local, ou révocation acceptée dans un
+    casier tenu ici) : nouvelle erreur **`AlreadyRevoked`** (49) ;
   - poste qui n'est pas un appareil de certification (pas de clé privée du membre dans le
-    coffre) : `Forbidden` ; l'interface dit de le faire depuis un appareil de certification ;
-  - appareil inconnu, d'un autre membre, ou appareil du poste : `NotFound` ;
-  - appareil déjà révoqué (entrée kind 3 au registre ou `DeviceRemove` déjà acceptée dans le
-    casier personnel) : nouvelle erreur **`AlreadyRevoked`** (49) ;
-  - casier gelé (ADR 0045) : la `DeviceRemove` de ce casier est différée, pas refusée (elle
-    n'enveloppe rien pour un membre retiré) — point à confirmer ;
-  - registre suspect : `KeyLogRejected` (aucune enveloppe pour un tiers).
-- Ligne de commande : `hirzla appareil revoquer APPAREIL [--oui]`, avec rappel de l'empreinte
-  de l'appareil et confirmation explicite (« La révocation est définitive. »).
-- Application : sur l'alerte 2 du bandeau du registre, bouton « Révoquer cet appareil »,
-  fenêtre de confirmation qui montre l'identifiant de l'appareil et dit que la révocation est
-  définitive et fait tourner la clé de chaque casier.
-- Tests négatifs : poste sans clé de membre, appareil d'un autre membre, appareil du poste,
-  appareil inconnu, appareil déjà révoqué ; `Debug` des nouvelles requêtes et réponses
-  couvert par `crates/hirzla-core/tests/debug_policy.rs`.
+    coffre) : `Forbidden` ;
+  - registre suspect : `KeyLogRejected` (aucune enveloppe pour un tiers) ;
+  - aucun casier tenu ici où l'appareil est actif : `Unsupported` (voir point 4) ;
+  - tous ces casiers gelés (ADR 0045) : `LockerFrozen`. Un casier gelé parmi d'autres est
+    laissé de côté ; le résultat compte les casiers où la révocation a été émise.
+- Ligne de commande : `hirzla appareil revoquer APPAREIL [--oui]`. Sans `--oui`, le texte de
+  confirmation est écrit sur la sortie d'erreur et seule la réponse « oui » au terminal
+  confirme ; sans terminal, `--oui` est exigé.
+- Application : sur l'alerte 2 de la carte « Registre des clés », bouton « Révoquer cet
+  appareil », puis fenêtre de confirmation qui montre le début de l'identifiant de l'appareil
+  et dit que la révocation est signée par la clé du membre, définitive, et fait tourner la clé
+  de chaque casier où il figure.
 
 ### 2. Depuis une opération en quarantaine : retirer le membre du casier (besoin B)
 
-Pour l'appareil d'un autre membre, l'application et la ligne de commande proposent, sur la
-ligne de l'opération en quarantaine, l'action existante **« Retirer ce membre du casier »**
-(`RoleRevoke`, 47, mêmes refus : `Forbidden`, quorum par `QuorumPrepare` si la cible est un
-`Owner` plus ancien, `LockerFrozen`), avec une confirmation qui dit qu'elle retire **tous** les
-appareils du membre de ce casier, et le conseil de prévenir le membre pour qu'il révoque
-l'appareil lui-même (partie 1). Aucune opération nouvelle de l'API, aucun changement de
-protocole ni de rôles.
+Pour l'appareil d'un autre membre, la fenêtre « Quarantaine » de l'application propose, sur
+chaque ligne et au seul `Owner` (« peut décider »), l'action existante **« Retirer ce membre du
+casier »** (`RoleRevoke`, 47, mêmes refus : `Forbidden`, quorum si la cible est un `Owner` plus
+ancien, `LockerFrozen`). Jamais pour le membre courant. La confirmation dit qu'elle retire
+**tous** les appareils du membre de ce casier, dont la clé tourne, rappelle de changer les mots
+de passe sensibles, et conseille de demander au membre de révoquer lui-même l'appareil en cause
+(partie 1). `hirzla quarantaine CASIER` affiche, pour un `Owner`, la commande
+`hirzla casier retirer CASIER MEMBRE` de chaque auteur. Aucune opération nouvelle de l'API.
 
-### 3. Hors de cet ADR
+### 3. Reportée
 
 Une vraie révocation d'appareil par un `Owner` (nouvelle opération de contrôle « exclusion
 d'un appareil d'un casier », signée par l'appareil de l'`Owner`) change `sync-protocol.md`
 (§ 7.2, § 7.3, § 9.4, § 11.8), `roles.md`, le format (nouveau `kind`) et les contrôles de
-`hirzlad`. Elle demanderait son propre ADR, avec ses règles d'ancienneté et de quorum, et son
+`hirzlad`. Elle demandera son propre ADR, avec ses règles d'ancienneté et de quorum, et son
 articulation avec la révocation définitive et monotone du § 9.7.
+
+### 4. Décisions prises pendant l'implémentation, à confirmer
+
+- **Casiers porteurs.** Une `DeviceRemove` n'est valide que dans un casier où l'appareil est
+  présent (`hirzla-access`, § 9.7 : sinon `Denial::DeviceCert`, refusée aussi par `hirzlad`).
+  Le noyau ne l'émet donc que là. En mode Serveur, le noyau ne tient pas de casier personnel
+  sur le serveur : un appareil inconnu qui ne figure encore dans aucun casier tenu ici n'a pas
+  de porteur, et la demande est refusée (`Unsupported`) sans rien signer. L'appareil n'a alors
+  aucune clé de casier ; mais un `Grant` ultérieur l'enveloppera, puisque `GetMemberKeys` le
+  liste. Publier la révocation dans le casier personnel sur le serveur, ou directement au
+  registre, reste à spécifier.
+- **Casier gelé** : laissé de côté plutôt que différé (une révocation différée demanderait de
+  la garder dans l'annexe, donc un changement de format).
+- **Redémarrage avant l'envoi.** L'attente déclarée au registre local n'est pas gardée dans
+  l'annexe : si le noyau redémarre entre l'émission et l'inscription (connexion perdue), la
+  révocation part à la synchronisation suivante et son inscription lève l'alerte 3 sur ce
+  poste. L'alerte désigne alors une révocation faite par le membre lui-même.
+- **Second appareil dans les tests.** L'enrôlement d'un second appareil n'est pas spécifié
+  (`api-locale.md` § 15.7) : le test de bout en bout certifie un appareil par
+  `Vault::certify_device_for_tests`, derrière la fonctionnalité `test-support` de
+  `hirzla-vault`, jamais activée dans un binaire livré.
+
+### 5. Tests
+
+`crates/hirzla-core/tests/server_mode.rs`, `an_unknown_device_is_revoked_from_its_alert` :
+un appareil certifié par la clé d'Alice ouvre une session (alerte 2 chez Alice), reçoit une
+enveloppe quand Bob lui partage un casier ; Alice le révoque, la clé du casier tourne, Bob ne
+compte plus qu'un appareil d'Alice, le serveur refuse les sessions de l'appareil révoqué, Alice
+lit ce que Bob écrit ensuite. Refus : appareil du poste, appareil inconnu, appareil d'Alice
+demandé par Bob (non titulaire de la clé), appareil sans casier porteur, appareil déjà révoqué
+(aussi après redémarrage). `hirzla-vault` : signature vérifiée par la clé du membre, refus de
+l'appareil du poste et d'un poste sans clé de membre. Codage strict de l'opération 49 et de
+l'erreur 49, `Debug` des nouvelles requêtes et réponses limité au nom de la variante.
 
 ## Conséquences
 
 - Partie 1 : la réponse attendue à l'alerte « appareil inconnu inscrit à votre nom » devient
   une action, sans nouvelle primitive (signature hybride existante de la clé du membre) ; la
-  clé du membre est utilisée pour la première fois par le noyau en mode Serveur, ce qui
-  demande une méthode de signature dans `hirzla-vault` et un test qui prouve qu'elle n'en sort
-  pas.
+  clé du membre sert pour la première fois au noyau en mode Serveur, par une méthode du coffre
+  qui ne la rend jamais.
 - Partie 1 : seul un appareil de certification peut répondre ; un membre qui n'en a plus
   attend la récupération (étape 10).
 - Partie 2 : l'`Owner` agit sans attendre le membre, au prix du retrait du membre entier du
@@ -126,7 +169,7 @@ articulation avec la révocation définitive et monotone du § 9.7.
 ## Alternatives écartées
 
 - **Faire signer la révocation par l'`Owner`** : la `DeviceRevocation` serait rejetée par
-  tous les postes (§ 9.4) ; l'accepter serait la partie 3, un changement de protocole.
+  tous les postes (§ 9.4) ; l'accepter serait la partie 3, un changement de protocole, reporté.
 - **Blocage de l'appareil par l'administrateur du serveur** (`hirzlad admin`) : le serveur
   n'est pas de confiance (ADR 0003) ; refuser les sessions d'un appareil ne lui retire ni les
   clés de casier qu'il détient ni les époques suivantes sans rotation, et donnerait à
