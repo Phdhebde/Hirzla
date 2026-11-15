@@ -1,6 +1,6 @@
 # ADR 0040 — Persistance du mode Serveur : registre local, passé élagué, compaction stable
 
-- Statut : accepté (recommandation de l'auteur, mise en œuvre dans ce lot ; à confirmer par le mainteneur)
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
