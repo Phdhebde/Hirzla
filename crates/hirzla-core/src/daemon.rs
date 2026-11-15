@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use hirzla_keystore::platform::{self, HardeningReport};
 use zeroize::Zeroizing;
 
-use crate::auth::{authorize_client, AllowList};
+use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::events::{Event, Log, Refusal};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
@@ -44,12 +44,15 @@ pub struct Options {
     pub log: Option<PathBuf>,
     /// Allowed client executables; the default list when absent.
     pub allow: Option<Vec<PathBuf>>,
+    /// Executables given the browser profile (`docs/api-locale.md` § 3.1); the native host
+    /// next to the core when absent and `allow` is absent, none when only `allow` is given.
+    pub allow_browser: Option<Vec<PathBuf>>,
     /// Automatic lock delay overriding the vault's setting.
     pub auto_lock: Option<Duration>,
 }
 
 const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
-[--allow-exe EXÉCUTABLE]... [--auto-lock SECONDES]";
+[--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES]";
 
 /// The default vault file: `$XDG_DATA_HOME/hirzla/coffre.hirzla` (or
 /// `~/.local/share/hirzla/…`) on Linux, `~/Library/Application Support/Hirzla/coffre.hirzla`
@@ -83,6 +86,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
+    let mut allow_browser: Option<Vec<PathBuf>> = None;
     let mut auto_lock = None;
     let mut it = args.into_iter();
     while let Some(arg) = it.next() {
@@ -97,6 +101,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             Some("--allow-exe") => allow
                 .get_or_insert_with(Vec::new)
                 .push(PathBuf::from(value("--allow-exe")?)),
+            Some("--allow-browser-exe") => allow_browser
+                .get_or_insert_with(Vec::new)
+                .push(PathBuf::from(value("--allow-browser-exe")?)),
             Some("--auto-lock") => {
                 let v = value("--auto-lock")?;
                 let s: u64 = v
@@ -125,6 +132,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         vault,
         log,
         allow,
+        allow_browser,
         auto_lock,
     })
 }
@@ -189,13 +197,18 @@ fn cleanup(endpoint: &Endpoint) {
 /// # Errors
 /// A message for the user, in French, if the endpoint cannot be opened.
 pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Result<(), String> {
+    let me = || {
+        std::env::current_exe()
+            .map_err(|_| "impossible de déterminer l'exécutable du noyau.".to_owned())
+    };
     let allow = match &options.allow {
         Some(list) => AllowList::new(list.iter().cloned()),
-        None => {
-            let me = std::env::current_exe()
-                .map_err(|_| "impossible de déterminer l'exécutable du noyau.".to_owned())?;
-            AllowList::default_for(&me)
-        }
+        None => AllowList::default_for(&me()?),
+    };
+    let browser = match (&options.allow_browser, &options.allow) {
+        (Some(list), _) => AllowList::new(list.iter().cloned()),
+        (None, Some(_)) => AllowList::new([]),
+        (None, None) => AllowList::browser_default_for(&me()?),
     };
     let mut listener = Listener::bind(&options.endpoint).map_err(|e| match e {
         crate::transport::TransportError::InUse => {
@@ -241,14 +254,17 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 continue;
             }
         };
-        if let Err(reason) = authorize_client(&peer, &allow) {
-            log.record(Event::ConnectionRefused {
-                pid: peer.pid,
-                reason,
-            });
-            spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
-            continue;
-        }
+        let profile = match authorize_client_profile(&peer, &allow, &browser) {
+            Ok(p) => p,
+            Err(reason) => {
+                log.record(Event::ConnectionRefused {
+                    pid: peer.pid,
+                    reason,
+                });
+                spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
+                continue;
+            }
+        };
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
             log.record(Event::ConnectionRefused {
@@ -264,7 +280,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         let active = Arc::clone(&active);
         let endpoint = Arc::clone(&endpoint);
         std::thread::spawn(move || {
-            serve(conn, &core, &log, &endpoint);
+            serve(conn, &core, &log, &endpoint, profile);
             active.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -302,7 +318,13 @@ fn refuse(mut conn: Connection, code: ErrorCode) {
     conn.finish();
 }
 
-fn serve(mut conn: Connection, core: &Mutex<Core>, log: &Log, endpoint: &Endpoint) {
+fn serve(
+    mut conn: Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    endpoint: &Endpoint,
+    profile: ClientProfile,
+) {
     let _ = conn.set_read_timeout(Some(IDLE_TIMEOUT));
     loop {
         let frame = match read_frame(&mut conn) {
@@ -316,22 +338,30 @@ fn serve(mut conn: Connection, core: &Mutex<Core>, log: &Log, endpoint: &Endpoin
             }
             Err(FrameError::Closed | FrameError::Io(_)) => break,
         };
-        let (id, result, shutdown) = match Request::decode(&frame) {
-            Ok((id, request)) => {
+        let (id, version, result, shutdown) = match Request::decode_versioned(&frame) {
+            Ok((id, version, request)) if !profile.permits(&request) => {
+                let code = ErrorCode::Unauthorized;
+                log.record(Event::Request {
+                    op: request.op(),
+                    error: Some(code),
+                });
+                (id, version, Err(ErrorReply::new(code)), false)
+            }
+            Ok((id, version, request)) => {
                 let shutdown = request.op() == Op::Shutdown;
                 let result = core
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .handle(request);
                 let ok = result.is_ok();
-                (id, result, shutdown && ok)
+                (id, version, result, shutdown && ok)
             }
-            Err((id, code)) => {
+            Err((id, version, code)) => {
                 log.record(Event::BadMessage);
-                (id, Err(ErrorReply::new(code)), false)
+                (id, version, Err(ErrorReply::new(code)), false)
             }
         };
-        let Ok(body) = Reply::encode(id, &result) else {
+        let Ok(body) = Reply::encode_versioned(version, id, &result) else {
             break;
         };
         drop(result);
@@ -371,6 +401,8 @@ mod tests {
             "/a",
             "--allow-exe",
             "/b",
+            "--allow-browser-exe",
+            "/c",
             "--auto-lock",
             "5",
         ]))
@@ -378,6 +410,7 @@ mod tests {
         assert_eq!(o.endpoint.display(), "/tmp/x/core.sock");
         assert_eq!(o.vault, PathBuf::from("/tmp/v.hirzla"));
         assert_eq!(o.allow.unwrap().len(), 2);
+        assert_eq!(o.allow_browser.unwrap(), vec![PathBuf::from("/c")]);
         assert_eq!(o.auto_lock, Some(Duration::from_secs(5)));
     }
 

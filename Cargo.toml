@@ -9,6 +9,7 @@ members = [
     "crates/hirzla-audit",
     "crates/hirzla-core",
     "apps/cli",
+    "apps/native-host",
     "apps/server",
 ]
 # Fuzz targets live outside the workspace (nightly, cargo-fuzz).

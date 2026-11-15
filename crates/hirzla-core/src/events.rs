@@ -228,7 +228,7 @@ mod tests {
         ] {
             events.push(Event::Locked { reason });
         }
-        for n in 1..=11 {
+        for n in 1..=13 {
             let op = Op::from_u64(n).unwrap_or(Op::Status);
             events.push(Event::Request { op, error: None });
             for c in 1..=17 {

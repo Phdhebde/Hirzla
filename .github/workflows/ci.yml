@@ -118,6 +118,38 @@ jobs:
           cargo test -p hirzla-keystore --test tpm2_prototype --
           --ignored --nocapture --test-threads=1
 
+  # Browser extension (step 8): unit tests of its decisions, then the real extension in
+  # Chromium (Playwright, new headless mode) against the real native host and core.
+  extension:
+    name: browser extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/extension
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
+      - name: tpm2-tss
+        working-directory: .
+        run: sudo -E .github/scripts/install-tpm2-tss.sh
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dependencies (locked)
+        run: npm ci --ignore-scripts
+      - name: Unit tests
+        run: npm test
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Core, command line and native host
+        working-directory: .
+        run: cargo build -p hirzla-core -p hirzla-cli -p hirzla-native-host
+      - name: End-to-end tests
+        run: npm run test:e2e
+
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest

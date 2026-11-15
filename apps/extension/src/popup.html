@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hirzla</title>
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="popup.js"></script>
+  </head>
+  <body>
+    <header>
+      <img src="icons/hirzla-32.png" alt="" width="20" height="20" />
+      <span class="brand">HIRZLA</span>
+      <button id="lock" type="button" class="link" hidden>Verrouiller</button>
+    </header>
+
+    <main>
+      <p id="site" class="site" hidden><span class="label">Site</span> <code id="origin"></code></p>
+      <p id="message" class="message" role="status" hidden></p>
+
+      <section id="logins" hidden>
+        <h2>Identifiants pour ce site</h2>
+        <ul id="entries"></ul>
+        <p id="truncated" class="hint" hidden>D’autres identifiants existent : utilisez l’application.</p>
+      </section>
+
+      <section id="actions" hidden>
+        <button id="propose" type="button">Enregistrer l’identifiant saisi</button>
+      </section>
+
+      <form id="save" hidden>
+        <h2>Nouvel identifiant</h2>
+        <label>Titre <input id="save-title" type="text" maxlength="512" autocomplete="off" /></label>
+        <label>Identifiant <input id="save-username" type="text" maxlength="1024" autocomplete="off" /></label>
+        <p class="hint">Le mot de passe saisi dans la page sera enregistré pour <code id="save-origin"></code> uniquement.</p>
+        <div class="row">
+          <button type="submit">Enregistrer</button>
+          <button id="save-cancel" type="button" class="secondary">Annuler</button>
+        </div>
+      </form>
+
+      <section id="generator">
+        <h2>Générateur</h2>
+        <div class="row">
+          <label class="inline">Longueur <input id="gen-length" type="number" min="8" max="128" value="20" /></label>
+          <label class="inline"><input id="gen-symbols" type="checkbox" checked /> Symboles</label>
+          <button id="gen" type="button">Générer</button>
+        </div>
+        <p id="gen-output" class="secret" hidden><code id="gen-value"></code></p>
+        <button id="gen-use" type="button" hidden>Utiliser sur cette page</button>
+      </section>
+    </main>
+  </body>
+</html>

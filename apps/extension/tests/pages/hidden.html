@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Champ caché</title>
+  <style>
+    /* One variant per page, chosen by the class of <body> (set by the test route). */
+    .display #pass { display: none; }
+    .visibility #pass { visibility: hidden; }
+    .opacity #pass { opacity: 0; }
+    .faint #pass { opacity: 0.2; }
+    .offscreen #pass { position: absolute; left: -10000px; top: -10000px; }
+    .tiny #pass { width: 1px; height: 1px; padding: 0; border: 0; }
+    .clip #pass { position: absolute; clip-path: inset(50%); }
+    .parent #box { display: none; }
+    .parent-opacity #box { opacity: 0.1; }
+    .covered #wrap { position: relative; }
+    .covered #cover { position: absolute; inset: 0; background: #fff; }
+  </style>
+</head>
+<body class="__VARIANT__">
+  <!-- Served at the registered origin (https://bank.test/hidden/<variant>). The password
+       field exists but the user cannot see or reach it: the fill must be refused. -->
+  <form id="login" action="#">
+    <label>Identifiant <input id="user" type="text" autocomplete="username"></label>
+    <div id="box"><div id="wrap"><input id="pass" type="password"><div id="cover"></div></div></div>
+  </form>
+</body>
+</html>
