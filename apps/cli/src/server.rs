@@ -3,7 +3,7 @@
 //! every key; this module only formats requests and replies.
 
 use hirzla_core::client::Client;
-use hirzla_core::proto::{ErrorReply, LockerEntry, Reply, Request};
+use hirzla_core::proto::{ErrorCode, ErrorReply, LockerEntry, Reply, Request};
 use hirzla_core::server_mode::proto::{
     normalise_fingerprint, AlertKind, KeyLogStatus, QuarantinedOp, QuorumAction, QuorumState, Role,
     ServerCode, ServerReply, ServerRequest, SuspectReason,
@@ -11,7 +11,9 @@ use hirzla_core::server_mode::proto::{
 use hirzla_vault::model::{Id16, OpId};
 use zeroize::Zeroizing;
 
-use crate::args::{LockerCommand, QuarantineCommand, QuorumCommand, QuorumWhat, ServerCommand};
+use crate::args::{
+    DeviceRevokeCommand, LockerCommand, QuarantineCommand, QuorumCommand, QuorumWhat, ServerCommand,
+};
 use crate::{client_message, hex, refusal_message, say, Session};
 
 fn server_message(code: ServerCode) -> String {
@@ -56,6 +58,7 @@ fn server_message(code: ServerCode) -> String {
         ServerCode::InvitationInvalid => "lien d'invitation non valide ou altéré : demandez-le \
              à nouveau à l'administrateur du serveur."
             .into(),
+        ServerCode::AlreadyRevoked => "cet appareil est déjà révoqué.".into(),
     }
 }
 
@@ -130,7 +133,15 @@ fn role_by_name(name: &str) -> Result<Role, String> {
 }
 
 fn member_arg(typed: &str) -> Result<Id16, String> {
-    let bad = || "MEMBRE : identifiant de 32 chiffres hexadécimaux attendu.".to_owned();
+    id_arg(typed, "MEMBRE")
+}
+
+fn device_arg(typed: &str) -> Result<Id16, String> {
+    id_arg(typed, "APPAREIL")
+}
+
+fn id_arg(typed: &str, what: &str) -> Result<Id16, String> {
+    let bad = || format!("{what} : identifiant de 32 chiffres hexadécimaux attendu.");
     if typed.len() != 32 || !typed.is_ascii() {
         return Err(bad());
     }
@@ -382,10 +393,13 @@ fn keylog_lines(k: &KeyLogStatus) -> String {
     for a in &k.alerts {
         let what = match a.kind {
             AlertKind::ForeignMemberKey => "clé de membre usurpée".to_owned(),
-            AlertKind::UnknownOwnDevice => format!(
-                "appareil inconnu inscrit à votre nom ({})",
-                a.device.map_or_else(String::new, |d| hex(&d))
-            ),
+            AlertKind::UnknownOwnDevice => {
+                let d = a.device.map_or_else(String::new, |d| hex(&d));
+                format!(
+                    "appareil inconnu inscrit à votre nom ({d}) ; si vous ne le reconnaissez \
+                     pas : « hirzla appareil revoquer {d} », depuis un appareil de certification"
+                )
+            }
             AlertKind::UnknownOwnRevocation => format!(
                 "révocation inconnue ({})",
                 a.device.map_or_else(String::new, |d| hex(&d))
@@ -514,6 +528,74 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
             Ok(())
         }
     }
+}
+
+/// `appareil revoquer APPAREIL [--oui]` (ADR 0059): the member key of this device signs
+/// the revocation, published in every locker where the device appears.
+pub fn run_device_revoke(
+    session: &Session<'_>,
+    command: &DeviceRevokeCommand,
+) -> Result<(), String> {
+    let device = device_arg(&command.device)?;
+    if !command.yes {
+        if !crate::term::interactive() {
+            return Err("la révocation est définitive : confirmez-la avec --oui.".into());
+        }
+        note(&format!(
+            "L'appareil {} ne pourra plus lire les nouvelles versions de vos casiers. La \
+             révocation est signée par votre clé de membre, publiée dans chaque casier où il \
+             figure, dont la clé tourne. Elle est définitive.",
+            hex(&device)
+        ));
+        if !confirm("Révoquer cet appareil ? Tapez « oui » pour confirmer : ")? {
+            say("Révocation abandonnée.");
+            return Ok(());
+        }
+    }
+    let mut c = session.connect(false)?;
+    let reply = match c.call_server(&ServerRequest::DeviceRevoke { device }) {
+        Ok(Ok(r)) => r,
+        Ok(Err(code)) => return Err(device_revoke_message(code)),
+        Err(e) => return Err(client_message(&e)),
+    };
+    let ServerReply::DeviceRevoked { lockers } = reply else {
+        return bad_reply();
+    };
+    say(&format!(
+        "Appareil révoqué dans {lockers} casier(s). Leur clé a tourné. Ce qu'il a déjà pu lire, \
+         il a pu le copier : changez les mots de passe sensibles sur leurs cibles."
+    ));
+    Ok(())
+}
+
+/// Refusals of `DeviceRevoke` that mean something else than for the locker operations.
+fn device_revoke_message(code: ServerCode) -> String {
+    match code {
+        ServerCode::Forbidden => "ce poste ne détient pas votre clé de membre : révoquez \
+             l'appareil depuis un appareil de certification."
+            .into(),
+        ServerCode::General(ErrorCode::Unsupported) => "cet appareil ne figure dans aucun de \
+             vos casiers : la révocation ne peut pas encore être publiée. Prévenez votre \
+             administrateur de sécurité."
+            .into(),
+        ServerCode::General(ErrorCode::NotFound) => {
+            "appareil introuvable sur ce poste. Synchronisez, puis réessayez.".into()
+        }
+        other => server_message(other),
+    }
+}
+
+/// Asks a question on the terminal: only « oui » confirms.
+fn confirm(prompt: &str) -> Result<bool, String> {
+    use std::io::Write;
+    let mut err = std::io::stderr();
+    let _ = write!(err, "{prompt}");
+    let _ = err.flush();
+    let mut line = String::new();
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|_| "lecture du terminal impossible.".to_owned())?;
+    Ok(line.trim().eq_ignore_ascii_case("oui"))
 }
 
 fn action_line(
@@ -775,6 +857,22 @@ pub fn run_quarantine(session: &Session<'_>, command: &QuarantineCommand) -> Res
             }
             if !ops.is_empty() && !can_decide {
                 say("Seul un propriétaire du casier peut les accepter ou les rejeter.");
+            }
+            if can_decide {
+                // ADR 0059, part 2: the only removal an owner signs for another member's
+                // device is the removal of the member (all its devices) from the locker.
+                let mut authors: Vec<Id16> = ops.iter().map(|o| o.member).collect();
+                authors.sort_unstable();
+                authors.dedup();
+                for m in authors {
+                    say(&format!(
+                        "Retirer l'auteur {} du casier (tous ses appareils ; la clé tourne) : \
+                         hirzla casier retirer {} {}",
+                        hex(&m[..4]),
+                        command.locker,
+                        hex(&m)
+                    ));
+                }
             }
             Ok(())
         }

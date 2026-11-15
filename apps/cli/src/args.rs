@@ -72,6 +72,10 @@ Mode Serveur :
   quarantaine CASIER [accepter|rejeter OP…]
                           Opérations en quarantaine d'un casier ; les accepte ou les
                           rejette (propriétaires).
+  appareil revoquer APPAREIL [--oui]
+                          Révoque un autre appareil inscrit à votre nom (alerte « appareil
+                          inconnu »), depuis un appareil de certification. Définitif.
+                          --oui : sans demande de confirmation.
   stop                    Verrouille le coffre et arrête le noyau.
 
 Mises à jour hors ligne (sans réseau ni noyau) :
@@ -95,7 +99,8 @@ CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexad
 moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
 DEMANDE, ACCORD, LIEN : le texte lui-même, ou @FICHIER. ID : début de l'identifiant de la
 demande (4 chiffres hexadécimaux au moins). OP : début de l'identifiant d'une opération
-(8 chiffres hexadécimaux au moins).";
+(8 chiffres hexadécimaux au moins). APPAREIL : identifiant de l'appareil (32 chiffres
+hexadécimaux).";
 
 /// A command of the server mode (`docs/api-locale.md` § 15.6).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +150,14 @@ pub struct QuarantineCommand {
     pub locker: String,
     /// `Some((accept, ops))` to decide.
     pub decide: Option<(bool, Vec<String>)>,
+}
+
+/// `appareil revoquer APPAREIL [--oui]` (ADR 0059).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceRevokeCommand {
+    pub device: String,
+    /// Confirmed on the command line: no question asked.
+    pub yes: bool,
 }
 
 /// A command on shared lockers (`docs/api-locale.md` § 15.6).
@@ -243,6 +256,7 @@ pub enum Command {
     Locker(LockerCommand),
     Quorum(QuorumCommand),
     Quarantine(QuarantineCommand),
+    DeviceRevoke(DeviceRevokeCommand),
     Update(UpdateCommand),
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
@@ -354,6 +368,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte"],
+        "appareil" => &["--oui"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
         "history" => &["--id", "--version", "--champ", "--stdout"],
@@ -783,6 +798,22 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             };
             Command::Quarantine(QuarantineCommand { locker, decide })
         }
+        "appareil" => {
+            max_positional(2)?;
+            match positional.first().map(String::as_str) {
+                Some("revoquer") => Command::DeviceRevoke(DeviceRevokeCommand {
+                    device: positional.get(1).cloned().ok_or_else(|| {
+                        "« appareil revoquer » attend l'identifiant de l'APPAREIL.".to_owned()
+                    })?,
+                    yes: has("--oui"),
+                }),
+                _ => {
+                    return Err(format!(
+                        "sous-commande de « appareil » inconnue.\n\n{USAGE}"
+                    ))
+                }
+            }
+        }
         "mise-a-jour" => {
             max_positional(2)?;
             let usage = "« mise-a-jour » attend verifier FICHIER ou appliquer FICHIER.";
@@ -987,6 +1018,30 @@ mod tests {
         ] {
             assert!(p(bad).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn parses_device_revocation() {
+        let d = "ab".repeat(16);
+        assert_eq!(
+            p(&["appareil", "revoquer", &d]).unwrap().command,
+            Command::DeviceRevoke(DeviceRevokeCommand {
+                device: d.clone(),
+                yes: false
+            })
+        );
+        assert_eq!(
+            p(&["appareil", "revoquer", &d, "--oui"]).unwrap().command,
+            Command::DeviceRevoke(DeviceRevokeCommand {
+                device: d.clone(),
+                yes: true
+            })
+        );
+        assert!(p(&["appareil", "revoquer"]).is_err());
+        assert!(p(&["appareil", "retirer", &d]).is_err());
+        assert!(p(&["appareil", "revoquer", &d, "x"]).is_err());
+        assert!(p(&["appareil", "revoquer", &d, "--empreinte", "E"]).is_err());
+        assert!(p(&["casier", "membres", "x", "--oui"]).is_err());
     }
 
     #[test]
