@@ -1,6 +1,6 @@
 # ADR 0034 — Kit de recouvrement à quorum en mode Self
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte

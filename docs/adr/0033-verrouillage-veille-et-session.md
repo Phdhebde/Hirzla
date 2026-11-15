@@ -1,6 +1,6 @@
 # ADR 0033 — Verrouillage à la mise en veille et au verrouillage de session
 
-- Statut : proposé
+- Statut : accepté (2026-11-15, décision du mainteneur)
 - Date : 2026-11-15
 
 ## Contexte
