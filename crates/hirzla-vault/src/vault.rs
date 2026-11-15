@@ -105,6 +105,7 @@ pub struct Vault {
     device_sign: DeviceSigningKey,
     device_vk: VerifyingKey,
     shards: BTreeMap<Id16, IndexShard>,
+    settings: Settings,
 }
 
 // -----------------------------------------------------------------------------------------
@@ -449,6 +450,7 @@ impl Vault {
             device_sign,
             device_vk,
             shards: BTreeMap::new(),
+            settings: Settings::default(),
         };
         vault.create_locker_with_id(personal_locker, &options.personal_locker_name, true)?;
         Ok(vault)
@@ -537,7 +539,7 @@ impl Vault {
         // Settings must be readable.
         let settings_box: Vec<u8> =
             conn.query_row("SELECT box FROM settings WHERE id = 1", [], |r| r.get(0))?;
-        Settings::decode(&unseal_padded(
+        let settings = Settings::decode(&unseal_padded(
             &dev_wrap,
             &aad_vault("hirzla/v1/settings", &vault_id)?,
             &settings_box,
@@ -572,6 +574,7 @@ impl Vault {
             device_sign,
             device_vk,
             shards,
+            settings,
         };
         vault.refresh_index()?;
         if !vault.shards.contains_key(&vault.identity.personal_locker) {
@@ -727,6 +730,12 @@ impl Vault {
     #[must_use]
     pub fn personal_locker(&self) -> Id16 {
         self.identity.personal_locker
+    }
+
+    /// The local settings (§ 5.6), as unsealed and checked at opening.
+    #[must_use]
+    pub fn settings(&self) -> Settings {
+        self.settings
     }
 
     // -------------------------------------------------------------------------------------
