@@ -10,8 +10,17 @@
 //! This module checks, for every control operation, the rules of § 7.3, § 7.4, § 7.7, § 9.2
 //! and `roles.md` that depend on the state: author's role, seniority and quorum, approvals and
 //! their signatures, device certificates and revocations, envelopes and wrapped epochs, epoch
-//! of the operation. It does **not** verify the operation signature, the device chain, the
-//! lamport rule nor the pruning rules of a `Compact`: they belong to `hirzla-sync`.
+//! of the operation, and that the certificate under which the operation signature verified
+//! ([`ControlOp::signer`], [`DataOp::signer`]) is the one the state holds for the author
+//! device. It does **not** verify the operation signature itself, the device chain, the
+//! lamport rule nor the pruning rules of a `Compact`: they belong to `hirzla-sync`, which
+//! hands over only operations whose signature verified (`hirzla_sync::AccessAuthorizer`).
+//!
+//! Device revocations are definitive and monotone (§ 9.7): every `DeviceRemove` of the input
+//! whose revocation verifies under the member key known to the locker revokes the device in
+//! the past of every later operation, and quarantines the operations concurrent with it
+//! (§ 9.4, step 1), whether or not the `DeviceRemove` itself is accepted. Forks (§ 9.6) are
+//! quarantined from the start ([`ControlOp::forked`], [`DataOp::forked`]).
 
 mod causality;
 mod state;
@@ -47,6 +56,12 @@ pub struct ControlOp {
     pub deps: Vec<OpId>,
     /// Clear control body.
     pub body: ControlBody,
+    /// Certificate of the author device under which the operation signature verified. The
+    /// operation is accepted only if it is the certificate `S(A ∩ past(o))` holds for that
+    /// device (for a `LockerCreate`, its `creator_device`).
+    pub signer: DeviceCert,
+    /// Part of a fork of its device (§ 9.6): quarantined, never accepted.
+    pub forked: bool,
 }
 
 impl ControlOp {
@@ -114,7 +129,7 @@ pub enum DataTarget {
 }
 
 /// A data operation, after unsealing.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DataOp {
     /// `op_id`.
     pub op_id: OpId,
@@ -124,6 +139,10 @@ pub struct DataOp {
     pub epoch: OpRef,
     /// What it writes.
     pub target: DataTarget,
+    /// Certificate under which the operation signature verified (see [`ControlOp::signer`]).
+    pub signer: DeviceCert,
+    /// Part of a fork of its device (§ 9.6): quarantined until an owner decides.
+    pub forked: bool,
 }
 
 /// A member removal treated by the loop of § 9.4.
@@ -181,30 +200,44 @@ pub fn compute(ctx: &LockerContext, ops: &[ControlOp], causality: &dyn Causality
         .cloned()
         .collect();
     ops.sort_by_key(ControlOp::order);
-    let engine = Engine {
+    let mut engine = Engine {
         ctx,
         ops: &ops,
         causality,
         verified: RefCell::new(HashMap::new()),
+        removals: Vec::new(),
     };
-
-    // Step 1: device removals are definitive. The DeviceRemove operations considered are those
-    // a first replay without quarantine accepts; a DeviceRemove itself is never quarantined,
-    // so that crossed revocations add up (§ 9.7).
-    let first = engine.replay(&BTreeSet::new());
-    let device_removals: Vec<DeviceRemoval> = first
-        .accepted
+    // Forks (§ 9.6) are quarantined from the start: never authority.
+    let mut quarantine: BTreeSet<usize> = ops
         .iter()
-        .filter_map(|&i| match &ops[i].body {
-            ControlBody::DeviceRemove(d) => Some(DeviceRemoval {
-                op_id: ops[i].op_id,
-                member: d.revocation.member,
-                device: d.revocation.device,
-            }),
+        .enumerate()
+        .filter(|(_, o)| o.forked)
+        .map(|(i, _)| i)
+        .collect();
+
+    // Step 1: device removals are definitive and monotone (§ 9.7). Every DeviceRemove of the
+    // input whose revocation verifies under the member key known to the locker counts, accepted
+    // or not: the revocation is signed by the member key, whoever publishes it. A DeviceRemove
+    // itself is never quarantined, so that crossed revocations add up (§ 16, point 23).
+    let first = engine.replay(&quarantine);
+    let known = engine.fold(first.accepted.iter().copied());
+    let device_removals: Vec<DeviceRemoval> = ops
+        .iter()
+        .filter(|o| !o.forked)
+        .filter_map(|o| match &o.body {
+            ControlBody::DeviceRemove(d) => {
+                let rev = &d.revocation;
+                let keys = &known.member(&rev.member)?.keys;
+                engine.revocation_ok(rev, keys).then_some(DeviceRemoval {
+                    op_id: o.op_id,
+                    member: rev.member,
+                    device: rev.device,
+                })
+            }
             _ => None,
         })
         .collect();
-    let mut quarantine: BTreeSet<usize> = BTreeSet::new();
+    engine.removals.clone_from(&device_removals);
     for (i, o) in ops.iter().enumerate() {
         if matches!(o.body, ControlBody::DeviceRemove(_)) {
             continue;
@@ -296,7 +329,10 @@ pub fn compute(ctx: &LockerContext, ops: &[ControlOp], causality: &dyn Causality
         };
         status.insert(o.op_id, s);
     }
-    let state = engine.fold(replay.accepted.iter().copied());
+    let mut state = engine.fold(replay.accepted.iter().copied());
+    for r in &device_removals {
+        state.revoke(r.member, r.device);
+    }
     let accepted = replay.accepted;
     AuthzState {
         ops,
@@ -367,7 +403,20 @@ impl AuthzState {
                 apply(&mut s, &self.ops[i]);
             }
         }
-        self.cache.borrow_mut().insert(key, s.clone());
+        // Revocations are monotone (§ 9.7): those in the past count even if their
+        // `DeviceRemove` was not accepted. Only states without one are cached, since the
+        // cache key covers the accepted operations only.
+        let revoked: Vec<&DeviceRemoval> = self
+            .device_removals
+            .iter()
+            .filter(|r| in_past(&r.op_id))
+            .collect();
+        if revoked.is_empty() {
+            self.cache.borrow_mut().insert(key, s.clone());
+        }
+        for r in revoked {
+            s.revoke(r.member, r.device);
+        }
         s
     }
 
@@ -390,13 +439,17 @@ impl AuthzState {
     /// Status of a data operation (§ 9.4, last paragraph).
     #[must_use]
     pub fn classify_data(&self, op: &DataOp, causality: &dyn Causality) -> DataStatus {
-        let suspect = self.treated.iter().any(|r| {
-            r.removes && r.target == op.opref.member && causality.concurrent(&op.op_id, &r.op_id)
-        }) || self.device_removals.iter().any(|r| {
-            r.member == op.opref.member
-                && r.device == op.opref.device
-                && causality.concurrent(&op.op_id, &r.op_id)
-        });
+        let suspect = op.forked
+            || self.treated.iter().any(|r| {
+                r.removes
+                    && r.target == op.opref.member
+                    && causality.concurrent(&op.op_id, &r.op_id)
+            })
+            || self.device_removals.iter().any(|r| {
+                r.member == op.opref.member
+                    && r.device == op.opref.device
+                    && causality.concurrent(&op.op_id, &r.op_id)
+            });
         if suspect {
             match self.decisions.get(&op.op_id) {
                 Some(Decision::Accept) => {}
@@ -418,6 +471,9 @@ impl AuthzState {
         };
         if let Err(d) = s.authorize(author, &action, &BTreeSet::new()) {
             return DataStatus::Rejected(d);
+        }
+        if s.active_device(&author.member, &author.device) != Some(&op.signer) {
+            return DataStatus::Rejected(Denial::DeviceCert);
         }
         if s.current_epoch() != Some(op.epoch) {
             return DataStatus::Rejected(Denial::WrongEpoch);
@@ -450,6 +506,8 @@ struct Engine<'a> {
     causality: &'a dyn Causality,
     /// Signature checks already done: SHA-384 of (domain tag ‖ key ‖ message ‖ signature).
     verified: RefCell<HashMap<[u8; 48], bool>>,
+    /// Valid device revocations of the input (step 1), applied to every later state.
+    removals: Vec<DeviceRemoval>,
 }
 
 impl Engine<'_> {
@@ -459,6 +517,36 @@ impl Engine<'_> {
             apply(&mut s, &self.ops[i]);
         }
         s
+    }
+
+    /// `S(A ∩ past(o))`, with the device revocations of the past (monotone, § 9.7).
+    fn state_before(&self, accepted: &[usize], o: &ControlOp) -> LockerState {
+        let mut s = self.fold(
+            accepted
+                .iter()
+                .copied()
+                .filter(|&a| self.causality.precedes(&self.ops[a].op_id, &o.op_id)),
+        );
+        for r in &self.removals {
+            if self.causality.precedes(&r.op_id, &o.op_id) {
+                s.revoke(r.member, r.device);
+            }
+        }
+        s
+    }
+
+    fn revocation_ok(&self, rev: &crate::control::DeviceRevocation, keys: &MemberKeys) -> bool {
+        self.cached(
+            b"revoke",
+            &[
+                &keys.sig,
+                &rev.member,
+                &rev.device,
+                &rev.revoked_ms.to_be_bytes(),
+                &rev.issuer_sig,
+            ],
+            || rev.verify(keys).is_ok(),
+        )
     }
 
     /// Replays the operations outside `excluded`, in total order. Each is accepted if it is
@@ -472,12 +560,7 @@ impl Engine<'_> {
             if excluded.contains(&i) {
                 continue;
             }
-            let s = self.fold(
-                accepted
-                    .iter()
-                    .copied()
-                    .filter(|&a| self.causality.precedes(&self.ops[a].op_id, &o.op_id)),
-            );
+            let s = self.state_before(&accepted, o);
             match self.check(o, &s, &request_ids) {
                 Ok(outcome) => {
                     if let Some(id) = outcome.request_id {
@@ -546,12 +629,17 @@ impl Engine<'_> {
         if !s.is_created() {
             return Err(Denial::Genesis);
         }
-        if s.active_device(&author.member, &author.device).is_none() {
-            return Err(if s.member(&author.member).and_then(|e| e.role).is_some() {
-                Denial::DeviceNotActive
-            } else {
-                Denial::NotAMember
-            });
+        match s.active_device(&author.member, &author.device) {
+            None => {
+                return Err(if s.member(&author.member).and_then(|e| e.role).is_some() {
+                    Denial::DeviceNotActive
+                } else {
+                    Denial::NotAMember
+                });
+            }
+            // Signed under another certificate than the one the state holds for the device.
+            Some(cert) if *cert != o.signer => return Err(Denial::DeviceCert),
+            Some(_) => {}
         }
         // Epoch of the operation (§ 7.4).
         if o.body.creates_epoch() {
@@ -744,18 +832,7 @@ impl Engine<'_> {
                 if !entry.devices.contains_key(&rev.device) {
                     return Err(Denial::DeviceCert);
                 }
-                let ok = self.cached(
-                    b"revoke",
-                    &[
-                        &entry.keys.sig,
-                        &rev.member,
-                        &rev.device,
-                        &rev.revoked_ms.to_be_bytes(),
-                        &rev.issuer_sig,
-                    ],
-                    || rev.verify(&entry.keys).is_ok(),
-                );
-                if !ok {
+                if !self.revocation_ok(rev, &entry.keys) {
                     return Err(Denial::DeviceCert);
                 }
                 let mut expected = s.reader_devices();
@@ -784,7 +861,7 @@ impl Engine<'_> {
         {
             return Err(Denial::Invalid);
         }
-        if !self.cert_ok(&c.creator_device, &c.creator) {
+        if o.signer != c.creator_device || !self.cert_ok(&c.creator_device, &c.creator) {
             return Err(Denial::DeviceCert);
         }
         let mut expected = BTreeMap::new();

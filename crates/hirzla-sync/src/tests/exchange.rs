@@ -5,9 +5,10 @@ use std::sync::Arc;
 use hirzla_vault::secret::SecretType;
 
 use super::support::*;
+use crate::authz::AccessAuthorizer;
 use crate::device::LocalDevice;
 use crate::exchange::{export, import, ChunkItem, ExchangeContent};
-use crate::testing::{MemoryAuthorizer, TestMember};
+use crate::testing::TestMember;
 use crate::SyncError;
 
 struct Setup {
@@ -23,12 +24,12 @@ fn setup() -> Setup {
     let alice = TestMember::new();
     let d1 = alice.device();
     let d2 = alice.device();
-    let mut r1 = R::create_locker(Arc::clone(&d1), MemoryAuthorizer, true, "Perso").unwrap();
+    let mut r1 = R::create_locker(Arc::clone(&d1), AccessAuthorizer, true, "Perso").unwrap();
     r1.set_clock(fixed_clock);
     r1.device_add(d2.cert().clone()).unwrap();
     r1.put_secret(None, SecretType::Password, password_edit("t", "p"))
         .unwrap();
-    let mut r2 = R::join(Arc::clone(&d2), MemoryAuthorizer, r1.locker_id(), None);
+    let mut r2 = R::join(Arc::clone(&d2), AccessAuthorizer, r1.locker_id(), None);
     r2.set_clock(fixed_clock);
     let content = ExchangeContent {
         ops: r1.all_ops(),

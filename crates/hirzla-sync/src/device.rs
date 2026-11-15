@@ -1,5 +1,7 @@
 //! The local device: its certificate and its private keys, as `hirzla-core` loads them.
 
+use hirzla_access::approval::ApprovalRequest;
+use hirzla_access::control::Approval;
 use hirzla_crypto::envelope::{self, KeyEnvelope};
 use hirzla_crypto::kem;
 use hirzla_crypto::sign::{DeviceDomain, DeviceSigningKey};
@@ -72,6 +74,19 @@ impl LocalDevice {
 
     pub(crate) fn sign(&self, domain: DeviceDomain, message: &[u8]) -> Result<Vec<u8>, SyncError> {
         Ok(self.sign.sign(domain, message)?.as_bytes().to_vec())
+    }
+
+    /// Signs a multi-owner request (§ 7.7) with this device. The request must name it.
+    ///
+    /// # Errors
+    /// [`SyncError::InvalidInput`] if the request names another device, or a crypto failure.
+    pub fn approve(&self, request: &ApprovalRequest) -> Result<Approval, SyncError> {
+        if request.approver_member != self.member_id()
+            || request.approver_device != self.device_id()
+        {
+            return Err(SyncError::InvalidInput);
+        }
+        request.approve(&self.sign).map_err(|_| SyncError::Crypto)
     }
 
     /// Whether `env` is addressed to this device.

@@ -637,6 +637,8 @@ fn injected_second_locker_creation_is_rejected() {
         epoch: opref,
         deps: Vec::new(),
         body,
+        signer: dev.cert.clone(),
+        forked: false,
     });
     // Mallory then grants herself into the locker on top of her own root.
     let alice = t.alice.keys.clone();

@@ -8,10 +8,12 @@ use hirzla_vault::secret::SecretType;
 
 use super::refusals::{secret_draft_citing, sign_draft};
 use super::support::*;
-use crate::codec::{Approval, ApprovalAction, ApprovalRequest, RoleCode};
+use crate::authz::AccessAuthorizer;
+use crate::control::Approval;
 use crate::replica::{OpStatus, QuarantineCause, RejectReason};
-use crate::testing::MemoryAuthorizer;
 use crate::AuthorizationState;
+use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
+use hirzla_access::Role;
 
 const Q: OpStatus = OpStatus::Quarantined(QuarantineCause::Authorization);
 
@@ -22,7 +24,7 @@ fn rejected() -> OpStatus {
 // § 9.3, row 1: o ∈ past(r).
 #[test]
 fn write_seen_before_revocation_stays_applied() {
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Reader]);
+    let mut w = World::new(&[Role::Editor, Role::Reader]);
     let (id, _) = w.replicas[1]
         .put_secret(None, SecretType::Password, password_edit("t", "bob"))
         .unwrap();
@@ -45,7 +47,7 @@ fn write_seen_before_revocation_stays_applied() {
 // § 9.3, row 2: o concurrent with r, then accepted, rejected or rejected automatically.
 #[test]
 fn concurrent_write_is_quarantined_then_accepted() {
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Reader]);
+    let mut w = World::new(&[Role::Editor, Role::Reader]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();
@@ -67,7 +69,7 @@ fn concurrent_write_is_quarantined_then_accepted() {
 
 #[test]
 fn quarantine_auto_reject_after_delay_and_explicit_accept_wins() {
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Owner]);
+    let mut w = World::new(&[Role::Editor, Role::Owner]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();
@@ -103,7 +105,7 @@ fn quarantine_auto_reject_after_delay_and_explicit_accept_wins() {
 // § 9.3, row 3: r ∈ past(o).
 #[test]
 fn write_after_seen_revocation_is_rejected() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let r = w.replicas[0].revoke(w.members[1].id(), None).unwrap();
     // Bob cites the revocation (he cannot open it, he copies its identifier and guesses its
     // clock) and writes under the epoch he knows.
@@ -117,7 +119,7 @@ fn write_after_seen_revocation_is_rejected() {
 #[test]
 fn antedated_revocation_and_owner_creation_by_a_revoked_member() {
     // Alice (oldest owner), Bob (owner), Carol (editor), Dave (reader).
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Editor, RoleCode::Reader]);
+    let mut w = World::new(&[Role::Owner, Role::Editor, Role::Reader]);
     let bob = w.members[1].id();
     let carol = w.members[2].id();
     let dave_keys = w.members[3].keys.clone();
@@ -125,7 +127,7 @@ fn antedated_revocation_and_owner_creation_by_a_revoked_member() {
     // Bob has not "seen" it: he revokes Carol and promotes Dave to owner, concurrently.
     let rb = w.replicas[1].revoke(carol, None).unwrap();
     let gb = w.replicas[1]
-        .grant(dave_keys, RoleCode::Owner, Vec::new(), None)
+        .grant(dave_keys, Role::Owner, Vec::new(), None)
         .unwrap();
     assert_eq!(w.replicas[1].status(&rb), Some(OpStatus::Applied));
     w.sync_among(&[0, 1, 2, 3]);
@@ -140,8 +142,8 @@ fn antedated_revocation_and_owner_creation_by_a_revoked_member() {
     ));
     for i in [0, 2, 3] {
         let s = w.replicas[i].authorization().unwrap();
-        assert_eq!(s.role(&carol), Some(RoleCode::Editor));
-        assert_eq!(s.role(&w.members[3].id()), Some(RoleCode::Reader));
+        assert_eq!(s.role(&carol), Some(Role::Editor));
+        assert_eq!(s.role(&w.members[3].id()), Some(Role::Reader));
         assert_eq!(s.role(&bob), None);
     }
     w.assert_converged_among(&honest);
@@ -150,12 +152,12 @@ fn antedated_revocation_and_owner_creation_by_a_revoked_member() {
 fn approval(w: &World, approver: usize, request_id: [u8; 16], target: OpId) -> Approval {
     let _ = target;
     let dev = Arc::clone(&w.devices[approver]);
-    Approval::sign(
+    approve(
         &dev,
         &ApprovalRequest {
             locker_id: w.replicas[0].locker_id(),
             request_id,
-            action: ApprovalAction::RemoveOwner,
+            action: SensitiveAction::OwnerRemoval,
             target: Some(w.members[0].id()),
             detail: None,
             issuer: w.members[1].id(),
@@ -169,7 +171,7 @@ fn approval(w: &World, approver: usize, request_id: [u8; 16], target: OpId) -> A
 #[test]
 fn removing_an_older_owner_needs_the_quorum() {
     // Alice (oldest), Bob and Carol, owners.
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Owner]);
+    let mut w = World::new(&[Role::Owner, Role::Owner]);
     let alice = w.members[0].id();
     // Bob alone: refused.
     let alone = w.replicas[1].revoke(alice, None).unwrap();
@@ -188,7 +190,7 @@ fn removing_an_older_owner_needs_the_quorum() {
 fn quorum_removal_conflicting_with_the_targets_own_removal() {
     // Alice (oldest), Bob, Carol: Bob and Carol remove Alice at the quorum while Alice,
     // concurrently, removes Bob. The oldest participant wins (§ 9.4): Alice.
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Owner]);
+    let mut w = World::new(&[Role::Owner, Role::Owner]);
     let alice = w.members[0].id();
     let bob = w.members[1].id();
     let rid = [9; 16];
@@ -205,7 +207,7 @@ fn quorum_removal_conflicting_with_the_targets_own_removal() {
     ));
     for i in [0, 2] {
         let s = w.replicas[i].authorization().unwrap();
-        assert_eq!(s.role(&alice), Some(RoleCode::Owner));
+        assert_eq!(s.role(&alice), Some(Role::Owner));
         assert_eq!(s.role(&bob), None);
     }
 }
@@ -214,7 +216,7 @@ fn quorum_removal_conflicting_with_the_targets_own_removal() {
 fn mutual_concurrent_removals() {
     // Alice and Bob, owners, remove each other concurrently: Bob is more recent and alone,
     // so his removal is refused outright; Alice's applies.
-    let mut w = World::new(&[RoleCode::Owner, RoleCode::Editor]);
+    let mut w = World::new(&[Role::Owner, Role::Editor]);
     let ra = w.replicas[0].revoke(w.members[1].id(), None).unwrap();
     let rb = w.replicas[1].revoke(w.members[0].id(), None).unwrap();
     w.sync();
@@ -230,7 +232,7 @@ fn mutual_concurrent_removals() {
     ));
     for i in [0, 2] {
         let s = w.replicas[i].authorization().unwrap();
-        assert_eq!(s.role(&w.members[0].id()), Some(RoleCode::Owner));
+        assert_eq!(s.role(&w.members[0].id()), Some(Role::Owner));
         assert_eq!(s.role(&w.members[1].id()), None);
     }
 }
@@ -238,7 +240,7 @@ fn mutual_concurrent_removals() {
 // § 9.7: device removal.
 #[test]
 fn device_removal_table() {
-    let mut w = World::new(&[RoleCode::Reader]);
+    let mut w = World::new(&[Role::Reader]);
     // Alice's second device.
     let d2 = w.add_device(0, 0);
     w.sync();
@@ -271,7 +273,7 @@ fn device_removal_table() {
 
 #[test]
 fn crossed_device_revocations_remove_both() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let d2 = w.add_device(0, 0);
     w.sync();
     let r1 = w.members[0].revoke(&w.devices[d2].device_id());
@@ -283,8 +285,9 @@ fn crossed_device_revocations_remove_both() {
     let s = w.replicas[1].authorization().unwrap();
     assert!(!s.device_active(&w.members[0].id(), &w.devices[0].device_id()));
     assert!(!s.device_active(&w.members[0].id(), &w.devices[d2].device_id()));
-    assert_eq!(w.replicas[1].status(&x1), Some(Q));
-    assert_eq!(w.replicas[1].status(&x2), Some(Q));
+    // A `DeviceRemove` is never quarantined (§ 16, point 23): both apply and add up.
+    assert_eq!(w.replicas[1].status(&x1), Some(OpStatus::Applied));
+    assert_eq!(w.replicas[1].status(&x2), Some(OpStatus::Applied));
     // No epoch is current any more: Bob's next write waits for a rotation by a reader.
     assert!(w.replicas[1].current_epoch().is_none());
     let rot = w.replicas[1].rotate().unwrap();
@@ -295,7 +298,7 @@ fn crossed_device_revocations_remove_both() {
 // § 9.6: a fork quarantines the device from the forked rank on.
 #[test]
 fn fork_is_quarantined() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();
@@ -303,7 +306,7 @@ fn fork_is_quarantined() {
     // A copy of Bob's vault on another computer: same device, same state.
     let mut copy = R::join(
         Arc::clone(&w.devices[1]),
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[1].locker_id(),
         w.replicas[1].genesis(),
     );
@@ -331,7 +334,7 @@ fn fork_is_quarantined() {
 #[test]
 fn rotation_table() {
     // Alice (owner), Bob (editor, the offline device D), Carol (reader), Eve (editor).
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Reader, RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor, Role::Reader, Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();
@@ -377,7 +380,7 @@ fn rotation_table() {
 
 #[test]
 fn missed_rotations_and_new_member_reads_history() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "old"))
         .unwrap();
@@ -390,14 +393,9 @@ fn missed_rotations_and_new_member_reads_history() {
     let m = crate::testing::TestMember::new();
     let d = m.device();
     w.replicas[0]
-        .grant(
-            m.keys.clone(),
-            RoleCode::Reader,
-            vec![d.cert().clone()],
-            None,
-        )
+        .grant(m.keys.clone(), Role::Reader, vec![d.cert().clone()], None)
         .unwrap();
-    let mut r = R::join(d, MemoryAuthorizer, w.replicas[0].locker_id(), None);
+    let mut r = R::join(d, AccessAuthorizer, w.replicas[0].locker_id(), None);
     send(&w.replicas[0], &mut r);
     assert_eq!(password_of(&r, &id).as_deref(), Some("old"));
     assert_eq!(r.fingerprint(), w.replicas[0].fingerprint());
@@ -405,7 +403,7 @@ fn missed_rotations_and_new_member_reads_history() {
 
 #[test]
 fn concurrent_rotations_pick_one_epoch() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let a = w.replicas[0].rotate().unwrap();
     let b = w.replicas[1].rotate().unwrap();
     w.sync();
@@ -418,7 +416,7 @@ fn concurrent_rotations_pick_one_epoch() {
 
 #[test]
 fn device_added_during_rotation_is_repaired_by_envelope_add() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     // Alice adds her second device while Bob rotates, concurrently.
     let d2 = w.add_device(0, 0);
     let rot = w.replicas[1].rotate().unwrap();
@@ -450,7 +448,7 @@ fn all_sent(r: &mut R) {
 #[test]
 fn reissue_rewrites_an_unsent_revocation_with_a_fresh_epoch() {
     // Alice (owner), Bob (editor), Carol (owner).
-    let mut w = World::new(&[RoleCode::Editor, RoleCode::Owner]);
+    let mut w = World::new(&[Role::Editor, Role::Owner]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();
@@ -482,7 +480,7 @@ fn reissue_rewrites_an_unsent_revocation_with_a_fresh_epoch() {
 
 #[test]
 fn shared_operations_are_never_rewritten() {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     let (id, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("t", "v0"))
         .unwrap();

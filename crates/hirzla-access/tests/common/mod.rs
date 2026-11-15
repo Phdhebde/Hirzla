@@ -186,6 +186,8 @@ impl Sim {
             epoch: opref,
             deps: Vec::new(),
             body,
+            signer: dev.cert.clone(),
+            forked: false,
         };
         let mut sim = Sim {
             locker: Self::locker_id(),
@@ -283,6 +285,8 @@ impl Sim {
             epoch,
             deps: d,
             body,
+            signer: author.cert.clone(),
+            forked: false,
         });
         op_id
     }
@@ -324,8 +328,10 @@ impl Sim {
             opref,
             epoch,
             target,
+            signer: author.cert.clone(),
+            forked: false,
         };
-        self.data.push(op);
+        self.data.push(op.clone());
         op
     }
 

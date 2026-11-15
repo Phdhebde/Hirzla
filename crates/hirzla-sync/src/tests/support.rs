@@ -2,18 +2,44 @@
 
 use std::sync::Arc;
 
-use hirzla_vault::model::{Id16, OpId};
+use hirzla_vault::model::{Id16, OpId, OpRef};
 use hirzla_vault::secret::{Field, FieldValue, SecretEdit, SecretType};
 
-use crate::codec::RoleCode;
+use hirzla_access::approval::ApprovalRequest;
+use hirzla_access::Role;
+
+use crate::authz::AccessAuthorizer;
+use crate::compact::PrunedPast;
+use crate::control::Approval;
 use crate::device::LocalDevice;
 use crate::replica::{OpStatus, Replica};
-use crate::testing::{MemoryAuthorizer, TestMember};
+use crate::testing::TestMember;
+use crate::SyncError;
 
-pub type R = Replica<MemoryAuthorizer>;
+pub type R = Replica<AccessAuthorizer>;
 
 pub fn fixed_clock() -> u64 {
     1_000
+}
+
+/// A made-up causal past for `op_id`, as a dishonest `Compact` would carry it.
+pub fn fake_past(r: &R, op_id: OpId) -> PrunedPast {
+    let me = r.next_ref();
+    PrunedPast {
+        op_id,
+        opref: OpRef { seq: 1, ..me },
+        prev: None,
+        lamport: 2,
+        deps: vec![r.genesis().unwrap()],
+        epoch: OpRef { seq: 1, ..me },
+        secret: None,
+        parents: Vec::new(),
+    }
+}
+
+/// Signs a multi-owner request with `dev` (§ 7.7).
+pub fn approve(dev: &LocalDevice, req: &ApprovalRequest) -> Result<Approval, SyncError> {
+    dev.approve(req)
 }
 
 /// Sends what `from` holds and `to` lacks.
@@ -87,11 +113,11 @@ pub struct World {
 
 impl World {
     /// Alice creates a locker and grants each extra member its role.
-    pub fn new(roles: &[RoleCode]) -> World {
+    pub fn new(roles: &[Role]) -> World {
         let alice = TestMember::new();
         let a_dev = alice.device();
         let mut owner =
-            R::create_locker(Arc::clone(&a_dev), MemoryAuthorizer, false, "Équipe").unwrap();
+            R::create_locker(Arc::clone(&a_dev), AccessAuthorizer, false, "Équipe").unwrap();
         owner.set_clock(fixed_clock);
         let mut members = vec![alice];
         let mut devices = vec![a_dev];
@@ -108,7 +134,7 @@ impl World {
         let genesis = owner.genesis();
         let mut replicas = vec![owner];
         for d in devices.iter().skip(1) {
-            let mut r = R::join(Arc::clone(d), MemoryAuthorizer, locker, genesis);
+            let mut r = R::join(Arc::clone(d), AccessAuthorizer, locker, genesis);
             r.set_clock(fixed_clock);
             replicas.push(r);
         }
@@ -202,7 +228,7 @@ impl World {
         self.replicas[by].device_add(d.cert().clone()).unwrap();
         let locker = self.replicas[by].locker_id();
         let genesis = self.replicas[by].genesis();
-        let mut r = R::join(Arc::clone(&d), MemoryAuthorizer, locker, genesis);
+        let mut r = R::join(Arc::clone(&d), AccessAuthorizer, locker, genesis);
         r.set_clock(fixed_clock);
         self.devices.push(d);
         self.replicas.push(r);

@@ -23,7 +23,12 @@ fn samples() -> Vec<ControlBody> {
                 wrap: [0xAB; lens::WRAPPED_KEY],
             }],
         }),
-        ControlBody::EnvelopeAdd(vec![]),
+        ControlBody::EnvelopeAdd(vec![KeyEnvelopeEntry {
+            member: [1; 16],
+            device: [2; 16],
+            recipient_key: [3; 48],
+            envelope: vec![4; lens::KEY_ENVELOPE],
+        }]),
         ControlBody::QuarantineAccept(vec![[1; 48], [2; 48]]),
         ControlBody::QuarantineReject {
             ops: vec![[3; 48]],
@@ -40,7 +45,11 @@ fn samples() -> Vec<ControlBody> {
             envelopes: vec![],
             prev: vec![],
             request_id: Some([8; 16]),
-            approvals: Some(vec![]),
+            approvals: Some(vec![Approval {
+                member: [12; 16],
+                device: [13; 16],
+                sig: vec![0x55; lens::SIGNATURE],
+            }]),
         }),
         ControlBody::Revoke(Revoke {
             member: [7; 16],
@@ -150,6 +159,84 @@ fn unsorted_or_duplicate_arrays_are_refused() {
         ),
     ]);
     assert!(reencode(&prune).is_err());
+}
+
+/// Point 27 of `sync-protocol.md` § 16: one encoding only, no duplicate.
+#[test]
+fn empty_optional_lists_and_duplicates_are_refused() {
+    let one = Value::bytes(&[1; 48]);
+    let unsorted = Value::Array(vec![Value::bytes(&[2; 48]), one.clone()]);
+    let dup = Value::Array(vec![one.clone(), one.clone()]);
+    let empty = Value::Array(vec![]);
+    for list in [unsorted, dup, empty] {
+        for kind in [KIND_QUARANTINE_ACCEPT, KIND_COMPACT] {
+            assert!(reencode(&map(vec![(1, Value::Uint(kind)), (2, list.clone())])).is_err());
+        }
+        let v = map(vec![
+            (1, Value::Uint(KIND_QUARANTINE_REJECT)),
+            (2, list.clone()),
+            (3, Value::Bool(false)),
+        ]);
+        assert!(reencode(&v).is_err());
+    }
+    // Lists are written sorted, whatever the order given.
+    let qa = ControlBody::QuarantineAccept(vec![[2; 48], [1; 48]]);
+    let back = ControlBody::decode(&qa.encode().unwrap()).unwrap();
+    assert_eq!(back, ControlBody::QuarantineAccept(vec![[1; 48], [2; 48]]));
+    // Revoke with a present but empty approval list.
+    let revoke = |approvals: Value| {
+        map(vec![
+            (1, Value::Uint(KIND_REVOKE)),
+            (2, Value::bytes(&[1; 16])),
+            (3, Value::Array(vec![])),
+            (4, Value::Array(vec![])),
+            (5, Value::bytes(&[2; 16])),
+            (6, approvals),
+        ])
+    };
+    assert!(reencode(&revoke(Value::Array(vec![]))).is_err());
+    let a = Approval {
+        member: [3; 16],
+        device: [4; 16],
+        sig: vec![0x55; lens::SIGNATURE],
+    }
+    .to_value();
+    assert!(reencode(&revoke(Value::Array(vec![a.clone()]))).is_ok());
+    assert!(reencode(&revoke(Value::Array(vec![a.clone(), a]))).is_err());
+    // EnvelopeAdd without envelope; two envelopes for one device.
+    assert!(reencode(&map(vec![
+        (1, Value::Uint(KIND_ENVELOPE_ADD)),
+        (2, Value::Array(vec![]))
+    ]))
+    .is_err());
+    let env = KeyEnvelopeEntry {
+        member: [1; 16],
+        device: [2; 16],
+        recipient_key: [3; 48],
+        envelope: vec![4; lens::KEY_ENVELOPE],
+    }
+    .to_value();
+    assert!(reencode(&map(vec![
+        (1, Value::Uint(KIND_ENVELOPE_ADD)),
+        (2, Value::Array(vec![env.clone(), env]))
+    ]))
+    .is_err());
+    // Two wraps of one epoch.
+    let w = EpochWrap {
+        epoch: OpRef {
+            member: [1; 16],
+            device: [2; 16],
+            seq: 3,
+        },
+        wrap: [0xAB; lens::WRAPPED_KEY],
+    }
+    .to_value();
+    assert!(reencode(&map(vec![
+        (1, Value::Uint(KIND_ROTATE)),
+        (3, Value::Array(vec![])),
+        (4, Value::Array(vec![w.clone(), w]))
+    ]))
+    .is_err());
 }
 
 #[test]
@@ -293,8 +380,12 @@ fn oversized_arrays_are_refused() {
 
 #[test]
 fn approvals_are_exposed_only_where_they_exist() {
-    let s = samples();
-    for b in &s {
-        assert!(b.approvals().is_empty());
+    // Only the joined approvals of a `Grant`, `Revoke` or `Policy` are exposed.
+    for b in &samples() {
+        let expected = match b {
+            ControlBody::Revoke(r) => r.approvals.as_ref().map_or(0, Vec::len),
+            _ => 0,
+        };
+        assert_eq!(b.approvals().len(), expected);
     }
 }

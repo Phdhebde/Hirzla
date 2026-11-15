@@ -6,14 +6,14 @@ use hirzla_vault::model::{Id16, OpId, OpRef};
 use hirzla_vault::secret::{FieldValue, LockerField, SecretType};
 
 use super::support::*;
-use crate::codec::RoleCode;
+use crate::authz::AccessAuthorizer;
 use crate::replica::{OpStatus, RejectReason};
-use crate::testing::MemoryAuthorizer;
 use crate::wire::Stub;
+use hirzla_access::Role;
 
 /// Alice (owner) and Bob (editor); one version kept; a secret written four times.
 fn history() -> (World, Id16, Vec<OpId>) {
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     w.replicas[0]
         .put_locker_meta(vec![(LockerField::KeepVersions, FieldValue::Uint(1))])
         .unwrap();
@@ -66,7 +66,7 @@ fn joiner_after_pruning() -> (World, Id16, Vec<OpId>, R) {
     w.pass(1, 0);
     let mut r = R::join(
         dev,
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[0].locker_id(),
         w.replicas[0].genesis(),
     );
@@ -85,8 +85,9 @@ fn a_device_joining_after_pruning_accepts_listed_stubs() {
     }
 }
 
+/// ADR 0017: the `Compact` carries the causal past of what it prunes, so a device that only
+/// ever receives stubs rebuilds the same graph, the same authorization and the same state.
 #[test]
-#[ignore = "ADR 0017: a stub carries no causal metadata, the joiner's past is truncated"]
 fn a_device_joining_after_pruning_reaches_the_same_state() {
     let (w, id, _, r) = joiner_after_pruning();
     assert_eq!(password_of(&r, &id).as_deref(), Some("v3"));
@@ -111,8 +112,14 @@ fn compact_listing_a_control_operation_or_an_unknown_one_is_rejected() {
     let (mut w, _, _) = history();
     let control = w.replicas[0].rotate().unwrap();
     w.sync();
-    let c1 = w.replicas[1].compact(vec![control]).unwrap();
-    let c2 = w.replicas[1].compact(vec![[0x55; 48]]).unwrap();
+    let past = fake_past(&w.replicas[1], control);
+    let c1 = w.replicas[1]
+        .compact_forged(vec![control], &[past])
+        .unwrap();
+    let past = fake_past(&w.replicas[1], [0x55; 48]);
+    let c2 = w.replicas[1]
+        .compact_forged(vec![[0x55; 48]], &[past])
+        .unwrap();
     w.sync();
     for c in [c1, c2] {
         assert_eq!(
@@ -125,7 +132,7 @@ fn compact_listing_a_control_operation_or_an_unknown_one_is_rejected() {
 #[test]
 fn compact_listing_a_version_it_has_not_seen_is_rejected() {
     // Bob compacts versions Alice wrote concurrently: not in the Compact's past.
-    let mut w = World::new(&[RoleCode::Editor]);
+    let mut w = World::new(&[Role::Editor]);
     w.replicas[0]
         .put_locker_meta(vec![(LockerField::KeepVersions, FieldValue::Uint(1))])
         .unwrap();
@@ -174,7 +181,7 @@ fn stub_without_compact_is_refused() {
     // Unlisted stubs are never forwarded.
     let fresh = R::join(
         Arc::clone(&w.devices[1]),
-        MemoryAuthorizer,
+        AccessAuthorizer,
         w.replicas[0].locker_id(),
         w.replicas[0].genesis(),
     );
