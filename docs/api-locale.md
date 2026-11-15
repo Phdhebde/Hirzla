@@ -312,6 +312,7 @@ identifiant de secret, ni chemin).
 | `vault_created`, `unlocked`, `stopped` | — |
 | `unlock_failed` | `failures` |
 | `locked` | `reason` (`request`, `inactivity`, `shutdown`) |
+| `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
@@ -435,3 +436,77 @@ Décisions prises seul pendant cette étape, à confirmer :
 10. **`Match` et `Fill` en `https` seulement** et sans port : un site interne en `http` ne
     peut pas être rempli par l'extension. Garder le schéma et le port dans l'index demanderait
     un changement de format.
+
+## 14. Profil agent (version 3)
+
+Le noyau d'un agent Hornn (`docs/integration-hornn.md`) parle en plus la **version 3**, qui ne
+contient que les opérations du membre machine. Codes : opérations **20 à 29** (12 et 13 sont pris
+par la version 2 de l'extension, 14 à 19 restent libres pour l'application de poste), erreurs
+**30 à 39**. Le noyau n'active ce profil qu'avec `--hornn-issuer HEX --hornn-key FICHIER`
+(l'identifiant du locataire Hornn sur 32 chiffres hexadécimaux, et sa clé hybride de
+vérification de 2 691 octets bruts). Sans ces options, une requête de code 20 à 29 reçoit
+`UnknownOperation`.
+
+### 14.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut 20
+à 29 va au profil agent ; elle doit porter `v = 3`, sinon `UnsupportedVersion` avec `{2: [3]}`.
+Les réponses portent `v = 3`. Toute autre trame suit les § 5 à 7, inchangés.
+
+### 14.2 Opérations
+
+| Code | Nom | Arguments | Résultat |
+| --- | --- | --- | --- |
+| 20 | `AgentStatus` | — | `{1: inscrit (bool), 2?: membre, 3?: appareil, 4: [casier], 5: émetteur Hornn, 6: démarrage du noyau (ms)}` ; 2 et 3 présents si et seulement si inscrit |
+| 21 | `AgentEnrol` | — | `{1: enrôlement bstr (CBOR {1: MemberKeys, 2: DeviceCert}), 2: code de contrôle tstr(20)}` |
+| 22 | `AgentJoin` | `{1: casier, 2?: bstr(48) op_id de la LockerCreate}` | — |
+| 23 | `AgentIngest` | `{1: casier, 2: [bstr opération] (≤ 1 024, chacune ≤ 2 Mio)}` | `{1: nouvelles, 2: déjà connues}` |
+| 24 | `AgentOutbox` | `{1: casier}` | `{1: [{1: op_id bstr(48), 2: opération bstr}]}` |
+| 25 | `AgentAck` | `{1: casier, 2: [op_id bstr(48)]}` | — |
+| 26 | `SessionOpen` | `{1: autorisation signée bstr (≤ 8 Kio)}` | `{1: {champ: tstr}, 2: [URL tstr], 3: [hôte tstr]}` |
+| 27 | `Rotate` | `{1: autorisation signée bstr (≤ 8 Kio)}` | `{1: op_id bstr(48) de la SecretPut publiée, 2: confirmée (bool)}` |
+
+- `AgentEnrol` est refusé (`AlreadyEnrolled`) si la machine a déjà son identité ; toutes les
+  autres opérations sauf `AgentStatus` exigent l'identité (`NotEnrolled`).
+- `SessionOpen` rend **seulement** les champs nommés par l'autorisation (10, 11, 22) et les URL et
+  hôtes du secret, qui ne sont pas secrets. C'est la seule réponse du profil qui porte un secret.
+- `Rotate` répond `Unsupported` tant qu'aucun transport de rotation n'est configuré (ADR 0030).
+
+### 14.3 Erreurs
+
+| Code | Nom | Sens | Détails |
+| --- | --- | --- | --- |
+| 30 | `NotEnrolled` | La machine n'a pas d'identité | — |
+| 31 | `AlreadyEnrolled` | La machine a déjà une identité | — |
+| 32 | `GrantRefused` | Autorisation refusée | `{1: motif}` |
+| 33 | `TransportRefused` | La cible a refusé le changement ; rien n'est publié | — |
+| 34 | `PublishPending` | Changé sur la cible, publication en attente | — |
+| 35 | `UnknownLocker` | Casier non servi par l'agent | — |
+
+Les codes généraux 1, 2, 3, 11, 13, 14 et 17 gardent leur sens. Motifs de `GrantRefused` (on
+peut les donner à la gateway, qui est le client légitime ; ils ne contiennent rien de
+l'autorisation) :
+
+| Motif | Nom | Sens |
+| --- | --- | --- |
+| 1 | `malformed` | Mal formée, ou objet différent de l'opération |
+| 2 | `bad_signature` | Signature hybride invalide (l'une ou l'autre moitié) |
+| 3 | `wrong_issuer` | Autre instance Hornn que celle épinglée |
+| 4 | `wrong_agent` | Destinée à un autre membre ou appareil |
+| 5 | `not_yet_valid` | Émise dans le futur au-delà de 5 s |
+| 6 | `expired` | Expirée (tolérance 5 s) |
+| 7 | `lifetime` | Durée de vie nulle ou supérieure à 60 s |
+| 8 | `before_start` | Émise avant le démarrage du noyau augmenté de la tolérance (5 s) |
+| 9 | `replayed` | Déjà utilisée |
+| 10 | `guard_full` | Trop d'autorisations vivantes en mémoire |
+| 11 | `requester` | Le demandeur n'a pas de rôle qui permet l'usage |
+| 12 | `agent_role` | Le rôle de la machine ne le permet pas, ou elle a pu être retirée |
+| 13 | `unknown` | Casier ou secret inconnu ou inutilisable |
+
+### 14.4 Points ouverts
+
+1. `Status` (§ 6) n'annonce pas la version 3 : un client du profil agent la découvre par
+   `AgentStatus`.
+2. Les opérations 20 à 27 sont ouvertes à tout client du profil complet (§ 3.1) et refusées
+   au profil navigateur (`Unauthorized`). Un profil « agent » qui les réserverait à
+   l'exécutable de la gateway reste à ajouter.

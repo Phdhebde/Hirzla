@@ -23,3 +23,5 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# In-memory relay and test identities, for the Hornn control plane simulator (tests only).
+hirzla-sync = { path = "../hirzla-sync", features = ["test-support"] }
