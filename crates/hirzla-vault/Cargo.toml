@@ -12,6 +12,9 @@ workspace = true
 [features]
 # Exposes the stages after decryption of the KDBX reader to the fuzz targets (`fuzz/`).
 fuzzing = []
+# Certifies extra devices of the member for the end-to-end tests of other crates
+# (`hirzla-core`, ADR 0059). Never enabled in a shipped binary.
+test-support = []
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
