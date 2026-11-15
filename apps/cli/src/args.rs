@@ -17,12 +17,31 @@ Commandes :
                           --champ CHAMP, --id ID, --stdout.
   set NOM                 Crée le secret NOM, ou le modifie s'il existe. La valeur est
                           demandée (ou lue sur l'entrée standard).
-                          --identifiant U, --url URL, --tag T, --note, --generer [LONGUEUR].
+                          --identifiant U, --url URL, --tag T, --note, --generer [LONGUEUR],
+                          --casier CASIER (casier partagé, à la création).
   rm NOM                  Met un secret à la corbeille. --purger : suppression définitive.
                           --id ID.
   gen [LONGUEUR]          Génère un mot de passe (24 caractères par défaut).
                           --sans-symboles, --sans-chiffres, --sans-majuscules, --stdout.
   status                  État du noyau et du coffre.
+
+Mode Serveur :
+  serveur identite        Affiche l'empreinte de votre clé de membre et le code de contrôle
+                          du poste. --sortie FICHIER : écrit la clé publique de membre
+                          pour l'administrateur du serveur.
+  serveur rejoindre ADRESSE --ac PEM [--empreinte E]
+                          Rattache le coffre au serveur (hirzla://hôte[:port]). Sans
+                          --empreinte, confirmez ensuite l'empreinte affichée.
+  serveur confirmer EMPREINTE
+                          Confirme l'empreinte du serveur, vérifiée hors bande.
+  serveur etat            Serveur rattaché et état des casiers partagés.
+  serveur sync            Synchronise les casiers partagés.
+  casier creer NOM        Crée un casier partagé.
+  casier membres CASIER   Liste les membres d'un casier partagé et leurs rôles.
+  casier ajouter CASIER MEMBRE ROLE [--empreinte E]
+                          Donne un rôle à un membre (ou change son rôle).
+  casier retirer CASIER MEMBRE
+                          Retire un membre du casier.
   stop                    Verrouille le coffre et arrête le noyau.
 
 Options globales :
@@ -31,7 +50,49 @@ Options globales :
                           de hirzla).
   --vault FICHIER         Coffre, transmis au noyau quand hirzla le démarre (ou HIRZLA_VAULT).
 
-Champs : titre, identifiant, mot-de-passe, notes.";
+Champs : titre, identifiant, mot-de-passe, notes.
+Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
+CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
+moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).";
+
+/// A command of the server mode (`docs/api-locale.md` § 15.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServerCommand {
+    Identity {
+        output: Option<PathBuf>,
+    },
+    Join {
+        url: String,
+        ca: PathBuf,
+        fingerprint: Option<String>,
+    },
+    Confirm {
+        fingerprint: String,
+    },
+    Status,
+    Sync,
+}
+
+/// A command on shared lockers (`docs/api-locale.md` § 15.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LockerCommand {
+    Create {
+        name: String,
+    },
+    Members {
+        locker: String,
+    },
+    Add {
+        locker: String,
+        member: String,
+        role: String,
+        fingerprint: Option<String>,
+    },
+    Remove {
+        locker: String,
+        member: String,
+    },
+}
 
 /// What to do.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +119,7 @@ pub enum Command {
         tags: Vec<String>,
         note: bool,
         generate: Option<u32>,
+        locker: Option<String>,
     },
     Rm {
         name: Option<String>,
@@ -71,6 +133,8 @@ pub enum Command {
     },
     Status,
     Stop,
+    Server(ServerCommand),
+    Locker(LockerCommand),
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
@@ -130,6 +194,10 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--kdf-memory",
         "--kdf-passes",
         "--kdf-lanes",
+        "--casier",
+        "--sortie",
+        "--ac",
+        "--empreinte",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -160,7 +228,16 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "init" => &["--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "ls" => &["--corbeille"],
         "get" => &["--champ", "--id", "--stdout"],
-        "set" => &["--identifiant", "--url", "--tag", "--note", "--generer"],
+        "set" => &[
+            "--identifiant",
+            "--url",
+            "--tag",
+            "--note",
+            "--generer",
+            "--casier",
+        ],
+        "serveur" => &["--sortie", "--ac", "--empreinte"],
+        "casier" => &["--empreinte"],
         "rm" => &["--purger", "--id"],
         "gen" => &[
             "--sans-symboles",
@@ -289,7 +366,108 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 tags: all("--tag"),
                 note: has("--note"),
                 generate,
+                locker: one("--casier")?,
             }
+        }
+        "serveur" => {
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            let arg = |i: usize, what: &str| -> Result<String, String> {
+                positional
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("« serveur {sub} » attend {what}."))
+            };
+            let only = |names: &[&str]| -> Result<(), String> {
+                match flags.iter().find(|(f, _)| !names.contains(&f.as_str())) {
+                    Some((f, _)) => Err(format!("option inconnue pour « serveur {sub} » : {f}")),
+                    None => Ok(()),
+                }
+            };
+            let sub_command = match sub {
+                "identite" => {
+                    max_positional(1)?;
+                    only(&["--sortie"])?;
+                    ServerCommand::Identity {
+                        output: one("--sortie")?.map(PathBuf::from),
+                    }
+                }
+                "rejoindre" => {
+                    max_positional(2)?;
+                    only(&["--ac", "--empreinte"])?;
+                    ServerCommand::Join {
+                        url: arg(1, "l'ADRESSE du serveur")?,
+                        ca: one("--ac")?
+                            .map(PathBuf::from)
+                            .ok_or_else(|| "« serveur rejoindre » attend --ac PEM.".to_owned())?,
+                        fingerprint: one("--empreinte")?,
+                    }
+                }
+                "confirmer" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Confirm {
+                        fingerprint: arg(1, "l'EMPREINTE du serveur")?,
+                    }
+                }
+                "etat" => {
+                    max_positional(1)?;
+                    only(&[])?;
+                    ServerCommand::Status
+                }
+                "sync" => {
+                    max_positional(1)?;
+                    only(&[])?;
+                    ServerCommand::Sync
+                }
+                _ => return Err(format!("sous-commande de « serveur » inconnue.\n\n{USAGE}")),
+            };
+            Command::Server(sub_command)
+        }
+        "casier" => {
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            let arg = |i: usize, what: &str| -> Result<String, String> {
+                positional
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("« casier {sub} » attend {what}."))
+            };
+            if sub != "ajouter" && has("--empreinte") {
+                return Err(format!(
+                    "option inconnue pour « casier {sub} » : --empreinte"
+                ));
+            }
+            let sub_command = match sub {
+                "creer" => {
+                    max_positional(2)?;
+                    LockerCommand::Create {
+                        name: arg(1, "le NOM du casier")?,
+                    }
+                }
+                "membres" => {
+                    max_positional(2)?;
+                    LockerCommand::Members {
+                        locker: arg(1, "le CASIER")?,
+                    }
+                }
+                "ajouter" => {
+                    max_positional(4)?;
+                    LockerCommand::Add {
+                        locker: arg(1, "le CASIER, le MEMBRE et le ROLE")?,
+                        member: arg(2, "le CASIER, le MEMBRE et le ROLE")?,
+                        role: arg(3, "le CASIER, le MEMBRE et le ROLE")?,
+                        fingerprint: one("--empreinte")?,
+                    }
+                }
+                "retirer" => {
+                    max_positional(3)?;
+                    LockerCommand::Remove {
+                        locker: arg(1, "le CASIER et le MEMBRE")?,
+                        member: arg(2, "le CASIER et le MEMBRE")?,
+                    }
+                }
+                _ => return Err(format!("sous-commande de « casier » inconnue.\n\n{USAGE}")),
+            };
+            Command::Locker(sub_command)
         }
         "gen" => {
             max_positional(1)?;
@@ -366,9 +544,46 @@ mod tests {
                 urls: vec!["a".into(), "b".into()],
                 tags: vec![],
                 note: false,
-                generate: Some(24)
+                generate: Some(24),
+                locker: None,
             }
         );
+        assert_eq!(
+            p(&["serveur", "rejoindre", "hirzla://h", "--ac", "ca.pem"])
+                .unwrap()
+                .command,
+            Command::Server(ServerCommand::Join {
+                url: "hirzla://h".into(),
+                ca: PathBuf::from("ca.pem"),
+                fingerprint: None,
+            })
+        );
+        assert_eq!(
+            p(&[
+                "casier",
+                "ajouter",
+                "Ops",
+                "00ff",
+                "lecteur",
+                "--empreinte",
+                "E"
+            ])
+            .unwrap()
+            .command,
+            Command::Locker(LockerCommand::Add {
+                locker: "Ops".into(),
+                member: "00ff".into(),
+                role: "lecteur".into(),
+                fingerprint: Some("E".into()),
+            })
+        );
+        assert!(matches!(
+            p(&["set", "x", "--casier", "Ops"]).unwrap().command,
+            Command::Set {
+                locker: Some(_),
+                ..
+            }
+        ));
         assert!(matches!(
             p(&["set", "x", "--generer", "32"]).unwrap().command,
             Command::Set {
@@ -407,5 +622,10 @@ mod tests {
         assert!(p(&["gen", "abc"]).is_err());
         assert!(p(&["get", "a", "--champ"]).is_err());
         assert!(p(&["--nope", "ls"]).is_err());
+        assert!(p(&["serveur"]).is_err());
+        assert!(p(&["serveur", "rejoindre", "hirzla://h"]).is_err());
+        assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());
+        assert!(p(&["casier", "ajouter", "Ops", "00ff"]).is_err());
+        assert!(p(&["casier", "retirer", "Ops", "00ff", "--empreinte", "E"]).is_err());
     }
 }
