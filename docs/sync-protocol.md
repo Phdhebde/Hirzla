@@ -915,3 +915,51 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     réservés (30 à 39), spécifiés à l'étape 10.
 20. **Partage par export chiffré pour un destinataire en mode Self** (`architecture.md`) :
     non spécifié ici.
+
+### Ajouts de l'étape 9 (implémentation)
+
+Précisions apparues en codant `hirzla-sync`. Les numéros 21 à 25 sont appliqués par
+l'implémentation ; les suivants restent ouverts.
+
+21. **Frontière avec `hirzla-access`** : trait `Authorizer` défini par `hirzla-sync`
+    (ADR 0018, proposé). Le sens des dépendances de `CLAUDE.md` est à mettre à jour.
+22. **Ancrage de la genèse** (ADR 0018) : genèse donnée à l'ouverture, ou unique
+    `LockerCreate` reçue ; plusieurs rendent le casier ambigu (tout en attente) ; toute
+    opération qui descend d'une autre `LockerCreate` est rejetée.
+23. **Époque des enveloppes** : toujours l'`epoch` de l'opération, y compris pour `Grant`,
+    `DeviceAdd` et `EnvelopeAdd` (ADR 0018).
+24. **Décodage strict** : une liste d'accords vide est refusée (absente veut dire aucune) ;
+    les listes d'opérations (`QuarantineAccept`, `QuarantineReject`, `Compact`) sont triées et
+    sans doublon ; un `VectorEntry` de rang 0 est refusé (jamais encodé).
+25. **Réémission des opérations locales (§ 7.5, ligne 2)** : seule la fin de chaîne qui n'a
+    **jamais quitté l'appareil** est réécrite. Une opération remise à un pair, écrite dans un
+    fichier d'échange, ou revenue du réseau compte comme publiée (ligne 3 : rescellement), même
+    si le serveur ne l'a pas encore accusée. Une opération de contrôle dans cette fin de chaîne
+    est réémise sur l'état courant (nouvelles enveloppes, accords repris), pas abandonnée.
+    Une donnée dont l'intention ne s'applique plus (secret purgé, ensemble plein) est retirée
+    et signalée.
+26. **Souches sans passé causal** (ADR 0017, proposé) : un appareil qui rejoint après une
+    compaction stable a un passé tronqué et peut diverger. Changement de format proposé ;
+    d'ici là, ne pas élaguer en mode Serveur.
+27. **Bifurcations et vecteurs** : deux opérations de même `(member, device, seq)` ont le même
+    rang dans un vecteur ; l'échange différentiel (§ 13.2) ne transmet donc pas la seconde.
+    Sur le réseau local, une bifurcation n'est détectée que si l'un des postes reçoit les deux
+    par un autre chemin (serveur, fichier d'échange). Piste : échanger aussi l'`op_id` du
+    dernier rang de chaque appareil.
+28. **Vecteur du fichier d'échange** : un `VectorEntry` ne porte pas de casier ; le vecteur
+    n'a de sens que si le fichier ne contient qu'un casier. À corriger avec un
+    `LockerCursor` par casier (§ 13.1).
+29. **Appareils `BlindUser` et `Auditor`** : sans clé d'époque, ils ne descellent ni les
+    opérations de contrôle ni leurs dépendances, et restent en attente sur tout le journal.
+    Le § 6 ne leur donne pas de chemin de validation.
+30. **Contrôle de version d'une opération dont les parents sont élagués** : la fusion des
+    parents n'est connue que des postes qui ont gardé les métadonnées ; voir ADR 0017.
+31. **Référence d'une souche** : `ref` et `prev` d'une souche viennent du relais et ne sont pas
+    signés ; seule la présence dans la liste d'une `Compact` signée les rend acceptables. Un
+    relais peut mentir sur la `ref` d'une souche listée. L'ADR 0017 corrige ce point si la
+    `Compact` porte aussi `ref`.
+32. **Appairage direct (§ 13.2)** : messages, transcription et vérification du pair codés ;
+    la couche réseau (TLS 1.3 + exportateur, mDNS) n'est pas implémentée, faute de dépendance
+    réseau validée.
+33. **« Instantanés chiffrés » (`PROMPTS.md`, étape 9)** : non retenus ; l'implémentation suit
+    la compaction par élagage du § 10.
