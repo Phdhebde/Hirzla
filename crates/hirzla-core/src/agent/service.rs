@@ -1,4 +1,4 @@
-//! What the core does with an agent request (`docs/api-locale.md` § 13).
+//! What the core does with an agent request (`docs/api-locale.md` § 14).
 
 use std::sync::Arc;
 

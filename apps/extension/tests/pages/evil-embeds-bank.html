@@ -1,0 +1,11 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8"><title>Page tierce</title></head>
+<body>
+  <!-- Served at https://evil.test/: a third-party page that frames the real login page of the
+       registered origin. Nothing may be filled: the top-level origin is not registered, and
+       the extension never acts inside a frame. -->
+  <h1>Jeu concours</h1>
+  <iframe id="frame" src="https://bank.test/login" width="400" height="300"></iframe>
+</body>
+</html>

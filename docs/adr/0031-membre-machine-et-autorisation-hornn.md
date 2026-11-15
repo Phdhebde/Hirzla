@@ -42,7 +42,7 @@ doivent pas changer pour cela.
    l'autorisation ; publication après un changement confirmé ; publication signalée « non
    confirmée » si l'issue est inconnue ; transport derrière un trait (ADR 0030).
 9. **API locale** : version 3, opérations 20 à 27, erreurs 30 à 35, aiguillées par le code
-   d'opération (`api-locale.md` § 13). La plage 14 à 19 reste à l'application de poste.
+   d'opération (`api-locale.md` § 14). La plage 14 à 19 reste à l'application de poste.
 10. **SDK Go sans dépendance** : un encodeur/décodeur CBOR minimal et strict (encodage de
     données, pas de cryptographie), sockets Unix et `SO_PEERCRED` de la bibliothèque standard.
     Les secrets y sont des `[]byte` effaçables, jamais des `string`.

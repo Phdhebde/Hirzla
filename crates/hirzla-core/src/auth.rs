@@ -6,7 +6,10 @@
 
 use std::path::{Path, PathBuf};
 
+use hirzla_vault::secret::SecretType;
+
 use crate::events::Refusal;
+use crate::proto::Request;
 use crate::transport::PeerIdentity;
 
 /// Executable names allowed to talk to the core by default, looked up next to the core's own
@@ -15,6 +18,10 @@ pub const DEFAULT_CLIENTS: [&str; 3] = ["hirzla", "hirzla-desktop", "hirzla-nati
 
 /// File name of the core executable.
 pub const CORE_EXECUTABLE: &str = "hirzla-core";
+
+/// Executable name of the browser native host, which gets the browser profile by default
+/// (`docs/api-locale.md` § 3.1, ADR 0026).
+pub const BROWSER_CLIENT: &str = "hirzla-native-host";
 
 /// A list of executables, compared by canonical path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,6 +61,80 @@ impl AllowList {
     #[must_use]
     pub fn paths(&self) -> &[PathBuf] {
         &self.0
+    }
+
+    /// The default browser list: [`BROWSER_CLIENT`] in the directory of `core_executable`.
+    #[must_use]
+    pub fn browser_default_for(core_executable: &Path) -> AllowList {
+        let dir = core_executable.parent().unwrap_or(Path::new("."));
+        AllowList::new([dir.join(format!("{BROWSER_CLIENT}{}", std::env::consts::EXE_SUFFIX))])
+    }
+}
+
+/// What an accepted client may ask (`docs/api-locale.md` § 3.1, version 2). Decided by the
+/// core from the client's executable, never from a message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientProfile {
+    /// Every operation: the command line, the desktop application.
+    Full,
+    /// The browser native host: state, lock, generator, and the operations bound to a web
+    /// origin. It can neither list nor read the vault outside an origin, nor change, delete,
+    /// create or unlock it, nor stop the core.
+    Browser,
+}
+
+impl ClientProfile {
+    /// Whether this profile may send `request`.
+    #[must_use]
+    pub fn permits(self, request: &Request) -> bool {
+        match self {
+            ClientProfile::Full => true,
+            ClientProfile::Browser => match request {
+                Request::Status
+                | Request::Lock
+                | Request::Generate { .. }
+                | Request::Match { .. }
+                | Request::Fill { .. } => true,
+                // A new login proposed by the extension: a password secret, bound to at
+                // least one URL, in the personal locker.
+                Request::Create {
+                    locker,
+                    secret_type,
+                    urls,
+                    ..
+                } => locker.is_none() && *secret_type == SecretType::Password && !urls.is_empty(),
+                Request::Init { .. }
+                | Request::Unlock { .. }
+                | Request::List { .. }
+                | Request::Read { .. }
+                | Request::Update { .. }
+                | Request::Delete { .. }
+                | Request::Shutdown => false,
+            },
+        }
+    }
+}
+
+/// The core's verdict on a client, with its profile: the browser profile if its executable
+/// is in `browser`, the full profile if it is in `allowed`, refused otherwise.
+///
+/// # Errors
+/// The [`Refusal`] to log.
+pub fn authorize_client_profile(
+    peer: &PeerIdentity,
+    allowed: &AllowList,
+    browser: &AllowList,
+) -> Result<ClientProfile, Refusal> {
+    if !peer.same_user {
+        return Err(Refusal::OtherUser);
+    }
+    let exe = peer.executable.as_deref().ok_or(Refusal::UnknownPeer)?;
+    if browser.allows(exe) {
+        Ok(ClientProfile::Browser)
+    } else if allowed.allows(exe) {
+        Ok(ClientProfile::Full)
+    } else {
+        Err(Refusal::ExecutableNotAllowed)
     }
 }
 
@@ -193,6 +274,120 @@ mod tests {
         let list = AllowList::default_for(&core);
         assert!(list.allows(&cli));
         assert!(!list.allows(&core));
+    }
+
+    #[test]
+    fn profile_comes_from_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cli = dir.path().join("cli");
+        let host = dir.path().join("host");
+        let other = dir.path().join("other");
+        for p in [&cli, &host, &other] {
+            std::fs::write(p, b"").unwrap();
+        }
+        let full = AllowList::new([cli.clone(), host.clone()]);
+        let browser = AllowList::new([host.clone()]);
+        let check =
+            |exe: &Path| authorize_client_profile(&peer(true, Some(exe.into())), &full, &browser);
+        assert_eq!(check(&cli), Ok(ClientProfile::Full));
+        // In both lists: the narrower profile wins.
+        assert_eq!(check(&host), Ok(ClientProfile::Browser));
+        assert_eq!(check(&other), Err(Refusal::ExecutableNotAllowed));
+        assert_eq!(
+            authorize_client_profile(&peer(false, Some(host.clone())), &full, &browser),
+            Err(Refusal::OtherUser)
+        );
+        assert_eq!(
+            authorize_client_profile(&peer(true, None), &full, &browser),
+            Err(Refusal::UnknownPeer)
+        );
+        // Only in the browser list: accepted, with the browser profile.
+        assert_eq!(
+            authorize_client_profile(
+                &peer(true, Some(host.clone())),
+                &AllowList::new([]),
+                &browser
+            ),
+            Ok(ClientProfile::Browser)
+        );
+    }
+
+    #[test]
+    fn browser_profile_is_limited() {
+        use crate::proto::{ApiValue, Selector};
+        use hirzla_vault::secret::Field;
+        use zeroize::Zeroizing;
+        let z = |s: &str| Zeroizing::new(s.to_owned());
+        let sel = || Selector::Id {
+            locker: [1; 16],
+            id: [2; 16],
+        };
+        let create = |locker: Option<[u8; 16]>, t: SecretType, urls: Vec<Zeroizing<String>>| {
+            Request::Create {
+                locker,
+                secret_type: t,
+                fields: vec![(Field::Title, ApiValue::Text(z("t")))],
+                urls,
+                tags: vec![],
+            }
+        };
+        let allowed = [
+            Request::Status,
+            Request::Lock,
+            Request::Generate {
+                length: 20,
+                classes: 15,
+            },
+            Request::Match {
+                origin: "https://a.example".into(),
+            },
+            Request::Fill {
+                locker: [1; 16],
+                id: [2; 16],
+                origin: "https://a.example".into(),
+            },
+            create(None, SecretType::Password, vec![z("https://a.example")]),
+        ];
+        let refused = [
+            Request::Init {
+                password: z("p"),
+                kdf: None,
+            },
+            Request::Unlock { password: z("p") },
+            Request::List {
+                query: None,
+                include_trash: false,
+            },
+            Request::Read {
+                selector: sel(),
+                field: Field::Password,
+            },
+            Request::Update {
+                selector: sel(),
+                set: vec![],
+                clear: vec![Field::Notes],
+            },
+            Request::Delete {
+                selector: sel(),
+                purge: false,
+            },
+            Request::Shutdown,
+            create(None, SecretType::Password, vec![]),
+            create(None, SecretType::Note, vec![z("https://a.example")]),
+            create(
+                Some([3; 16]),
+                SecretType::Password,
+                vec![z("https://a.example")],
+            ),
+        ];
+        for r in &allowed {
+            assert!(ClientProfile::Browser.permits(r), "{r:?}");
+            assert!(ClientProfile::Full.permits(r), "{r:?}");
+        }
+        for r in &refused {
+            assert!(!ClientProfile::Browser.permits(r), "{r:?}");
+            assert!(ClientProfile::Full.permits(r), "{r:?}");
+        }
     }
 
     #[test]

@@ -10,7 +10,7 @@
 //! - [`MachineMember`]: enrolment, replicas, sessions, rotation;
 //! - [`rotation`]: the transport trait and the rotation target;
 //! - [`proto`] and [`service`]: the agent operations of the local API (version 3, codes 20
-//!   and up, `docs/api-locale.md` § 13).
+//!   and up, `docs/api-locale.md` § 14).
 
 pub mod proto;
 pub mod rotation;

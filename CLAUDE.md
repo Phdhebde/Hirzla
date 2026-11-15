@@ -53,6 +53,7 @@ Dans ces cas : propose un ADR (copie `docs/adr/0000-modele.md`), n'implémente p
 | `apps/server` | `hirzlad`, serveur aveugle. |
 | `apps/desktop` | Application Tauri 2. |
 | `apps/extension` | Extension navigateur. |
+| `apps/native-host` | `hirzla-native-host`, hôte de messagerie native de l'extension (client du noyau, profil navigateur). |
 | `sdk/go` | Client pour l'agent gateway Hornn. |
 | `docs/` | Spécifications, ADR, cible de sécurité. |
 | `brand/` | Logo, couleurs, typographies. |

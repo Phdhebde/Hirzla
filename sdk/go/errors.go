@@ -2,7 +2,7 @@ package hirzla
 
 import "fmt"
 
-// Code is the status of a refused request (docs/api-locale.md § 7 and § 13.3).
+// Code is the status of a refused request (docs/api-locale.md § 7 and § 14.3).
 type Code uint64
 
 // General codes reused by the agent profile, and the codes of the agent profile.
@@ -24,7 +24,7 @@ const (
 	CodeUnknownLocker      Code = 35
 )
 
-// GrantReason tells why the core refused a session grant (docs/api-locale.md § 13.3).
+// GrantReason tells why the core refused a session grant (docs/api-locale.md § 14.3).
 type GrantReason uint64
 
 // Reasons a grant is refused.

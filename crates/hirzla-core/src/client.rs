@@ -102,7 +102,7 @@ impl Client {
         result.map_err(ClientError::Refused)
     }
 
-    /// Sends one agent request (`docs/api-locale.md` § 13) and waits for its reply. The
+    /// Sends one agent request (`docs/api-locale.md` § 14) and waits for its reply. The
     /// inner result carries the core's refusal, with its agent code.
     ///
     /// # Errors

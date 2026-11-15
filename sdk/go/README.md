@@ -2,7 +2,7 @@
 
 Client destiné à l'agent gateway Hornn, pour qu'il agisse comme membre machine d'un casier
 (`docs/integration-hornn.md`). Il pilote le noyau Hirzla de l'agent par l'API locale
-(`docs/api-locale.md` § 13, version 3). **Il n'implémente aucune cryptographie** : les clés, les
+(`docs/api-locale.md` § 14, version 3). **Il n'implémente aucune cryptographie** : les clés, les
 répliques et toutes les vérifications des autorisations de Hornn sont dans le noyau. Le SDK
 transmet les autorisations et les opérations comme des octets opaques.
 

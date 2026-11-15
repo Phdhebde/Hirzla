@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-// Protocol constants (docs/api-locale.md § 4 and § 13).
+// Protocol constants (docs/api-locale.md § 4 and § 14).
 const (
 	// AgentVersion is the version of the local API that carries the agent operations.
 	AgentVersion = 3

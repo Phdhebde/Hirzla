@@ -15,9 +15,9 @@ use zeroize::Zeroizing;
 use hirzla_access::hornn::HornnTrust;
 use hirzla_vault::model::Id16;
 
-use crate::agent::proto::{is_agent_request, AgentReply, AgentRequest};
+use crate::agent::proto::{is_agent_request, AgentCode, AgentReply, AgentRequest};
 use crate::agent::service::{AgentConfig, AgentService};
-use crate::auth::{authorize_client, AllowList};
+use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::events::{Event, Log, Refusal};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
@@ -49,6 +49,9 @@ pub struct Options {
     pub log: Option<PathBuf>,
     /// Allowed client executables; the default list when absent.
     pub allow: Option<Vec<PathBuf>>,
+    /// Executables given the browser profile (`docs/api-locale.md` § 3.1); the native host
+    /// next to the core when absent and `allow` is absent, none when only `allow` is given.
+    pub allow_browser: Option<Vec<PathBuf>>,
     /// Automatic lock delay overriding the vault's setting.
     pub auto_lock: Option<Duration>,
     /// Agent profile (`docs/integration-hornn.md`): Hornn's issuer and the file of its
@@ -57,7 +60,7 @@ pub struct Options {
 }
 
 const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
-[--allow-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
+[--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
 [--hornn-issuer HEX --hornn-key FICHIER]";
 
 /// The default vault file: `$XDG_DATA_HOME/hirzla/coffre.hirzla` (or
@@ -92,6 +95,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
+    let mut allow_browser: Option<Vec<PathBuf>> = None;
     let mut auto_lock = None;
     let mut hornn_issuer: Option<Id16> = None;
     let mut hornn_key: Option<PathBuf> = None;
@@ -108,6 +112,9 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             Some("--allow-exe") => allow
                 .get_or_insert_with(Vec::new)
                 .push(PathBuf::from(value("--allow-exe")?)),
+            Some("--allow-browser-exe") => allow_browser
+                .get_or_insert_with(Vec::new)
+                .push(PathBuf::from(value("--allow-browser-exe")?)),
             Some("--auto-lock") => {
                 let v = value("--auto-lock")?;
                 let s: u64 = v
@@ -149,6 +156,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         vault,
         log,
         allow,
+        allow_browser,
         auto_lock,
         hornn,
     })
@@ -232,13 +240,18 @@ fn cleanup(endpoint: &Endpoint) {
 /// # Errors
 /// A message for the user, in French, if the endpoint cannot be opened.
 pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Result<(), String> {
+    let me = || {
+        std::env::current_exe()
+            .map_err(|_| "impossible de déterminer l'exécutable du noyau.".to_owned())
+    };
     let allow = match &options.allow {
         Some(list) => AllowList::new(list.iter().cloned()),
-        None => {
-            let me = std::env::current_exe()
-                .map_err(|_| "impossible de déterminer l'exécutable du noyau.".to_owned())?;
-            AllowList::default_for(&me)
-        }
+        None => AllowList::default_for(&me()?),
+    };
+    let browser = match (&options.allow_browser, &options.allow) {
+        (Some(list), _) => AllowList::new(list.iter().cloned()),
+        (None, Some(_)) => AllowList::new([]),
+        (None, None) => AllowList::browser_default_for(&me()?),
     };
     let agent = match &options.hornn {
         None => None,
@@ -300,14 +313,17 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 continue;
             }
         };
-        if let Err(reason) = authorize_client(&peer, &allow) {
-            log.record(Event::ConnectionRefused {
-                pid: peer.pid,
-                reason,
-            });
-            spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
-            continue;
-        }
+        let profile = match authorize_client_profile(&peer, &allow, &browser) {
+            Ok(p) => p,
+            Err(reason) => {
+                log.record(Event::ConnectionRefused {
+                    pid: peer.pid,
+                    reason,
+                });
+                spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
+                continue;
+            }
+        };
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
             log.record(Event::ConnectionRefused {
@@ -324,7 +340,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         let endpoint = Arc::clone(&endpoint);
         let agent = agent.clone();
         std::thread::spawn(move || {
-            serve(conn, &core, agent.as_deref(), &log, &endpoint);
+            serve(conn, &core, agent.as_deref(), &log, &endpoint, profile);
             active.fetch_sub(1, Ordering::SeqCst);
         });
     }
@@ -362,7 +378,7 @@ fn refuse(mut conn: Connection, code: ErrorCode) {
     conn.finish();
 }
 
-/// Answers an agent request (`docs/api-locale.md` § 13). Returns `false` if the connection
+/// Answers an agent request (`docs/api-locale.md` § 14). Returns `false` if the connection
 /// must close.
 fn serve_agent(
     conn: &mut Connection,
@@ -390,12 +406,35 @@ fn serve_agent(
     write_frame(conn, &body).is_ok()
 }
 
+/// Refuses an agent request from a client whose profile does not permit it.
+fn refuse_agent(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
+    let (id, result) = match AgentRequest::decode(frame) {
+        Ok((id, request)) => {
+            let code = AgentCode::General(ErrorCode::Unauthorized);
+            log.record(Event::AgentRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    match AgentReply::encode(id, &result) {
+        Ok(body) => write_frame(conn, &body).is_ok(),
+        Err(_) => false,
+    }
+}
+
 fn serve(
     mut conn: Connection,
     core: &Mutex<Core>,
     agent: Option<&Mutex<AgentService>>,
     log: &Log,
     endpoint: &Endpoint,
+    profile: ClientProfile,
 ) {
     let _ = conn.set_read_timeout(Some(IDLE_TIMEOUT));
     loop {
@@ -412,28 +451,43 @@ fn serve(
         };
         if let Some(agent) = agent {
             if is_agent_request(&frame) {
-                if serve_agent(&mut conn, agent, log, &frame) {
+                // The agent operations are for the gateway (a full client), never for the
+                // browser profile.
+                let ok = if profile == ClientProfile::Full {
+                    serve_agent(&mut conn, agent, log, &frame)
+                } else {
+                    refuse_agent(&mut conn, log, &frame)
+                };
+                if ok {
                     continue;
                 }
                 break;
             }
         }
-        let (id, result, shutdown) = match Request::decode(&frame) {
-            Ok((id, request)) => {
+        let (id, version, result, shutdown) = match Request::decode_versioned(&frame) {
+            Ok((id, version, request)) if !profile.permits(&request) => {
+                let code = ErrorCode::Unauthorized;
+                log.record(Event::Request {
+                    op: request.op(),
+                    error: Some(code),
+                });
+                (id, version, Err(ErrorReply::new(code)), false)
+            }
+            Ok((id, version, request)) => {
                 let shutdown = request.op() == Op::Shutdown;
                 let result = core
                     .lock()
                     .unwrap_or_else(PoisonError::into_inner)
                     .handle(request);
                 let ok = result.is_ok();
-                (id, result, shutdown && ok)
+                (id, version, result, shutdown && ok)
             }
-            Err((id, code)) => {
+            Err((id, version, code)) => {
                 log.record(Event::BadMessage);
-                (id, Err(ErrorReply::new(code)), false)
+                (id, version, Err(ErrorReply::new(code)), false)
             }
         };
-        let Ok(body) = Reply::encode(id, &result) else {
+        let Ok(body) = Reply::encode_versioned(version, id, &result) else {
             break;
         };
         drop(result);
@@ -473,6 +527,8 @@ mod tests {
             "/a",
             "--allow-exe",
             "/b",
+            "--allow-browser-exe",
+            "/c",
             "--auto-lock",
             "5",
         ]))
@@ -480,6 +536,7 @@ mod tests {
         assert_eq!(o.endpoint.display(), "/tmp/x/core.sock");
         assert_eq!(o.vault, PathBuf::from("/tmp/v.hirzla"));
         assert_eq!(o.allow.unwrap().len(), 2);
+        assert_eq!(o.allow_browser.unwrap(), vec![PathBuf::from("/c")]);
         assert_eq!(o.auto_lock, Some(Duration::from_secs(5)));
         assert!(o.hornn.is_none());
     }

@@ -1,4 +1,4 @@
-//! Agent operations of the local API (`docs/api-locale.md` § 13): version 3, operation codes
+//! Agent operations of the local API (`docs/api-locale.md` § 14): version 3, operation codes
 //! 20 to 27, error codes 30 to 35. Same frames, same CBOR profile and same strict decoding as
 //! the rest of the API (`crate::proto`).
 
@@ -89,7 +89,7 @@ pub enum AgentCode {
     NotEnrolled,
     /// 31: the machine already has an identity.
     AlreadyEnrolled,
-    /// 32: the grant is refused; the detail gives the reason code (§ 13.3).
+    /// 32: the grant is refused; the detail gives the reason code (§ 14.3).
     GrantRefused(u64),
     /// 33: the target refused the password change; nothing published.
     TransportRefused,

@@ -285,6 +285,61 @@ fn second_core_on_the_same_endpoint_fails() {
     assert!(!status.success());
 }
 
+/// A client with the browser profile (`--allow-browser-exe`) gets state and the generator,
+/// and `Unauthorized` for the rest; its connection stays open (`docs/api-locale.md` § 3.1).
+#[test]
+fn browser_profile_is_enforced_by_the_core() {
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let init = Request::Init {
+        password: z(PASSWORD),
+        kdf: None,
+    };
+    assert_eq!(refused(c.call(&init)), ErrorCode::Unauthorized);
+    assert_eq!(refused(c.call(&Request::Shutdown)), ErrorCode::Unauthorized);
+    let list = Request::List {
+        query: None,
+        include_trash: false,
+    };
+    assert_eq!(refused(c.call(&list)), ErrorCode::Unauthorized);
+    match c
+        .call(&Request::Generate {
+            length: 24,
+            classes: 15,
+        })
+        .unwrap()
+    {
+        Reply::Generated(p) => assert_eq!(p.chars().count(), 24),
+        _ => panic!(),
+    }
+    // Allowed, but there is no vault yet.
+    let m = Request::Match {
+        origin: "https://bank.example".into(),
+    };
+    assert_eq!(refused(c.call(&m)), ErrorCode::NoVault);
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=request op=init result=unauthorized"),
+        "{log}"
+    );
+    assert!(
+        log.contains("event=request op=match result=no_vault"),
+        "{log}"
+    );
+    assert!(!log.contains(PASSWORD));
+}
+
 #[cfg(unix)]
 #[test]
 fn the_agent_profile_answers_over_the_real_channel() {
@@ -337,4 +392,42 @@ fn the_agent_profile_answers_over_the_real_channel() {
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
     assert!(log.contains("event=agent_request op=session_open result=malformed"));
     assert!(!log.contains(&control_code));
+}
+
+#[cfg(unix)]
+#[test]
+fn agent_operations_are_refused_to_the_browser_profile() {
+    use hirzla_core::agent::proto::{AgentCode, AgentRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "agent-browser");
+    let hornn = hirzla_crypto::sign::HornnSigningKey::generate().unwrap();
+    let key = dir.path().join("hornn.key");
+    std::fs::write(&key, hornn.verifying_key().as_bytes()).unwrap();
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let key_arg = key.to_str().unwrap().to_owned();
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &[
+            "--allow-browser-exe",
+            me.to_str().unwrap(),
+            "--hornn-issuer",
+            "0f0e0d0c0b0a09080706050403020100",
+            "--hornn-key",
+            &key_arg,
+        ],
+    );
+    let mut c = connect(&ep);
+    for r in [AgentRequest::AgentStatus, AgentRequest::AgentEnrol] {
+        assert!(matches!(
+            c.call_agent(&r).unwrap(),
+            Err(AgentCode::General(ErrorCode::Unauthorized))
+        ));
+    }
+    // The connection stays open for the operations the profile permits.
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=agent_request op=agent_enrol result=unauthorized"));
 }

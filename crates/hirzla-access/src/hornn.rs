@@ -115,7 +115,7 @@ pub enum GrantRefusal {
 }
 
 impl GrantRefusal {
-    /// Reason code returned to the agent process (`docs/api-locale.md` § 13.3).
+    /// Reason code returned to the agent process (`docs/api-locale.md` § 14.3).
     #[must_use]
     pub const fn code(self) -> u64 {
         match self {

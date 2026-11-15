@@ -97,7 +97,7 @@ pub enum Event {
     },
     /// The core stops.
     Stopped,
-    /// An agent request was answered (`docs/api-locale.md` § 13). `result` is `ok`, the
+    /// An agent request was answered (`docs/api-locale.md` § 14). `result` is `ok`, the
     /// name of the error, or the reason a grant was refused: fixed words only.
     AgentRequest {
         /// Operation.
@@ -240,7 +240,7 @@ mod tests {
         ] {
             events.push(Event::Locked { reason });
         }
-        for n in 1..=11 {
+        for n in 1..=13 {
             let op = Op::from_u64(n).unwrap_or(Op::Status);
             events.push(Event::Request { op, error: None });
             for c in 1..=17 {

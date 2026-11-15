@@ -41,7 +41,7 @@ rotation, proposé) et ADR 0031 (membre machine et autorisation de session, prop
 2. Hornn signe une **autorisation de session** (§ 3) : 60 secondes, usage unique, destinée au
    membre machine de la gateway, nommant le casier, le secret, l'utilisateur et les champs.
 3. L'autorisation passe par le hub jusqu'à la gateway, opaque, comme le jeton actuel (H9).
-4. La gateway la présente à son noyau Hirzla (`SessionOpen`, `api-locale.md` § 13).
+4. La gateway la présente à son noyau Hirzla (`SessionOpen`, `api-locale.md` § 14).
 5. Le noyau fait les vérifications du § 4, consomme l'autorisation, descelle les champs demandés
    et les rend à la gateway seulement.
 6. La gateway vérifie que la cible donnée par Hornn figure parmi les URL ou hôtes du secret,
@@ -112,7 +112,7 @@ Testé par `hirzla-access` (`fixed_vector_of_the_body`) et par le SDK Go (`TestE
 
 ## 4. Vérifications par le noyau de l'agent
 
-Dans cet ordre ; la première qui échoue refuse, avec un code de motif (`api-locale.md` § 13.3) :
+Dans cet ordre ; la première qui échoue refuse, avec un code de motif (`api-locale.md` § 14.3) :
 
 1. décodage strict de `SignedGrant` ;
 2. signature hybride avec la clé épinglée : **les deux moitiés** doivent vérifier ;
@@ -216,7 +216,7 @@ plan de contrôle (`crates/hirzla-core/tests/hornn_sim`) les met en œuvre.
 9. **Synchronisation** : relayer les opérations entre `hirzlad` et le noyau (`AgentIngest`,
    `AgentOutbox`, `AgentAck`) tant que le noyau n'a pas son propre client de synchronisation
    (§ 11), et synchroniser avant de présenter une autorisation.
-10. **Journal** : reprendre dans l'audit de Hornn les codes de motif des refus (§ 13.3 de
+10. **Journal** : reprendre dans l'audit de Hornn les codes de motif des refus (§ 14.3 de
     `api-locale.md`).
 
 ## 9. Rotation
@@ -253,8 +253,9 @@ plan de contrôle (`crates/hirzla-core/tests/hornn_sim`) les met en œuvre.
 2. **Client de synchronisation** : le noyau n'a pas encore de client `hirzlad` (§ 11 de
    `sync-protocol.md`) ; la gateway relaie des octets opaques.
 3. **Transport SSH réel** : ADR 0030.
-4. **Profil de client** : les opérations 20 à 27 devraient être réservées à l'exécutable de la
-   gateway par le mécanisme de profils de la version 2 (ADR 0026, branche de l'extension).
+4. **Profil de client** : les opérations 20 à 27 sont refusées au profil navigateur
+   (ADR 0026) et ouvertes au profil complet ; un profil « agent » qui les réserverait à
+   l'exécutable de la gateway reste à ajouter.
 5. **Journal d'audit signé** : l'usage est dans le journal technique du noyau ; un événement
    d'audit (`evenements.md`) est à ajouter.
 6. **Windows** : le SDK Go ne sait pas encore ouvrir le tube nommé du noyau.

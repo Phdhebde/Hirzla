@@ -17,6 +17,8 @@ hirzla-audit = { path = "../hirzla-audit" }
 hirzla-keystore = { path = "../hirzla-keystore" }
 hirzla-sync = { path = "../hirzla-sync" }
 thiserror = "2.0"
+# Same parser as the vault index hosts (WHATWG URL Standard), already in the graph.
+url = "2.5.8"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
 [dev-dependencies]

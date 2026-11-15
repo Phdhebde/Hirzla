@@ -805,6 +805,7 @@ dependencies = [
  "hirzla-vault",
  "tempfile",
  "thiserror",
+ "url",
  "zeroize",
 ]
 
@@ -840,6 +841,17 @@ dependencies = [
  "thiserror",
  "tss-esapi",
  "windows-sys",
+ "zeroize",
+]
+
+[[package]]
+name = "hirzla-native-host"
+version = "0.0.0"
+dependencies = [
+ "hirzla-core",
+ "hirzla-keystore",
+ "hirzla-vault",
+ "tempfile",
  "zeroize",
 ]
 
