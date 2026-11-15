@@ -1171,10 +1171,11 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
     contre les en-têtes du journal, avec reconstruction.
 
-## 15. Fichier annexe du mode Serveur (v2)
+## 15. Fichier annexe du mode Serveur (v3)
 
 Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
-stable).
+stable). Version 3 : ADR 0044 (demandes d'accord en cours) et ADR 0045 (surveillance datée :
+révocations retenues, inscriptions, opérations retenues).
 
 Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
@@ -1198,12 +1199,38 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | `2` écrit ; `1` encore lu |
+| 1 | `v` | `uint` | `3` écrit ; `1` et `2` encore lus |
 | 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
 | 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
 | 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
-| 5 | `keylog` | `KeyLogState` | Requis en v2, absent en v1 |
+| 5 | `keylog` | `KeyLogState` | Requis en v2 et v3, absent en v1 |
+| 6 | `requests` | `array<PendingRequest>` | v3 : demandes d'accord en cours (ADR 0044), au plus 64, triées par `request_id`, sans doublon |
+| 7 | `watch` | `Watch` | v3 : surveillance datée (ADR 0045) |
 
+Une annexe v1 ou v2 n'a pas les clés 6 et 7 : aucune demande, surveillance vide.
+
+`PendingRequest` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `locker_id` | `ID16` | Un casier de `lockers` |
+| 2 | `request_id` | `ID16` | |
+| 3 | `action` | `uint` | 1, 2 ou 3 (`sync-protocol.md` § 7.7) |
+| 4 | `target` | `ID16?` | Présent si et seulement si `action` vaut 1 ou 2 |
+| 5 | `detail` | `uint?` | Présent si et seulement si `action` vaut 2 ou 3 |
+| 6 | `approvals` | `array<Approval>` | Accords vérifiés à leur ajout, au plus 15, triés par membre, un par membre |
+| 7 | `created_ms` | `uint` | Heure murale de la préparation |
+
+`Watch` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `removals` | `array<{1: op_id, 2: discovered_ms}>` | `Revoke` inscrites au registre (kind 5) pour un casier de `lockers`, pas encore reçues, triées par `op_id` |
+| 2 | `issued` | `array<{1: locker_id, 2: op_id, 3: issued_ms}>` | `Revoke` émises par le poste, pas encore inscrites, triées par `op_id` |
+| 3 | `enrolled_ms` | `uint?` | Première authentification acceptée, tant que le certificat du poste n'est pas inscrit |
+| 4 | `pending` | `array<{1: locker_id, 2: op_id, 3: seen_ms}>` | Opérations en attente d'une dépendance alors que le serveur annonçait `more = false`, triées par `(locker_id, op_id)` |
+
+Chaque liste de `Watch` compte au plus 100 000 éléments.
 `LockerState` :
 
 | Clé | Nom | Type | Contraintes |
@@ -1260,7 +1287,13 @@ Version 2, dans cet ordre :
 3. **Opérations** (`ops`), puis **souches** (`stubs`), revalidées comme à la réception (une
    souche exige une `Compact` qui la liste, `sync-protocol.md` § 10.3).
 4. `unsent`, puis `stable`.
+5. Version 3 : `requests` (chaque casier cité doit être dans `lockers`) et `watch`, gardés tels
+   quels ; les accords ne sont pas revérifiés à la lecture, ils le sont de nouveau par le
+   contrôle de `QuorumApply` et par tous les postes à la réception de l'opération.
 
+Le noyau tient aussi `SyncState.quarantine_seen` (`sync-protocol.md` § 11.4, clé 5) : l'heure
+de la première synchronisation qui a vu chaque opération en quarantaine, d'où court le délai de
+rejet automatique (ADR 0045).
 Une réplique reconstruite ainsi, à n'importe quel moment de sa vie, a le même état, les mêmes
 statuts, le même passé élagué et les mêmes opérations à envoyer que celle qui a été écrite.
 

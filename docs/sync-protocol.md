@@ -359,6 +359,49 @@ Règles :
 - La demande circule par tout canal : boîte aux lettres du serveur, réseau local, fichier.
   Elle ne contient aucun secret. L'appareil de l'approbateur affiche ce qu'il signe.
 
+### 7.8 Demande et accord en texte (ADR 0044)
+
+Pour circuler hors bande (copier-coller, fichier, messagerie), une demande et un accord sont
+des objets texte dans l'enveloppe du § 11.10. Ils ne passent pas par le serveur.
+
+**Demande** (`ApprovalOffer`), préfixe `hirzla-demande:` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `1` |
+| 2 | `locker_id` | `ID16` | |
+| 3 | `request_id` | `ID16` | Aléa de l'initiateur |
+| 4 | `action` | `uint` | 1, 2 ou 3 (`ApprovalRequest.action`) |
+| 5 | `target` | `ID16?` | Présent si et seulement si `action` vaut 1 ou 2 |
+| 6 | `detail` | `uint?` | Présent si et seulement si `action` vaut 2 (rôle, 2 à 6) ou 3 (quorum, 2 à 16) |
+| 7 | `issuer` | `ID16` | Membre initiateur |
+| 8 | `issuer_device` | `ID16` | Appareil initiateur |
+
+Ni nom de casier ni secret : l'approbateur lit le nom dans sa propre réplique.
+
+**Accord** (`ApprovalToken`), préfixe `hirzla-accord:` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `1` |
+| 2 | `locker_id` | `ID16` | |
+| 3 | `request_id` | `ID16` | |
+| 4 | `approval` | `Approval` | § 7.7 |
+
+Règles du poste :
+
+- L'approbateur ne signe que s'il est `Owner` du casier avec un appareil actif, n'est ni la
+  cible ni l'initiateur, et si l'action vaut encore dans son état (cible toujours `Owner`,
+  nouveau rôle différent de l'actuel, quorum de 2 à 16). Il signe l'`ApprovalRequest` du § 7.7
+  construite à partir de la demande et de sa propre identité.
+- L'initiateur n'ajoute un accord qu'à une demande qu'il a préparée et pas encore appliquée ;
+  il le vérifie aussitôt (signature par le certificat actif de l'approbateur dans son état,
+  approbateur `Owner`, ni cible ni initiateur, membre pas encore compté). Un accord refusé
+  n'est pas gardé.
+- Quand les accords suffisent (§ 9.2), l'initiateur publie l'opération (`Revoke`, `Grant` ou
+  `Policy`) avec `request_id` et `approvals` ; la demande est alors retirée et son
+  `request_id` ne resservira pas.
+
 ## 8. Fusion
 
 ### 8.1 Têtes d'un secret
@@ -863,6 +906,37 @@ Ensuite :
 - **Après `Stable`**, le serveur sert la souche (`OpItem` clé 3) au lieu de l'opération pour
   chaque élément de `prune` qui est une opération de données du même casier, non `late`, reçue
   avant la `Compact`. Il efface les corps plus tard, en réécrivant son journal (ADR 0040).
+- **Opérations `late`** (ADR 0047) : le serveur date leur réception (enregistrement
+  `LateSeen`, répertoire de données v3) et, après 30 jours, ne sert plus leur corps à
+  personne ; il l'efface à la réécriture suivante du journal.
+
+### 11.10 Enveloppe texte et lien d'invitation (ADR 0046)
+
+**Enveloppe texte** : `préfixe` ‖ `base64url(CBOR(objet) ‖ SHA-384(CBOR(objet))[0..4])`, base64url
+de la RFC 4648 § 5 sans bourrage, CBOR canonique (§ 2). Le contrôle de 4 octets ne détecte que
+les erreurs de copie : l'intégrité vient de l'empreinte ou de la signature que porte l'objet.
+Décodage strict : préfixe exact, caractères base64url seulement (les blancs sont retirés à la
+saisie), contrôle juste, objet canonique sans clé inconnue. Au plus 96 Kio de texte.
+
+| Préfixe | Objet |
+| --- | --- |
+| `hirzla-invitation:` | Lien d'invitation, ci-dessous |
+| `hirzla-demande:` | Demande d'accord (§ 7.8) |
+| `hirzla-accord:` | Accord (§ 7.8) |
+
+**Lien d'invitation**, version 1 :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `1` ; une autre valeur fait refuser le lien |
+| 2 | `address` | `tstr` | `hirzla://hôte[:port]` (`api-locale.md` § 15.2) |
+| 3 | `tls_roots` | `bstr` | Certificats PEM de l'AC du site, ≤ 64 Kio |
+| 4 | `fingerprint` | `tstr` | Empreinte de la clé du serveur (`format.md` § 3.1), 20 caractères, obligatoire |
+
+Le poste qui reçoit un lien le traite exactement comme les trois champs séparés **avec**
+empreinte : il compare la clé reçue dans `HelloAck` à l'empreinte avant d'envoyer `Auth`
+(§ 11.3). `hirzlad invitation` produit le lien à partir de l'en-tête en clair de son
+répertoire de données.
 
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
