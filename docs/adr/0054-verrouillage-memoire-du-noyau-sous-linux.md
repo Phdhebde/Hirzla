@@ -47,7 +47,7 @@ Pistes examinées pour un processus non privilégié :
    (`guide-agd.md` § 2) exige `LimitMEMLOCK=infinity` ou un fichier d'échange chiffré (ou
    aucun) dans la configuration évaluée.
 5. Le verrouillage ciblé par allocateur est reporté à un ADR ultérieur touchant
-   `hirzla-crypto` et `hirzla-vault`.
+   `hirzla-crypto` et `hirzla-vault` (ADR 0060, proposé).
 
 ## Conséquences
 
