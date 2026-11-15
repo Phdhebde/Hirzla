@@ -91,7 +91,7 @@ existe, par un manifeste signé hybride sous Linux.
     clients sont exposés, et rend le remplacement détectable ; les paquets deb et rpm, posés
     dans `/usr/bin` par root, restent la configuration recommandée.
 - Le côté client (vérifier la signature du noyau avant d'envoyer le mot de passe maître) suit
-  le même chemin et reste à faire ; le client vérifie aujourd'hui le chemin du noyau.
+  le même chemin : fait par l'ADR 0055 (`codesign::CoreSignature`).
 - Le code Windows et macOS est compilé et passé à `clippy` en croisé ; il doit être exécuté
   sur des postes réels avec des binaires signés (voir « Reste à faire » de la PR).
 

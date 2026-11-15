@@ -2,13 +2,13 @@
 //! Run them by hand as described in `docs/keystore-prototypes.md`:
 //!
 //! ```sh
-//! cargo test -p hirzla-keystore --test tpm2_prototype -- --ignored --nocapture --test-threads=1
+//! cargo test -p hirzla-keystore --features tpm2-prototype --test tpm2_prototype -- --ignored --nocapture --test-threads=1
 //! ```
 //!
 //! `HIRZLA_TPM_TCTI` selects the TPM (default `device:/dev/tpmrm0`; `swtpm:port=2321` for
 //! the software TPM).
 
-#![cfg(target_os = "linux")]
+#![cfg(all(target_os = "linux", feature = "tpm2-prototype"))]
 #![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::panic, clippy::print_stdout)]
 

@@ -144,6 +144,26 @@ pub fn init_data(dir: &Path) -> Data {
     }
 }
 
+/// The configuration of a server on the loopback, on ephemeral ports.
+pub fn config(pki: &Pki, data: &Data) -> Config {
+    Config {
+        data_dir: data.dir.clone(),
+        listen: "127.0.0.1:0".parse().unwrap(),
+        admin_listen: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
+        tls: tls::device_server_config(
+            tls::load_certs(&pki.cert).unwrap(),
+            tls::load_key(&pki.key).unwrap(),
+        )
+        .unwrap(),
+        admin_tls: tls::admin_server_config(
+            tls::load_certs(&pki.cert).unwrap(),
+            tls::load_key(&pki.key).unwrap(),
+            tls::roots(tls::load_certs(&pki.admin_ca).unwrap()).unwrap(),
+        )
+        .unwrap(),
+    }
+}
+
 /// A started, unsealed server.
 pub struct Server {
     pub running: Running,
@@ -154,22 +174,17 @@ pub struct Server {
 
 impl Server {
     pub fn start(pki: Pki, data: &Data) -> Server {
-        let running = net::start(Config {
-            data_dir: data.dir.clone(),
-            listen: "127.0.0.1:0".parse().unwrap(),
-            admin_listen: "127.0.0.1:0".parse::<SocketAddr>().unwrap(),
-            tls: tls::device_server_config(
-                tls::load_certs(&pki.cert).unwrap(),
-                tls::load_key(&pki.key).unwrap(),
-            )
-            .unwrap(),
-            admin_tls: tls::admin_server_config(
-                tls::load_certs(&pki.cert).unwrap(),
-                tls::load_key(&pki.key).unwrap(),
-                tls::roots(tls::load_certs(&pki.admin_ca).unwrap()).unwrap(),
-            )
-            .unwrap(),
-        });
+        Server::start_with_limits(pki, data, net::Limits::DEVICE, net::Limits::ADMIN)
+    }
+
+    pub fn start_with_limits(
+        pki: Pki,
+        data: &Data,
+        device_limits: net::Limits,
+        admin_limits: net::Limits,
+    ) -> Server {
+        let config = config(&pki, data);
+        let running = net::start_with_limits(config, device_limits, admin_limits);
         let running = running.expect("server starts");
         let device_tls = pki.device_tls();
         let admin_tls = pki.admin_tls();

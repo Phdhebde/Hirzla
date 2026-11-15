@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use hirzla_keystore::platform::{self, HardeningReport};
+use hirzla_keystore::platform::{self, HardeningReport, HardeningStatus};
 use zeroize::Zeroizing;
 
 use hirzla_access::hornn::HornnTrust;
@@ -333,6 +333,13 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         pid: std::process::id(),
         hardening,
     });
+    // Linux with a finite RLIMIT_MEMLOCK (ADR 0054): said once, with the limit, and shown by
+    // `hirzla status`. The guide requires `LimitMEMLOCK=infinity` or an encrypted swap.
+    if hardening.memory_locked == HardeningStatus::Failed {
+        log.record(Event::MemoryNotLocked {
+            limit_kib: platform::memory_lock_limit().map(|b| b / 1024),
+        });
+    }
     log.record(Event::ClientSignatures {
         required: signatures.mode() == SignatureMode::Required,
     });

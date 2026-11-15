@@ -115,6 +115,12 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// The core's memory could not be locked (ADR 0054): secrets may reach the swap file.
+    /// `limit_kib` is the `RLIMIT_MEMLOCK` in force, `-` when unknown.
+    MemoryNotLocked {
+        /// Limit in KiB.
+        limit_kib: Option<u64>,
+    },
     /// Whether the core checks its clients' signatures (ADR 0042): 1 yes, 0 no.
     ClientSignatures {
         /// Required.
@@ -154,6 +160,11 @@ impl Event {
                 out,
                 "event=started pid={pid} memory_locked={} dumps_disabled={} tracing_blocked={}",
                 hardening.memory_locked, hardening.dumps_disabled, hardening.tracing_blocked
+            ),
+            Event::MemoryNotLocked { limit_kib } => write!(
+                out,
+                "event=memory_not_locked limit_kib={}",
+                limit_kib.map_or_else(|| "-".to_owned(), |k| k.to_string())
             ),
             Event::Listening => write!(out, "event=listening"),
             Event::ConnectionRefused { pid, reason } => write!(
@@ -287,6 +298,10 @@ mod tests {
             },
             Event::ClientSignatures { required: true },
             Event::ClientSignatures { required: false },
+            Event::MemoryNotLocked {
+                limit_kib: Some(8192),
+            },
+            Event::MemoryNotLocked { limit_kib: None },
         ];
         for reason in [
             Refusal::OtherUser,

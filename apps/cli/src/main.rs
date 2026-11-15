@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::process::{Command as Process, ExitCode, Stdio};
 use std::time::{Duration, Instant};
 
+use hirzla_core::auth::ServerRefusal;
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, Reply, Request, Selector, StatusInfo,
@@ -101,6 +102,11 @@ fn client_message(e: &ClientError) -> String {
         }
         ClientError::UnsafeEndpoint => {
             "le point de connexion n'est pas réservé à votre compte : connexion refusée.".into()
+        }
+        ClientError::UntrustedCore(ServerRefusal::SignatureNotAccepted) => {
+            "la signature du noyau n'est pas reconnue (éditeur différent ou manifeste des \
+             clients non conforme) : connexion refusée, rien n'a été envoyé."
+                .into()
         }
         ClientError::UntrustedCore(_) => {
             "le processus à l'écoute n'est pas le noyau Hirzla attendu : connexion refusée.".into()
@@ -439,6 +445,16 @@ fn run(args: &Args) -> Result<(), String> {
                     hardening_name(s.hardening.dumps_disabled),
                     hardening_name(s.hardening.tracing_blocked),
                 ));
+                // ADR 0054: a Linux core whose memory is not locked says so, with the remedy.
+                if cfg!(target_os = "linux") && s.hardening.memory_locked == HardeningStatus::Failed
+                {
+                    say(
+                        "Attention : la mémoire du noyau n'est pas verrouillée ; des secrets \
+                         peuvent être écrits dans le fichier d'échange. Démarrez le noyau avec \
+                         une limite de mémoire verrouillée illimitée (LimitMEMLOCK=infinity) \
+                         ou chiffrez le fichier d'échange (guide d'installation, § 2).",
+                    );
+                }
                 Ok(())
             }
         },

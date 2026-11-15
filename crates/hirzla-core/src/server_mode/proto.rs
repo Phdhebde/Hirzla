@@ -376,7 +376,7 @@ pub struct QuorumState {
 }
 
 /// A quarantined operation, as an `Owner` judges it (ADR 0045). Never a secret value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct QuarantinedOp {
     /// Operation.
     pub op_id: OpId,
@@ -441,6 +441,41 @@ impl std::fmt::Debug for LockerStatus {
             .field("access", &self.access)
             .field("frozen", &self.frozen)
             .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for QuarantinedOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the title of the secret: it is confidential metadata.
+        f.debug_struct("QuarantinedOp")
+            .field("cause", &self.cause)
+            .field("class", &self.class)
+            .field("received_ms", &self.received_ms)
+            .field("due_ms", &self.due_ms)
+            .finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for ServerReply {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The variant only: replies carry locker names and titles (confidential metadata).
+        let name = match self {
+            Self::Done => "Done",
+            Self::Status { .. } => "Status",
+            Self::Identity { .. } => "Identity",
+            Self::Joined { .. } => "Joined",
+            Self::Confirmed { .. } => "Confirmed",
+            Self::Synced(_) => "Synced",
+            Self::LockerCreated(_) => "LockerCreated",
+            Self::Granted { .. } => "Granted",
+            Self::Members { .. } => "Members",
+            Self::Request(_) => "Request",
+            Self::Inspected { .. } => "Inspected",
+            Self::Approved(_) => "Approved",
+            Self::Requests(_) => "Requests",
+            Self::Quarantine { .. } => "Quarantine",
+        };
+        f.debug_struct(name).finish_non_exhaustive()
     }
 }
 
@@ -635,7 +670,7 @@ pub struct MemberInfo {
 }
 
 /// A server mode reply. Holds no secret: names of lockers are in erasing buffers.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum ServerReply {
     /// No result.
     Done,

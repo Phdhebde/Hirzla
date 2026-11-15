@@ -35,22 +35,21 @@ pub(super) fn os_harden_process(lock: bool) -> HardeningReport {
     }
 }
 
-/// `mlockall(MCL_CURRENT | MCL_FUTURE)`, only when it cannot make later allocations fail:
-/// with a finite `RLIMIT_MEMLOCK`, every allocation beyond the limit (an Argon2id derivation
-/// takes 64 MiB or more) would fail and abort the process. Privileged processes
+/// `mlockall(MCL_CURRENT | MCL_FUTURE)`, only when it cannot make later allocations fail
+/// (ADR 0054): with a finite `RLIMIT_MEMLOCK`, every allocation beyond the limit (an Argon2id
+/// derivation takes 64 MiB or more) would fail and abort the process. Privileged processes
 /// (`CAP_IPC_LOCK`, usually root) are not bound by the limit.
+///
+/// The soft limit is first raised to the hard limit, which needs no privilege: an
+/// administrator who sets `memlock` to `unlimited` as a hard limit only (`limits.conf`,
+/// `LimitMEMLOCK=infinity` in a unit) gets the lock without changing the default of every
+/// process. When the limit stays finite, nothing is locked and the core reports
+/// [`HardeningStatus::Failed`]; [`memory_lock_limit`] gives the limit for the warning.
 fn lock_memory() -> HardeningStatus {
-    let mut limit = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: `limit` is a valid, writable rlimit that outlives the call.
-    #[allow(unsafe_code)]
-    let rc = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) };
-    if rc != 0 {
+    let Some(limit) = raise_memlock_limit() else {
         return HardeningStatus::Failed;
-    }
-    if limit.rlim_cur != libc::RLIM_INFINITY && effective_uid() != 0 {
+    };
+    if limit.rlim_cur != libc::RLIM_INFINITY && effective_uid() != 0 && !has_cap_ipc_lock() {
         return HardeningStatus::Failed;
     }
     // SAFETY: mlockall takes flags only.
@@ -65,6 +64,61 @@ fn lock_memory() -> HardeningStatus {
         let _ = unsafe { libc::munlockall() };
         HardeningStatus::Failed
     }
+}
+
+fn memlock_limit() -> Option<libc::rlimit> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: `limit` is a valid, writable rlimit that outlives the call.
+    #[allow(unsafe_code)]
+    let rc = unsafe { libc::getrlimit(libc::RLIMIT_MEMLOCK, &mut limit) };
+    (rc == 0).then_some(limit)
+}
+
+/// Raises the soft `RLIMIT_MEMLOCK` to the hard one (allowed to any process) and returns the
+/// limit in force.
+fn raise_memlock_limit() -> Option<libc::rlimit> {
+    let limit = memlock_limit()?;
+    if limit.rlim_cur == limit.rlim_max {
+        return Some(limit);
+    }
+    let raised = libc::rlimit {
+        rlim_cur: limit.rlim_max,
+        rlim_max: limit.rlim_max,
+    };
+    // SAFETY: `raised` is a valid rlimit read by the call only.
+    #[allow(unsafe_code)]
+    let rc = unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &raised) };
+    if rc == 0 {
+        Some(raised)
+    } else {
+        Some(limit)
+    }
+}
+
+/// `CAP_IPC_LOCK` (bit 14) in the effective capabilities of this process, read from
+/// `/proc/self/status`: such a process may lock beyond `RLIMIT_MEMLOCK`.
+fn has_cap_ipc_lock() -> bool {
+    const CAP_IPC_LOCK: u32 = 14;
+    std::fs::read_to_string("/proc/self/status")
+        .ok()
+        .and_then(|s| {
+            s.lines()
+                .find_map(|l| l.strip_prefix("CapEff:"))
+                .and_then(|v| u64::from_str_radix(v.trim(), 16).ok())
+        })
+        .is_some_and(|caps| caps & (1 << CAP_IPC_LOCK) != 0)
+}
+
+/// The soft `RLIMIT_MEMLOCK` of this process, in bytes; `None` when it is unlimited or
+/// cannot be read. Shown by the core when its memory could not be locked.
+#[must_use]
+pub fn memory_lock_limit() -> Option<u64> {
+    memlock_limit()
+        .filter(|l| l.rlim_cur != libc::RLIM_INFINITY)
+        .map(|l| l.rlim_cur)
 }
 
 /// Credentials of the peer of a connected Unix domain socket (`SO_PEERCRED`).
@@ -119,6 +173,20 @@ mod tests {
     use super::*;
     use std::os::fd::AsFd;
     use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn memlock_limit_is_raised_to_the_hard_limit() {
+        let before = memlock_limit().unwrap();
+        let after = raise_memlock_limit().unwrap();
+        assert_eq!(after.rlim_cur, before.rlim_max);
+        assert_eq!(memlock_limit().unwrap().rlim_cur, before.rlim_max);
+        match memory_lock_limit() {
+            None => assert_eq!(after.rlim_cur, libc::RLIM_INFINITY),
+            Some(n) => assert_eq!(n, after.rlim_cur),
+        }
+        // Reading the capabilities never fails the process.
+        let _ = has_cap_ipc_lock();
+    }
 
     #[test]
     fn peer_of_a_socket_pair_is_ourselves() {

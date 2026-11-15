@@ -7,6 +7,7 @@
 //! hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
 //! hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM
 //!               --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+//! hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter OPTIONS
 //! ```
 //!
 //! One self-contained binary: no runtime dependency, no configuration service, no outbound
@@ -14,6 +15,8 @@
 //! port until the quorum unseals the root key.
 
 #![forbid(unsafe_code)]
+
+mod admin;
 
 use std::collections::BTreeMap;
 use std::fs::OpenOptions;
@@ -33,6 +36,7 @@ const USAGE: &str = "usage:
   hirzlad invitation --data DIR --address hirzla://HOST[:PORT] --ca PEM
   hirzlad serve --data DIR --listen ADDR --cert PEM --key PEM \\
                 --admin-listen ADDR --admin-cert PEM --admin-key PEM --admin-client-ca PEM
+  hirzlad admin etat|desceller|creer-compte|point-de-controle|arreter …  (hirzlad admin aide)
   hirzlad --version";
 
 fn hex(b: &[u8]) -> String {
@@ -168,6 +172,11 @@ fn report(s: &str) {
     eprintln!("hirzlad: {s}");
 }
 
+/// Output of the administration tool, to standard error like the rest of `hirzlad`.
+fn report_admin(s: &str) {
+    eprintln!("{s}");
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args.first().map(String::as_str) {
@@ -178,6 +187,25 @@ fn main() -> ExitCode {
         Some("init") => options(&args[1..]).and_then(|o| init(&o)),
         Some("invitation") => options(&args[1..]).and_then(|o| invitation(&o)),
         Some("serve") => options(&args[1..]).and_then(|o| serve(&o)),
+        // Administration tool (ADR 0053): French messages, its own exit codes.
+        Some("admin") => {
+            return match args.get(1).map(String::as_str) {
+                Some("aide" | "--help" | "-h") | None => {
+                    report_admin(admin::USAGE);
+                    ExitCode::SUCCESS
+                }
+                _ => match admin::run(&args[1..]) {
+                    Ok(text) => {
+                        report_admin(&text);
+                        ExitCode::SUCCESS
+                    }
+                    Err(msg) => {
+                        report_admin(&format!("erreur : {msg}"));
+                        ExitCode::from(1)
+                    }
+                },
+            };
+        }
         _ => Err(ServerError::Config("unknown command")),
     };
     match result {

@@ -493,3 +493,10 @@ pub fn read_password_from_terminal(prompt: &str, max_len: usize) -> io::Result<Z
     }
     Ok(out)
 }
+
+/// No `RLIMIT_MEMLOCK` to report on this system (the memory of the core is not locked,
+/// `docs/api-locale.md` § 9).
+#[must_use]
+pub fn memory_lock_limit() -> Option<u64> {
+    None
+}

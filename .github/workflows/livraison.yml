@@ -33,9 +33,6 @@ jobs:
         run: >-
           sudo apt-get update && sudo apt-get install -y libssl-dev
           libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev rpm
-      - name: tpm2-tss
-        if: runner.os == 'Linux'
-        run: sudo -E .github/scripts/install-tpm2-tss.sh
       - name: Tauri CLI (pinned)
         run: cargo install tauri-cli --version 2.12.4 --locked
       # The core and the command line are installed next to hirzla-desktop: the core accepts
@@ -60,10 +57,23 @@ jobs:
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
         run: cargo tauri build --config tauri.livraison.conf.json
+      # Bills of materials of the shipped executables (ADR 0056), offline, deterministic.
+      - name: Bills of materials (CycloneDX)
+        shell: bash
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          triple="$(rustc -vV | sed -n 's/^host: //p')"
+          py=python3; if [ "$RUNNER_OS" = "Windows" ]; then py=python; fi
+          mkdir -p target/release/bundle/sbom
+          for p in hirzla-core hirzla-cli hirzla-desktop; do
+            "$py" .github/scripts/sbom.py "$p" --target "$triple" \
+              --output "target/release/bundle/sbom/$p-$triple.cdx.json"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: hirzla-${{ matrix.os }}
           path: |
+            target/release/bundle/sbom/*.cdx.json
             target/release/bundle/**/*.msi
             target/release/bundle/**/*.dmg
             target/release/bundle/**/*.deb

@@ -45,7 +45,8 @@ cargo install tauri-cli --version 2.12.4 --locked
 
 Prérequis propres : WiX Toolset 3 sous Windows (installé par la CLI Tauri au premier MSI, ou
 fourni hors ligne dans `%LOCALAPPDATA%\tauri\WixTools`), Xcode sous macOS, et sous Linux
-`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev rpm` plus tpm2-tss (voir la CI).
+`libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev rpm` (tpm2-tss n'est plus nécessaire : le
+prototype TPM est hors des binaires livrés, ADR 0052).
 
 ```sh
 # 0. La clé publique d'éditeur (§ 7), compilée dans le noyau et la ligne de commande.
@@ -61,8 +62,12 @@ cp target/release/hirzla-core "apps/desktop/src-tauri/binaries/hirzla-core-$trip
 cp target/release/hirzla      "apps/desktop/src-tauri/binaries/hirzla-$triple"
 # 3. Les installeurs du système courant.
 cd apps/desktop/src-tauri
-cargo tauri build --config tauri.livraison.conf.json
+cargo tauri build --config tauri.livraison.conf.json --features livraison
 ```
+
+La fonctionnalité `livraison` de l'application, de la ligne de commande et de l'hôte natif
+fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : même
+éditeur sous Windows et macOS, empreinte du manifeste des clients sous Linux.
 
 Le flux `.github/workflows/livraison.yml` (lancé à la main) fait ces étapes sur les trois
 systèmes et publie les installeurs comme artefacts. La compilation Cargo elle-même ne
@@ -70,6 +75,31 @@ télécharge rien d'autre que les crates de `Cargo.lock` : pas de dépendance gi
 de construction qui télécharge.
 
 Chaque livraison publie aussi un fichier `SHA256SUMS` des installeurs, signé (§ 5).
+
+### Compilation reproductible et nomenclature (ADR 0056)
+
+Les exécutables Linux se compilent de façon reproductible : deux compilations de la même
+étiquette, dans deux répertoires différents, donnent les mêmes octets. Réglages, à appliquer à
+l'étape 1 ci-dessus :
+
+```sh
+export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+export RUSTFLAGS="--remap-path-prefix=$PWD=/hirzla --remap-path-prefix=$PWD/target=/target \
+  --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+export CFLAGS="-ffile-prefix-map=$PWD=/hirzla -ffile-prefix-map=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+export CXXFLAGS="$CFLAGS"
+cargo fetch --locked && cargo build --release --locked --offline …
+```
+
+`.github/scripts/reproducible-build.sh` fait deux compilations et les compare ; le job de CI
+« reproducible build (Linux) » le lance à chaque demande de fusion. Les paquets d'installation
+eux-mêmes ne sont pas reproductibles (dates écrites par Tauri et les outils de paquet) : ce
+sont les exécutables, identifiés par le manifeste des clients signé (§ 7), qui le sont.
+
+Chaque livraison publie la **nomenclature logicielle** (SBOM, CycloneDX 1.5) de chaque
+exécutable, produite hors ligne par `.github/scripts/sbom.py PAQUET --target TRIPLET`
+(bibliothèque standard de Python, aucun outil à installer). Elle est déterministe : la
+régénérer depuis l'étiquette donne le même fichier.
 
 ## 3. macOS : signature et notarisation
 
@@ -163,12 +193,14 @@ exécutables (aucun `strip` ensuite) et installé à côté de `hirzla-core` :
 
 ```sh
 hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 \
-  --sortie hirzla-clients.manifest hirzla hirzla-desktop hirzla-native-host
+  --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
 ```
 
 Format, identique à l'enveloppe du § 8 avec le type `C` : en-tête, manifeste CBOR des
 exécutables (nom, taille, SHA-384), signature hybride. Le noyau refuse de démarrer si le
-manifeste manque, ne vérifie pas avec une clé compilée ou est altéré.
+manifeste manque, ne vérifie pas avec une clé compilée ou est altéré. Le manifeste nomme aussi
+`hirzla-core` : les clients d'une version de livraison vérifient le noyau installé contre lui
+et refusent de lui parler s'il manque ou diffère (ADR 0055).
 
 ## 8. Mises à jour hors ligne signées (ADR 0043)
 

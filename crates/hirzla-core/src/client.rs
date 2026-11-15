@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agent::proto::{AgentCode, AgentReply, AgentRequest};
 use crate::auth::{self, ServerRefusal, CORE_EXECUTABLE};
+use crate::codesign::CoreSignature;
 use crate::proto::{read_frame, write_frame, ErrorReply, FrameError, Reply, Request};
 use crate::selfmode::proto::{SelfCode, SelfReply, SelfRequest};
 use crate::server_mode::proto::{ServerCode, ServerReply, ServerRequest};
@@ -60,16 +61,41 @@ pub struct Client {
 
 impl Client {
     /// Connects to the core at `endpoint` and checks that it runs under the same user and,
-    /// when `expected_core` is given, from that executable.
+    /// when `expected_core` is given, from that executable, signed as this build requires
+    /// ([`CoreSignature::for_build`], ADR 0055: required in a delivery build).
     ///
     /// # Errors
-    /// [`ClientError`].
+    /// [`ClientError`]; [`ClientError::UntrustedCore`] with
+    /// [`ServerRefusal::SignatureNotAccepted`] when the signature policy cannot be set up.
     pub fn connect(
         endpoint: &Endpoint,
         expected_core: Option<&Path>,
     ) -> Result<Client, ClientError> {
+        let policy = match expected_core {
+            Some(core) => CoreSignature::for_build(core)
+                .map_err(|_| ClientError::UntrustedCore(ServerRefusal::SignatureNotAccepted))?,
+            None => CoreSignature::off(),
+        };
+        Client::connect_with(endpoint, expected_core, &policy)
+    }
+
+    /// [`Client::connect`] with an explicit signature policy toward the core, applied when
+    /// `expected_core` is given. Nothing is sent before the core is accepted.
+    ///
+    /// # Errors
+    /// [`ClientError`].
+    pub fn connect_with(
+        endpoint: &Endpoint,
+        expected_core: Option<&Path>,
+        policy: &CoreSignature,
+    ) -> Result<Client, ClientError> {
         let (conn, server) = transport::connect(endpoint)?;
         auth::check_server(&server, expected_core).map_err(ClientError::UntrustedCore)?;
+        if let Some(core) = expected_core {
+            policy
+                .check(&server, core)
+                .map_err(ClientError::UntrustedCore)?;
+        }
         Ok(Client { conn, next_id: 1 })
     }
 
