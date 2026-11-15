@@ -37,6 +37,14 @@
     app_hardening: { memory_locked: "not_attempted", dumps_disabled: "applied", tracing_blocked: "applied" },
     app_version: "0.0.0",
   });
+  let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
+  let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
+  const v = (n) => n.toString(16).padStart(96, "0");
+  const history = [
+    { version: v(3), wall_ms: Date.UTC(2026, 9, 2, 8, 14), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["password"], custom: 0 },
+    { version: v(2), wall_ms: Date.UTC(2026, 3, 18, 17, 2), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["notes"], custom: 0 },
+    { version: v(1), wall_ms: Date.UTC(2025, 11, 4, 10, 40), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "username", "password"], changed: ["title", "username", "password"], custom: 0 },
+  ];
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
   const handlers = {
@@ -75,6 +83,39 @@
     generate_password: () => "Vn4%tB8qZ!e2Lr6#Wm9sKd3x",
     copy_generated: () => 30,
     import_csv: () => ({ imported: 42, empty: 1, refused_lines: [17], totp_skipped: 2 }),
+    get_settings: () => ({ ...settings }),
+    set_settings: (a) => {
+      const s = a.settings;
+      if ((s.auto_lock_s !== 0 && (s.auto_lock_s < 30 || s.auto_lock_s > 86400)) || s.clipboard_clear_s < 5 || s.clipboard_clear_s > 600) {
+        return refuse("invalid", "Le verrouillage automatique doit être compris entre 30 s et 24 h.");
+      }
+      settings = { ...s };
+    },
+    change_password: (a) => {
+      if (a.current !== "démonstration") return refuse("unlock_failed", "Déverrouillage refusé : mot de passe incorrect, ou coffre altéré.");
+    },
+    restore_secret: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      if (e) e.trash = false;
+    },
+    secret_history: () => history,
+    reveal_version: (a) => (a.field === "password" ? "ancien-Mot-de-passe-2025" : "Ancienne note."),
+    copy_version: () => 30,
+    restore_version: () => {},
+    recovery_status: () => kit,
+    create_recovery_kit: (a) => {
+      kit = { kit: "7be04d1a", threshold: a.threshold, count: a.count };
+      const files = Array.from({ length: a.count }, (_, i) => `hirzla-part-7be04d1a-${i + 1}.hirzla-part`);
+      return { ...kit, folder: "/home/marie/Documents/recouvrement", files };
+    },
+    choose_recovery_shares: () => ["hirzla-part-3fa2c901-1.hirzla-part", "hirzla-part-3fa2c901-3.hirzla-part"],
+    recovery_unlock: () => { state = "unlocked"; },
+    remove_recovery_kit: () => { kit = null; },
+    choose_kdbx_file: () => "Personnel.kdbx",
+    import_kdbx: (a) => {
+      if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
+      return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
+    },
   };
   window.__TAURI__ = {
     core: {

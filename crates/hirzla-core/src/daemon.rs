@@ -22,6 +22,8 @@ use crate::events::{Event, Log, Refusal};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
+use crate::selfmode::import;
+use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
 use crate::service::{Config, Core};
 use crate::transport::{Connection, Endpoint, Listener};
@@ -205,7 +207,6 @@ fn open_log(path: Option<&PathBuf>) -> std::io::Result<Box<dyn std::io::Write + 
 }
 
 /// Entry point of `hirzla-core`. Hardens the process before anything else.
-#[must_use]
 pub fn main() -> ExitCode {
     let hardening = platform::harden_process();
     let options = match parse_args(std::env::args_os().skip(1)) {
@@ -298,6 +299,25 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         },
         Arc::clone(log),
     )));
+
+    {
+        // Sleep and session lock, where the system tells (ADR 0033); elsewhere the tick
+        // notices a sleep by its clocks, and the desktop application relays logind.
+        let core = Arc::clone(&core);
+        let watch = platform::watch_system_events(move |event| {
+            let kind = match event {
+                platform::SystemEvent::Sleep => SystemEventKind::Sleep,
+                platform::SystemEvent::SessionLock => SystemEventKind::SessionLock,
+            };
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .system_event(kind);
+        });
+        log.record(Event::SystemWatch {
+            sleep: watch.sleep,
+            session_lock: watch.session_lock,
+        });
+    }
 
     {
         let core = Arc::clone(&core);
@@ -414,6 +434,48 @@ fn serve_agent(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a Self-mode request (`docs/api-locale.md` § 16). Returns `false` if the
+/// connection must close.
+///
+/// A KDBX import derives the database key and decrypts it outside the core's lock: a long
+/// Argon2 does not stop the other clients nor the automatic lock.
+fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]) -> bool {
+    let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
+    let (id, result) = match SelfRequest::decode(frame) {
+        Ok((
+            id,
+            SelfRequest::ImportKdbx {
+                path,
+                password,
+                locker,
+            },
+        )) => {
+            let result = if lock().is_unlocked() {
+                import::read_database(&path, &password)
+                    .map_err(|c| (c, None))
+                    .and_then(|db| lock().import_database(db, locker))
+            } else {
+                lock().handle_self(SelfRequest::ImportKdbx {
+                    path,
+                    password,
+                    locker,
+                })
+            };
+            (id, result)
+        }
+        Ok((id, request)) => (id, lock().handle_self(request)),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err((code, None)))
+        }
+    };
+    let Ok(body) = SelfReply::encode_with(id, result.as_ref().map_err(|e| *e)) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Answers a server mode request (`docs/api-locale.md` § 15). The browser profile is refused
 /// (§ 15.1). Returns `false` if the connection must close.
 fn serve_server(
@@ -448,6 +510,28 @@ fn serve_server(
     };
     drop(result);
     write_frame(conn, &body).is_ok()
+}
+
+/// Refuses a Self-mode request from a client whose profile does not permit it.
+fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
+    let (id, code) = match SelfRequest::decode(frame) {
+        Ok((id, request)) => {
+            let code = SelfCode::General(ErrorCode::Unauthorized);
+            log.record(Event::SelfRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, code)
+        }
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, code)
+        }
+    };
+    match SelfReply::encode(id, &Err(code)) {
+        Ok(body) => write_frame(conn, &body).is_ok(),
+        Err(_) => false,
+    }
 }
 
 /// Refuses an agent request from a client whose profile does not permit it.
@@ -493,6 +577,19 @@ fn serve(
             }
             Err(FrameError::Closed | FrameError::Io(_)) => break,
         };
+        if is_self_request(&frame) {
+            // The Self-mode operations are for the desktop application and the command line
+            // (full clients), never for the browser profile.
+            let ok = if profile == ClientProfile::Full {
+                serve_self(&mut conn, core, log, &frame)
+            } else {
+                refuse_self(&mut conn, log, &frame)
+            };
+            if ok {
+                continue;
+            }
+            break;
+        }
         if is_server_request(&frame) {
             if serve_server(&mut conn, core, log, &frame, profile) {
                 continue;

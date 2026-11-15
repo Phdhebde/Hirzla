@@ -93,7 +93,7 @@ jobs:
       - name: Fuzz each decoder for 60 seconds
         working-directory: fuzz
         run: |
-          for target in decode_secret_body decode_locker_body decode_header; do
+          for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60
           done
 

@@ -1,6 +1,7 @@
 // Screenshots of the main screens in both themes, against the fake core of
 // tests/mock-core.js, with Playwright (not a dependency of the project: install it or use a
-// global installation, e.g. `NODE_PATH="$(npm root -g)" node scripts/captures.mjs DIR`).
+// global installation, e.g. `NODE_PATH="$(npm root -g)" node scripts/captures.mjs DIR`; set
+// CHROME_PATH to use an installed Chrome or Chromium instead of Playwright's own).
 // Also checks that every screen loads without a script error and that the keyboard reaches
 // the main controls.
 import { createRequire } from "node:module";
@@ -22,6 +23,11 @@ mkdirSync(out, { recursive: true });
 const TYPES = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml", ".ttf": "font/ttf" };
 const server = createServer(async (req, res) => {
   const path = normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)).replace(/^([/\\])+/, "");
+  if (path === "favicon.ico") {
+    // Asked by a full Chrome (CHROME_PATH), not by the application's web view.
+    res.writeHead(204).end();
+    return;
+  }
   const file = join(ui, path || "index.html");
   if (!file.startsWith(ui)) {
     res.writeHead(403).end();
@@ -43,7 +49,7 @@ const server = createServer(async (req, res) => {
 await new Promise((r) => server.listen(0, "127.0.0.1", r));
 const base = `http://127.0.0.1:${server.address().port}/index.html`;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath: process.env.CHROME_PATH } : {});
 const errors = [];
 const shots = [];
 
@@ -143,17 +149,74 @@ for (const theme of ["clair", "sombre"]) {
   await p.waitForTimeout(4200); // let the earlier announcement fade
   await shot(p, "09-import-csv", theme);
 
-  // KDBX explanation.
+  // KeePass import: choose the base, refused password, then the report.
   await p.click("#import-kdbx");
   await p.waitForSelector("#dialogue-kdbx[open]");
+  await p.click("#kdbx-choisir");
+  await p.waitForFunction(() => document.querySelector("#kdbx-fichier").textContent.length > 0);
+  await p.keyboard.type("faux");
+  await p.keyboard.press("Enter");
+  await p.waitForSelector("#kdbx-erreur:not([hidden])");
   await shot(p, "10-import-kdbx", theme);
+  await p.keyboard.type("keepass");
+  await p.keyboard.press("Enter");
+  await p.waitForSelector("#dialogue-kdbx", { state: "hidden" });
+  await p.evaluate(() => document.querySelector("#import-resultat").scrollIntoView({ block: "end" }));
+  await shot(p, "11-import-kdbx-compte-rendu", theme);
+
+  // Vault settings, password change and recovery kit.
+  await p.waitForFunction(() => document.querySelector("#reglage-auto").value === "300");
+  await p.evaluate(() => document.querySelector("#reglages-coffre").scrollIntoView({ block: "start" }));
+  await shot(p, "12-reglages-du-coffre", theme);
+  await p.fill("#reglage-auto", "5");
+  await p.click("#form-reglages-coffre button[type=submit]");
+  await p.waitForSelector("#reglages-coffre-erreur:not([hidden])");
+  await p.fill("#reglage-auto", "600");
+  await p.click("#form-reglages-coffre button[type=submit]");
+  await p.waitForSelector("#reglages-coffre-erreur", { state: "hidden" });
+  await p.fill("#recouvrement-parts", "5");
+  await p.fill("#recouvrement-seuil", "3");
+  await p.click("#recouvrement-creer");
+  await p.waitForSelector("#dialogue-confirmation[open]");
+  await p.click("#confirmation-oui");
+  await p.waitForSelector("#recouvrement-resultat:not([hidden])");
+  await p.evaluate(() => document.querySelector("#reglages-recouvrement").scrollIntoView({ block: "start" }));
+  await p.waitForTimeout(4200);
+  await shot(p, "13-kit-de-recouvrement", theme);
+
+  // History of a secret, then the trash.
+  await p.click("[data-vue='secrets'][data-filtre='tous']");
+  await p.click("#liste-secrets li");
+  await p.click("#fiche-historique");
+  await p.waitForSelector("#dialogue-historique[open] #historique-liste li");
+  await p.click("#historique-liste li:nth-child(2) button");
+  await p.waitForFunction(() => [...document.querySelectorAll("#historique-liste .valeur-secrete")].some((e) => e.textContent));
+  await shot(p, "14-historique", theme);
   await p.keyboard.press("Escape");
+  await p.click("[data-filtre='corbeille']");
+  await p.click("#liste-secrets li");
+  await p.waitForSelector("#fiche-restaurer:not([hidden])");
+  await shot(p, "15-corbeille", theme);
+  await p.click("#fiche-restaurer");
+  await p.waitForSelector("#liste-vide:not([hidden])");
 
   // Lock: everything shown is wiped.
   await p.keyboard.press("Control+l");
   await p.waitForSelector("#ecran-deverrouillage:not([hidden])");
   const leftovers = await p.evaluate(() => document.querySelectorAll("#liste-secrets li").length);
   if (leftovers !== 0) errors.push(`${theme}: la liste reste affichée après verrouillage`);
+
+  // Open with the recovery kit.
+  await p.waitForSelector("#lien-recouvrement:not([hidden])");
+  await p.click("#lien-recouvrement");
+  await p.waitForSelector("#dialogue-recouvrement[open]");
+  await p.click("#recouvrement-choisir");
+  await p.waitForSelector("#recouvrement-fichiers li");
+  await p.fill("#recouvrement-mdp", "nouveau mot de passe maître");
+  await p.fill("#recouvrement-confirmation", "nouveau mot de passe maître");
+  await shot(p, "16-ouvrir-avec-le-kit", theme);
+  await p.click("#recouvrement-ouvrir");
+  await p.waitForSelector("#ecran-coffre:not([hidden])");
   await p.close();
 }
 

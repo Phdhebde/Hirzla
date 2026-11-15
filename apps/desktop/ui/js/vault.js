@@ -18,6 +18,27 @@ const TYPE_NAMES = /** @type {Record<string, string>} */ ({
   unknown: "Secret",
 });
 
+const FIELD_LABELS = /** @type {Record<string, string>} */ ({
+  title: "titre",
+  username: "identifiant",
+  password: "mot de passe",
+  notes: "notes",
+  favorite: "favori",
+  totp: "TOTP",
+  ssh_private_key: "clé privée SSH",
+  ssh_public_key: "clé publique SSH",
+  ssh_passphrase: "phrase de passe",
+  passkey: "clé d'accès",
+  other: "autre champ",
+});
+
+/** Secret fields of a version that may be revealed or copied, with their labels. */
+const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
+  ["password", "Mot de passe"],
+  ["notes", "Notes"],
+  ["ssh_passphrase", "Phrase de passe"],
+]);
+
 /**
  * @typedef {object} VaultHooks
  * @property {(e: import("./api.js").ApiError) => void} onError  Refusal not handled here.
@@ -77,6 +98,12 @@ export class VaultView {
     });
     byId("fiche-favori").addEventListener("click", () => void this.toggleFavorite());
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
+    byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
+    byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    byId("dialogue-historique").addEventListener("close", () => {
+      this.hideAll();
+      byId("historique-liste").replaceChildren();
+    });
   }
 
   /** @returns {Entry | undefined} */
@@ -260,10 +287,11 @@ export class VaultView {
     fav.hidden = entry.trash;
     byId("fiche-modifier").hidden = entry.trash || !["password", "note"].includes(entry.kind);
     byId("fiche-supprimer").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
+    byId("fiche-restaurer").hidden = !entry.trash;
 
     const ref = { locker: entry.locker, id: entry.id };
     if (entry.trash) {
-      fields.append(info("État", "Dans la corbeille. La restauration viendra avec une prochaine version du noyau."));
+      fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
     }
     if (entry.kind === "password") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
@@ -404,6 +432,148 @@ export class VaultView {
       await api.update({ locker: entry.locker, id: entry.id }, { favorite: !entry.favorite });
       announce(entry.favorite ? "Retiré des favoris." : "Ajouté aux favoris.");
       await this.refresh();
+    } catch (e) {
+      this.hooks.onError(/** @type {any} */ (e));
+    }
+  }
+
+  async restoreSelected() {
+    const entry = this.selected();
+    if (!entry || !entry.trash) return;
+    try {
+      await api.restore({ locker: entry.locker, id: entry.id });
+      announce(`« ${entry.title} » est sorti de la corbeille.`);
+      this.selectedId = null;
+      await this.refresh();
+      this.list.focus();
+    } catch (e) {
+      this.hooks.onError(/** @type {any} */ (e));
+    }
+  }
+
+  /** Shows the versions of the selected secret. */
+  async openHistory() {
+    const entry = this.selected();
+    if (!entry) return;
+    const ref = { locker: entry.locker, id: entry.id };
+    /** @type {import("./api.js").Version[]} */
+    let versions;
+    try {
+      versions = await api.history(ref);
+    } catch (e) {
+      this.hooks.onError(/** @type {any} */ (e));
+      return;
+    }
+    byId("historique-titre").textContent = `Historique de « ${entry.title} »`;
+    // Numbered like `hirzla history`: 1 is the current version.
+    byId("historique-liste").replaceChildren(
+      ...versions.map((v, i) => this.versionItem(ref, v, i + 1, i === 0)),
+    );
+    const dialog = /** @type {HTMLDialogElement} */ (byId("dialogue-historique"));
+    if (!dialog.open) dialog.showModal();
+  }
+
+  /**
+   * One version in the history dialog.
+   * @param {import("./api.js").SecretRef} ref
+   * @param {import("./api.js").Version} v
+   * @param {number} number  1 for the current version.
+   * @param {boolean} current
+   */
+  versionItem(ref, v, number, current) {
+    const when = v.wall_ms > 0 ? new Date(v.wall_ms).toLocaleString("fr-FR") : "date inconnue";
+    const state = v.state === "trash" ? " · dans la corbeille" : v.state === "purged" ? " · supprimé" : "";
+    const changed = v.changed.length ? v.changed.map((f) => FIELD_LABELS[f] ?? f).join(", ") : "état";
+    const value = h("span", { class: "valeur-secrete" });
+    /** @type {HTMLElement[]} */
+    const actions = [];
+    for (const [field, label] of VERSION_SECRETS) {
+      if (!v.fields.includes(field)) continue;
+      const reveal = h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: `Révéler ${label.toLowerCase()}` });
+      reveal.addEventListener("click", () => void this.revealVersion(ref, v.version, field, label, value));
+      const copy = h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: `Copier ${label.toLowerCase()}` });
+      copy.addEventListener("click", () => void this.copyVersion(ref, v.version, field, label));
+      actions.push(reveal, copy);
+    }
+    if (!current && v.state !== "purged") {
+      const restore = h("button", { class: "bouton bouton-principal bouton-petit", type: "button", text: "Rétablir cette version" });
+      restore.addEventListener("click", () => void this.restoreVersion(ref, v, number));
+      actions.push(restore);
+    }
+    return h("li", { class: "version" }, [
+      h("p", { class: "version-titre", text: `Version ${number}${current ? " (actuelle)" : ""} · ${when}${state}` }),
+      h("p", { text: `${v.title}${v.username ? ` · ${v.username}` : ""}` }),
+      h("p", { class: "texte-secondaire", text: `Modifié : ${changed}` }),
+      value,
+      h("div", { class: "actions-champ" }, actions),
+    ]);
+  }
+
+  /**
+   * @param {import("./api.js").SecretRef} ref
+   * @param {string} version
+   * @param {FieldName} field
+   * @param {string} label
+   * @param {HTMLElement} out
+   */
+  async revealVersion(ref, version, field, label, out) {
+    this.hideAll();
+    let text;
+    try {
+      text = await api.revealVersion(ref, version, field);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "not_found") announce(`${label} : aucune valeur dans cette version.`);
+      else this.hooks.onError(err);
+      return;
+    }
+    out.textContent = `${label} : ${text}`;
+    text = "";
+    const hide = () => {
+      clearTimeout(timer);
+      out.textContent = "";
+      this.hiders.delete(hide);
+    };
+    const timer = window.setTimeout(hide, this.hooks.revealSeconds() * 1000);
+    this.hiders.add(hide);
+  }
+
+  /**
+   * @param {import("./api.js").SecretRef} ref
+   * @param {string} version
+   * @param {FieldName} field
+   * @param {string} label
+   */
+  async copyVersion(ref, version, field, label) {
+    try {
+      const s = await api.copyVersion(ref, version, field);
+      announce(`${label} copié. Le presse-papiers sera effacé dans ${s} s.`);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "not_found") announce(`${label} : aucune valeur dans cette version.`);
+      else this.hooks.onError(err);
+    }
+  }
+
+  /**
+   * @param {import("./api.js").SecretRef} ref
+   * @param {import("./api.js").Version} v
+   * @param {number} number
+   */
+  async restoreVersion(ref, v, number) {
+    const history = /** @type {HTMLDialogElement} */ (byId("dialogue-historique"));
+    history.close();
+    const ok = await confirmDialog(
+      `Rétablir la version ${number} ?`,
+      "Ses valeurs redeviennent l'état actuel du secret. La version actuelle reste dans l'historique.",
+      "Rétablir",
+    );
+    if (!ok) return;
+    try {
+      await api.restoreVersion(ref, v.version);
+      announce(`Version ${number} rétablie.`);
+      await this.refresh();
+      await this.openHistory();
     } catch (e) {
       this.hooks.onError(/** @type {any} */ (e));
     }

@@ -47,13 +47,51 @@ par défaut de KeePassXC et KeePass 2.x récents), quand le noyau gagnera une op
 le noyau, seul processus admis à tenir des clés, avec tests sur des bases de référence et
 fuzzing du décodeur. L'option 1 reste possible si un audit de `keepass` est disponible.
 
+## Option 2 livrée (finition du mode Self, 2026-11-15)
+
+L'option 2 est livrée dans le périmètre annoncé : le noyau lit et déchiffre la base lui-même
+(opération `ImportKdbx`, 72, de l'API locale v5, `docs/api-locale.md` § 16) ; l'application et
+la ligne de commande (`hirzla import-kdbx`) ne transmettent que le chemin et le mot de passe.
+
+- **Périmètre** : KDBX 4.0 et 4.1, Argon2d ou Argon2id (versions 0x10 et 0x13), AES-256-CBC ou
+  ChaCha20, sans compression ou gzip, flux interne ChaCha20, **mot de passe seul**. Refusés
+  avant tout calcul coûteux : KDBX 3 et antérieurs, AES-KDF, Twofish, Salsa20, fichier clé
+  (`ImportUnsupported`).
+- **Cryptographie** (`hirzla-crypto`, module `kdbx`, à part de tout le reste) : SHA-256,
+  SHA-512, HMAC-SHA-256 et AES-256-CBC d'AWS-LC ; Argon2 de RustCrypto `argon2`, déjà retenu ;
+  ChaCha20 brut (RFC 8439) de RustCrypto **`chacha20` =0.10.2**, seule dépendance
+  cryptographique nouvelle : AWS-LC ne l'expose pas hors AEAD. Le crate est celui qu'audite le
+  rapport NCC Group de `chacha20poly1305` (2020). Les étiquettes HMAC de l'en-tête et de chaque
+  bloc sont comparées en temps constant, avant tout déchiffrement. Coût Argon2 borné
+  (1 Gio, 1 000 passes, 64 voies, 64 Gio·passes au total).
+- **Analyse** (`hirzla-vault`, module `kdbx`) : enveloppe binaire, flux de blocs, `flate2`
+  (moteur Rust) et XML par `quick-xml`, valeurs protégées en `base64` ; les trois étaient déjà
+  dans le graphe (Tauri) et n'utilisent pas d'`unsafe` dans le code appelé. Tout est borné :
+  fichier de 64 Mio, charge décompressée de 256 Mio, champ d'en-tête de 64 Kio, 64 champs
+  d'en-tête, texte de 1 Mio, profondeur XML de 128, 100 000 entrées, 64 champs personnalisés
+  par entrée. Le texte déchiffré et les valeurs vivent dans des tampons effacés.
+- **Tests** : six bases KDBX 4 et une KDBX 3 de référence, versionnées (`crates/hirzla-vault/tests/kdbx/`, faites
+  par KeePassXC et pykeepass, script de génération à côté), refus des en-têtes et blocs
+  altérés, d'un mauvais mot de passe, d'une base KDBX 3, d'un fichier trop grand, tests par
+  propriétés ; deux cibles de fuzzing (`fuzz/fuzz_targets/read_kdbx.rs`,
+  `read_kdbx_payload.rs`) lancées par la CI.
+- **Ce qui n'est pas importé** : pièces jointes, historique des entrées, configurations TOTP,
+  entrées de la corbeille KeePass ; le compte rendu les compte. Les champs personnalisés sont
+  gardés (sensibles s'ils sont protégés dans KeePass).
+- **Limites** : les tampons internes de `flate2` et `quick-xml` ne sont pas effacés ; une base
+  fusionnée par KeePassXC peut ne plus désigner sa corbeille, dont les entrées sont alors
+  importées comme les autres, avec le groupe « Corbeille » en étiquette.
+
+L'import CSV reste disponible.
+
 ## Conséquences
 
 - Pendant l'export, un fichier CSV en clair existe sur le disque : l'interface le rappelle
-  après l'import. C'est le principal défaut de l'option 3.
+  après l'import. C'est le principal défaut de l'option 3, que l'option 2 évite.
 - Les codes TOTP, pièces jointes et l'historique des entrées KeePass ne sont pas importés
   (l'API v1 n'expose pas ces champs) ; le rapport d'import les compte.
-- Aucune dépendance cryptographique nouvelle n'entre à l'étape 7.
+- Aucune dépendance cryptographique nouvelle n'entre à l'étape 7 ; l'option 2 ajoute
+  `chacha20` (voir plus haut).
 
 ## Alternatives écartées
 

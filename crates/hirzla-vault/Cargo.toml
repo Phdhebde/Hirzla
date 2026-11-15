@@ -9,10 +9,19 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes the stages after decryption of the KDBX reader to the fuzz targets (`fuzz/`).
+fuzzing = []
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 # ADR 0013.
 cbor4ii = { version = "1.2.4", default-features = false, features = ["use_alloc"] }
+# KDBX 4 import (ADR 0025): protected values (base64), gzip payload, XML document. All three
+# were already in the dependency graph (Tauri) and forbid `unsafe` in the code used here.
+base64 = { version = "0.23.1", default-features = false, features = ["alloc"] }
+flate2 = { version = "1.1.11", default-features = false, features = ["rust_backend"] }
+quick-xml = { version = "0.42.0", default-features = false }
 icu_normalizer = "2.4.0"
 rusqlite = { version = "0.42.0", features = ["bundled"] }
 thiserror = "2.0"

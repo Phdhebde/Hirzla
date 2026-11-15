@@ -17,6 +17,21 @@ const COMMANDS: &[&str] = &[
     "generate_password",
     "copy_generated",
     "import_csv",
+    "get_settings",
+    "set_settings",
+    "change_password",
+    "restore_secret",
+    "secret_history",
+    "reveal_version",
+    "copy_version",
+    "restore_version",
+    "recovery_status",
+    "create_recovery_kit",
+    "choose_recovery_shares",
+    "recovery_unlock",
+    "remove_recovery_kit",
+    "choose_kdbx_file",
+    "import_kdbx",
 ];
 
 fn main() {

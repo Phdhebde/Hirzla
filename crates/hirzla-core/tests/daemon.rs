@@ -471,3 +471,74 @@ fn the_server_mode_answers_full_clients_only() {
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
     assert!(log.contains("event=server_request op=server_sync result=unauthorized"));
 }
+
+#[test]
+fn the_self_mode_answers_over_the_real_channel() {
+    use hirzla_core::selfmode::proto::{SelfCode, SelfReply, SelfRequest, SystemEventKind};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "self");
+    let me = std::env::current_exe().unwrap();
+    let _core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    assert_eq!(
+        c.call_self(&SelfRequest::GetSettings).unwrap().err(),
+        Some((SelfCode::General(ErrorCode::NoVault), None))
+    );
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: hirzla_crypto::password::MIN_M_KIB,
+            t: hirzla_crypto::password::MIN_T,
+            p: 1,
+        }),
+    })
+    .unwrap();
+    let Ok(SelfReply::Settings(s)) = c.call_self(&SelfRequest::GetSettings).unwrap() else {
+        panic!()
+    };
+    assert!(s.lock_on_sleep && s.lock_on_session_lock);
+    // The desktop application relays a session lock: the vault locks.
+    assert!(matches!(
+        c.call_self(&SelfRequest::SystemEvent(SystemEventKind::SessionLock))
+            .unwrap(),
+        Ok(SelfReply::SystemEvent { locked: true })
+    ));
+    assert_eq!(state(&mut c), VaultState::Locked);
+    assert!(matches!(
+        c.call_self(&SelfRequest::RecoveryStatus).unwrap(),
+        Ok(SelfReply::RecoveryStatus(None))
+    ));
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=system_watch"), "{log}");
+    assert!(log.contains("event=locked reason=session_lock"), "{log}");
+    assert!(!log.contains(PASSWORD));
+}
+
+#[test]
+fn self_mode_operations_are_refused_to_the_browser_profile() {
+    use hirzla_core::selfmode::proto::{SelfCode, SelfRequest, SystemEventKind};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "self-browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    for r in [
+        SelfRequest::GetSettings,
+        SelfRequest::SystemEvent(SystemEventKind::Sleep),
+        SelfRequest::RecoveryStatus,
+    ] {
+        assert_eq!(
+            c.call_self(&r).unwrap().err(),
+            Some((SelfCode::General(ErrorCode::Unauthorized), None))
+        );
+    }
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=self_request op=recovery_status result=unauthorized"));
+}

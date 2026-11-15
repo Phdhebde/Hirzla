@@ -38,15 +38,21 @@ security-framework-sys = "2.17.0"
 # the master password, until a released tss-esapi opens the TPM on Windows.
 [target.'cfg(windows)'.dependencies]
 # ADR 0015: the named pipe of the local channel, the identity of its peer, the process DACL
-# and console input without echo (`platform`).
+# and console input without echo (`platform`). ADR 0033: suspend and session-lock
+# notifications (Graphics_Gdi, LibraryLoader, Power, RemoteDesktop, UI_WindowsAndMessaging).
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
+    "Win32_Graphics_Gdi",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
     "Win32_Storage_FileSystem",
     "Win32_System_Console",
     "Win32_System_IO",
+    "Win32_System_LibraryLoader",
     "Win32_System_Pipes",
+    "Win32_System_Power",
+    "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
 ] }

@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v4
+# API locale du noyau — spécification v5
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -8,7 +8,7 @@ journal, durcissement du processus. Les choix de dépendances et l'emplacement d
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
-l'ADR 0032 (accepté).
+l'ADR 0032 (accepté) ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -350,7 +350,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **2** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`). Les profils agent (version 3, § 14) et Serveur (version 4, § 15) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **2** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15) et Self (version 5, § 16) ont leurs propres versions et ne sont pas annoncés par `Status`.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
   qu'avant, portant `v = 1`. Un client envoie chaque requête avec **la plus petite version qui
@@ -376,6 +376,9 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
 | `gen [N] [--sans-symboles] [--sans-chiffres] [--sans-majuscules] [--stdout]` | `Generate`, `Status` |
 | `status`, `stop` | `Status` ; `Shutdown` |
+
+Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
+import KeePass, mot de passe, réglages, recouvrement) au § 16.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -427,6 +430,14 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   passe d'au moins 12 caractères exigé par l'application), `Unlock`, `Lock`, `List`, `Read`
   (révélation d'un champ, ou copie faite par le processus Rust sans passer par la vue web),
   `Create`, `Update`, `Delete`, `Generate`. Un `Create` par ligne pour l'import CSV.
+- Mode Self (§ 16) : `GetSettings`, `SetSettings`, `ChangePassword`, `RestoreSecret`,
+  `History`, `ReadVersion` (révélation ou copie), `RestoreVersion`, `RecoveryStatus` (aussi sur
+  l'écran de déverrouillage), `RecoveryCreate`, `RecoveryUnlock`, `RecoveryRemove`,
+  `ImportKdbx`. La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
+  par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
+  dossier choisi (`0600`, sans en remplacer) sans passer par elle.
+- Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
+  `ActiveChanged` de l'économiseur d'écran sur D-Bus, et envoie `SystemEvent` (ADR 0033).
 - Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers à sa fermeture.
 
 ## 14. Points ouverts
@@ -442,9 +453,8 @@ Décisions prises seul pendant cette étape, à confirmer :
 3. **Frein du déverrouillage** en mémoire du noyau (3 essais libres, puis 1 s doublée jusqu'à
    300 s) : perdu au redémarrage du noyau.
 4. **`auto_lock_s = 0`** traité comme la valeur par défaut, et non comme « jamais ».
-5. **Verrouillage automatique** non déclenché par la mise en veille ni par le verrouillage de
-   la session. L'application de poste (§ 13) verrouille le coffre à sa fermeture, mais ne
-   suit pas encore la veille ni la session : reste à faire.
+5. ~~Verrouillage automatique non déclenché par la mise en veille ni par le verrouillage de
+   la session~~ : tranché par l'ADR 0033 et la version 5 (§ 16, `SystemEvent`).
 6. **Pas de gestion de `SIGTERM`** (elle demanderait du code `unsafe` ou une dépendance) : un
    noyau tué ne supprime pas sa socket, retirée au démarrage suivant ; sa mémoire est rendue
    au système sans effacement explicite.
@@ -681,3 +691,149 @@ identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; 
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
 3. Pas d'accords à plusieurs, de décisions de quarantaine, d'enrôlement d'un second appareil ni
    de fichiers joints dans les casiers partagés : à spécifier dans une version suivante.
+
+## 16. Mode Self (version 5)
+
+Décisions : ADR 0025 (import KeePass, option 2), ADR 0033 (verrouillage à la mise en veille et
+au verrouillage de session), ADR 0034 (kit de recouvrement à quorum). Le noyau parle en plus la
+**version 5**, qui porte ce dont l'application de poste et la ligne de commande ont besoin pour
+tenir un coffre seules, au-delà des versions 1 et 2 : réglages, changement du mot de passe
+maître, corbeille, historique des versions, recouvrement, import KeePass, événements du
+système. Codes : opérations **60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du
+mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
+
+### 16.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+60 à 79 va au mode Self ; elle doit porter `v = 5`, sinon `UnsupportedVersion` avec `{2: [5]}`.
+Un code de la plage sans opération : `UnknownOperation`. Les réponses portent `v = 5`. Ces
+opérations sont réservées au profil complet : le profil navigateur reçoit `Unauthorized`, et le
+refus est journalisé. `Status` (§ 6) n'annonce pas la version 5 : un client la découvre en
+l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
+
+### 16.2 Types
+
+| Nom | Encodage |
+| --- | --- |
+| Réglages | `{1: auto_lock_s uint, 2: clipboard_clear_s uint, 3: lock_on_sleep bool, 4: lock_on_session_lock bool}`, les quatre clés toujours présentes |
+| Version | `{1: op_id bstr(48), 2: lamport uint, 3: wall_ms uint, 4: état uint (0 actif, 1 corbeille, 2 purgé), 5: titre tstr, 6?: identifiant tstr, 7: [champ uint], 8: [champ uint], 9: champs personnalisés uint}` ; titre et identifiant de 4 096 octets au plus |
+| Fichier de part | `bstr` (≤ 16 Kio), le fichier `.hirzla-part` tel quel (`format.md` § 4.4) |
+| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP, 8: refusés}`, tous `uint` |
+
+Une version liste les **numéros** des champs présents (clé 7, `format.md` § 8) et ceux qui ont
+changé depuis la version précédente (clé 8) : un champ compte comme changé quand l'écriture qui
+l'a posé diffère, ou quand il a disparu ; **aucune valeur n'est comparée**. La plus ancienne
+version liste tous ses champs. Une version ne porte jamais de valeur secrète : on lit un champ
+d'une version par `ReadVersion`.
+
+### 16.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 60 | `SystemEvent` | tout état | `{1: 1 mise en veille \| 2 verrouillage de session}` | `{1: verrouillé bool}` |
+| 61 | `GetSettings` | ouvert | — | réglages |
+| 62 | `SetSettings` | ouvert | réglages | — |
+| 63 | `ChangePassword` | ouvert | `{1: actuel tstr, 2: nouveau tstr}` | — |
+| 64 | `RestoreSecret` | ouvert | `{1: casier, 2: secret}` | — |
+| 65 | `History` | ouvert | `{1: casier, 2: secret}` | `{1: [version]}`, la plus récente en premier, 4 096 au plus |
+| 66 | `ReadVersion` | ouvert | `{1: casier, 2: secret, 3: op_id bstr(48), 4: champ uint}` | `{1: valeur}` (§ 5.3) |
+| 67 | `RestoreVersion` | ouvert | `{1: casier, 2: secret, 3: op_id bstr(48)}` | — |
+| 68 | `RecoveryStatus` | existant | — | `{1: kit bool, 2?: kit_id bstr(16), 3?: seuil uint, 4?: parts uint}` ; 2 à 4 présents si et seulement si 1 vaut `true` |
+| 69 | `RecoveryCreate` | ouvert | `{1: seuil uint, 2: parts uint}`, 2 ≤ seuil ≤ parts ≤ 16 | `{1: kit_id bstr(16), 2: [fichier de part]}` |
+| 70 | `RecoveryUnlock` | verrouillé | `{1: [fichier de part] (1 à 16), 2: nouveau mot de passe tstr}` | — |
+| 71 | `RecoveryRemove` | ouvert | — | — |
+| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier}` | compte rendu d'import |
+
+Détails :
+
+1. **`SystemEvent`** — l'application de poste signale que le système va se mettre en veille ou
+   que la session est verrouillée (ADR 0033). Le noyau verrouille le coffre si ses réglages le
+   demandent (`lock_on_sleep`, `lock_on_session_lock`) et répond s'il l'a fait. Coffre absent
+   ou verrouillé : `{1: false}`. Le noyau reçoit aussi ces événements lui-même sous Windows et
+   macOS, et remarque partout une mise en veille par un saut de l'horloge murale de plus de
+   30 s par rapport à l'horloge monotone ; l'opération sert là où il ne les reçoit pas
+   (sessions Linux, par D-Bus).
+2. **`GetSettings`, `SetSettings`** — `auto_lock_s` : 0 (délai par défaut) ou 30 à 86 400 ;
+   `clipboard_clear_s` : 5 à 600 ; hors bornes, `InvalidInput`. Les deux interrupteurs valent
+   `true` par défaut (`format.md` § 5.6).
+3. **`ChangePassword`** — même frein que `Unlock` (§ 14 point 3) : un mot de passe actuel faux
+   compte comme un échec de déverrouillage (`UnlockFailed`, puis `Throttled` avec
+   `{1: secondes}`) ; un succès remet le compteur à zéro. La clé du poste est renveloppée sous
+   le nouveau mot de passe, avec le coût Argon2id du mot de passe actuel et un sel neuf : aucun
+   secret n'est rechiffré.
+4. **`RestoreSecret`** — sort un secret de la corbeille (nouvelle version d'état actif).
+   Secret absent ou purgé : `NotFound`.
+5. **`History`, `ReadVersion`** — versions encore gardées par la rétention (`format.md` § 9.3).
+   `ReadVersion` d'un champ absent de cette version, ou d'une version inconnue : `NotFound` ;
+   d'un champ binaire : `Unsupported`.
+6. **`RestoreVersion`** — écrit une nouvelle version qui reprend les champs, adresses,
+   étiquettes et champs personnalisés de la version désignée ; l'état actuel reste dans
+   l'historique. Version de purge : `InvalidInput` ; secret purgé : `NotFound`.
+7. **`RecoveryStatus`** — lu dans l'en-tête en clair du coffre, sans clé : répond aussi coffre
+   verrouillé, pour que l'écran de déverrouillage propose le kit. Sans coffre : `NoVault`.
+8. **`RecoveryCreate`** — crée un kit (ADR 0034) qui **remplace** le précédent : les anciennes
+   parts n'ouvrent plus le coffre. Les fichiers de part sont des secrets : le client les écrit
+   tels quels, chacun pour un dépositaire, et ne les garde pas. Bornes non tenues :
+   `InvalidInput`.
+9. **`RecoveryUnlock`** — coffre ouvert : `AlreadyUnlocked` ; sans kit : `NotFound` (l'en-tête
+   le dit déjà) ; fichier qui n'est pas une part : `InvalidInput`. Parts trop peu nombreuses,
+   d'un autre kit ou d'un autre coffre, ou qui ne se recombinent pas : `UnlockFailed`, sous le
+   même frein que `Unlock`. Succès : le coffre est ouvert **et** le nouveau mot de passe remplace
+   l'ancien (même coût Argon2id) ; le kit reste valable.
+10. **`RecoveryRemove`** — retire la méthode de recouvrement de l'en-tête. Sans kit : `NotFound` ;
+    si une autre méthode la suit dans l'en-tête (son rang entre dans la clé de cette méthode,
+    `format.md` § 4.2) : `Unsupported`.
+11. **`ImportKdbx`** — le noyau lit le fichier lui-même (le client n'en transmet que le chemin),
+    le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
+    défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
+    `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
+    clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
+    de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
+    identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
+    « Sans titre » ; chemin du groupe (sans la racine) en étiquette, plus les étiquettes
+    KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
+    KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
+    coffre (valeur trop longue) comptée dans « refusés ».
+
+### 16.4 Erreurs
+
+| Code | Nom | Sens | Détails |
+| --- | --- | --- | --- |
+| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 3 ou antérieur, AES-KDF, Twofish, Salsa20, fichier clé | — |
+| 61 | `ImportKeyRejected` | Mot de passe de la base faux, ou en-tête altéré | — |
+| 62 | `ImportMalformed` | Pas une base KeePass, ou base malformée, altérée ou trop grande | — |
+
+Les codes généraux 1 à 5, 7 à 11, 13, 14, 16 et 17 gardent leur sens ; `Throttled` porte
+`{1: secondes}` comme au § 7. Aucun message ne contient de secret, de chemin ni de cause
+cryptographique ; le journal du noyau n'écrit que l'opération et le nom du résultat
+(`event=self_request op=<nom> result=<ok|nom>`), et
+`event=system_watch sleep=0|1 session_lock=0|1` au démarrage (ce que le système lui signale).
+
+### 16.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `history NOM \| --id ID` | `List` (résolution), `History` |
+| `history NOM \| --id ID --version N --champ C [--stdout]` | `List`, `History`, `ReadVersion`, `Status` (presse-papiers comme `get`) |
+| `restore NOM \| --id ID` | `List` (corbeille comprise), `RestoreSecret` |
+| `restore NOM \| --id ID --version N` | `List`, `History`, `RestoreVersion` |
+| `import-kdbx FICHIER` | `ImportKdbx` (mot de passe de la base demandé sans écho) |
+| `passwd` | `ChangePassword` (actuel, puis nouveau deux fois en terminal) |
+| `settings [--verrouillage S] [--presse-papiers S] [--veille oui\|non] [--session oui\|non]` | `GetSettings`, (`SetSettings`) |
+| `recovery status` | `RecoveryStatus` |
+| `recovery create T N DOSSIER` | `RecoveryCreate` ; parts écrites `hirzla-part-<kit>-<i>.hirzla-part`, `0600`, sans en remplacer |
+| `recovery unlock PART…` | `RecoveryUnlock` (nouveau mot de passe demandé) |
+| `recovery remove` | `RecoveryRemove` |
+
+`N` de `--version` est le numéro qu'affiche `history` : 1 pour la version actuelle, puis en
+remontant le temps (l'application de poste numérote de même). Un nouveau mot de passe tapé au terminal doit compter au moins 12 caractères.
+
+### 16.6 Points ouverts
+
+1. L'import lit un chemin donné par un client du profil complet : le noyau ouvre ce que
+   l'utilisateur peut lire, ni plus ni moins que le client lui-même. Le profil navigateur ne
+   peut pas l'appeler.
+2. Les tampons internes de `flate2` et `quick-xml` pendant l'import ne sont pas effacés
+   (ADR 0025) ; ceux du noyau le sont.
+3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
+   `Status`.

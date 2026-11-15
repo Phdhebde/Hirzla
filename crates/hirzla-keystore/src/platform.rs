@@ -1,6 +1,7 @@
 //! Operating-system calls the core and the command line need but that only exist behind
 //! `unsafe` FFI (ADR 0015): process hardening, identity of the peer of the local channel,
-//! the Windows named pipe, and reading a password from the terminal without echo.
+//! the Windows named pipe, reading a password from the terminal without echo, and the
+//! sleep and session-lock notifications that lock the vault (ADR 0033).
 //!
 //! `unsafe` is forbidden everywhere but in `hirzla-keystore` (rule 6 of `CLAUDE.md`). These
 //! calls are kept here, in one place, each block justified by a `// SAFETY:` comment, behind a
@@ -13,6 +14,9 @@ use std::fmt;
 use std::io::{self, Read};
 
 use zeroize::{Zeroize, Zeroizing};
+
+mod events;
+pub use events::{watch_system_events, SystemEvent, SystemWatch};
 
 #[cfg(unix)]
 mod unix;
