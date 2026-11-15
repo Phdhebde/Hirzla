@@ -775,6 +775,10 @@ hexadécimaux du début de l'`op_id`.
    partagés : à spécifier dans une version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
+5. Pas de révocation d'appareil depuis une alerte : seule la clé du membre signe une
+   révocation d'appareil (`roles.md`), le noyau n'a pas de chemin pour la publier. Proposition
+   (opération 49 `DeviceRevoke` pour ses propres appareils, retrait du membre depuis une
+   opération en quarantaine) : ADR 0059, proposé, non implémenté.
 
 ### 15.8 Accords et quarantaine (opérations 90 à 98)
 
