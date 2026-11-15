@@ -22,6 +22,25 @@ pub mod link;
 use commands::AppState;
 use link::{CoreLink, LinkConfig};
 
+/// Whether the web view may show `url`: only the application's own pages, served by Tauri
+/// (`tauri://localhost` on Linux and macOS, `http(s)://tauri.localhost` on Windows).
+#[must_use]
+pub fn is_app_url(url: &tauri::Url) -> bool {
+    match url.scheme() {
+        "tauri" => url.host_str() == Some("localhost"),
+        "http" | "https" => url.host_str() == Some("tauri.localhost") && url.port().is_none(),
+        _ => false,
+    }
+}
+
+/// Refuses any navigation away from the application's pages: no remote page can ever be
+/// loaded in the window, even by mistake (the capability is local only, as a second line).
+fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("navigation-guard")
+        .on_navigation(|_, url| is_app_url(url))
+        .build()
+}
+
 /// Starts the application.
 ///
 /// # Errors
@@ -29,6 +48,7 @@ use link::{CoreLink, LinkConfig};
 pub fn run() -> Result<(), tauri::Error> {
     let link = LinkConfig::for_this_process().map(CoreLink::new);
     let app = tauri::Builder::default()
+        .plugin(navigation_guard())
         .manage(AppState::new(link))
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
@@ -53,4 +73,31 @@ pub fn run() -> Result<(), tauri::Error> {
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn only_the_application_pages_may_be_shown() {
+        for ok in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/index.html",
+            "https://tauri.localhost/",
+        ] {
+            assert!(is_app_url(&ok.parse().unwrap()), "{ok}");
+        }
+        for bad in [
+            "https://example.com/",
+            "http://tauri.localhost.example.com/",
+            "http://tauri.localhost:8080/",
+            "file:///tmp/page.html",
+            "tauri://other/",
+            "data:text/html,x",
+        ] {
+            assert!(!is_app_url(&bad.parse().unwrap()), "{bad}");
+        }
+    }
 }
