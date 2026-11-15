@@ -69,11 +69,32 @@ fonctionnement.
   une seule clé (hybride) à protéger pour ce qui compte, plus une clé GPG de distribution.
 - Difficile : avertissements SmartScreen et Gatekeeper tant qu'aucun certificat de système
   n'existe ; à expliquer dans le guide d'installation.
-- À surveiller : la réponse de la SignPath Foundation ; la mise en œuvre du point 1 (sans
-  elle, une livraison Windows ou macOS doit être compilée avec `--client-signatures off`,
-  ce que la cible de sécurité interdit dans la configuration évaluée) ; la mise à jour de
-  `livraison.md` § 3, § 4 et § 6 quand le point 1 est fusionné.
+- À surveiller : la réponse de la SignPath Foundation ; l'emplacement du manifeste dans un
+  paquet d'application macOS (voir « Mise en œuvre »).
 - Marche à suivre de l'éditeur : `docs/guide-signature.md`.
+
+## Mise en œuvre
+
+- **Point 1** (branche `feat/manifeste-trois-systemes`) : `hirzla-core::codesign`. Le mode
+  est la constante `SIGNATURE_KIND`, fixée par la fonctionnalité Cargo `signature-systeme`
+  (mode `systeme`) ; sans elle, mode `manifeste`, défaut de toute version. Une fonctionnalité
+  Cargo plutôt qu'une variable d'environnement de compilation : elle se voit dans la commande
+  de compilation et dans `Cargo.toml`, se propage du noyau aux clients
+  (`hirzla-cli`, `hirzla-native-host`, `hirzla-desktop` la relaient vers `hirzla-core`), et
+  ne peut pas être prise par mégarde à l'environnement d'un agent de CI. Le manifeste est lu
+  à côté du noyau sur les trois systèmes (`default_manifest_path`) et doit porter la
+  plateforme du noyau ; le fichier haché est `/proc/<pid>/exe` sous Linux, le chemin rendu par
+  `QueryFullProcessImageNameW` ou `proc_pidpath` sous Windows et macOS (fonctions déjà
+  utilisées pour identifier le pair, aucun nouveau `unsafe`). Échec fermé : manifeste absent,
+  altéré, d'une autre plateforme ou sans clé, et le noyau ne démarre pas
+  (`SetupError::Manifest`, `SetupError::NoPublisherKey`) ; mode `systeme` hors Windows et
+  macOS : `SetupError::Unsupported`. Le journal du noyau porte le mode
+  (`event=client_signatures required=1 kind=manifeste`). Tests unitaires et de bout en bout
+  (`apps/cli/tests/e2e.rs`) sur les trois systèmes en CI.
+- **Reste** : sous macOS, le sceau de `Hirzla.app` couvre un manifeste posé dans le paquet
+  et la signature de `hirzla-desktop` dépend de ce sceau ; le manifeste ne peut donc pas
+  contenir l'empreinte de `hirzla-desktop` s'il est dans le paquet (`livraison.md` § 9,
+  point 2). Emplacement à trancher par un ADR avant la première livraison macOS.
 
 ## Alternatives écartées
 

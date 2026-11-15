@@ -140,7 +140,7 @@ Propriétés distinctives :
 | Paramètre | Valeur |
 | --- | --- |
 | Plateforme du poste et du serveur | `À COMPLÉTER (Max)` (recommandation ADR 0050 : Linux x86-64, Debian 12 ou Ubuntu 24.04 LTS) |
-| Binaires | Version de livraison : `hirzla-core` et `hirzla` compilés avec la fonctionnalité `livraison` (signature des clients exigée, clés d'éditeur compilées seules admises) |
+| Binaires | Version de livraison : `hirzla-core` et `hirzla` compilés avec la fonctionnalité `livraison` et sans `signature-systeme` (signature des clients exigée, contrôlée par le manifeste des clients, clés d'éditeur compilées seules admises : ADR 0063 § 1) |
 | Installation | Les trois exécutables dans le même répertoire, posé par root (`/usr/bin` pour deb et rpm), manifeste des clients signé à côté du noyau (`livraison.md` § 1 et § 7) |
 | Suite cryptographique | Suite V1 (`SuiteId 0x0001`) seule |
 | TLS | TLS 1.3, groupe `X25519MLKEM768` seul (**écart** au dossier cryptographique, qui vise `SecP384r1MLKEM1024` : ADR 0028 option A, ADR 0050 point 4) |
@@ -370,10 +370,12 @@ Paquets de mise à jour hors ligne et manifeste des clients signés en hybride E
 ML-DSA-87 par la clé d'éditeur, signature vérifiée avant tout décodage, version strictement
 supérieure exigée (aucun retour en arrière), noms de fichiers fermés, empreintes SHA-384
 comparées à temps constant, mise en place atomique (ADR 0043). Le noyau vérifie la signature
-de chaque client (Authenticode, signature Apple, manifeste signé sous Linux) et échoue fermé
-(ADR 0042) ; chaque client vérifie de même la signature du noyau avant tout envoi, dans les
-versions de livraison (ADR 0055). L'ADR 0063 fait du manifeste signé par la clé d'éditeur le
-contrôle par défaut sur les trois systèmes (mise en œuvre à venir pour Windows et macOS) ;
+de chaque client et échoue fermé (ADR 0042) ; chaque client vérifie de même la signature du
+noyau avant tout envoi, dans les versions de livraison (ADR 0055). Le contrôle, fixé à la
+compilation et jamais deviné à l'exécution (ADR 0063 § 1), est par défaut le **manifeste des
+clients** signé par la clé d'éditeur, sur Linux, Windows et macOS ; la signature de système
+(Authenticode, signature Apple) ne le remplace que dans une version compilée avec la
+fonctionnalité `signature-systeme`, hors configuration évaluée ;
 empreintes des livraisons signées en GPG, provenance de compilation Sigstore, signatures
 Authenticode et Apple facultatives ; dépendances
 figées (`Cargo.lock`, `cargo deny`) ; exécutables Linux compilés de façon reproductible et
@@ -386,14 +388,17 @@ nomenclature logicielle CycloneDX publiée avec chaque livraison (ADR 0056).
   (`client_manifest_signature_is_checked`, `a_package_signature_is_not_a_manifest_signature`,
   `package_for_this_version_or_older_is_refused`, `package_of_another_publisher_is_refused`,
   `altered_package_changes_nothing`, `embedded_client_manifest_must_match_the_package`) ;
-  `matches_entry_refuses_a_modified_file`, `linux_manifest_check_end_to_end`,
-  `linux_client_checks_the_core_against_the_manifest`, `core_signature_off_accepts_without_looking`
-  (`codesign.rs`) ; job de CI « reproducible build (Linux) »
+  `matches_entry_refuses_a_modified_file`, `manifest_check_end_to_end`,
+  `client_checks_the_core_against_the_manifest`, `signature_kind_is_fixed_at_compile_time`,
+  `core_signature_off_accepts_without_looking` (`codesign.rs`, sur les trois systèmes) ;
+  `signed_client_manifest_is_enforced`, `client_checks_the_running_core_against_the_manifest`
+  (`apps/cli/tests/e2e.rs`, sur les trois systèmes) ; job de CI « reproducible build (Linux) »
   (`.github/scripts/reproducible-build.sh`, `.github/scripts/sbom.py`) ; `required_signatures_fail_closed` (`daemon.rs`) ;
   `verifies_applies_and_refuses_rollback` (`apps/cli/tests/update.rs`) ;
   `signs_and_verifies_manifests_and_packages` (`apps/release-signer/tests/signer.rs`).
-- **Écarts** : signatures Windows et macOS (du client par le noyau et du noyau par le
-  client) non essayées sur postes réels signés ; sous Linux, le client vérifie le noyau
+- **Écarts** : manifeste des clients sous Windows et macOS essayé en CI seulement, pas sur
+  des postes installés ; signature de système (mode `systeme`) non essayée sur postes réels
+  signés ; sous Linux, le client vérifie le noyau
   installé, pas le processus que le système lui cache (ADR 0055, hypothèse H13) ;
   reproductibilité vérifiée pour les exécutables Linux seulement, pas pour les paquets
   d'installation (ADR 0056).
@@ -601,7 +606,15 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
   import KDBX ; la mémoire de l'application de poste (moteur web) contient le secret affiché.
 - **M7** : un logiciel malveillant du compte peut lancer un vrai client signé et le piloter ;
   réutilisation de PID possible entre connexion et vérification ; un certificat d'éditeur
-  révoqué reste accepté sans vérification en ligne (ADR 0042).
+  révoqué reste accepté sans vérification en ligne (ADR 0042, mode `systeme` seulement).
+  Sous Windows et macOS, le manifeste est comparé au fichier qui porte le **chemin** de
+  l'exécutable nommé par le système (`QueryFullProcessImageNameW`, `proc_pidpath`), pas à
+  l'image en cours d'exécution comme sous Linux (`/proc/<pid>/exe`) : un fichier remplacé
+  entre le lancement du processus et sa vérification passerait le contrôle (ADR 0063 § 1).
+  Atténuations : Windows refuse d'écrire dans l'image d'un processus en cours ou de la
+  supprimer ; il permet en revanche, comme macOS, de la renommer et de poser un autre
+  fichier sous le même nom, ce qui exige d'écrire dans le répertoire d'installation, réservé
+  à l'administrateur (H13).
 - **Métadonnées connues du serveur** : identifiants de casiers et de membres, tailles
   bourrées, heures de connexion, graphe des opérations (en-têtes en clair), qui a accusé quelle
   compaction, dernière authentification de chaque appareil à la journée près (ADR 0040).
