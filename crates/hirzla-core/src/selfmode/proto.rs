@@ -1,5 +1,5 @@
 //! Self-mode operations of the local API (`docs/api-locale.md` § 16): version 5, operation
-//! codes 40 to 59, error codes 40 to 49. Same frames, same CBOR profile and same strict
+//! codes 60 to 79, error codes 60 to 69. Same frames, same CBOR profile and same strict
 //! decoding as the rest of the API (`crate::proto`).
 
 use hirzla_vault::cbor::{
@@ -15,7 +15,7 @@ use crate::proto::{field_from_u64, ApiValue, ErrorCode, MAX_PASSWORD, MAX_TEXT};
 /// Version of the protocol that carries the Self-mode operations.
 pub const SELF_VERSION: u64 = 5;
 /// Operation codes reserved for the Self mode.
-pub const SELF_OPS: std::ops::RangeInclusive<u64> = 40..=59;
+pub const SELF_OPS: std::ops::RangeInclusive<u64> = 60..=79;
 /// Longest path of a file to import, in bytes.
 pub const MAX_PATH: usize = 4096;
 /// Most versions listed by `History`.
@@ -29,31 +29,31 @@ const MAX_INDEX_TEXT: usize = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelfOp {
     /// The system goes to sleep or locks the session.
-    SystemEvent = 40,
+    SystemEvent = 60,
     /// Settings of the vault.
-    GetSettings = 41,
+    GetSettings = 61,
     /// Change the settings of the vault.
-    SetSettings = 42,
+    SetSettings = 62,
     /// Change the master password.
-    ChangePassword = 43,
+    ChangePassword = 63,
     /// Take a secret out of the trash.
-    RestoreSecret = 44,
+    RestoreSecret = 64,
     /// Versions of a secret.
-    History = 45,
+    History = 65,
     /// One field of an earlier version.
-    ReadVersion = 46,
+    ReadVersion = 66,
     /// Restore an earlier version.
-    RestoreVersion = 47,
+    RestoreVersion = 67,
     /// Whether a recovery kit exists.
-    RecoveryStatus = 48,
+    RecoveryStatus = 68,
     /// Make a recovery kit.
-    RecoveryCreate = 49,
+    RecoveryCreate = 69,
     /// Open the vault with recovery shares and set a new password.
-    RecoveryUnlock = 50,
+    RecoveryUnlock = 70,
     /// Remove the recovery kit.
-    RecoveryRemove = 51,
+    RecoveryRemove = 71,
     /// Import a KeePass KDBX 4 database.
-    ImportKdbx = 52,
+    ImportKdbx = 72,
 }
 
 impl SelfOp {
@@ -100,17 +100,17 @@ impl SelfOp {
     }
 }
 
-/// Error codes of the Self mode (40 to 49). The general codes of § 7 keep their numbers.
+/// Error codes of the Self mode (60 to 69). The general codes of § 7 keep their numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelfCode {
     /// A general code of § 7.
     General(ErrorCode),
-    /// 40: a KeePass database this core does not import (KDBX 3, AES-KDF, Twofish, key
+    /// 60: a KeePass database this core does not import (KDBX 3, AES-KDF, Twofish, key
     /// file…).
     ImportUnsupported,
-    /// 41: wrong password for the KeePass database, or its header was altered.
+    /// 61: wrong password for the KeePass database, or its header was altered.
     ImportKeyRejected,
-    /// 42: not a KeePass database, or a malformed, altered or oversized one.
+    /// 62: not a KeePass database, or a malformed, altered or oversized one.
     ImportMalformed,
 }
 
@@ -120,9 +120,9 @@ impl SelfCode {
     pub fn status(self) -> u64 {
         match self {
             SelfCode::General(c) => c as u64,
-            SelfCode::ImportUnsupported => 40,
-            SelfCode::ImportKeyRejected => 41,
-            SelfCode::ImportMalformed => 42,
+            SelfCode::ImportUnsupported => 60,
+            SelfCode::ImportKeyRejected => 61,
+            SelfCode::ImportMalformed => 62,
         }
     }
 
@@ -224,34 +224,34 @@ pub struct ImportReport {
 /// A Self-mode request.
 #[derive(Clone, PartialEq, Eq)]
 pub enum SelfRequest {
-    /// 40.
+    /// 60.
     SystemEvent(SystemEventKind),
-    /// 41.
+    /// 61.
     GetSettings,
-    /// 42.
+    /// 62.
     SetSettings(SettingsArgs),
-    /// 43.
+    /// 63.
     ChangePassword {
         /// Current password.
         current: Zeroizing<String>,
         /// New password.
         new: Zeroizing<String>,
     },
-    /// 44.
+    /// 64.
     RestoreSecret {
         /// Locker.
         locker: Id16,
         /// Secret.
         secret: Id16,
     },
-    /// 45.
+    /// 65.
     History {
         /// Locker.
         locker: Id16,
         /// Secret.
         secret: Id16,
     },
-    /// 46.
+    /// 66.
     ReadVersion {
         /// Locker.
         locker: Id16,
@@ -262,7 +262,7 @@ pub enum SelfRequest {
         /// The field.
         field: Field,
     },
-    /// 47.
+    /// 67.
     RestoreVersion {
         /// Locker.
         locker: Id16,
@@ -271,25 +271,25 @@ pub enum SelfRequest {
         /// The version.
         version: OpId,
     },
-    /// 48.
+    /// 68.
     RecoveryStatus,
-    /// 49.
+    /// 69.
     RecoveryCreate {
         /// Shares needed.
         threshold: u8,
         /// Shares made.
         count: u8,
     },
-    /// 50.
+    /// 70.
     RecoveryUnlock {
         /// Share files.
         shares: Vec<Zeroizing<Vec<u8>>>,
         /// New master password.
         new_password: Zeroizing<String>,
     },
-    /// 51.
+    /// 71.
     RecoveryRemove,
-    /// 52.
+    /// 72.
     ImportKdbx {
         /// Absolute path of the database.
         path: String,
@@ -311,27 +311,27 @@ impl std::fmt::Debug for SelfRequest {
 pub enum SelfReply {
     /// No result.
     Done,
-    /// 40: whether the vault was locked by this event.
+    /// 60: whether the vault was locked by this event.
     SystemEvent {
         /// Locked now.
         locked: bool,
     },
-    /// 41.
+    /// 61.
     Settings(SettingsArgs),
-    /// 45, newest first.
+    /// 65, newest first.
     History(Vec<VersionInfo>),
-    /// 46.
+    /// 66.
     Value(ApiValue),
-    /// 48.
+    /// 68.
     RecoveryStatus(Option<RecoveryInfo>),
-    /// 49.
+    /// 69.
     RecoveryKit {
         /// Identifier of the kit.
         kit_id: Id16,
         /// Share files, one per holder (erased on drop).
         shares: Vec<Zeroizing<Vec<u8>>>,
     },
-    /// 52.
+    /// 72.
     Imported(ImportReport),
 }
 
@@ -786,9 +786,9 @@ impl SelfReply {
         let body = f.opt(4);
         if status != 0 {
             let code = match status {
-                40 => SelfCode::ImportUnsupported,
-                41 => SelfCode::ImportKeyRejected,
-                42 => SelfCode::ImportMalformed,
+                60 => SelfCode::ImportUnsupported,
+                61 => SelfCode::ImportKeyRejected,
+                62 => SelfCode::ImportMalformed,
                 n => SelfCode::General(ErrorCode::from_u64(n).ok_or(ErrorCode::Malformed)?),
             };
             let retry = match (code, body) {

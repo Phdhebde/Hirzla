@@ -8,7 +8,8 @@ use std::time::{Duration, Instant, SystemTime};
 use hirzla_keystore::platform::HardeningReport;
 use hirzla_vault::model::{Id16, Settings};
 use hirzla_vault::secret::{
-    Field, FieldValue, IndexEntry, SecretEdit, SecretState, SecretType, SetKind, SetValue,
+    Field, FieldValue, IndexEntry, SecretBody, SecretEdit, SecretState, SecretType, SetKind,
+    SetValue,
 };
 use hirzla_vault::{CreateOptions, KdfCost, Vault, VaultError};
 
@@ -20,6 +21,8 @@ use crate::proto::{
     StatusInfo, VaultState, SUPPORTED_VERSIONS,
 };
 use crate::selfmode::proto::SystemEventKind;
+use crate::server_mode::proto::{ServerCode, ServerReply, ServerRequest};
+use crate::server_mode::ServerMode;
 
 /// Version of the core, reported by `Status`.
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,6 +56,9 @@ pub struct Config {
 pub struct Core {
     pub(crate) config: Config,
     pub(crate) vault: Option<Vault>,
+    /// Server mode of the open vault, loaded at its first use (ADR 0032); the error if the
+    /// annex could not be loaded.
+    server: Option<Result<ServerMode, ServerCode>>,
     pub(crate) last_activity: Instant,
     failures: u32,
     throttled_until: Option<Instant>,
@@ -141,6 +147,7 @@ impl Core {
         Core {
             config,
             vault: None,
+            server: None,
             last_activity: Instant::now(),
             failures: 0,
             throttled_until: None,
@@ -177,6 +184,7 @@ impl Core {
 
     /// Locks the vault: every key and unsealed index fragment is erased as it is dropped.
     pub fn lock(&mut self, reason: LockReason) {
+        self.server = None;
         if let Some(v) = self.vault.take() {
             v.close();
             self.log.record(Event::Locked { reason });
@@ -278,6 +286,70 @@ impl Core {
         result
     }
 
+    /// Answers one server mode request (`docs/api-locale.md` § 15) and logs its outcome
+    /// (operation and fixed result name only).
+    pub fn handle_server(&mut self, request: ServerRequest) -> Result<ServerReply, ServerCode> {
+        let op = request.op();
+        let result = self.dispatch_server(request);
+        self.log.record(Event::ServerRequest {
+            op,
+            result: result.as_ref().map_or_else(|c| c.name(), |_| "ok"),
+        });
+        result
+    }
+
+    fn dispatch_server(&mut self, request: ServerRequest) -> Result<ServerReply, ServerCode> {
+        self.vault().map_err(|e| ServerCode::General(e.code))?;
+        self.load_server();
+        match (self.vault.as_ref(), self.server.as_mut()) {
+            (Some(vault), Some(Ok(server))) => server.handle(vault, request),
+            (_, Some(Err(code))) => Err(*code),
+            _ => Err(ServerCode::General(ErrorCode::Internal)),
+        }
+    }
+
+    /// Loads the server mode of the open vault if it is not loaded yet.
+    fn load_server(&mut self) {
+        if self.server.is_none() {
+            if let Some(v) = &self.vault {
+                self.server = Some(ServerMode::load(v, &self.config.vault_path));
+            }
+        }
+    }
+
+    /// The server mode, if a vault is open and its annex loaded.
+    fn server(&mut self) -> Option<&mut ServerMode> {
+        self.load_server();
+        self.server.as_mut()?.as_mut().ok()
+    }
+
+    /// Whether `locker` is a shared locker of the server mode.
+    fn is_shared(&mut self, locker: &Id16) -> bool {
+        self.server().is_some_and(|s| s.holds(locker))
+    }
+
+    /// Writes a secret of a shared locker (`docs/api-locale.md` § 15.4).
+    fn write_shared(
+        &mut self,
+        locker: &Id16,
+        secret: Option<Id16>,
+        secret_type: SecretType,
+        edit: SecretEdit,
+    ) -> Result<Id16, ErrorReply> {
+        self.vault()?;
+        match (self.vault.as_ref(), self.server.as_mut()) {
+            (Some(vault), Some(Ok(server))) => server
+                .write(vault, locker, secret, secret_type, edit)
+                .map_err(|c| {
+                    ErrorReply::new(match c {
+                        ServerCode::General(c) => c,
+                        _ => ErrorCode::InvalidInput,
+                    })
+                }),
+            _ => Err(ErrorReply::new(ErrorCode::NotFound)),
+        }
+    }
+
     pub(crate) fn vault(&mut self) -> Result<&mut Vault, ErrorReply> {
         if self.vault.is_none() {
             return Err(ErrorReply::new(if self.config.vault_path.exists() {
@@ -322,6 +394,7 @@ impl Core {
             } => {
                 let vault = self.vault()?;
                 let locker = locker.unwrap_or_else(|| vault.personal_locker());
+                let shared = self.is_shared(&locker);
                 let mut edit = SecretEdit {
                     set: fields
                         .into_iter()
@@ -333,9 +406,13 @@ impl Core {
                     .extend(urls.into_iter().map(|u| (SetKind::Urls, SetValue::Text(u))));
                 edit.add
                     .extend(tags.into_iter().map(|t| (SetKind::Tags, SetValue::Text(t))));
-                let id = vault
-                    .create_secret(locker, secret_type, edit)
-                    .map_err(vault_error)?;
+                let id = if shared {
+                    self.write_shared(&locker, None, secret_type, edit)?
+                } else {
+                    self.vault()?
+                        .create_secret(locker, secret_type, edit)
+                        .map_err(vault_error)?
+                };
                 Ok(Reply::Created { locker, id })
             }
             Request::Update {
@@ -352,13 +429,28 @@ impl Core {
                     clear,
                     ..SecretEdit::default()
                 };
-                self.vault()?
-                    .update_secret(locker, id, edit)
-                    .map_err(vault_error)?;
+                if let Some(t) = self.shared_type(&locker, &id) {
+                    self.write_shared(&locker, Some(id), t, edit)?;
+                } else {
+                    self.vault()?
+                        .update_secret(locker, id, edit)
+                        .map_err(vault_error)?;
+                }
                 Ok(Reply::Done)
             }
             Request::Delete { selector, purge } => {
                 let (locker, id) = self.resolve(&selector)?;
+                if let Some(t) = self.shared_type(&locker, &id) {
+                    if purge {
+                        return Err(ErrorReply::new(ErrorCode::Unsupported));
+                    }
+                    let edit = SecretEdit {
+                        state: Some(SecretState::Trash),
+                        ..SecretEdit::default()
+                    };
+                    self.write_shared(&locker, Some(id), t, edit)?;
+                    return Ok(Reply::Done);
+                }
                 let vault = self.vault()?;
                 if purge {
                     vault.purge_secret(locker, id)
@@ -459,6 +551,21 @@ impl Core {
                 all
             }
         };
+        let mut shared_lockers = Vec::new();
+        if let Some(server) = self.server() {
+            for (id, name) in server.lockers() {
+                for e in server.entries(&id) {
+                    if query.is_none_or(|q| matches_query(&e, q)) {
+                        raw.push((id, e));
+                    }
+                }
+                shared_lockers.push(LockerEntry {
+                    id,
+                    name,
+                    personal: false,
+                });
+            }
+        }
         raw.retain(|(_, e)| match e.state {
             SecretState::Active => true,
             SecretState::Trash => include_trash,
@@ -480,6 +587,7 @@ impl Core {
                 name: l.name,
                 personal: l.personal,
             })
+            .chain(shared_lockers)
             .collect();
         Ok(Reply::List { entries, lockers })
     }
@@ -487,6 +595,29 @@ impl Core {
     /// Finds the secret a selector designates: by identifiers (any state but purged), or by
     /// exact title, case-insensitive, among active secrets, which must be unique.
     fn resolve(&mut self, selector: &Selector) -> Result<(Id16, Id16), ErrorReply> {
+        self.vault()?;
+        let mut hits = Vec::new();
+        if let Some(server) = self.server() {
+            match selector {
+                Selector::Id { locker, id } if server.holds(locker) => {
+                    return if server.read(locker, id).is_some() {
+                        Ok((*locker, *id))
+                    } else {
+                        Err(ErrorReply::new(ErrorCode::NotFound))
+                    };
+                }
+                Selector::Id { .. } => {}
+                Selector::Title(title) => {
+                    for (l, _) in server.lockers() {
+                        for e in server.entries(&l) {
+                            if e.state == SecretState::Active && same_title(&e.title, title) {
+                                hits.push((l, e.secret_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let vault = self.vault()?;
         match selector {
             Selector::Id { locker, id } => {
@@ -502,7 +633,6 @@ impl Core {
                 }
             }
             Selector::Title(title) => {
-                let mut hits = Vec::new();
                 for l in vault.lockers() {
                     for e in vault.list(l.id).map_err(vault_error)? {
                         if e.state == SecretState::Active && same_title(&e.title, title) {
@@ -584,17 +714,48 @@ impl Core {
 
     fn read(&mut self, selector: &Selector, field: Field) -> Result<Reply, ErrorReply> {
         let (locker, id) = self.resolve(selector)?;
-        let body = self.vault()?.read_secret(locker, id).map_err(vault_error)?;
-        let entry = body
-            .fields
-            .get(&field)
-            .ok_or_else(|| ErrorReply::new(ErrorCode::NotFound))?;
-        match &entry.value {
-            FieldValue::Text(t) => Ok(Reply::Value(ApiValue::Text(t.clone()))),
-            FieldValue::Bool(b) => Ok(Reply::Value(ApiValue::Bool(*b))),
-            _ => Err(ErrorReply::new(ErrorCode::Unsupported)),
+        if self.is_shared(&locker) {
+            let body = self
+                .server()
+                .and_then(|s| s.read(&locker, &id))
+                .ok_or_else(|| ErrorReply::new(ErrorCode::NotFound))?;
+            return field_reply(body, field);
         }
+        let body = self.vault()?.read_secret(locker, id).map_err(vault_error)?;
+        field_reply(&body, field)
     }
+
+    /// The type of a secret of a shared locker, `None` if `locker` is not shared.
+    fn shared_type(&mut self, locker: &Id16, id: &Id16) -> Option<SecretType> {
+        let server = self.server()?;
+        if !server.holds(locker) {
+            return None;
+        }
+        server.read(locker, id).map(|b| b.secret_type)
+    }
+}
+
+/// The value of one field of a secret (`Read`).
+fn field_reply(body: &SecretBody, field: Field) -> Result<Reply, ErrorReply> {
+    let entry = body
+        .fields
+        .get(&field)
+        .ok_or_else(|| ErrorReply::new(ErrorCode::NotFound))?;
+    match &entry.value {
+        FieldValue::Text(t) => Ok(Reply::Value(ApiValue::Text(t.clone()))),
+        FieldValue::Bool(b) => Ok(Reply::Value(ApiValue::Bool(*b))),
+        _ => Err(ErrorReply::new(ErrorCode::Unsupported)),
+    }
+}
+
+/// Whether an index entry matches a search, on the fields `Vault::search` looks at.
+fn matches_query(e: &IndexEntry, query: &str) -> bool {
+    let q = query.to_lowercase();
+    let hit = |s: &str| s.to_lowercase().contains(&q);
+    hit(&e.title)
+        || e.username.as_ref().is_some_and(|u| hit(u))
+        || e.hosts.iter().any(|h| hit(h))
+        || e.tags.iter().any(|t| hit(t))
 }
 
 #[cfg(test)]

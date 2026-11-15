@@ -9,7 +9,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use hirzla_core::proto::{field_from_u64, ApiValue, MAX_PASSWORD};
+use hirzla_core::proto::{ApiValue, MAX_PASSWORD};
 use hirzla_core::selfmode::proto::{
     ImportReport, RecoveryInfo, SelfReply, SelfRequest, SettingsArgs, SystemEventKind, VersionInfo,
     MAX_PATH,
@@ -79,18 +79,22 @@ impl SettingsDto {
     }
 }
 
+/// Name of a field number (`docs/format.md` § 8), for the history screen.
 fn field_name(n: u64) -> &'static str {
-    match field_from_u64(n) {
-        Some(Field::Title) => "title",
-        Some(Field::Notes) => "notes",
-        Some(Field::Favorite) => "favorite",
-        Some(Field::Username) => "username",
-        Some(Field::Password) => "password",
-        Some(Field::Totp) => "totp",
-        Some(Field::SshPrivateKey) => "ssh_private_key",
-        Some(Field::SshPublicKey) => "ssh_public_key",
-        Some(Field::SshPassphrase) => "ssh_passphrase",
-        Some(_) => "passkey",
+    const NAMES: [(Field, &str); 9] = [
+        (Field::Title, "title"),
+        (Field::Notes, "notes"),
+        (Field::Favorite, "favorite"),
+        (Field::Username, "username"),
+        (Field::Password, "password"),
+        (Field::Totp, "totp"),
+        (Field::SshPrivateKey, "ssh_private_key"),
+        (Field::SshPublicKey, "ssh_public_key"),
+        (Field::SshPassphrase, "ssh_passphrase"),
+    ];
+    match NAMES.iter().find(|(f, _)| *f as u64 == n) {
+        Some((_, name)) => name,
+        None if (Field::RpId as u64..=Field::Discoverable as u64).contains(&n) => "passkey",
         None => "other",
     }
 }

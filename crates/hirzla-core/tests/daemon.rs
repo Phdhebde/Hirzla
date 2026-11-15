@@ -432,6 +432,46 @@ fn agent_operations_are_refused_to_the_browser_profile() {
     assert!(log.contains("event=agent_request op=agent_enrol result=unauthorized"));
 }
 
+/// The server mode (`docs/api-locale.md` § 15) answers a full client over the real channel,
+/// opens no connection without a joined server, and is refused to the browser profile.
+#[cfg(unix)]
+#[test]
+fn the_server_mode_answers_full_clients_only() {
+    use hirzla_core::server_mode::proto::{ServerCode, ServerRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "server-full");
+    let me = std::env::current_exe().unwrap();
+    let core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    // No vault: the general code.
+    assert!(matches!(
+        c.call_server(&ServerRequest::ServerStatus).unwrap(),
+        Err(ServerCode::General(ErrorCode::NoVault))
+    ));
+    drop(c);
+    drop(core);
+
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "server-browser");
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    for r in [ServerRequest::ServerStatus, ServerRequest::ServerSync] {
+        assert!(matches!(
+            c.call_server(&r).unwrap(),
+            Err(ServerCode::General(ErrorCode::Unauthorized))
+        ));
+    }
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=server_request op=server_sync result=unauthorized"));
+}
+
 #[test]
 fn the_self_mode_answers_over_the_real_channel() {
     use hirzla_core::selfmode::proto::{SelfCode, SelfReply, SelfRequest, SystemEventKind};

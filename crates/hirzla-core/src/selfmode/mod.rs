@@ -2,7 +2,7 @@
 //! application and the command line need to run a vault alone, beyond the operations of
 //! versions 1 and 2.
 //!
-//! - [`proto`]: operations 40 to 59 and error codes 40 to 49;
+//! - [`proto`]: operations 60 to 79 and error codes 60 to 69;
 //! - [`service`]: settings, password change, trash, version history, quorum recovery
 //!   (ADR 0034) and locking on system events (ADR 0033);
 //! - [`import`]: KeePass KDBX 4 import in the core (ADR 0025, option 2).

@@ -102,29 +102,29 @@ fn requests_are_decoded_strictly() {
     let invalid = SelfCode::General(ErrorCode::InvalidInput);
     // Wrong version, unknown operation in the range.
     assert_eq!(
-        refusal(&frame(2, 41, None)),
+        refusal(&frame(2, 61, None)),
         SelfCode::General(ErrorCode::UnsupportedVersion)
     );
     assert_eq!(
-        refusal(&frame(5, 59, None)),
+        refusal(&frame(5, 79, None)),
         SelfCode::General(ErrorCode::UnknownOperation)
     );
     // Arguments where none are taken, missing where needed, unknown keys.
-    assert_eq!(refusal(&frame(5, 41, Some(Value::map(vec![])))), malformed);
-    assert_eq!(refusal(&frame(5, 45, None)), malformed);
+    assert_eq!(refusal(&frame(5, 61, Some(Value::map(vec![])))), malformed);
+    assert_eq!(refusal(&frame(5, 65, None)), malformed);
     let pair = |extra: Option<(u64, Value)>| {
         let mut e = vec![(1, Value::bytes(&L)), (2, Value::bytes(&S))];
         e.extend(extra);
         Value::map(e)
     };
     assert_eq!(
-        refusal(&frame(5, 45, Some(pair(Some((3, Value::Uint(1))))))),
+        refusal(&frame(5, 65, Some(pair(Some((3, Value::Uint(1))))))),
         malformed
     );
     assert_eq!(
         refusal(&frame(
             5,
-            45,
+            65,
             Some(Value::map(vec![
                 (1, Value::bytes(&[1; 15])),
                 (2, Value::bytes(&S))
@@ -134,14 +134,14 @@ fn requests_are_decoded_strictly() {
     );
     // System events: 1 and 2 only.
     assert_eq!(
-        refusal(&frame(5, 40, Some(Value::map(vec![(1, Value::Uint(3))])))),
+        refusal(&frame(5, 60, Some(Value::map(vec![(1, Value::Uint(3))])))),
         invalid
     );
     // Settings: all four keys, typed.
     assert_eq!(
         refusal(&frame(
             5,
-            42,
+            62,
             Some(Value::map(vec![
                 (1, Value::Uint(1)),
                 (2, Value::Uint(1)),
@@ -154,7 +154,7 @@ fn requests_are_decoded_strictly() {
     assert_eq!(
         refusal(&frame(
             5,
-            43,
+            63,
             Some(Value::map(vec![
                 (1, Value::text("")),
                 (2, Value::text("x"))
@@ -167,7 +167,7 @@ fn requests_are_decoded_strictly() {
         assert_eq!(
             refusal(&frame(
                 5,
-                49,
+                69,
                 Some(Value::map(vec![(1, Value::Uint(t)), (2, Value::Uint(n))]))
             )),
             invalid,
@@ -178,7 +178,7 @@ fn requests_are_decoded_strictly() {
     let unlock = |shares: Vec<Value>| {
         frame(
             5,
-            50,
+            70,
             Some(Value::map(vec![
                 (1, Value::Array(shares)),
                 (2, Value::text("x")),
@@ -195,7 +195,7 @@ fn requests_are_decoded_strictly() {
     let import = |path: &str| {
         frame(
             5,
-            52,
+            72,
             Some(Value::map(vec![
                 (1, Value::text(path)),
                 (2, Value::text("p")),
@@ -208,7 +208,7 @@ fn requests_are_decoded_strictly() {
     assert_eq!(
         refusal(&frame(
             5,
-            46,
+            66,
             Some(Value::map(vec![
                 (1, Value::bytes(&L)),
                 (2, Value::bytes(&S)),
@@ -222,11 +222,11 @@ fn requests_are_decoded_strictly() {
 
 #[test]
 fn routing_by_operation_code() {
-    assert!(is_self_request(&frame(5, 40, None)));
-    assert!(is_self_request(&frame(1, 59, None)));
-    assert!(!is_self_request(&frame(5, 39, None)));
-    assert!(!is_self_request(&frame(5, 60, None)));
-    assert!(!is_self_request(&frame(3, 20, None)));
+    assert!(is_self_request(&frame(5, 60, None)));
+    assert!(is_self_request(&frame(1, 79, None)));
+    assert!(!is_self_request(&frame(5, 59, None)));
+    assert!(!is_self_request(&frame(5, 80, None)));
+    assert!(!is_self_request(&frame(3, 40, None)));
     assert!(!is_self_request(b"\xff"));
 }
 
@@ -356,7 +356,7 @@ fn replies_are_decoded_strictly() {
     let unknown = cbor::encode(&Value::map(vec![
         (1, Value::Uint(5)),
         (2, Value::Uint(1)),
-        (3, Value::Uint(49)),
+        (3, Value::Uint(69)),
     ]))
     .unwrap();
     assert!(SelfReply::decode(SelfOp::GetSettings, &unknown).is_err());

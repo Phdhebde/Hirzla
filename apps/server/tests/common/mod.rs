@@ -204,7 +204,10 @@ impl Server {
         .unwrap()
     }
 
-    pub fn try_connect(&self, device: &LocalDevice) -> Result<Client, hirzla_server::ServerError> {
+    pub fn try_connect(
+        &self,
+        device: &LocalDevice,
+    ) -> Result<Client, hirzla_server::client::NetError> {
         Client::connect(
             self.running.addr,
             SERVER_NAME,

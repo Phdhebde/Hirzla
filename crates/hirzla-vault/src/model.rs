@@ -516,6 +516,9 @@ pub struct MemberPrivate {
     pub mldsa_seed: Zeroizing<[u8; 32]>,
 }
 
+/// Longest server address, in bytes (§ 5.5).
+pub const MAX_SERVER_URL: usize = 2048;
+
 /// Server of a vault in server mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {
@@ -527,6 +530,33 @@ pub struct ServerInfo {
     pub server_key: Vec<u8>,
     /// Fingerprint checked out of band.
     pub server_key_verified: bool,
+}
+
+impl ServerInfo {
+    /// Canonical value (§ 5.5).
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        Value::map(vec![
+            (1, Value::text(&self.url)),
+            (2, Value::bytes(&self.server_id)),
+            (3, Value::bytes(&self.server_key)),
+            (4, Value::Bool(self.server_key_verified)),
+        ])
+    }
+
+    /// Strict decoding (§ 5.5).
+    ///
+    /// # Errors
+    /// [`CborError`].
+    pub fn from_value(v: &Value) -> Result<Self, CborError> {
+        let s = Fields::new(v, &[1, 2, 3, 4])?;
+        Ok(ServerInfo {
+            url: text_max(s.req(1)?, MAX_SERVER_URL)?.to_owned(),
+            server_id: id(s.req(2)?)?,
+            server_key: bytes_exact(s.req(3)?, lens::SIG_PUBLIC)?,
+            server_key_verified: boolean(s.req(4)?)?,
+        })
+    }
 }
 
 /// Sealed identity of the device (§ 5.5).
@@ -593,15 +623,7 @@ impl Identity {
             ));
         }
         if let Some(s) = &self.server {
-            entries.push((
-                8,
-                Value::map(vec![
-                    (1, Value::text(&s.url)),
-                    (2, Value::bytes(&s.server_id)),
-                    (3, Value::bytes(&s.server_key)),
-                    (4, Value::Bool(s.server_key_verified)),
-                ]),
-            ));
+            entries.push((8, s.to_value()));
         }
         cbor::encode(&Value::map(entries))
     }
@@ -635,18 +657,7 @@ impl Identity {
             None => None,
         };
         let mode = u8::try_from(uint_in(f.req(7)?, 0..=1)?).map_err(|_| CborError::Malformed)?;
-        let server = match f.opt(8) {
-            Some(s) => {
-                let s = Fields::new(s, &[1, 2, 3, 4])?;
-                Some(ServerInfo {
-                    url: text_max(s.req(1)?, 2048)?.to_owned(),
-                    server_id: id(s.req(2)?)?,
-                    server_key: bytes_exact(s.req(3)?, lens::SIG_PUBLIC)?,
-                    server_key_verified: boolean(s.req(4)?)?,
-                })
-            }
-            None => None,
-        };
+        let server = f.opt(8).map(ServerInfo::from_value).transpose()?;
         if (mode == 1) != server.is_some() {
             return Err(CborError::Malformed);
         }

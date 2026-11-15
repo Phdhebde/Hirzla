@@ -11,6 +11,7 @@
 //! | [`keylog`] | Hooks of the key transparency log (`transparence.md` § 6) |
 //! | [`exchange`] | Self mode exchange file (§ 13.1) |
 //! | [`pairing`] | Self mode local pairing messages (§ 13.2), without the network part |
+//! | `net` | Frames, TLS profile and session client of § 11 (feature `net`, ADR 0032) |
 //! | [`relay`] | The relay journal of one locker, shared by `hirzlad` and the test relay (§ 11) |
 //! | [`wire`] | Vectors, stubs, operation items, local sync state (§ 11.4, § 11.5) |
 //!
@@ -31,6 +32,8 @@ mod error;
 pub mod exchange;
 pub mod keylog;
 mod merge;
+#[cfg(feature = "net")]
+pub mod net;
 pub mod op;
 pub mod pairing;
 pub mod relay;

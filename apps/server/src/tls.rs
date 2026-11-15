@@ -21,7 +21,6 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use rustls::crypto::{aws_lc_rs, CryptoProvider, SupportedKxGroup};
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::server::WebPkiClientVerifier;
@@ -30,17 +29,9 @@ use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use crate::proto::ALPN;
 use crate::ServerError;
 
-/// The key exchange groups offered and accepted: hybrid only (see the module documentation
-/// and ADR 0028 for `SecP384r1MLKEM1024`).
-pub static HYBRID_GROUPS: &[&dyn SupportedKxGroup] = &[aws_lc_rs::kx_group::X25519MLKEM768];
-
-/// The `aws-lc-rs` provider restricted to [`HYBRID_GROUPS`].
-#[must_use]
-pub fn provider() -> Arc<CryptoProvider> {
-    let mut p = aws_lc_rs::default_provider();
-    p.kx_groups = HYBRID_GROUPS.to_vec();
-    Arc::new(p)
-}
+/// The profile shared with the devices (`hirzla_sync::net::tls`): one definition of the
+/// hybrid groups for both ends.
+pub use hirzla_sync::net::tls::{provider, HYBRID_GROUPS};
 
 /// Reads a PEM certificate chain.
 ///
@@ -126,13 +117,5 @@ pub fn client_config(
     roots: RootCertStore,
     client_auth: Option<(Vec<CertificateDer<'static>>, PrivateKeyDer<'static>)>,
 ) -> Result<Arc<ClientConfig>, ServerError> {
-    let b = ClientConfig::builder_with_provider(provider())
-        .with_protocol_versions(&[&rustls::version::TLS13])?
-        .with_root_certificates(roots);
-    let mut c = match client_auth {
-        Some((certs, key)) => b.with_client_auth_cert(certs, key)?,
-        None => b.with_no_client_auth(),
-    };
-    c.alpn_protocols = vec![ALPN.to_vec()];
-    Ok(Arc::new(c))
+    Ok(hirzla_sync::net::tls::client_config(roots, client_auth)?)
 }

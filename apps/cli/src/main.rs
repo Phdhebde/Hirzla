@@ -9,6 +9,7 @@
 mod args;
 mod clipboard;
 mod selfmode;
+mod server;
 mod term;
 
 use std::io::{IsTerminal, Write};
@@ -519,22 +520,9 @@ fn run(args: &Args) -> Result<(), String> {
             });
             Ok(())
         }
-        Command::Set {
-            name,
-            username,
-            urls,
-            tags,
-            note,
-            generate,
-        } => set(
-            &session,
-            name,
-            username.as_deref(),
-            urls,
-            tags,
-            *note,
-            *generate,
-        ),
+        command @ Command::Set { .. } => set(&session, command),
+        Command::Server(command) => server::run_server(&session, command),
+        Command::Locker(command) => server::run_locker(&session, command),
         Command::History {
             name,
             id,
@@ -558,17 +546,27 @@ fn run(args: &Args) -> Result<(), String> {
     }
 }
 
-fn set(
-    session: &Session<'_>,
-    name: &str,
-    username: Option<&str>,
-    urls: &[String],
-    tags: &[String],
-    note: bool,
-    generate: Option<u32>,
-) -> Result<(), String> {
+/// `set`: creates the secret, or updates the active one with that exact title.
+fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
+    let Command::Set {
+        name,
+        username,
+        urls,
+        tags,
+        note,
+        generate,
+        locker,
+    } = command
+    else {
+        return Ok(());
+    };
+    let (name, username, note, generate) = (name.as_str(), username.as_deref(), *note, *generate);
     let z = |s: &str| Zeroizing::new(s.to_owned());
     let mut c = session.connect(false)?;
+    let locker = locker
+        .as_deref()
+        .map(|l| server::resolve_locker(&mut c, l))
+        .transpose()?;
     // An existing active secret with that exact title is updated; none, it is created.
     let existing: Vec<ListEntry> = list(&mut c, Some(name), false)?
         .into_iter()
@@ -577,6 +575,7 @@ fn set(
                 .chars()
                 .flat_map(char::to_lowercase)
                 .eq(name.chars().flat_map(char::to_lowercase))
+                && locker.is_none_or(|l| l == e.locker)
         })
         .collect();
     if existing.len() > 1 {
@@ -641,7 +640,7 @@ fn set(
             call(
                 &mut c,
                 &Request::Create {
-                    locker: None,
+                    locker,
                     secret_type: if is_note {
                         SecretType::Note
                     } else {

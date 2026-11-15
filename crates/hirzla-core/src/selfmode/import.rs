@@ -34,7 +34,7 @@ fn refusal(e: VaultError) -> SelfCode {
 ///
 /// # Errors
 /// `InvalidInput` for a relative path, `NotFound` for a file that cannot be read, or the
-/// import codes (40 to 42).
+/// import codes (60 to 62).
 pub fn read_database(path: &str, password: &str) -> Result<KdbxDatabase, SelfCode> {
     let path = Path::new(path);
     if !path.is_absolute() {

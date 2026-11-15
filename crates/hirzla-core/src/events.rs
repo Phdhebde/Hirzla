@@ -11,6 +11,7 @@ use hirzla_keystore::platform::HardeningReport;
 use crate::agent::proto::AgentOp;
 use crate::proto::{ErrorCode, Op};
 use crate::selfmode::proto::SelfOp;
+use crate::server_mode::proto::ServerOp;
 
 /// Why a connection was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,6 +126,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A server mode request was answered (`docs/api-locale.md` § 15). `result` is `ok` or
+    /// the name of the error: fixed words only.
+    ServerRequest {
+        /// Operation.
+        op: ServerOp,
+        /// Outcome.
+        result: &'static str,
+    },
 }
 
 impl Event {
@@ -185,6 +194,9 @@ impl Event {
             ),
             Event::SelfRequest { op, result } => {
                 write!(out, "event=self_request op={} result={result}", op.name())
+            }
+            Event::ServerRequest { op, result } => {
+                write!(out, "event=server_request op={} result={result}", op.name())
             }
         };
     }
@@ -302,10 +314,16 @@ mod tests {
                 events.push(Event::AgentRequest { op, result });
             }
         }
-        for n in 40..=52 {
+        for n in 60..=72 {
             let op = SelfOp::from_u64(n).unwrap_or(SelfOp::GetSettings);
             for result in ["ok", "import_key_rejected", "unlock_failed"] {
                 events.push(Event::SelfRequest { op, result });
+            }
+        }
+        for n in 40..=48 {
+            let op = ServerOp::from_u64(n).unwrap_or(ServerOp::ServerStatus);
+            for result in ["ok", "forbidden", "server_refused", "fingerprint_mismatch"] {
+                events.push(Event::ServerRequest { op, result });
             }
         }
         for e in events {

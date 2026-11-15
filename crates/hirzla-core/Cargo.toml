@@ -15,7 +15,7 @@ hirzla-vault = { path = "../hirzla-vault" }
 hirzla-access = { path = "../hirzla-access" }
 hirzla-audit = { path = "../hirzla-audit" }
 hirzla-keystore = { path = "../hirzla-keystore" }
-hirzla-sync = { path = "../hirzla-sync" }
+hirzla-sync = { path = "../hirzla-sync", features = ["net"] }
 thiserror = "2.0"
 # Same parser as the vault index hosts (WHATWG URL Standard), already in the graph.
 url = "2.5.8"
@@ -24,4 +24,9 @@ zeroize = { version = "1.8", features = ["zeroize_derive"] }
 [dev-dependencies]
 tempfile = "3.27.0"
 # In-memory relay and test identities, for the Hornn control plane simulator (tests only).
-hirzla-sync = { path = "../hirzla-sync", features = ["test-support"] }
+hirzla-sync = { path = "../hirzla-sync", features = ["net", "test-support"] }
+# Server mode end-to-end test (ADR 0032): a real hirzlad, its test PKI and its TLS types.
+# Same versions and features as apps/server; tests only, never linked into the core.
+hirzla-server = { path = "../../apps/server" }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
