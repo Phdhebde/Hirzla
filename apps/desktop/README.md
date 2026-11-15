@@ -1,13 +1,26 @@
 # Application de poste
 
 Application Tauri 2 pour Windows, Linux et macOS, mode Self (étape 7 de `PROMPTS.md`).
-Décisions : ADR 0024 (coquille et interface), ADR 0025 (import KeePass). Livraison :
-`docs/livraison.md`.
+Décisions : ADR 0024 (coquille et interface), ADR 0025 (import KeePass), ADR 0033
+(verrouillage à la mise en veille et au verrouillage de session), ADR 0034 (kit de
+recouvrement). Livraison : `docs/livraison.md`.
 
 L'application est un **client du noyau**, comme la ligne de commande : elle ne détient
 aucune clé. Son processus Rust parle à `hirzla-core` par le canal local authentifié
 (`docs/api-locale.md`) ; la vue web ne parle qu'à ce processus, par les commandes de
-`src-tauri/src/commands.rs`, sous une politique de contenu stricte, sans réseau ni greffon.
+`src-tauri/src/commands.rs` et `src-tauri/src/selfmode.rs`, sous une politique de contenu
+stricte, sans réseau ni greffon.
+
+Fonctions du mode Self (API locale version 5, `docs/api-locale.md` § 16) : réglages du
+coffre (délais, verrouillage à la mise en veille et au verrouillage de session), changement
+du mot de passe maître, historique des versions et restauration, sortie de corbeille, kit de
+recouvrement à quorum (création, ouverture du coffre avec les parts, retrait) et import
+KeePass KDBX 4 lu par le noyau. Les fichiers (base KeePass, parts) sont choisis par le
+sélecteur du système, ouvert par le processus Rust : la vue web ne reçoit que des noms.
+
+Sous Linux, l'application écoute logind et l'économiseur d'écran sur D-Bus
+(`src-tauri/src/events.rs`) et signale la mise en veille et le verrouillage de session au
+noyau ; sous Windows et macOS, le noyau les reçoit lui-même du système.
 
 | Chemin | Rôle |
 | --- | --- |
@@ -45,6 +58,7 @@ cd apps/desktop
 npm ci --ignore-scripts && npm run check           # vérification des types (JSDoc)
 (cd ui/fonts && sha256sum -c SHA256SUMS)            # polices embarquées
 NODE_PATH="$(npm root -g)" node scripts/captures.mjs /chemin/des/captures   # Playwright requis
+# CHROME_PATH=/usr/bin/google-chrome : un Chrome installé au lieu de celui de Playwright
 ```
 
 ## Polices

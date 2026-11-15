@@ -4,7 +4,7 @@
 // the vault by itself, everything shown is wiped and the unlock screen comes back.
 
 import { api } from "./api.js";
-import { announce, byId, showError } from "./dom.js";
+import { announce, byId, h, showError } from "./dom.js";
 import { SecretForm } from "./form.js";
 import { applyTheme, loadPrefs } from "./prefs.js";
 import { GeneratorView, SettingsView } from "./tools.js";
@@ -84,6 +84,8 @@ function wipe() {
     /** @type {HTMLDialogElement} */ (d).close();
   }
   form.clear();
+  settings.wipe();
+  wipeRecovery();
   byId("import-resultat").hidden = true;
 }
 
@@ -114,11 +116,12 @@ async function poll() {
       if (before === "unlocked" && !userLocked) {
         showError(
           byId("deverrouillage-erreur"),
-          `Le coffre a été verrouillé après ${s.auto_lock_s} s d'inactivité.`,
+          "Le coffre a été verrouillé : inactivité, mise en veille ou verrouillage de la session.",
         );
       }
       userLocked = false;
       showScreen("deverrouillage");
+      void offerRecovery();
     } else if (s.state === "unlocked" && currentScreen() !== "coffre") {
       showError(byId("deverrouillage-erreur"), null);
       showScreen("coffre");
@@ -223,6 +226,96 @@ byId("form-deverrouillage").addEventListener("submit", async (ev) => {
   }
 });
 
+// --- Recovery kit (ADR 0034) -----------------------------------------------------------
+
+/** Shows the recovery link on the unlock screen when the vault has a kit. */
+async function offerRecovery() {
+  const link = byId("lien-recouvrement");
+  try {
+    const kit = await api.recoveryStatus();
+    link.hidden = !kit;
+    if (kit) {
+      byId("recouvrement-ouvrir-texte").textContent =
+        `Réunissez ${kit.threshold} des ${kit.count} parts du kit ${kit.kit}, puis choisissez un nouveau mot de ` +
+        "passe maître : il remplacera l'ancien.";
+    }
+  } catch {
+    link.hidden = true;
+  }
+}
+
+function wipeRecovery() {
+  for (const id of ["recouvrement-mdp", "recouvrement-confirmation"]) {
+    /** @type {HTMLInputElement} */ (byId(id)).value = "";
+  }
+  byId("recouvrement-fichiers").replaceChildren();
+  /** @type {HTMLButtonElement} */ (byId("recouvrement-ouvrir")).disabled = true;
+}
+
+byId("lien-recouvrement").addEventListener("click", () => {
+  wipeRecovery();
+  showError(byId("recouvrement-ouvrir-erreur"), null);
+  /** @type {HTMLDialogElement} */ (byId("dialogue-recouvrement")).showModal();
+  byId("recouvrement-choisir").focus();
+});
+byId("dialogue-recouvrement").addEventListener("close", wipeRecovery);
+
+byId("recouvrement-choisir").addEventListener("click", async () => {
+  const error = byId("recouvrement-ouvrir-erreur");
+  showError(error, null);
+  try {
+    const names = await api.chooseRecoveryShares();
+    byId("recouvrement-fichiers").replaceChildren(...names.map((n) => h("li", { text: n })));
+    /** @type {HTMLButtonElement} */ (byId("recouvrement-ouvrir")).disabled = false;
+    byId("recouvrement-mdp").focus();
+  } catch (e) {
+    const err = /** @type {ApiError} */ (e);
+    if (err.code !== "cancelled" && !onGlobalError(err)) showError(error, err.message);
+  }
+});
+
+byId("form-recouvrement-ouvrir").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const pw = /** @type {HTMLInputElement} */ (byId("recouvrement-mdp"));
+  const confirm = /** @type {HTMLInputElement} */ (byId("recouvrement-confirmation"));
+  const error = byId("recouvrement-ouvrir-erreur");
+  const button = /** @type {HTMLButtonElement} */ (byId("recouvrement-ouvrir"));
+  if ([...pw.value].length < 12) {
+    showError(error, "Le mot de passe maître doit compter au moins 12 caractères.");
+    pw.focus();
+    return;
+  }
+  if (pw.value !== confirm.value) {
+    showError(error, "Les deux saisies du mot de passe maître diffèrent.");
+    confirm.focus();
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Ouverture…";
+  showError(error, null);
+  try {
+    await api.recoveryUnlock(pw.value, confirm.value);
+    /** @type {HTMLDialogElement} */ (byId("dialogue-recouvrement")).close();
+    announce("Coffre ouvert avec le kit de recouvrement. Votre nouveau mot de passe maître est en place.", 8000);
+    await poll();
+  } catch (e) {
+    const err = /** @type {ApiError} */ (e);
+    if (!onGlobalError(err)) showError(error, err.message);
+  } finally {
+    pw.value = "";
+    confirm.value = "";
+    button.textContent = "Ouvrir le coffre";
+    button.disabled = byId("recouvrement-fichiers").childElementCount === 0;
+  }
+});
+
+// Buttons that close their dialog without submitting it.
+document.addEventListener("click", (ev) => {
+  const b = /** @type {HTMLElement} */ (ev.target).closest("[data-fermer]");
+  const dialog = b?.closest("dialog");
+  if (dialog && dialog.open) dialog.close();
+});
+
 // --- Open vault ------------------------------------------------------------------------
 
 /** @param {string} view */
@@ -232,6 +325,7 @@ function showView(view) {
   }
   if (view !== "generateur") generator.wipe();
   if (view === "reglages" && status) settings.render(status);
+  if (view === "reglages") void settings.load();
   if (view === "generateur") void generator.generate();
 }
 
