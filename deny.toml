@@ -1,6 +1,13 @@
 # cargo-deny : licences, avis de sécurité et provenance des dépendances.
 [advisories]
 yanked = "deny"
+# proc-macro-error is unmaintained (no vulnerability): build-time proc macro pulled by
+# Tauri 2's Linux GTK3 stack (gtk-rs 0.18 -> glib-macros). It never runs in the shipped
+# binary and handles no secret. No upgrade exists until Tauri moves off gtk-rs 0.18;
+# maintainer decision 2026-11-15. Revisit at each Tauri upgrade.
+ignore = [
+    { id = "RUSTSEC-2024-0370", reason = "unmaintained build-time macro via Tauri/gtk-rs 0.18, no fix available" },
+]
 
 [licenses]
 # Zlib: foldhash, pulled by rusqlite -> hashlink -> hashbrown (ADR 0013).
