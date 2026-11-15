@@ -167,7 +167,7 @@ pub struct SettingsArgs {
 }
 
 /// One version of a secret, as listed by `History`: index data and field numbers only.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VersionInfo {
     /// The operation that carries it.
     pub op_id: OpId,
@@ -187,6 +187,19 @@ pub struct VersionInfo {
     pub changed: Vec<u64>,
     /// Number of custom fields.
     pub custom: u64,
+}
+
+impl std::fmt::Debug for VersionInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the title nor the user name: they are confidential metadata.
+        f.debug_struct("VersionInfo")
+            .field("lamport", &self.lamport)
+            .field("state", &self.state)
+            .field("fields", &self.fields)
+            .field("changed", &self.changed)
+            .field("custom", &self.custom)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The recovery kit of the vault, without its shares.
