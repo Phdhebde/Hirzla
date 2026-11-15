@@ -1,6 +1,6 @@
 # ADR 0058 — Durée de rétention des opérations tardives réglable dans `hirzlad`
 
-- Statut : accepté (recommandation implémentée, bornes à confirmer par le mainteneur)
+- Statut : accepté (2026-11-15, décision du mainteneur ; bornes 8 à 365 jours confirmées)
 - Date : 2026-11-15
 
 ## Contexte
