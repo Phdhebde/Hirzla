@@ -1,6 +1,7 @@
 //! Recovery of the member key through trustees (`docs/roles.md`, ADR 0020), and the
 //! exposure and reseal plans after a removal.
 
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

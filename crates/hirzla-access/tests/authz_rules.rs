@@ -2,6 +2,7 @@
 //! the list of § 15): quarantine, seniority, quorum, approvals, device removals, epochs,
 //! secret-level roles, groups, and independence from the delivery order.
 
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

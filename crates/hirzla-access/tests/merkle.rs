@@ -1,6 +1,7 @@
 //! RFC 9162 Merkle tree: reference vectors (SHA-256, the RFC 6962 test data) on the generic
 //! code, frozen SHA-384 vectors on the production instance, and properties.
 
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

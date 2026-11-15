@@ -2,6 +2,7 @@
 //! every refusal included. Each cell emits the real operation in a copy of the same locker and
 //! computes the authorisation state.
 
+#![forbid(unsafe_code)]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 mod common;

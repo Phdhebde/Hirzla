@@ -2,7 +2,13 @@
 //! fabricates a grant, substitutes a public key, withholds a revocation, forks or rewrites its
 //! log. Every attack must be detected by a device.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![forbid(unsafe_code)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout
+)]
 
 mod common;
 

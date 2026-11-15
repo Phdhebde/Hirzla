@@ -4,7 +4,13 @@
 //!
 //! Short encodings are frozen byte for byte (`hex`), long ones by length and SHA-384.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![forbid(unsafe_code)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::print_stdout
+)]
 
 mod common;
 
