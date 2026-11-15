@@ -167,6 +167,39 @@ fn hornn_key_signs_only_session_grants() {
 }
 
 #[test]
+fn publisher_key_signs_only_its_domains() {
+    let publisher = PublisherSigningKey::generate().unwrap();
+    let vk = publisher.verifying_key();
+    let manifest = publisher
+        .sign(PublisherDomain::ClientManifest, MSG)
+        .unwrap();
+    let package = publisher.sign(PublisherDomain::UpdatePackage, MSG).unwrap();
+    vk.verify(Domain::ClientManifest, MSG, &manifest).unwrap();
+    vk.verify(Domain::UpdatePackage, MSG, &package).unwrap();
+    // A manifest signature is not a package signature, and the reverse.
+    assert_eq!(
+        vk.verify(Domain::UpdatePackage, MSG, &manifest),
+        Err(Error::InvalidSignature)
+    );
+    assert_eq!(
+        vk.verify(Domain::ClientManifest, MSG, &package),
+        Err(Error::InvalidSignature)
+    );
+    // Another key's signature is refused.
+    let other = PublisherSigningKey::generate().unwrap();
+    let forged = other.sign(PublisherDomain::UpdatePackage, MSG).unwrap();
+    assert_eq!(
+        vk.verify(Domain::UpdatePackage, MSG, &forged),
+        Err(Error::InvalidSignature)
+    );
+    // The private key round-trips through its encoding.
+    let bytes = publisher.to_bytes().unwrap();
+    let again = PublisherSigningKey::from_bytes(&bytes, vk).unwrap();
+    let sig = again.sign(PublisherDomain::UpdatePackage, MSG).unwrap();
+    vk.verify(Domain::UpdatePackage, MSG, &sig).unwrap();
+}
+
+#[test]
 fn member_key_certifies_a_device() {
     let member = MemberSigningKey::generate().unwrap();
     let device = DeviceSigningKey::generate().unwrap();
@@ -243,7 +276,11 @@ fn domain_labels_are_distinct_and_prefix_free() {
         Domain::AuditCheckpoint,
         Domain::DeviceAuditCheckpoint,
         Domain::HornnSessionGrant,
+        Domain::ClientManifest,
+        Domain::UpdatePackage,
     ];
+    assert_eq!(Domain::ClientManifest.label(), b"hirzla/v1/client-manifest");
+    assert_eq!(Domain::UpdatePackage.label(), b"hirzla/v1/update-package");
     assert_eq!(Domain::KeyLogHead.label(), b"hirzla/v1/keylog-head");
     assert_eq!(
         Domain::HornnSessionGrant.label(),

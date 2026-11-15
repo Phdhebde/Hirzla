@@ -18,6 +18,7 @@
 //! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share, device audit checkpoint |
 //! | [`ServerSigningKey`] | server authentication, receipt, audit checkpoint, key transparency log head |
 //! | [`HornnSigningKey`] | Hornn session grant (`docs/integration-hornn.md`) |
+//! | [`PublisherSigningKey`] | client manifest, update package (ADR 0042, 0043) |
 //!
 //! | Object | Layout | Length |
 //! | --- | --- | --- |
@@ -84,6 +85,10 @@ pub enum Domain {
     DeviceAuditCheckpoint,
     /// A session grant signed by the Hornn control plane (`docs/integration-hornn.md`).
     HornnSessionGrant,
+    /// The signed manifest of the installed client executables (ADR 0042).
+    ClientManifest,
+    /// An offline update package (ADR 0043).
+    UpdatePackage,
 }
 
 impl Domain {
@@ -105,6 +110,8 @@ impl Domain {
             Domain::AuditCheckpoint => b"hirzla/v1/audit-checkpoint",
             Domain::DeviceAuditCheckpoint => b"hirzla/v1/device-audit-checkpoint",
             Domain::HornnSessionGrant => b"hirzla/v1/hornn-session-grant",
+            Domain::ClientManifest => b"hirzla/v1/client-manifest",
+            Domain::UpdatePackage => b"hirzla/v1/update-package",
         }
     }
 
@@ -165,6 +172,25 @@ pub enum ServerDomain {
 pub enum HornnDomain {
     /// A session grant.
     SessionGrant,
+}
+
+/// Domains the publisher key may sign (ADR 0042, 0043). The private key lives on the
+/// publisher's offline signing station only; Hirzla verifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublisherDomain {
+    /// The manifest of the client executables.
+    ClientManifest,
+    /// An update package.
+    UpdatePackage,
+}
+
+impl From<PublisherDomain> for Domain {
+    fn from(d: PublisherDomain) -> Self {
+        match d {
+            PublisherDomain::ClientManifest => Domain::ClientManifest,
+            PublisherDomain::UpdatePackage => Domain::UpdatePackage,
+        }
+    }
 }
 
 impl From<HornnDomain> for Domain {
@@ -502,6 +528,14 @@ role_key!(
     /// Hornn's private key; this type is the reference of what Hornn signs, used by the tests.
     HornnSigningKey,
     HornnDomain
+);
+
+role_key!(
+    /// The publisher key (ADR 0042, 0043): it only signs client manifests and update
+    /// packages. Held by the publisher's offline signing tool (`hirzla-signer`), never by a
+    /// workstation; the core and the command line only verify.
+    PublisherSigningKey,
+    PublisherDomain
 );
 
 impl MemberSigningKey {
