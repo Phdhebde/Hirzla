@@ -10,6 +10,7 @@ use hirzla_keystore::platform::HardeningReport;
 
 use crate::agent::proto::AgentOp;
 use crate::proto::{ErrorCode, Op};
+use crate::selfmode::proto::SelfOp;
 
 /// Why a connection was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +47,10 @@ pub enum LockReason {
     Inactivity,
     /// The core is stopping.
     Shutdown,
+    /// The system went or is going to sleep (ADR 0033).
+    Sleep,
+    /// The user session was locked (ADR 0033).
+    SessionLock,
 }
 
 /// An event of the log.
@@ -105,6 +110,21 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// Which system notifications the core receives (ADR 0033): 1 yes, 0 no.
+    SystemWatch {
+        /// Sleep.
+        sleep: bool,
+        /// Session lock.
+        session_lock: bool,
+    },
+    /// A Self-mode request was answered (`docs/api-locale.md` § 16). `result` is `ok` or the
+    /// name of the error: fixed words only.
+    SelfRequest {
+        /// Operation.
+        op: SelfOp,
+        /// Outcome.
+        result: &'static str,
+    },
 }
 
 impl Event {
@@ -146,11 +166,25 @@ impl Event {
                     LockReason::Request => "request",
                     LockReason::Inactivity => "inactivity",
                     LockReason::Shutdown => "shutdown",
+                    LockReason::Sleep => "sleep",
+                    LockReason::SessionLock => "session_lock",
                 }
             ),
             Event::Stopped => write!(out, "event=stopped"),
             Event::AgentRequest { op, result } => {
                 write!(out, "event=agent_request op={} result={result}", op.name())
+            }
+            Event::SystemWatch {
+                sleep,
+                session_lock,
+            } => write!(
+                out,
+                "event=system_watch sleep={} session_lock={}",
+                u8::from(*sleep),
+                u8::from(*session_lock)
+            ),
+            Event::SelfRequest { op, result } => {
+                write!(out, "event=self_request op={} result={result}", op.name())
             }
         };
     }
@@ -221,6 +255,10 @@ mod tests {
             Event::Unlocked,
             Event::UnlockFailed { failures: 3 },
             Event::Stopped,
+            Event::SystemWatch {
+                sleep: true,
+                session_lock: false,
+            },
         ];
         for reason in [
             Refusal::OtherUser,
@@ -237,6 +275,8 @@ mod tests {
             LockReason::Request,
             LockReason::Inactivity,
             LockReason::Shutdown,
+            LockReason::Sleep,
+            LockReason::SessionLock,
         ] {
             events.push(Event::Locked { reason });
         }
@@ -260,6 +300,12 @@ mod tests {
                 "not_enrolled",
             ] {
                 events.push(Event::AgentRequest { op, result });
+            }
+        }
+        for n in 40..=52 {
+            let op = SelfOp::from_u64(n).unwrap_or(SelfOp::GetSettings);
+            for result in ["ok", "import_key_rejected", "unlock_failed"] {
+                events.push(Event::SelfRequest { op, result });
             }
         }
         for e in events {

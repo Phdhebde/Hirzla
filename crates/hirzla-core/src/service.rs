@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use hirzla_keystore::platform::HardeningReport;
 use hirzla_vault::model::{Id16, Settings};
@@ -19,6 +19,7 @@ use crate::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, LockerEntry, Reply, Request, Selector,
     StatusInfo, VaultState, SUPPORTED_VERSIONS,
 };
+use crate::selfmode::proto::SystemEventKind;
 
 /// Version of the core, reported by `Status`.
 pub const CORE_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -33,6 +34,9 @@ const CALIBRATION_TARGET: Duration = Duration::from_secs(1);
 const CALIBRATION_MAX_M_KIB: u32 = 1024 * 1024;
 /// Name of the personal locker of a new vault.
 const PERSONAL_LOCKER: &str = "Personnel";
+/// How far the wall clock may run ahead of the monotonic clock between two ticks before the
+/// core concludes that the system slept (ADR 0033).
+pub const SLEEP_GAP: Duration = Duration::from_secs(30);
 
 /// Settings of a core.
 #[derive(Debug, Clone)]
@@ -47,15 +51,17 @@ pub struct Config {
 
 /// The core's state: at most one open vault.
 pub struct Core {
-    config: Config,
-    vault: Option<Vault>,
-    last_activity: Instant,
+    pub(crate) config: Config,
+    pub(crate) vault: Option<Vault>,
+    pub(crate) last_activity: Instant,
     failures: u32,
     throttled_until: Option<Instant>,
-    log: Arc<Log>,
+    pub(crate) log: Arc<Log>,
+    /// Clocks at the previous tick, to notice a sleep (ADR 0033).
+    last_tick: Option<(Instant, SystemTime)>,
 }
 
-fn vault_error(e: VaultError) -> ErrorReply {
+pub(crate) fn vault_error(e: VaultError) -> ErrorReply {
     ErrorReply::new(match e {
         VaultError::NotAVault | VaultError::UnsupportedVersion | VaultError::Corrupt => {
             ErrorCode::Corrupt
@@ -139,6 +145,7 @@ impl Core {
             failures: 0,
             throttled_until: None,
             log,
+            last_tick: None,
         }
     }
 
@@ -148,7 +155,7 @@ impl Core {
         self.vault.is_some()
     }
 
-    fn settings(&self) -> Settings {
+    pub(crate) fn settings(&self) -> Settings {
         self.vault.as_ref().map(Vault::settings).unwrap_or_default()
     }
 
@@ -176,13 +183,88 @@ impl Core {
         }
     }
 
-    /// Locks the vault if it has been idle for the automatic lock delay.
+    /// Locks the vault if it has been idle for the automatic lock delay, or if the system
+    /// slept since the previous tick.
     pub fn tick(&mut self, now: Instant) {
+        self.tick_at(now, SystemTime::now());
+    }
+
+    /// [`Core::tick`] with the wall clock given. A sleep shows as the wall clock running
+    /// ahead of the monotonic clock, which stops during sleep on Linux and macOS (ADR 0033);
+    /// on Windows the core is also told by the system before it sleeps.
+    pub fn tick_at(&mut self, now: Instant, wall: SystemTime) {
+        if let Some((mono, before)) = self.last_tick.replace((now, wall)) {
+            let elapsed = now.saturating_duration_since(mono);
+            let wall_elapsed = wall.duration_since(before).unwrap_or(Duration::ZERO);
+            if wall_elapsed > elapsed + SLEEP_GAP {
+                self.system_event(SystemEventKind::Sleep);
+            }
+        }
         if self.vault.is_some()
             && now.saturating_duration_since(self.last_activity) >= self.auto_lock_delay()
         {
             self.lock(LockReason::Inactivity);
         }
+    }
+
+    /// The system sleeps or locks the session: locks the vault if its settings say so.
+    /// Returns whether the vault was locked by this event.
+    pub fn system_event(&mut self, kind: SystemEventKind) -> bool {
+        let Some(vault) = self.vault.as_ref() else {
+            return false;
+        };
+        let s = vault.settings();
+        let (wanted, reason) = match kind {
+            SystemEventKind::Sleep => (s.lock_on_sleep, LockReason::Sleep),
+            SystemEventKind::SessionLock => (s.lock_on_session_lock, LockReason::SessionLock),
+        };
+        if wanted {
+            self.lock(reason);
+        }
+        wanted
+    }
+
+    /// Refuses with `Throttled` while failed unlocks impose a wait.
+    pub(crate) fn check_throttle(&self) -> Result<(), ErrorReply> {
+        let now = Instant::now();
+        if let Some(until) = self.throttled_until {
+            if now < until {
+                let wait = until.saturating_duration_since(now);
+                return Err(ErrorReply {
+                    code: ErrorCode::Throttled,
+                    retry_after_s: Some(wait.as_secs() + u64::from(wait.subsec_nanos() > 0)),
+                    versions: Vec::new(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Counts a failed unlock (or a wrong current password) and sets the wait.
+    pub(crate) fn record_failure(&mut self) {
+        self.failures = self.failures.saturating_add(1);
+        self.log.record(Event::UnlockFailed {
+            failures: self.failures,
+        });
+        if self.failures >= FREE_FAILURES {
+            let exp = (self.failures - FREE_FAILURES).min(16);
+            let wait = Duration::from_secs(1u64 << exp).min(MAX_THROTTLE);
+            self.throttled_until = Some(Instant::now() + wait);
+        }
+    }
+
+    /// The master password was proven (a password change): the failures are forgotten.
+    pub(crate) fn password_proven(&mut self) {
+        self.failures = 0;
+        self.throttled_until = None;
+    }
+
+    /// An opened vault: resets the failures, starts the inactivity delay, logs.
+    pub(crate) fn opened(&mut self, vault: Vault) {
+        self.vault = Some(vault);
+        self.password_proven();
+        self.last_activity = Instant::now();
+        self.log.record(Event::Unlocked);
     }
 
     /// Answers one request and logs its outcome (operation and result code only).
@@ -196,7 +278,7 @@ impl Core {
         result
     }
 
-    fn vault(&mut self) -> Result<&mut Vault, ErrorReply> {
+    pub(crate) fn vault(&mut self) -> Result<&mut Vault, ErrorReply> {
         if self.vault.is_none() {
             return Err(ErrorReply::new(if self.config.vault_path.exists() {
                 ErrorCode::Locked
@@ -348,36 +430,14 @@ impl Core {
         if !self.config.vault_path.exists() {
             return Err(ErrorReply::new(ErrorCode::NoVault));
         }
-        let now = Instant::now();
-        if let Some(until) = self.throttled_until {
-            if now < until {
-                let wait = until.saturating_duration_since(now);
-                return Err(ErrorReply {
-                    code: ErrorCode::Throttled,
-                    retry_after_s: Some(wait.as_secs() + u64::from(wait.subsec_nanos() > 0)),
-                    versions: Vec::new(),
-                });
-            }
-        }
+        self.check_throttle()?;
         match Vault::open(&self.config.vault_path, password) {
             Ok(v) => {
-                self.vault = Some(v);
-                self.failures = 0;
-                self.throttled_until = None;
-                self.last_activity = Instant::now();
-                self.log.record(Event::Unlocked);
+                self.opened(v);
                 Ok(Reply::Done)
             }
             Err(VaultError::Unlock) => {
-                self.failures = self.failures.saturating_add(1);
-                self.log.record(Event::UnlockFailed {
-                    failures: self.failures,
-                });
-                if self.failures >= FREE_FAILURES {
-                    let exp = (self.failures - FREE_FAILURES).min(16);
-                    let wait = Duration::from_secs(1u64 << exp).min(MAX_THROTTLE);
-                    self.throttled_until = Some(Instant::now() + wait);
-                }
+                self.record_failure();
                 Err(ErrorReply::new(ErrorCode::UnlockFailed))
             }
             Err(e) => Err(vault_error(e)),

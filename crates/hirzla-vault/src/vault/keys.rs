@@ -218,6 +218,28 @@ impl Vault {
         }))
     }
 
+    /// The Argon2id cost of the current password method, to keep it when the password
+    /// changes (a new salt is drawn).
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] without a password method, storage or
+    /// [`VaultError::Corrupt`].
+    pub fn password_cost(&self) -> Result<KdfCost, VaultError> {
+        let (_, _, header) = Self::read_header(&self.conn)?;
+        header
+            .unlock
+            .iter()
+            .find_map(|m| match &m.params {
+                UnlockParams::Password(p) => Some(KdfCost::Params {
+                    m_kib: p.m_kib(),
+                    t: p.t(),
+                    p: p.p(),
+                }),
+                _ => None,
+            })
+            .ok_or(VaultError::Unsupported)
+    }
+
     /// Rewrites the header and its authentication in one transaction.
     fn write_header(&self, header: &Header) -> Result<(), VaultError> {
         let body = header.encode()?;
