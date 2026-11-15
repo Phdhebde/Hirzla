@@ -9,7 +9,19 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# In-memory authorizer, relay and identities for tests (here and in dependent crates).
+# Never enabled in a shipped binary.
+test-support = []
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 hirzla-vault = { path = "../hirzla-vault" }
-hirzla-access = { path = "../hirzla-access" }
+# No dependency on hirzla-access (ADR 0018): authorization decisions go through the
+# `Authorizer` trait of this crate.
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+# Already in the workspace (hirzla-vault): property tests of the merge and delivery orders.
+proptest = "1.12.0"

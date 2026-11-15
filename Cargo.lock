@@ -856,9 +856,11 @@ dependencies = [
 name = "hirzla-sync"
 version = "0.0.0"
 dependencies = [
- "hirzla-access",
  "hirzla-crypto",
  "hirzla-vault",
+ "proptest",
+ "thiserror",
+ "zeroize",
 ]
 
 [[package]]
