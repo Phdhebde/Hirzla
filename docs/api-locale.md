@@ -91,6 +91,21 @@ noyau d'après son exécutable, jamais d'après un message :
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
 | navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
+**Signature du client** (ADR 0042). En plus du chemin, le noyau peut exiger que l'exécutable
+du client soit signé par **le même éditeur que lui** : Authenticode (`WinVerifyTrust`, sans
+réseau ni révocation en ligne, même émetteur et même sujet de certificat que le noyau) sous
+Windows ; signature de code Apple (`SecCodeCheckValidity` dynamique, exigence
+`anchor apple generic`, même identifiant d'équipe que le noyau) sous macOS ; sous Linux,
+empreinte SHA-384 de l'exécutable réellement lancé (`/proc/<pid>/exe`) égale à celle du
+**manifeste des clients** signé par la clé d'éditeur (`hirzla-clients.manifest` à côté du
+noyau, `docs/livraison.md` § 7). Option `--client-signatures required|off` : `off` par défaut en
+développement ; `required` imposé et non désactivable dans une version de livraison. En
+développement, `--publisher-key FICHIER` et `--client-manifest FICHIER` désignent la clé
+publique d'éditeur et le manifeste ; une version de livraison n'admet que ses clés compilées.
+En mode `required`, un noyau qui ne peut établir sa propre signature (Windows, macOS) ou
+vérifier le manifeste (Linux) **refuse de démarrer**. Un client refusé pour sa signature reçoit
+`Unauthorized` comme les autres, motif journalisé `signature_not_accepted`.
+
 Un exécutable présent dans les deux listes a le profil navigateur. Une opération hors profil
 reçoit `Unauthorized` avec l'identifiant de la requête ; la connexion reste ouverte et le refus
 est journalisé (`event=request result=unauthorized`). Le profil navigateur ne peut donc ni
@@ -100,7 +115,8 @@ navigateur.
 
 Un client refusé reçoit, après sa première trame (non décodée) ou au bout de deux secondes, une
 réponse `Unauthorized` d'identifiant 0, puis la connexion est fermée. Le refus est journalisé
-avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`).
+avec son motif (`other_user`, `unknown_peer`, `executable_not_allowed`,
+`signature_not_accepted`).
 
 ### 3.2 Le client authentifie le noyau
 
@@ -307,7 +323,8 @@ identifiant de secret, ni chemin).
 | `started` | `pid`, `memory_locked`, `dumps_disabled`, `tracing_blocked` |
 | `listening` | — |
 | `connection_accepted` | `pid` |
-| `connection_refused` | `pid`, `reason` (`other_user`, `unknown_peer`, `executable_not_allowed`, `busy`) |
+| `connection_refused` | `pid`, `reason` (`other_user`, `unknown_peer`, `executable_not_allowed`, `busy`, `signature_not_accepted`) |
+| `client_signatures` | `required` (`1` ou `0`, ADR 0042) |
 | `request` | `op`, `result` (`ok` ou nom de l'erreur) |
 | `bad_message` | — |
 | `vault_created`, `unlocked`, `stopped` | — |
@@ -447,9 +464,9 @@ Décisions prises seul pendant cette étape, à confirmer :
 1. **Encodage CBOR** pour l'API locale, plutôt que JSON : même profil et même code de
    validation que le format du coffre (`hirzla_vault::cbor`), aucune dépendance nouvelle.
    L'hôte de messagerie native de l'extension (étape 8) traduira le JSON du navigateur.
-2. **Liste d'autorisation par chemin d'exécutable**, sans vérification de signature de code.
-   La vérification de signature (Authenticode, signature Apple) est une piste pour la
-   livraison signée de l'étape 7.
+2. ~~**Liste d'autorisation par chemin d'exécutable**, sans vérification de signature de
+   code~~ : signature du client ajoutée par l'ADR 0042 (§ 3.1). Reste à faire : le client
+   vérifie encore le noyau par son seul chemin (§ 3.2).
 3. **Frein du déverrouillage** en mémoire du noyau (3 essais libres, puis 1 s doublée jusqu'à
    300 s) : perdu au redémarrage du noyau.
 4. **`auto_lock_s = 0`** traité comme la valeur par défaut, et non comme « jamais ».

@@ -12,7 +12,7 @@ post-quantique normalisé : il faut casser les deux. Le symétrique est en 256 b
 | --- | --- | --- |
 | Établissement de clé | ECDH P-384 + ML-KEM-1024, combinés par KDF | FIPS 203 |
 | Signature | ECDSA P-384 + ML-DSA-87, les deux doivent vérifier | FIPS 204 |
-| Signature des racines et des versions | SLH-DSA-SHA2-256s | FIPS 205 |
+| Signature des racines et des versions | SLH-DSA-SHA2-256s, **en complément** d'une signature hybride, quand AWS-LC l'exposera ; absent d'`aws-lc-rs` 1.19 et non utilisé aujourd'hui (ADR 0043) | FIPS 205 |
 | Chiffrement authentifié | AES-256-GCM, une clé par version de secret | SP 800-38D |
 | Enveloppe de clés | AES-256-KW avec remplissage | RFC 5649 |
 | Hachage | SHA-384, SHA-512 ; SHA3-256 pour le journal d'audit (`docs/evenements.md`) | FIPS 180-4, 202 |
@@ -89,6 +89,7 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 | Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share`, `hirzla/v1/device-audit-checkpoint` |
 | Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt`, `hirzla/v1/audit-checkpoint`, `hirzla/v1/keylog-head` |
 | Plan de contrôle Hornn (vérifiée seulement) | `hirzla/v1/hornn-session-grant` (`integration-hornn.md` § 3.3, ADR 0031) |
+| Éditeur (vérifiée seulement par les postes) | `hirzla/v1/client-manifest`, `hirzla/v1/update-package` (`livraison.md` § 7 et § 8, ADR 0042, 0043) |
 
 - Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
   clé publique attendue, à temps constant.

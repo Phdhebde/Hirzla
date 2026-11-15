@@ -209,7 +209,7 @@ validée, le calcul est à temps constant.
 | F4 | Protection des secrets en mémoire | Noyau dans un processus séparé. Mémoire verrouillée, vidage et traçage interdits. Secrets typés et effacés. Verrouillage automatique. | `hirzla-core` |
 | F5 | Authentification des opérations | Chaque opération est signée en hybride (ECDSA P-384 + ML-DSA-87) par la clé de son appareil, certifiée par la clé du membre. Chaîne par appareil, horloge de Lamport exacte, détection des bifurcations, quarantaine des opérations concurrentes d'un retrait, rejetées par défaut après un délai. | `hirzla-sync` |
 | F6 | Journalisation infalsifiable | Journal chaîné par SHA3-256 et signé, export vers un SIEM. | `hirzla-audit` |
-| F7 | Intégrité des mises à jour | Binaires et mises à jour signés (SLH-DSA), compilation reproductible, dépendances figées, nomenclature logicielle. | Livraison |
+| F7 | Intégrité des mises à jour | Binaires signés (Authenticode, Apple, GPG) ; paquets de mise à jour hors ligne et manifeste des clients signés en hybride ECDSA P-384 + ML-DSA-87 par la clé d'éditeur, sans retour à une version antérieure (ADR 0043) ; signature des clients vérifiée par le noyau (ADR 0042) ; compilation reproductible, dépendances figées, nomenclature logicielle. | Livraison, `hirzla-core`, `hirzla` |
 | F8 | Authentification mutuelle et canal | TLS 1.3 hybride. Signatures hybrides du serveur et de l'appareil (clé d'appareil certifiée, non révoquée) liées à la session par l'exportateur TLS. Clé du serveur épinglée au premier contact. Canal local authentifié entre interface et noyau. | `hirzla-sync`, `hirzla-core`, `hirzlad` |
 | F9 | Authenticité des clés publiques | Jusqu'à l'étape 10 : confiance au premier contact, clés épinglées, refus de toute clé différente, comparaison d'empreinte hors bande. Ensuite : registre en ajout seul, preuve d'inscription vérifiée avant d'envelopper une clé de casier. | `hirzla-access`, `hirzla-vault` |
 | F10 | Remplissage restreint au domaine | Remplissage seulement si l'hôte de la page est exactement un hôte enregistré. | `hirzla-core`, extension |
@@ -279,8 +279,9 @@ Menaces résiduelles, à déclarer au CESTI :
    mis à jour.
 5. **Fonctions F8 à F14** : ajoutées aux sept fonctions du brouillon. Elles découlent des
    spécifications du format et du protocole.
-6. **F7** : l'usage de SLH-DSA pour signer les mises à jour est une lecture de « signature des
-   racines et des versions » dans `crypto.md`. À confirmer.
+6. **F7** : ~~SLH-DSA pour signer les mises à jour~~ — tranché par l'ADR 0043 : signature
+   hybride ECDSA P-384 + ML-DSA-87, SLH-DSA ajouté en complément quand une bibliothèque
+   auditée présente (AWS-LC) l'exposera.
 7. **Configuration évaluée** : nœud unique et sceau par quorum, pour réduire la surface.
    La grappe à trois nœuds et le HSM viendraient dans une évaluation ultérieure.
 8. **F15 dans le périmètre d'évaluation** : les mécanismes d'interopérabilité sont évalués

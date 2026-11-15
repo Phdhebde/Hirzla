@@ -48,4 +48,7 @@ l'anglais dans le code.
 | Accord | `Approval` | Signature d'un propriétaire jointe à une action à plusieurs |
 | Quorum | `Quorum` | Nombre de propriétaires requis pour retirer un propriétaire plus ancien |
 | Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
+| Clé d'éditeur | `PublisherKey` | Clé hybride de l'éditeur, hors ligne ; signe le manifeste des clients et les paquets de mise à jour (ADR 0042, 0043) |
+| Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |
+| Paquet de mise à jour | `UpdatePackage` | Fichier signé qui porte une nouvelle version, appliqué sans réseau (ADR 0043) |
 | Identifiant de bloc | `BlockId` | Identifiant opaque d'un contenu scellé, lié aux données associées |

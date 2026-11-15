@@ -48,8 +48,12 @@ fourni hors ligne dans `%LOCALAPPDATA%\tauri\WixTools`), Xcode sous macOS, et so
 `libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev rpm` plus tpm2-tss (voir la CI).
 
 ```sh
-# 1. Le noyau et la ligne de commande, en version de livraison.
-cargo build --release --locked -p hirzla-core -p hirzla-cli
+# 0. La clé publique d'éditeur (§ 7), compilée dans le noyau et la ligne de commande.
+export HIRZLA_PUBLISHER_KEYS="$(hirzla-signer cle-hex --publique editeur.pub)"
+# 1. Le noyau et la ligne de commande, en version de livraison (signature des clients
+#    exigée, clés d'éditeur compilées seules admises : ADR 0042, 0043).
+cargo build --release --locked -p hirzla-core -p hirzla-cli \
+  --features hirzla-core/livraison,hirzla-cli/livraison
 # 2. Copiés sous le nom attendu par Tauri : <nom>-<triplet de la cible>[.exe].
 triple="$(rustc -vV | sed -n 's/^host: //p')"
 mkdir -p apps/desktop/src-tauri/binaries
@@ -126,18 +130,111 @@ Chaque livraison publie aussi un fichier `SHA256SUMS` des installeurs, signé (�
 
 - [ ] Les trois exécutables de chaque installeur sont dans le même répertoire, et
       `hirzla status` comme l'application se connectent au noyau installé.
+- [ ] Le journal du noyau installé montre `event=client_signatures required=1`.
+- [ ] Sous Linux, `hirzla-clients.manifest` est installé à côté du noyau et
+      `hirzla-signer verifier` l'accepte.
 - [ ] Signatures vérifiées sur un poste propre de chaque système (§ 3, § 4, § 5).
 - [ ] Sous macOS, aucun droit `get-task-allow` ; sous Linux, `hirzla status` montre
       « Traçage interdit : appliqué ».
 - [ ] L'application démarre sans réseau (câble débranché, pare-feu sortant fermé).
 - [ ] `SHA256SUMS` publié et signé.
 
-## 7. Points ouverts
+## 7. Clé d'éditeur et manifeste des clients (ADR 0042)
 
-1. Le noyau compare les **chemins** des clients, pas leurs signatures. Vérifier la signature
-   Authenticode ou Apple du client (et du noyau côté client) renforcerait l'authentification ;
-   à spécifier dans `docs/api-locale.md` avant d'être codé.
+La **clé d'éditeur** est une paire de signature hybride ECDSA P-384 + ML-DSA-87
+(`PublisherSigningKey`, domaines `hirzla/v1/client-manifest` et `hirzla/v1/update-package`).
+Elle est créée et gardée sur le **poste de signature hors ligne** de l'éditeur, jamais sur un
+agent de CI, jamais dans le dépôt :
+
+```sh
+hirzla-signer cle-generer --prive editeur.cle --publique editeur.pub   # une fois
+hirzla-signer cle-hex --publique editeur.pub   # valeur de HIRZLA_PUBLISHER_KEYS
+```
+
+`HIRZLA_PUBLISHER_KEYS` (variable de CI non secrète : c'est une clé publique) accepte
+plusieurs clés séparées par des virgules : une rotation publie d'abord une version qui admet
+l'ancienne et la nouvelle clé.
+
+Le noyau d'une version de livraison vérifie la signature de chaque client (`docs/api-locale.md`
+§ 3.1) : Authenticode sous Windows et signature Apple sous macOS (§ 3 et § 4 : le noyau et ses
+clients doivent être signés par le **même** certificat ou la même équipe), **manifeste des
+clients** sous Linux. Ce manifeste est produit **après** la dernière transformation des
+exécutables (aucun `strip` ensuite) et installé à côté de `hirzla-core` :
+
+```sh
+hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 \
+  --sortie hirzla-clients.manifest hirzla hirzla-desktop hirzla-native-host
+```
+
+Format, identique à l'enveloppe du § 8 avec le type `C` : en-tête, manifeste CBOR des
+exécutables (nom, taille, SHA-384), signature hybride. Le noyau refuse de démarrer si le
+manifeste manque, ne vérifie pas avec une clé compilée ou est altéré.
+
+## 8. Mises à jour hors ligne signées (ADR 0043)
+
+Une mise à jour est **un fichier**, signé par la clé d'éditeur, qui se transporte sur un
+support amovible ou par les outils du parc et s'applique **sans réseau ni noyau**.
+
+**Construire** (poste de signature) :
+
+```sh
+hirzla-signer paquet --cle editeur.cle --version 1.4.0 --plateforme linux-x86_64 \
+  --sortie hirzla-1.4.0-linux-x86_64.hirzla-maj \
+  hirzla hirzla-core hirzla-desktop hirzla-native-host hirzla-clients.manifest
+hirzla-signer verifier --publique editeur.pub hirzla-1.4.0-linux-x86_64.hirzla-maj
+```
+
+**Vérifier et appliquer** (poste, noyau et application arrêtés, droits d'écriture sur le
+répertoire d'installation) :
+
+```sh
+hirzla mise-a-jour verifier hirzla-1.4.0-linux-x86_64.hirzla-maj
+sudo hirzla mise-a-jour appliquer hirzla-1.4.0-linux-x86_64.hirzla-maj
+```
+
+**Format** (tous les entiers en gros-boutiste) :
+
+| Morceau | Longueur | Contenu |
+| --- | --- | --- |
+| en-tête | 8 | `HIRZLA` ‖ type (`U` paquet, `C` manifeste des clients) ‖ version de format `01` |
+| longueur | 4 | longueur du manifeste, 1 à 65 536 |
+| manifeste | variable | CBOR déterministe : `{1: [majeur, mineur, correctif], 2: plateforme, 3: [{1: nom, 2: taille, 3: SHA-384 (48), 4: exécutable}…]}` |
+| signature | 4 725 | signature hybride (`crypto.md`) de l'en-tête, de la longueur et du manifeste, domaine `hirzla/v1/update-package` (`hirzla/v1/client-manifest` pour le type `C`) |
+| contenu | somme des tailles | les fichiers dans l'ordre du manifeste, rien après (type `U` seulement) |
+
+Règles de vérification :
+
+- la signature est vérifiée **avant** tout décodage du manifeste ; les deux composantes
+  doivent tenir, avec une clé compilée (une version de développement accepte
+  `--cle-editeur FICHIER`, refusé en version de livraison) ;
+- noms permis, à plat, triés, sans répétition : `hirzla`, `hirzla-core`, `hirzla-desktop`,
+  `hirzla-native-host` (avec `.exe` si la plateforme commence par `windows-`) et
+  `hirzla-clients.manifest` ; plateforme `<os>-<arch>` (`linux-x86_64`, `windows-x86_64`,
+  `macos-aarch64`…) ; 16 fichiers, 512 Mio par fichier et 1 Gio au total au plus ;
+- chaque fichier est haché en flux et comparé à temps constant ; contenu tronqué ou suivi
+  d'octets refusé ;
+- un manifeste des clients inclus doit vérifier avec la même clé, porter la même version et
+  la même plateforme, et nommer exactement les exécutables du paquet avec leurs empreintes ;
+- `appliquer` exige la plateforme de l'exécutable `hirzla` et une version **strictement
+  supérieure** à la version installée (la plus grande de celle de `hirzla` et de
+  `.hirzla-version`, écrit par chaque application) : **aucun retour en arrière**, sans
+  option pour le forcer ;
+- les fichiers sont écrits à côté de leur cible (`.NOM.hirzla-new`), vérifiés, puis mis en
+  place par renommage quand tous le sont ; un échec avant ne modifie rien.
+
+Limites : sous macOS, l'application dans un `.app` est refusée (le sceau du paquet couvre les
+exécutables) : passez par l'image disque notarisée. Pour deb et rpm, préférez le dépôt de
+paquets : écraser des fichiers suivis par `dpkg` ou `rpm` désynchronise le gestionnaire de
+paquets. La version de l'espace de travail Cargo doit être relevée à chaque livraison.
+
+## 9. Points ouverts
+
+1. ~~Le noyau compare les **chemins** des clients, pas leurs signatures~~ : signature des
+   clients vérifiée par le noyau (ADR 0042, § 7). Reste : la vérification de la signature du
+   noyau par ses clients, et l'exécution sur des postes réels signés.
 2. Identifiant d'application `app.hirzla.desktop` et éditeur « Hirzla » : à remplacer par le
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
-3. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Les mises à jour passent
-   par les outils de déploiement du parc ou par le dépôt de paquets.
+3. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
+   (ADR 0043, § 8) en plus des outils de déploiement du parc et des dépôts de paquets.
+   Reste : brancher la production du manifeste et du paquet dans `livraison.yml` une fois la
+   clé d'éditeur créée et `HIRZLA_PUBLISHER_KEYS` renseignée.
