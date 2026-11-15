@@ -246,10 +246,20 @@ fn client_refuses_an_unexpected_core() {
     let dir = private_dir();
     let ep = endpoint(dir.path(), "server");
     let me = std::env::current_exe().unwrap();
-    let _core = start(dir.path(), &ep, &me, &[]);
+    let core = start(dir.path(), &ep, &me, &[]);
     connect(&ep); // wait until it listens
     match Client::connect(&ep, Some(&me)) {
         Err(ClientError::UntrustedCore(_)) => {}
+        // Linux, unprivileged: the hardened core is non-dumpable and the kernel hides its
+        // executable; the client then rests on the same user (docs/api-locale.md § 3.3).
+        // Accepted only when the executable really is hidden.
+        Ok(_) if cfg!(target_os = "linux") => {
+            let exe = std::fs::read_link(format!("/proc/{}/exe", core.child.id()));
+            assert!(
+                matches!(&exe, Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied),
+                "accepted a core whose executable is visible: {exe:?}"
+            );
+        }
         other => panic!("expected an untrusted core, got {:?}", other.err()),
     }
 }
