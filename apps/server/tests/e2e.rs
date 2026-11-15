@@ -13,9 +13,9 @@ use hirzla_access::keylog::{
     device_cert_object, member_keys_object, EntryKind, ExpectedEntry, KeyLogProof,
 };
 use hirzla_access::Role;
+use hirzla_server::client::NetError as ServerError;
 use hirzla_server::client::{AdminClient, Client, Identity};
 use hirzla_server::proto::{code, kind, Ops, PushStatus};
-use hirzla_server::ServerError;
 use hirzla_sync::testing::TestMember;
 use hirzla_sync::wire::OpItem;
 use hirzla_sync::{AccessAuthorizer, OpStatus};

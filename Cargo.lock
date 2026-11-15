@@ -1995,6 +1995,7 @@ dependencies = [
  "hirzla-crypto",
  "hirzla-vault",
  "proptest",
+ "rustls",
  "thiserror 2.0.21",
  "zeroize",
 ]
