@@ -529,7 +529,9 @@ fn the_server_mode_commands_drive_a_real_core() {
             .code(),
         "invalid"
     );
-    let ca = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/ac-essai.pem");
+    // A public test CA (certificate only, no key): `*.pem` files are never tracked.
+    let ca = dir.path().join("ac-essai.pem");
+    std::fs::write(&ca, TEST_CA).unwrap();
     assert_eq!(state.set_server_ca(&ca).unwrap(), "ac-essai.pem");
     assert_eq!(
         state
@@ -565,3 +567,19 @@ fn the_server_mode_commands_drive_a_real_core() {
         "not_joined"
     );
 }
+
+/// Self-signed P-384 test CA certificate (public part only), valid until 2126.
+const TEST_CA: &str = "\
+-----BEGIN CERTIFICATE-----\n\
+MIIBxTCCAUygAwIBAgIUb8x3Xi2TDnCx4MYcTDmhz69zUSYwCgYIKoZIzj0EAwIw\n\
+GTEXMBUGA1UEAwwOSGlyemxhIHRlc3QgQ0EwIBcNMjYxMTE1MTgzNDI2WhgPMjEy\n\
+NjEwMjIxODM0MjZaMBkxFzAVBgNVBAMMDkhpcnpsYSB0ZXN0IENBMHYwEAYHKoZI\n\
+zj0CAQYFK4EEACIDYgAEjGcMoBspil/oJREJebPryQPCQhq2Oa/3JwHPP/pGOXV+\n\
+dB4lHDJzBczdCSykNhFufEa2r8XmoalJxXQwgraj3nLHjlg9gbLSHsG31+E3YEgJ\n\
+SWdBGd9+14bqC3RrzS3vo1MwUTAdBgNVHQ4EFgQUn3tiQPklvKnbq7U4EDJSBg4G\n\
+qGAwHwYDVR0jBBgwFoAUn3tiQPklvKnbq7U4EDJSBg4GqGAwDwYDVR0TAQH/BAUw\n\
+AwEB/zAKBggqhkjOPQQDAgNnADBkAjBi+R2MQQpkCr7QPt4g7DBk0NeazDszCc4M\n\
+Vk83Xgz+gJqOWhcSegKX485IMqnibTUCMHVUfZhnI/haugLJx2PwOGp8Qz0T7GP9\n\
+r62SVJqDcufcgXZY7rsiQYxB762fYktrWA==\n\
+-----END CERTIFICATE-----\n\
+";
