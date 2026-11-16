@@ -155,6 +155,10 @@ publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
    `hirzla-signer` n'est pas dans le `PATH` : `HIRZLA_SIGNER=/chemin/hirzla-signer sh
    signer-manifestes.sh …`. Ne modifiez, ne renommez et ne signez aucun exécutable : le
    manifeste porte leurs empreintes exactes.
+
+   **macOS** (ADR 0065) : les exécutables signés sont ceux de `Hirzla.app/Contents/MacOS/`
+   de l'application **déjà signée ad hoc** par le flux. Le manifeste ne va pas dans
+   `Hirzla.app` : le paquet `.pkg` le pose dans `/Library/Application Support/Hirzla/`.
 6. **Démontez la clé d'éditeur.** Copiez les trois fichiers `hirzla-clients-*.manifest` sur
    la clé de transfert (ils sont publics), puis, sur la machine connectée : *Releases* ›
    brouillon « Hirzla 1.0.0 » › crayon (*Edit*) › faites glisser les trois fichiers dans

@@ -97,7 +97,7 @@ deviné à l'exécution (ADR 0063 § 1) :
 
 | Mode | Compilation | Contrôle |
 | --- | --- | --- |
-| `manifeste` | défaut de toute version, dont la livraison | empreinte SHA-384 (taille comprise, comparée à temps constant) de l'exécutable du client égale à celle du **manifeste des clients** signé par la clé d'éditeur hybride (`hirzla-clients.manifest` à côté du noyau, `docs/livraison.md` § 7), sur les trois systèmes |
+| `manifeste` | défaut de toute version, dont la livraison | empreinte SHA-384 (taille comprise, comparée à temps constant) de l'exécutable du client égale à celle du **manifeste des clients** signé par la clé d'éditeur hybride (`hirzla-clients.manifest` à côté du noyau ; en livraison macOS, `/Library/Application Support/Hirzla/hirzla-clients.manifest`, ADR 0065 ; `docs/livraison.md` § 7), sur les trois systèmes |
 | `systeme` | fonctionnalité Cargo `signature-systeme` (noyau et clients), seulement pour un éditeur titulaire d'un certificat | **même éditeur que le noyau** au sens du système : Authenticode (`WinVerifyTrust`, sans réseau ni révocation en ligne, même émetteur et même sujet de certificat) sous Windows ; signature de code Apple (`SecCodeCheckValidity` dynamique, exigence `anchor apple generic`, même identifiant d'équipe) sous macOS ; refusé sous Linux |
 
 Un noyau compilé en mode `manifeste` ignore la signature de système, présente ou non. Le
@@ -119,9 +119,14 @@ pas.
 Option `--client-signatures required|off` : `off` par défaut en développement ; `required`
 imposé et non désactivable dans une version de livraison. En développement,
 `--publisher-key FICHIER` et `--client-manifest FICHIER` désignent la clé publique d'éditeur et
-le manifeste ; une version de livraison n'admet que ses clés compilées. En mode `required`, un
+le manifeste ; une version de livraison n'admet que ses clés compilées et, sous macOS, refuse
+`--client-manifest` : elle lit le manifeste à l'emplacement fixe
+`/Library/Application Support/Hirzla/hirzla-clients.manifest`, hors de `Hirzla.app` dont le
+sceau ne peut pas le couvrir, et seulement si ce fichier et chaque répertoire au-dessus
+appartiennent à root sans être inscriptibles par un groupe ni par les autres, vérifié sur le
+fichier ouvert (ADR 0065 ; les clients appliquent le même contrôle). En mode `required`, un
 noyau qui ne peut vérifier le manifeste (mode `manifeste` : absent, altéré, d'une autre
-plateforme, sans clé) ou établir sa propre signature (mode `systeme`) **refuse de démarrer**.
+plateforme, sans clé, non protégé par root en livraison macOS) ou établir sa propre signature (mode `systeme`) **refuse de démarrer**.
 Le journal du noyau porte le mode au démarrage (`event=client_signatures required=1
 kind=manifeste`). Un client refusé pour sa signature reçoit `Unauthorized` comme les autres,
 motif journalisé `signature_not_accepted`.
