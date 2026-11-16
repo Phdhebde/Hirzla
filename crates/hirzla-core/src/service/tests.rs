@@ -11,6 +11,7 @@ use hirzla_vault::secret::SecretType;
 use zeroize::Zeroizing;
 
 use super::*;
+use crate::generator::{Profile, Spec};
 use crate::proto::classes;
 
 const PASSWORD: &str = "maître-mot-de-passe-de-test";
@@ -257,6 +258,25 @@ fn life_cycle_and_log_hygiene() {
             classes: classes::ALL
         })
         .is_ok());
+    // Full settings need no vault either, and report the entropy after filtering.
+    match c.handle(Request::GenerateWith {
+        spec: Profile::LongTerm.spec(),
+    }) {
+        Ok(Reply::GeneratedWith(g)) => {
+            assert_eq!(g.value.len(), 40);
+            assert!(g.estimate.entropy_millibits >= 256_000);
+        }
+        _ => panic!("refused"),
+    }
+    assert_eq!(
+        code(c.handle(Request::GenerateWith {
+            spec: Spec::Pin {
+                length: 3,
+                rules: 0
+            }
+        })),
+        ErrorCode::InvalidInput
+    );
     c.handle(Request::Unlock {
         password: z(PASSWORD),
     })

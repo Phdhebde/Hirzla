@@ -8,6 +8,19 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [Non publié]
+
+### Générateur
+
+- Cinq modes : caractères, phrase de passe (liste française embarquée de 2 048 mots),
+  prononçable, code PIN et modèle (ADR 0068).
+- Réglages : minimum par famille, symboles et exclusions au choix, règles « sans ambigus »,
+  « mêmes touches en AZERTY et en QWERTY », « sans répétition », « lettre en tête ».
+- Entropie renvoyée avec chaque valeur, calculée après filtrage par les règles.
+- Profils intégrés, dont « longue durée » à 256 bits.
+- API locale version 7 : opération `GenerateWith` (14). `Generate` (10) ne change pas.
+- Ligne de commande : `hirzla gen --mode …`, `--profil …` et les réglages correspondants.
+
 ## [1.0.0] — 2026-11-16
 
 Première version publiée. Installeurs pour Windows (MSI), macOS (paquet d'installation

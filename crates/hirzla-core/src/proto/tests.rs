@@ -103,6 +103,175 @@ fn every_request_round_trips() {
     }
 }
 
+fn specs() -> Vec<Spec> {
+    use crate::generator::{rules, Profile};
+    let mut specs: Vec<Spec> = Profile::ALL.into_iter().map(Profile::spec).collect();
+    specs.extend([
+        Spec::characters(8, classes::LOWER),
+        Spec::Characters {
+            length: 256,
+            classes: classes::ALL,
+            minimums: [9, 0, 3, 1],
+            symbols: Some("+-".to_owned()),
+            excluded: "aB3".to_owned(),
+            rules: rules::ALL & !rules::NO_SEQUENCE,
+        },
+        Spec::Passphrase {
+            words: 6,
+            separator: '-',
+            capitalize: false,
+            digits: 0,
+        },
+        Spec::Passphrase {
+            words: 24,
+            separator: ' ',
+            capitalize: true,
+            digits: 4,
+        },
+        Spec::Pronounceable {
+            syllables: 9,
+            capitalize: true,
+            digits: 2,
+            rules: rules::NO_AMBIGUOUS,
+        },
+        Spec::Pin {
+            length: 6,
+            rules: rules::NO_REPEAT | rules::NO_SEQUENCE,
+        },
+        Spec::Pin {
+            length: 4,
+            rules: 0,
+        },
+        Spec::Template {
+            template: r"Aa-9999-aaa-AA \x".to_owned(),
+            symbols: Some("#".to_owned()),
+            excluded: "0".to_owned(),
+            rules: rules::NO_REPEAT,
+        },
+        Spec::Template {
+            template: "****".to_owned(),
+            symbols: None,
+            excluded: String::new(),
+            rules: 0,
+        },
+    ]);
+    specs
+}
+
+/// `GenerateWith` (version 7): every mode round trips, in version 7.
+#[test]
+fn generator_settings_round_trip() {
+    for spec in specs() {
+        let r = Request::GenerateWith { spec };
+        round_trip(&r);
+        let bytes = r.encode(1).unwrap();
+        assert_eq!(Request::decode_versioned(&bytes).unwrap().1, 7);
+    }
+    // The operation does not exist before version 7.
+    for version in [1, 2] {
+        let b = encode_map(vec![
+            (1, Value::Uint(version)),
+            (2, Value::Uint(7)),
+            (3, Value::Uint(Op::GenerateWith as u64)),
+            (
+                4,
+                Value::map(vec![(1, Value::Uint(4)), (2, Value::Uint(6))]),
+            ),
+        ]);
+        assert_eq!(refused(&b), (7, ErrorCode::UnknownOperation));
+    }
+    // The earlier operations exist in version 7.
+    let b = encode_map(vec![
+        (1, Value::Uint(7)),
+        (2, Value::Uint(7)),
+        (3, Value::Uint(Op::Status as u64)),
+    ]);
+    assert!(Request::decode_versioned(&b).unwrap() == (7, 7, Request::Status));
+}
+
+#[test]
+fn generator_settings_are_checked() {
+    let req = |args: Vec<(u64, Value)>| {
+        encode_map(vec![
+            (1, Value::Uint(7)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(Op::GenerateWith as u64)),
+            (4, Value::map(args)),
+        ])
+    };
+    let u = Value::Uint;
+    let mins = |n: u64, len: usize| Value::Array(vec![Value::Uint(n); len]);
+    // Accepted: explicit defaults.
+    assert!(Request::decode(&req(vec![(1, u(4)), (2, u(6)), (7, u(0))])).is_ok());
+    for (args, code) in [
+        // No mode, mode of the wrong type, unknown mode.
+        (vec![(2, u(6))], ErrorCode::Malformed),
+        (
+            vec![(1, Value::text("pin")), (2, u(6))],
+            ErrorCode::Malformed,
+        ),
+        (vec![(1, u(0)), (2, u(6))], ErrorCode::InvalidInput),
+        (vec![(1, u(6)), (2, u(6))], ErrorCode::InvalidInput),
+        // A key of another mode, an unknown key, a missing key.
+        (vec![(1, u(4)), (2, u(6)), (3, u(15))], ErrorCode::Malformed),
+        (vec![(1, u(4)), (2, u(6)), (12, u(1))], ErrorCode::Malformed),
+        (vec![(1, u(4))], ErrorCode::Malformed),
+        (
+            vec![(1, u(5)), (2, u(6)), (11, Value::text("a"))],
+            ErrorCode::Malformed,
+        ),
+        (vec![(1, u(2)), (2, u(6))], ErrorCode::Malformed),
+        (
+            vec![(1, u(1)), (2, u(16)), (3, u(15))],
+            ErrorCode::Malformed,
+        ),
+        // Values out of bounds.
+        (vec![(1, u(4)), (2, u(1 << 40))], ErrorCode::InvalidInput),
+        (
+            vec![(1, u(4)), (2, u(6)), (7, u(32))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![(1, u(1)), (2, u(16)), (3, u(16)), (4, mins(0, 4))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![(1, u(1)), (2, u(16)), (3, u(15)), (4, mins(10, 4))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![(1, u(1)), (2, u(16)), (3, u(15)), (4, mins(1, 3))],
+            ErrorCode::Malformed,
+        ),
+        (
+            vec![(1, u(1)), (2, u(16)), (3, u(15)), (4, mins(1, 5))],
+            ErrorCode::Malformed,
+        ),
+        (
+            vec![(1, u(2)), (2, u(6)), (8, Value::text("--"))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![(1, u(2)), (2, u(6)), (8, Value::text(""))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![(1, u(5)), (11, Value::text(&"a".repeat(257)))],
+            ErrorCode::InvalidInput,
+        ),
+        (
+            vec![
+                (1, u(5)),
+                (11, Value::text("a")),
+                (5, Value::text(&"+".repeat(95))),
+            ],
+            ErrorCode::InvalidInput,
+        ),
+    ] {
+        assert_eq!(refused(&req(args.clone())), (3, code), "{args:?}");
+    }
+}
+
 fn reply_round_trip(op: Op, r: Result<Reply, ErrorReply>) {
     let bytes = Reply::encode(9, &r).unwrap();
     let (id, back) = Reply::decode(op, &bytes).unwrap();
@@ -159,6 +328,18 @@ fn every_reply_round_trips() {
         }),
     );
     reply_round_trip(Op::Generate, Ok(Reply::Generated(z("abc"))));
+    for pool in [0, 2048] {
+        reply_round_trip(
+            Op::GenerateWith,
+            Ok(Reply::GeneratedWith(Generated {
+                value: z("cuivre-lanterne"),
+                estimate: Estimate {
+                    entropy_millibits: 22_000,
+                    pool,
+                },
+            })),
+        );
+    }
     reply_round_trip(Op::Match, Ok(Reply::Matches(vec![])));
     reply_round_trip(
         Op::Match,
@@ -314,6 +495,16 @@ fn versions_of_requests_and_replies() {
     // A reply of version 2 cannot be written for a request of version 1.
     assert!(Reply::encode_versioned(1, 3, &Ok(Reply::Matches(vec![]))).is_err());
     assert!(Reply::encode_versioned(3, 3, &Ok(Reply::Done)).is_err());
+    // Nor a reply of version 7 for a request of version 2.
+    let g = Reply::GeneratedWith(Generated {
+        value: z("x"),
+        estimate: Estimate {
+            entropy_millibits: 1,
+            pool: 0,
+        },
+    });
+    assert!(Reply::encode_versioned(2, 3, &Ok(g.clone())).is_err());
+    assert_eq!(version_of(&Reply::encode(3, &Ok(g)).unwrap()), 7);
 }
 
 #[test]

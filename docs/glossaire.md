@@ -47,6 +47,9 @@ l'anglais dans le code.
 | Appareil de certification | `CertificationDevice` | Appareil qui détient la clé privée du membre |
 | Accord | `Approval` | Signature d'un propriétaire jointe à une action à plusieurs |
 | Quorum | `Quorum` | Nombre de propriétaires requis pour retirer un propriétaire plus ancien |
+| Phrase de passe | `Passphrase` | Mots tirés d'une liste, séparés ; mode du générateur (ADR 0068) |
+| Modèle | `Template` | Motif qui fixe la nature de chaque position d'une valeur générée |
+| Profil de génération | `Profile` | Réglages nommés du générateur |
 | Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
 | Clé d'éditeur | `PublisherKey` | Clé hybride de l'éditeur, hors ligne ; signe le manifeste des clients et les paquets de mise à jour (ADR 0042, 0043) |
 | Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |

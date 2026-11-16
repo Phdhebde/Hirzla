@@ -441,6 +441,19 @@ fn local_api_requests_and_replies_print_no_secret() {
             format!("{:?}", Reply::Generated(z(SENTINEL))),
         ),
         (
+            "Reply::GeneratedWith",
+            format!(
+                "{:?}",
+                Reply::GeneratedWith(hirzla_core::generator::Generated {
+                    value: z(SENTINEL),
+                    estimate: hirzla_core::generator::Estimate {
+                        entropy_millibits: 0,
+                        pool: 0
+                    }
+                })
+            ),
+        ),
+        (
             "Reply::Filled",
             format!(
                 "{:?}",
