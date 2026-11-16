@@ -11,7 +11,7 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 ## [1.0.0] — 2026-11-16
 
 Première version publiée. Installeurs pour Windows (MSI), macOS (paquet d'installation
-`.pkg`, Apple Silicon) et Linux (deb, rpm, AppImage), ligne de commande et serveur `hirzlad`
+`.pkg`, Apple Silicon) et Linux (deb, rpm), ligne de commande et serveur `hirzlad`
 pour Linux, extension Firefox et Chromium.
 
 ### Cryptographie

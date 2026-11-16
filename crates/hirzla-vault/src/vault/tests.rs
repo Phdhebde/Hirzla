@@ -48,6 +48,17 @@ fn new_vault() -> (tempfile::TempDir, PathBuf, Vault) {
     (dir, path, v)
 }
 
+/// The container file is created readable by its owner only, whatever the umask.
+#[cfg(unix)]
+#[test]
+fn container_file_is_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let (_dir, path, v) = new_vault();
+    drop(v);
+    let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600, "mode {mode:o}");
+}
+
 /// A vault whose parent directory is reached through a symbolic link (as `/var` is on
 /// macOS) is refused by `SQLITE_OPEN_NOFOLLOW`, with an error that says so.
 #[cfg(unix)]
@@ -64,6 +75,7 @@ fn symlink_in_vault_path_is_refused() {
         Some(rusqlite::ffi::SQLITE_CANTOPEN_SYMLINK)
     );
     assert_eq!(err, Some(VaultError::SymlinkInPath));
+    assert!(!real.join("v.hirzla").exists(), "no empty file left behind");
 }
 
 fn text(f: Field, s: &str) -> (Field, FieldValue) {
