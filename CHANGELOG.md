@@ -10,10 +10,9 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 
 ## [1.0.0] — 2026-11-16
 
-Première version publiée. Installeurs pour Windows (MSI) et Linux (deb, rpm, AppImage),
-ligne de commande et serveur `hirzlad` pour Linux, extension Firefox et Chromium. macOS
-suivra : l'emplacement du manifeste des clients dans un paquet d'application est en cours de
-décision (ADR 0065).
+Première version publiée. Installeurs pour Windows (MSI), macOS (paquet d'installation
+`.pkg`, Apple Silicon) et Linux (deb, rpm, AppImage), ligne de commande et serveur `hirzlad`
+pour Linux, extension Firefox et Chromium.
 
 ### Cryptographie
 
@@ -85,9 +84,10 @@ décision (ADR 0065).
 
 ### Limites connues
 
-- Pas de signature Authenticode ni Apple : avertissements SmartScreen à l'installation
-  (ADR 0063).
-- Pas d'installeur macOS dans cette version (ADR 0065 en cours).
+- Pas de signature Authenticode ni Apple : avertissements SmartScreen et Gatekeeper à
+  l'installation (ADR 0063).
+- macOS : paquet `.pkg` seulement, pas d'image disque ; il pose le manifeste des clients
+  dans `/Library/Application Support/Hirzla/`, hors de `Hirzla.app` (ADR 0065).
 - Prototypes de déverrouillage matériel hors des binaires livrés (ADR 0052).
 - Produit ni certifié ni qualifié à ce jour ; dossier CSPN en préparation.
 

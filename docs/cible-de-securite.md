@@ -391,7 +391,10 @@ nomenclature logicielle CycloneDX publiée avec chaque livraison (ADR 0056).
   `matches_entry_refuses_a_modified_file`, `manifest_check_end_to_end`,
   `client_checks_the_core_against_the_manifest`, `signature_kind_is_fixed_at_compile_time`,
   `core_signature_off_accepts_without_looking`, `manifest_location_per_build`,
-  `root_protection_rule` (`codesign.rs`, sur les trois systèmes) ;
+  `root_protection_rule`, `manifest_of_another_version_is_refused`,
+  `manifest_override_only_in_development_builds` (`codesign.rs`, sur les trois systèmes) ;
+  `client_manifest_override_decision`, `manifest_of_another_version_stops_the_core`
+  (`daemon.rs`) ;
   `open_root_protected_fails_closed` (`codesign.rs`, Linux et macOS : manifeste macOS à
   emplacement fixe protégé par root, ADR 0065) ;
   `signed_client_manifest_is_enforced`, `client_checks_the_running_core_against_the_manifest`
@@ -631,6 +634,16 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
   réussir la substitution entre lancement et vérification, les fichiers n'étant acceptés
   que s'ils portent les empreintes du manifeste, que ce compte ne peut pas modifier
   (`/Library/Application Support` n'est pas inscriptible par `admin`).
+  Choix du manifeste : une version de livraison lit le manifeste à son seul emplacement par
+  défaut, sur les trois systèmes (`--client-manifest` refusé), et le noyau comme ses clients
+  refusent un manifeste authentique d'une autre version que la leur
+  (`SetupError::ManifestVersion`) : celui qui lance le noyau ne peut pas lui faire accepter
+  un manifeste plus ancien, qui nommerait les exécutables d'une version antérieure. Reste
+  le retour en arrière complet : sous Windows et Linux, qui peut écrire dans le répertoire
+  d'installation (H13) peut y poser ensemble un noyau, des clients et un manifeste
+  authentiques d'une version antérieure, de même que, sous macOS, un administrateur peut
+  réinstaller un `.pkg` plus ancien ; ce couple cohérent démarre, comme le ferait
+  l'installation de cette version par le gestionnaire de paquets.
 - **Métadonnées connues du serveur** : identifiants de casiers et de membres, tailles
   bourrées, heures de connexion, graphe des opérations (en-têtes en clair), qui a accusé quelle
   compaction, dernière authentification de chaque appareil à la journée près (ADR 0040).

@@ -67,8 +67,9 @@ pub struct Options {
     /// Publisher key file for the client manifest (development builds only); the keys
     /// compiled into the core when absent.
     pub publisher_key: Option<PathBuf>,
-    /// Client manifest; `hirzla-clients.manifest` next to the core when absent, or the fixed
-    /// path of a macOS delivery build, which refuses this option (ADR 0065).
+    /// Client manifest (development builds only); when absent, `hirzla-clients.manifest`
+    /// next to the core, or the fixed path of a macOS delivery build (ADR 0065). A delivery
+    /// build refuses this option on every system.
     pub client_manifest: Option<PathBuf>,
 }
 
@@ -173,15 +174,11 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             Some("--publisher-key") => {
                 publisher_key = Some(PathBuf::from(value("--publisher-key")?));
             }
-            Some("--client-manifest") if codesign::FIXED_MANIFEST_PATH => {
-                return Err(
-                    "--client-manifest : refusé dans une version de livraison pour macOS \
-                     (manifeste à emplacement fixe)."
-                        .to_owned(),
-                )
-            }
             Some("--client-manifest") => {
-                client_manifest = Some(PathBuf::from(value("--client-manifest")?));
+                client_manifest = Some(client_manifest_option(
+                    codesign::MANIFEST_OVERRIDE_ALLOWED,
+                    || value("--client-manifest"),
+                )?);
             }
             Some("--help") | Some("-h") => return Err(USAGE.to_owned()),
             _ => return Err(format!("argument inconnu. {USAGE}")),
@@ -212,6 +209,23 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         publisher_key,
         client_manifest,
     })
+}
+
+/// `--client-manifest`: the path given when `allowed` (development builds,
+/// [`codesign::MANIFEST_OVERRIDE_ALLOWED`]), refused otherwise, before its value is read:
+/// a delivery build reads the manifest at its default path only, on every system.
+fn client_manifest_option(
+    allowed: bool,
+    value: impl FnOnce() -> Result<OsString, String>,
+) -> Result<PathBuf, String> {
+    if !allowed {
+        return Err(
+            "--client-manifest : refusé dans une version de livraison (manifeste lu \
+             à son emplacement par défaut seulement)."
+                .to_owned(),
+        );
+    }
+    value().map(PathBuf::from)
 }
 
 fn parse_id16(s: &str) -> Option<Id16> {
@@ -482,6 +496,11 @@ fn client_signatures(
              (propriétaire root exigé, modifiable par root seul)."
                 .to_owned()
         }
+        codesign::SetupError::ManifestVersion => format!(
+            "signature des clients exigée, mais le manifeste des clients n'est pas celui de \
+             la version {} du noyau : réinstallez la version complète.",
+            release::Version::current()
+        ),
         codesign::SetupError::Unsupported => {
             "signature des clients exigée, mais ce système ne permet pas de la vérifier.".to_owned()
         }
@@ -813,8 +832,8 @@ mod tests {
             "--client-manifest",
             "m",
         ]));
-        if codesign::FIXED_MANIFEST_PATH {
-            // macOS delivery build: the manifest is read at its fixed path only (ADR 0065).
+        if release::DELIVERY_BUILD {
+            // Delivery build, every system: the manifest is read at its default path only.
             assert!(o.is_err());
         } else {
             let o = o.unwrap();
@@ -831,6 +850,58 @@ mod tests {
         } else {
             assert_eq!(off.unwrap().client_signatures, SignatureMode::Off);
             assert_eq!(key.unwrap().publisher_key, Some(PathBuf::from("k")));
+        }
+    }
+
+    /// The decision behind `--client-manifest`, both ways, whatever this build is: refused
+    /// when overrides are not allowed (delivery builds), without reading the value.
+    #[test]
+    fn client_manifest_override_decision() {
+        assert_eq!(
+            client_manifest_option(true, || Ok(OsString::from("m"))),
+            Ok(PathBuf::from("m"))
+        );
+        assert!(client_manifest_option(true, || Err("no value".to_owned())).is_err());
+        let refused = client_manifest_option(false, || -> Result<OsString, String> {
+            unreachable!("the value of a refused option is not read")
+        });
+        assert!(refused.unwrap_err().contains("livraison"));
+    }
+
+    /// A genuine manifest of another version than the core's: the core refuses to start, and
+    /// says why.
+    #[cfg(not(feature = "signature-systeme"))]
+    #[test]
+    fn manifest_of_another_version_stops_the_core() {
+        use crate::release::update::entry_for;
+        use crate::release::{current_platform, sign, Kind, Manifest, Version};
+        use hirzla_crypto::sign::PublisherSigningKey;
+
+        let dir = tempfile::tempdir().unwrap();
+        let key = PublisherSigningKey::generate().unwrap();
+        let name = format!("hirzla{}", std::env::consts::EXE_SUFFIX);
+        let client = dir.path().join(&name);
+        std::fs::write(&client, b"client").unwrap();
+        let own = Version::current();
+        let manifest = Manifest {
+            version: Version {
+                patch: own.patch + 1,
+                ..own
+            },
+            platform: current_platform(),
+            files: vec![entry_for(&name, &client, true).unwrap()],
+        };
+        let path = dir.path().join(release::CLIENT_MANIFEST_FILE);
+        std::fs::write(&path, sign(Kind::ClientManifest, &manifest, &key).unwrap()).unwrap();
+        let pub_key = dir.path().join("editeur.pub");
+        std::fs::write(&pub_key, key.verifying_key().as_bytes()).unwrap();
+        let mut o = parse_args(args(&["--vault", "v"])).unwrap();
+        o.client_signatures = SignatureMode::Required;
+        o.publisher_key = Some(pub_key);
+        o.client_manifest = Some(path);
+        let err = client_signatures(&o, &dir.path().join("hirzla-core")).unwrap_err();
+        if !codesign::FIXED_MANIFEST_PATH {
+            assert!(err.contains(&format!("version {own}")), "{err}");
         }
     }
 

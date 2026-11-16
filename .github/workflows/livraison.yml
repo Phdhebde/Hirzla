@@ -16,8 +16,20 @@ name: Livraison
 # manifest, then attaches installers, archives, extension, bills of materials, SHA256SUMS and
 # Sigstore provenance to the draft. The publisher then signs SHA256SUMS with GPG and publishes.
 #
-# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS is a repository variable
-# holding public keys.
+# macOS (ADR 0065): stage 1 builds and ad hoc signs Hirzla.app itself, and hands it to the
+# publisher zipped; the macOS manifest names the executables of Hirzla.app/Contents/MacOS as
+# signed. Stage 2 wraps that very bundle and the manifest into a .pkg (macos-pkg.sh), which
+# installs the manifest outside the bundle. No disk image is delivered.
+#
+# Dry run: a tag vX.Y.Z-essai.N runs the same two stages for workspace version X.Y.Z, but
+# compiles the throwaway test keys of HIRZLA_PUBLISHER_KEYS_ESSAI instead of
+# HIRZLA_PUBLISHER_KEYS, and keeps the GitHub release a pre-release draft titled "Essai ...".
+# Its executables trust the test keys only: they must never be published as a real release
+# (docs/livraison.md § 2.1). release-version.py refuses test keys shared with the real ones.
+#
+# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS and HIRZLA_PUBLISHER_KEYS_ESSAI
+# are repository variables holding public keys; every job takes the keys of the mode from
+# the version job, never from the variables directly.
 on:
   push:
     tags: ["v*"]
@@ -44,6 +56,11 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
+      # X.Y.Z, or X.Y.Z-essai.N for a dry run.
+      label: ${{ steps.check.outputs.label }}
+      essai: ${{ steps.check.outputs.essai }}
+      # HIRZLA_PUBLISHER_KEYS, or HIRZLA_PUBLISHER_KEYS_ESSAI for a dry run (public keys).
+      publisher_keys: ${{ steps.check.outputs.publisher_keys }}
     steps:
       - name: Started on a tag
         if: github.ref_type != 'tag'
@@ -51,14 +68,18 @@ jobs:
           echo "::error::Start this workflow on a release tag (Use workflow from: Tags > vX.Y.Z), not on a branch."
           exit 1
       - uses: actions/checkout@v4
-      - name: Tag equals the workspace version; HIRZLA_PUBLISHER_KEYS is set
+      - name: Tag equals the workspace version; publisher keys of the mode are set
         id: check
         env:
           HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+          HIRZLA_PUBLISHER_KEYS_ESSAI: ${{ vars.HIRZLA_PUBLISHER_KEYS_ESSAI }}
         run: |
-          version="$(python3 .github/scripts/release-version.py --tag "$GITHUB_REF_NAME" --publisher-keys)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          version="$(python3 .github/scripts/release-version.py --tag "$GITHUB_REF_NAME" \
+            --publisher-keys --github-output "$GITHUB_OUTPUT")"
           echo "Release $version, tag $GITHUB_REF_NAME, commit $GITHUB_SHA"
+          if grep -qx 'essai=true' "$GITHUB_OUTPUT"; then
+            echo "::warning::Dry run ($GITHUB_REF_NAME): test publisher keys (HIRZLA_PUBLISHER_KEYS_ESSAI). Never publish this release; delete the draft and the tag afterwards."
+          fi
 
   # ---------------------------------------------------------------------------------------
   # Stage 1: release executables, built once. They are never modified afterwards: the client
@@ -90,8 +111,9 @@ jobs:
             triple: aarch64-apple-darwin
             ext: ""
     env:
-      # Public publisher keys compiled into the core and its clients (ADR 0042, 0043).
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+      # Public publisher keys compiled into the core and its clients (ADR 0042, 0043): the
+      # test keys in a dry run.
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -148,19 +170,23 @@ jobs:
               "apps/desktop/src-tauri/binaries/$n-${{ matrix.triple }}${{ matrix.ext }}"
           done
       # Compiles hirzla-desktop only: installers are built by stage 2 from these files.
+      # macOS: Hirzla.app itself (ADR 0065). Its seal covers the executables, so it is
+      # signed below and never rebuilt: stage 2 wraps this very bundle into the .pkg.
       - name: Desktop application
         shell: bash
         working-directory: apps/desktop/src-tauri
-        run: >-
-          cargo tauri build --no-bundle --ci --config tauri.livraison.conf.json
-          --features livraison -- --locked
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then bundle=(--bundles app); else bundle=(--no-bundle); fi
+          cargo tauri build "${bundle[@]}" --ci --config tauri.livraison.conf.json \
+            --features livraison -- --locked
       - name: Server and audit verifier (Linux)
         if: runner.os == 'Linux'
         run: |
           cargo build --release --locked -p hirzla-server -p hirzla-audit
           mkdir -p out/serveur
           cp target/release/hirzlad target/release/hirzla-audit-verify out/serveur/
-      - name: Collect the executables
+      - name: Collect the executables (Linux, Windows)
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           dir="out/${{ matrix.platform }}"
@@ -168,15 +194,25 @@ jobs:
           for n in hirzla hirzla-core hirzla-desktop hirzla-native-host; do
             cp "target/release/$n${{ matrix.ext }}" "$dir/"
           done
-      # macOS without an Apple Developer account (docs/livraison.md § 3, ADR 0063 § 5): ad hoc
-      # signature with the hardened runtime, BEFORE the manifest is signed, since any
-      # signature changes the file.
-      - name: Ad hoc signature, hardened runtime (macOS)
+      # macOS without an Apple Developer account (docs/livraison.md § 3, ADR 0063 § 5, 0065):
+      # final ad hoc signature of Hirzla.app with the hardened runtime, BEFORE the manifest is
+      # signed, since any signature changes the files. Nested executables first, then the
+      # bundle (main executable and seal). Nothing changes the bundle afterwards: the zip
+      # below carries it to the publisher, who hashes Contents/MacOS/* as signed, and to
+      # stage 2, which puts it in the .pkg as it is.
+      - name: Ad hoc signature of Hirzla.app, hardened runtime (macOS)
         if: runner.os == 'macOS'
         run: |
-          for f in out/${{ matrix.platform }}/*; do
-            codesign --force --sign - --options runtime "$f"
+          app=target/release/bundle/macos/Hirzla.app
+          ls -l "$app/Contents/MacOS"
+          for n in hirzla hirzla-core hirzla-native-host; do
+            codesign --force --sign - --options runtime "$app/Contents/MacOS/$n"
           done
+          codesign --force --deep --sign - --options runtime "$app"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          dir="out/${{ matrix.platform }}"
+          mkdir -p "$dir"
+          ditto -c -k --norsrc --keepParent "$app" "$dir/Hirzla.app.zip"
       # Hook: an Authenticode signature (SignPath Foundation, docs/guide-signature.md step 5)
       # would go here, before the upload, for the same reason.
       - name: Fingerprints
@@ -222,6 +258,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
+      LABEL: ${{ needs.version.outputs.label }}
+      ESSAI: ${{ needs.version.outputs.essai }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -230,7 +268,7 @@ jobs:
           path: dl
       - name: Publisher folder
         run: |
-          dir="hirzla-$VERSION-a-signer"
+          dir="hirzla-$LABEL-a-signer"
           mkdir -p "$dir"
           for p in linux-x86_64 windows-x86_64 macos-aarch64; do
             cp -r "dl/executables-$p/$p" "$dir/$p"
@@ -238,7 +276,17 @@ jobs:
           done
           printf '%s\n' "$VERSION" > "$dir/VERSION"
           cp .github/scripts/signer-manifestes.sh "$dir/"
-          cat > "$dir/LISEZMOI.txt" <<EOF
+          if [ "$ESSAI" = "true" ]; then
+            cat > "$dir/ESSAI" <<EOF
+          ESSAI DU FLUX DE LIVRAISON ($GITHUB_REF_NAME) : NE JAMAIS PUBLIER.
+          Ces exécutables portent les clés d'éditeur de test (HIRZLA_PUBLISHER_KEYS_ESSAI).
+          Signez les manifestes avec la clé d'éditeur jetable de l'essai, jamais avec la
+          vraie clé d'éditeur. Supprimez ensuite le brouillon et l'étiquette
+          (docs/livraison.md, § 2.1, essai à blanc).
+
+          EOF
+          fi
+          { cat "$dir/ESSAI" 2>/dev/null || true; cat <<EOF
           Hirzla $VERSION : manifestes des clients à signer (étape 1 du flux Livraison).
           Étiquette $GITHUB_REF_NAME, commit $(git rev-parse HEAD), exécution $GITHUB_RUN_ID.
           Marche à suivre complète : docs/guide-signature.md, étape 7.
@@ -258,21 +306,30 @@ jobs:
               --plateforme windows-x86_64 --sortie hirzla-clients-windows-x86_64.manifest \\
               windows-x86_64/hirzla.exe windows-x86_64/hirzla-core.exe \\
               windows-x86_64/hirzla-desktop.exe windows-x86_64/hirzla-native-host.exe
+            mkdir macos-aarch64/app
+            unzip -q macos-aarch64/Hirzla.app.zip -d macos-aarch64/app
+            M=macos-aarch64/app/Hirzla.app/Contents/MacOS
             hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
               --plateforme macos-aarch64 --sortie hirzla-clients-macos-aarch64.manifest \\
-              macos-aarch64/hirzla macos-aarch64/hirzla-core \\
-              macos-aarch64/hirzla-desktop macos-aarch64/hirzla-native-host
+              \$M/hirzla \$M/hirzla-core \$M/hirzla-desktop \$M/hirzla-native-host
 
-          puis, pour chaque plateforme P :
+          puis, pour chaque plateforme P (pour macOS, dossier \$M au lieu de P) :
 
             hirzla-signer verifier --publique /media/usb/editeur.pub --version $VERSION \\
               --plateforme P --executables P hirzla-clients-P.manifest
+
+          macOS (ADR 0065) : Hirzla.app est livrée entière, déjà signée ad hoc par le flux ;
+          le manifeste porte sur les exécutables de Hirzla.app/Contents/MacOS tels qu'ils
+          sont dans ce paquet signé. Le manifeste ne va pas dans Hirzla.app : l'étape 2 met
+          les deux dans un paquet .pkg qui pose le manifeste dans
+          /Library/Application Support/Hirzla/.
 
           Joignez ensuite les trois fichiers hirzla-clients-*.manifest au brouillon
           de la version $GITHUB_REF_NAME sur GitHub (Releases > Edit > glisser les fichiers),
           et lancez la seconde étape : Actions > Livraison > Run workflow, sur l'étiquette
           $GITHUB_REF_NAME. Ne modifiez aucun exécutable : le manifeste les identifie.
           EOF
+          } > "$dir/LISEZMOI.txt"
           cat "$dir/LISEZMOI.txt"
           echo "FOLDER=$dir" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
@@ -283,25 +340,37 @@ jobs:
           retention-days: 90
       # One draft per tag. A new stage 1 replaces the executables, so manifests signed for
       # an earlier run no longer match: they are removed from the draft.
+      # A dry run (tag vX.Y.Z-essai.N) is a pre-release draft titled "Essai ...", with a
+      # visible warning in its notes: it carries the test keys and is never published.
       - name: Draft release
         run: |
+          essai=() title="Hirzla $VERSION" prerelease=()
+          if [ "$ESSAI" = "true" ]; then
+            essai=(--essai) title="Essai Hirzla $LABEL (ne pas publier)" prerelease=(--prerelease)
+          fi
           python3 .github/scripts/release-notes.py --version "$VERSION" --stage 1 \
-            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" --output notes.md
+            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" ${essai[@]+"${essai[@]}"} \
+            --output notes.md
           if state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [ "$state" != "true" ]; then
               echo "::error::Release $GITHUB_REF_NAME is already published: a published version is never rebuilt."
               exit 1
             fi
-            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --title "$title" \
+              ${prerelease[@]+"${prerelease[@]}"}
             for a in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'); do
               echo "Removing stale asset $a"
               gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes
             done
           else
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-              --title "Hirzla $VERSION" --notes-file notes.md
+              ${prerelease[@]+"${prerelease[@]}"} --title "$title" --notes-file notes.md
           fi
           {
+            if [ "$ESSAI" = "true" ]; then
+              echo "> **Essai à blanc** ($GITHUB_REF_NAME) : clés d'éditeur de test. Signez avec la clé jetable ; ne publiez jamais ce brouillon."
+              echo
+            fi
             echo "### Étape 1 terminée"
             echo
             echo "1. Téléchargez l'artefact \`$FOLDER\` de cette exécution."
@@ -326,7 +395,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Stage-1 run of this tag
@@ -371,15 +440,12 @@ jobs:
           if grep -q '\.hirzla-maj$' assets.txt; then
             gh release download "$GITHUB_REF_NAME" --pattern '*.hirzla-maj' --dir signed
           fi
-          for p in linux-x86_64 windows-x86_64; do
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
             if [ ! -f "signed/hirzla-clients-$p.manifest" ]; then
               echo "::error::hirzla-clients-$p.manifest is not attached to the draft release (docs/guide-signature.md, step 7)."
               exit 1
             fi
           done
-          if [ ! -f signed/hirzla-clients-macos-aarch64.manifest ]; then
-            echo "::warning::No macOS manifest: macOS is not published in this version (ADR 0065)."
-          fi
       - name: Toolchain
         run: rustup toolchain install
       - name: Build tools
@@ -387,14 +453,21 @@ jobs:
       - name: hirzla-signer
         run: cargo build --locked -p hirzla-release-signer
       # Signature (both components, a key of HIRZLA_PUBLISHER_KEYS), version, platform, and
-      # the stage-1 executables named exactly, with the same size and SHA-384.
+      # the stage-1 executables named exactly, with the same size and SHA-384. macOS: the
+      # executables of the signed Hirzla.app, Contents/MacOS (ADR 0065).
       - name: Verify the manifests and update packages
         run: |
           signer=target/debug/hirzla-signer
           for m in signed/hirzla-clients-*.manifest; do
             p="${m#signed/hirzla-clients-}"; p="${p%.manifest}"
+            exe="stage1/executables-$p/$p"
+            if [ -f "$exe/Hirzla.app.zip" ]; then
+              mkdir "stage1/app-$p"
+              unzip -q "$exe/Hirzla.app.zip" -d "stage1/app-$p"
+              exe="stage1/app-$p/Hirzla.app/Contents/MacOS"
+            fi
             "$signer" verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" --version "$VERSION" \
-              --plateforme "$p" --executables "stage1/executables-$p/$p" "$m"
+              --plateforme "$p" --executables "$exe" "$m"
           done
           for u in signed/*.hirzla-maj; do
             [ -e "$u" ] || continue
@@ -413,9 +486,6 @@ jobs:
     name: stage 2, installers (${{ matrix.platform }})
     needs: [version, manifests]
     runs-on: ${{ matrix.os }}
-    # macOS does not block the release: the manifest location in Hirzla.app is being decided
-    # (ADR 0065); its disk image stays a workflow artifact, never attached to the release.
-    continue-on-error: ${{ matrix.platform == 'macos-aarch64' }}
     permissions:
       contents: read
       actions: read
@@ -435,14 +505,16 @@ jobs:
             ext: ".exe"
             bundles: msi
             manifest_config: tauri.manifeste.windows.conf.json
+          # macOS: no `tauri bundle`; the .pkg wraps the stage-1 Hirzla.app (ADR 0065).
           - os: macos-latest
             platform: macos-aarch64
             triple: aarch64-apple-darwin
             ext: ""
-            bundles: dmg
+            bundles: ""
             manifest_config: ""
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -454,6 +526,7 @@ jobs:
           libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
           rpm cpio
       - name: Tauri CLI (pinned)
+        if: runner.os != 'macOS'
         run: cargo install tauri-cli --version ${{ env.TAURI_CLI_VERSION }} --locked
       - uses: actions/download-artifact@v4
         with:
@@ -468,6 +541,7 @@ jobs:
       # The executables go where `tauri bundle` takes them, byte for byte; `expected/` keeps
       # the reference copy, with the manifest, for the check below.
       - name: Place the executables and the manifest
+        if: runner.os != 'macOS'
         shell: bash
         run: |
           src="stage1/${{ matrix.platform }}"
@@ -488,6 +562,7 @@ jobs:
       # bundle type (used by its updater, which Hirzla does not ship). NO_STRIP: linuxdeploy
       # must not strip the AppImage executables.
       - name: Installers
+        if: runner.os != 'macOS'
         shell: bash
         working-directory: apps/desktop/src-tauri
         env:
@@ -541,14 +616,54 @@ jobs:
             exit 1
           fi
           .github/scripts/compare-installed.sh MSI expected "$(dirname "$core")" .exe
-      # TODO(ADR 0065): macOS. The client manifest cannot sit inside Hirzla.app next to the
-      # core (the bundle seal covers it, docs/livraison.md § 9 point 2). Once ADR 0065 has
-      # chosen the location, build here the .pkg that installs Hirzla.app and the manifest,
-      # check it like the other installers, and let the publication job attach it.
-      - name: "Hook: macOS .pkg with the client manifest (ADR 0065, to do)"
+      # macOS (ADR 0065): the stage-1 Hirzla.app, unzipped as signed, its manifest verified
+      # again here against the very executables that go into the .pkg, then the .pkg that
+      # installs Hirzla.app into /Applications and the manifest, owned by root, into
+      # /Library/Application Support/Hirzla/.
+      - name: CMake (macOS)
+        if: runner.os == 'macOS'
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "3.31.x"
+      - name: hirzla-signer (macOS)
+        if: runner.os == 'macOS'
+        run: cargo build --locked -p hirzla-release-signer
+      - name: Signed Hirzla.app and its manifest (macOS)
         if: runner.os == 'macOS'
         run: |
-          echo "::warning::macOS installer not published: manifest location pending (ADR 0065). The disk image is a workflow artifact only."
+          app_dir="$RUNNER_TEMP/app"
+          mkdir -p "$app_dir"
+          ditto -x -k "stage1/${{ matrix.platform }}/Hirzla.app.zip" "$app_dir"
+          app="$app_dir/Hirzla.app"
+          codesign --verify --strict --deep --verbose=2 "$app"
+          m="signed/hirzla-clients-${{ matrix.platform }}.manifest"
+          target/debug/hirzla-signer verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" \
+            --version "$VERSION" --plateforme "${{ matrix.platform }}" \
+            --executables "$app/Contents/MacOS" "$m"
+          mkdir -p expected
+          cp -p "$app/Contents/MacOS/"* expected/
+          cp "$m" expected/hirzla-clients.manifest
+          echo "APP=$app" >> "$GITHUB_ENV"
+      - name: Installer .pkg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p out
+          cd out
+          "$GITHUB_WORKSPACE/.github/scripts/macos-pkg.sh" "$APP" \
+            "$GITHUB_WORKSPACE/expected/hirzla-clients.manifest" "$VERSION"
+      # Like the other installers: the .pkg must hold the signed executables and the manifest
+      # byte for byte, and the bundle it installs must still verify.
+      - name: Check the .pkg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          x="$RUNNER_TEMP/pkg-extract"
+          inst="$RUNNER_TEMP/pkg-installed"
+          pkgutil --expand-full out/Hirzla_"$VERSION"_*.pkg "$x"
+          mkdir -p "$inst"
+          cp -p "$x/hirzla-app.pkg/Payload/Hirzla.app/Contents/MacOS/"* "$inst/"
+          cp -p "$x/hirzla-manifest.pkg/Payload/hirzla-clients.manifest" "$inst/"
+          .github/scripts/compare-installed.sh pkg expected "$inst" ""
+          codesign --verify --strict --deep --verbose=2 "$x/hirzla-app.pkg/Payload/Hirzla.app"
       - uses: actions/download-artifact@v4
         if: runner.os == 'Linux'
         with:
@@ -585,8 +700,7 @@ jobs:
           mkdir -p out
           shopt -s nullglob
           for f in target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm \
-            target/release/bundle/appimage/*.AppImage target/release/bundle/msi/*.msi \
-            target/release/bundle/dmg/*.dmg; do
+            target/release/bundle/appimage/*.AppImage target/release/bundle/msi/*.msi; do
             cp "$f" out/
           done
           ls -l out
@@ -609,6 +723,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
+      LABEL: ${{ needs.version.outputs.label }}
+      ESSAI: ${{ needs.version.outputs.essai }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -623,11 +739,11 @@ jobs:
         with:
           name: signed
           path: release
-      # Linux and Windows only: the macOS disk image stays a workflow artifact (ADR 0065).
+      # The three platforms; macOS as a .pkg, never a disk image (ADR 0065).
       - name: Installers and archives
         run: |
           mkdir -p release
-          for p in linux-x86_64 windows-x86_64; do
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
             if [ ! -d "dl/installers-$p" ]; then
               echo "::error::installers of $p missing"
               exit 1
@@ -693,15 +809,30 @@ jobs:
           subject-path: release/*
       - name: Attach to the draft release
         run: |
+          essai=() prerelease=()
+          if [ "$ESSAI" = "true" ]; then
+            essai=(--essai) prerelease=(--prerelease)
+          fi
           python3 .github/scripts/release-notes.py --version "$VERSION" --stage 2 \
             --run-id "${{ needs.manifests.outputs.run_id }}" --sha "$(git rev-parse HEAD)" \
-            --output notes.md
+            ${essai[@]+"${essai[@]}"} --output notes.md
           if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
             echo "::error::Release $GITHUB_REF_NAME is no longer a draft: nothing attached."
             exit 1
           fi
           gh release upload "$GITHUB_REF_NAME" release/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true \
+            ${prerelease[@]+"${prerelease[@]}"}
+          if [ "$ESSAI" = "true" ]; then
+            {
+              echo "### Essai à blanc terminé : brouillon complet, À NE JAMAIS PUBLIER"
+              echo
+              echo "1. Examinez le brouillon $GITHUB_REF_NAME et ses fichiers (clés d'éditeur de test)."
+              echo "2. Supprimez-le avec son étiquette : \`gh release delete $GITHUB_REF_NAME --cleanup-tag --yes\`."
+              echo "3. Détruisez la clé d'éditeur jetable (\`docs/livraison.md\` § 2.1)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "### Étape 2 terminée : brouillon complet"
             echo

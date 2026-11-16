@@ -6,8 +6,13 @@ release flow), {{NOTES}} (the section of CHANGELOG.md for this version) and {{MA
 hidden marker that carries the run id of the first stage, read back by the second stage).
 The template's leading HTML comment, meant for maintainers, is dropped.
 
+With --essai (dry run of the release flow, tag vX.Y.Z-essai.N, docs/livraison.md § 2.1), a
+visible warning heads the body at both stages: the executables carry the test publisher keys
+and the draft must never be published.
+
 Usage:
-    release-notes.py --version X.Y.Z --stage 1|2 --run-id N --sha COMMIT [--output FILE]
+    release-notes.py --version X.Y.Z --stage 1|2 --run-id N --sha COMMIT [--essai]
+                     [--output FILE]
     release-notes.py --read-run-id < BODY   (prints the run id found in a release body)
 
 Standard library only: no new dependency, no network.
@@ -37,6 +42,15 @@ STATES = {
 }
 
 
+# Visible at both stages of a dry run, and kept if the draft were ever published by mistake.
+ESSAI = (
+    "> **ESSAI DU FLUX DE LIVRAISON : NE JAMAIS PUBLIER.** Les exécutables de ce brouillon "
+    "portent les clés d'éditeur de test (`HIRZLA_PUBLISHER_KEYS_ESSAI`), pas la clé "
+    "d'éditeur. Examinez-le, puis supprimez le brouillon et son étiquette "
+    "(`docs/livraison.md` § 2.1, essai à blanc)."
+)
+
+
 def changelog_section(version):
     with open(CHANGELOG, encoding="utf-8") as f:
         lines = f.read().splitlines()
@@ -59,14 +73,14 @@ def changelog_section(version):
     return re.sub(r"^### ", "#### ", section, flags=re.MULTILINE)
 
 
-def render(version, stage, run_id, sha):
+def render(version, stage, run_id, sha, essai=False):
     with open(TEMPLATE, encoding="utf-8") as f:
         text = f.read()
     text = re.sub(r"\A\s*<!--.*?-->\s*", "", text, flags=re.DOTALL)
     marker = f"<!-- hirzla-etape-1 run_id={run_id} sha={sha} -->"
     for key, value in [
         ("{{VERSION}}", version),
-        ("{{ETAT}}", STATES[stage]),
+        ("{{ETAT}}", f"{ESSAI}\n\n{STATES[stage]}" if essai else STATES[stage]),
         ("{{NOTES}}", changelog_section(version)),
         ("{{MARQUE}}", marker),
     ]:
@@ -84,6 +98,7 @@ def main():
     ap.add_argument("--stage", choices=sorted(STATES))
     ap.add_argument("--run-id")
     ap.add_argument("--sha")
+    ap.add_argument("--essai", action="store_true", help="dry run of the release flow")
     ap.add_argument("--output")
     ap.add_argument("--read-run-id", action="store_true")
     args = ap.parse_args()
@@ -98,7 +113,7 @@ def main():
         return
     if not (args.version and args.stage and args.run_id and args.sha):
         ap.error("--version, --stage, --run-id and --sha are required")
-    text = render(args.version, args.stage, args.run_id, args.sha)
+    text = render(args.version, args.stage, args.run_id, args.sha, args.essai)
     if args.output:
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(text)

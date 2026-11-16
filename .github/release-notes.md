@@ -8,8 +8,8 @@ Ce commentaire n'est pas recopié.
 
 ## Hirzla {{VERSION}}
 
-Coffre-fort de mots de passe post-quantique pour Windows et Linux, seul sur un poste (mode
-Self) ou relié à un serveur `hirzlad` qui ne peut rien lire (mode Serveur).
+Coffre-fort de mots de passe post-quantique pour Windows, macOS et Linux, seul sur un poste
+(mode Self) ou relié à un serveur `hirzlad` qui ne peut rien lire (mode Serveur).
 
 {{NOTES}}
 
@@ -18,6 +18,7 @@ Self) ou relié à un serveur `hirzlad` qui ne peut rien lire (mode Serveur).
 | Système | Fichier |
 | --- | --- |
 | Windows 10 et 11 (x64) | `Hirzla_{{VERSION}}_x64_fr-FR.msi` |
+| macOS 11 et suivants (Apple Silicon) | `Hirzla_{{VERSION}}_aarch64.pkg` |
 | Debian, Ubuntu (x86-64) | `Hirzla_{{VERSION}}_amd64.deb` |
 | Fedora, RHEL, openSUSE (x86-64) | `Hirzla-{{VERSION}}-1.x86_64.rpm` |
 | Autres Linux (x86-64) | `Hirzla_{{VERSION}}_amd64.AppImage`, s'il est présent (voir « Limites ») |
@@ -26,9 +27,11 @@ Self) ou relié à un serveur `hirzlad` qui ne peut rien lire (mode Serveur).
 | Extension Firefox et Chromium | `hirzla-extension-{{VERSION}}.zip` |
 
 Chaque installeur dépose côte à côte le noyau `hirzla-core`, l'application, la ligne de
-commande `hirzla`, l'hôte natif de l'extension et le manifeste des clients
+commande `hirzla` et l'hôte natif de l'extension, avec le manifeste des clients
 `hirzla-clients.manifest`, signé hors ligne par la clé d'éditeur hybride (ECDSA P-384 +
-ML-DSA-87). Le noyau refuse de démarrer sans lui. Les manifestes de chaque plateforme
+ML-DSA-87). Le noyau refuse de démarrer sans lui. Sous macOS, le paquet `.pkg` installe
+`Hirzla.app` dans `/Applications` et le manifeste, hors de l'application, dans
+`/Library/Application Support/Hirzla/` (propriété de root). Les manifestes de chaque plateforme
 (`hirzla-clients-<plateforme>.manifest`) et les nomenclatures logicielles CycloneDX
 (`*.cdx.json`) sont joints à cette page.
 
@@ -46,13 +49,16 @@ ML-DSA-87). Le noyau refuse de démarrer sans lui. Les manifestes de chaque plat
 
 Les installeurs ne portent pas de signature de système (ADR 0063) : Windows affiche
 « Windows a protégé votre ordinateur » (*Informations complémentaires* › *Exécuter quand
-même*). Le produit vérifie quand même ses propres exécutables par la clé d'éditeur. Aucun
+même*) ; macOS refuse d'ouvrir un paquet d'un développeur non identifié (clic droit sur le
+`.pkg` › *Ouvrir*, ou `sudo installer -pkg Hirzla_{{VERSION}}_aarch64.pkg -target /`).
+L'installation sous macOS demande les droits d'administrateur. Le produit vérifie quand même ses propres exécutables par la clé d'éditeur. Aucun
 installeur ne télécharge quoi que ce soit ; l'application fonctionne en réseau isolé.
 
 ## Limites
 
-- **macOS** : pas d'installeur dans cette version ; l'emplacement du manifeste des clients
-  dans un paquet d'application macOS est en cours de décision (ADR 0065).
+- **macOS** : paquet d'installation `.pkg` seulement, pas d'image disque (ADR 0065) ; une
+  copie de `Hirzla.app` glissée ailleurs à la main ne trouve son manifeste que si le `.pkg`
+  de la même version est installé.
 - **AppImage** : publiée seulement si ses exécutables sont identiques, octet pour octet, à
   ceux du manifeste signé (le flux le vérifie et l'écarte sinon).
 

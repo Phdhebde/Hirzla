@@ -24,7 +24,7 @@ use hirzla_keystore::platform;
 
 use crate::auth::{ServerRefusal, CORE_EXECUTABLE};
 use crate::events::Refusal;
-use crate::release::{self, FileEntry, Manifest, PublisherKeys, ReleaseError};
+use crate::release::{self, FileEntry, Manifest, PublisherKeys, ReleaseError, Version};
 use crate::transport::PeerIdentity;
 
 /// Whether client signatures are checked (`--client-signatures`).
@@ -96,6 +96,11 @@ pub enum SetupError {
     /// than root (macOS delivery builds, ADR 0065).
     #[error("client manifest not protected")]
     ManifestNotProtected,
+    /// The client manifest is genuine but made for another version than this build
+    /// ([`Version::current`]): an older manifest would name older executables, a newer one
+    /// executables this build does not know.
+    #[error("client manifest of another version")]
+    ManifestVersion,
     /// No publisher key to verify the manifest.
     #[error("no publisher key")]
     NoPublisherKey,
@@ -145,6 +150,11 @@ impl Check {
                 if m.platform != release::current_platform() {
                     return Err(SetupError::Manifest(ReleaseError::Platform));
                 }
+                // So does a manifest of another version, genuine as it may be: the core and its
+                // clients only trust the manifest of their own version.
+                if m.version != Version::current() {
+                    return Err(SetupError::ManifestVersion);
+                }
                 Ok(Check::Manifest(m))
             }
         }
@@ -184,9 +194,14 @@ pub const MACOS_MANIFEST_PATH: &str = "/Library/Application Support/Hirzla/hirzl
 
 /// Whether this build reads the client manifest at the fixed path [`MACOS_MANIFEST_PATH`],
 /// and only once it is checked as protected by root ([`open_root_protected`]): macOS
-/// delivery builds (ADR 0065). The core then refuses `--client-manifest`. Every other build
-/// reads it next to the core, or where `--client-manifest` says.
+/// delivery builds (ADR 0065). Every other build reads it next to the core.
 pub const FIXED_MANIFEST_PATH: bool = cfg!(target_os = "macos") && release::DELIVERY_BUILD;
+
+/// Whether the core accepts another client manifest than [`default_manifest_path`]
+/// (`--client-manifest`): development builds only. A delivery build, on every system, reads
+/// the manifest at its default path only, so that whoever starts the core cannot choose it
+/// (an older genuine manifest, for example).
+pub const MANIFEST_OVERRIDE_ALLOWED: bool = !release::DELIVERY_BUILD;
 
 /// Where the client manifest of the core at `core_executable` is installed: next to it
 /// (`docs/livraison.md` § 7), except in a macOS delivery build, at [`MACOS_MANIFEST_PATH`]
@@ -488,11 +503,22 @@ mod tests {
         dir: &Path,
         key: &PublisherSigningKey,
         platform: String,
+        entries: Vec<FileEntry>,
+    ) -> PathBuf {
+        manifest_file_of(dir, key, Version::current(), platform, entries)
+    }
+
+    /// [`manifest_file_for`] for `version`.
+    fn manifest_file_of(
+        dir: &Path,
+        key: &PublisherSigningKey,
+        version: Version,
+        platform: String,
         mut entries: Vec<FileEntry>,
     ) -> PathBuf {
         entries.sort_by(|a, b| a.name.cmp(&b.name));
         let m = Manifest {
-            version: Version::current(),
+            version,
             platform,
             files: entries,
         };
@@ -689,6 +715,58 @@ mod tests {
             core_setup(SignatureMode::Required, &path, &keys).err(),
             Some(SetupError::Manifest(ReleaseError::Signature))
         );
+    }
+
+    /// A genuine manifest of an older or a newer version is refused, by the core and by the
+    /// clients alike: they only trust the manifest of their own version.
+    #[test]
+    fn manifest_of_another_version_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = PublisherSigningKey::generate().unwrap();
+        let keys = PublisherKeys::new(vec![key.verifying_key().clone()]);
+        let core_name = format!("{CORE_EXECUTABLE}{EXE}");
+        let core = dir.path().join(&core_name);
+        std::fs::write(&core, b"the published core").unwrap();
+        let entries = || vec![entry_for(&core_name, &core, true).unwrap()];
+        let own = Version::current();
+        // The product is at 1.0.0 or later (release-version.py), so 0.9.9 is older.
+        let older = Version {
+            major: 0,
+            minor: 9,
+            patch: 9,
+        };
+        assert!(older < own);
+        let newer = Version {
+            patch: own.patch + 1,
+            ..own
+        };
+        let platform = release::current_platform;
+        for other in [older, newer] {
+            let path = manifest_file_of(dir.path(), &key, other, platform(), entries());
+            assert_eq!(
+                client_setup(SignatureMode::Required, &path, &keys).err(),
+                Some(SetupError::ManifestVersion)
+            );
+            assert_eq!(
+                core_setup(SignatureMode::Required, &path, &keys).err(),
+                Some(SetupError::ManifestVersion)
+            );
+        }
+        // The manifest of this very version is accepted.
+        let path = manifest_file_of(dir.path(), &key, own, platform(), entries());
+        assert!(client_setup(SignatureMode::Required, &path, &keys).is_ok());
+        assert!(core_setup(SignatureMode::Required, &path, &keys).is_ok());
+        // Off checks nothing, the version neither.
+        let path = manifest_file_of(dir.path(), &key, newer, platform(), entries());
+        assert!(client_setup(SignatureMode::Off, &path, &keys).is_ok());
+    }
+
+    /// The client manifest cannot be chosen at run time in a delivery build, on any system.
+    #[test]
+    fn manifest_override_only_in_development_builds() {
+        assert_eq!(MANIFEST_OVERRIDE_ALLOWED, !release::DELIVERY_BUILD);
+        // Where the manifest location is fixed, no override is possible either.
+        const { assert!(!(FIXED_MANIFEST_PATH && MANIFEST_OVERRIDE_ALLOWED)) };
     }
 
     /// ADR 0065: the manifest lives next to the core, except in a macOS delivery build.
