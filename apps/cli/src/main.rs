@@ -49,6 +49,10 @@ fn main() -> ExitCode {
     if let Command::ClipboardHelper { seconds } = args.command {
         return clipboard::helper(seconds);
     }
+    if args.command == Command::Version {
+        say(&format!("hirzla {}", env!("CARGO_PKG_VERSION")));
+        return ExitCode::SUCCESS;
+    }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
@@ -576,7 +580,7 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Passwd => selfmode::change_password(&session),
         Command::Settings(change) => selfmode::settings(&session, change),
         Command::Recovery(what) => selfmode::recovery(&session, what),
-        Command::ClipboardHelper { .. } | Command::Update(_) => Ok(()),
+        Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }
 

@@ -21,7 +21,6 @@ Coffre-fort de mots de passe post-quantique pour Windows, macOS et Linux, seul s
 | macOS 11 et suivants (Apple Silicon) | `Hirzla_{{VERSION}}_aarch64.pkg` |
 | Debian, Ubuntu (x86-64) | `Hirzla_{{VERSION}}_amd64.deb` |
 | Fedora, RHEL, openSUSE (x86-64) | `Hirzla-{{VERSION}}-1.x86_64.rpm` |
-| Autres Linux (x86-64) | `Hirzla_{{VERSION}}_amd64.AppImage`, s'il est présent (voir « Limites ») |
 | Ligne de commande seule, Linux | `hirzla-cli-{{VERSION}}-linux-x86_64.tar.gz` |
 | Serveur `hirzlad`, Linux | `hirzlad-{{VERSION}}-linux-x86_64.tar.gz` |
 | Extension Firefox et Chromium | `hirzla-extension-{{VERSION}}.zip` |
@@ -59,7 +58,8 @@ installeur ne télécharge quoi que ce soit ; l'application fonctionne en résea
 - **macOS** : paquet d'installation `.pkg` seulement, pas d'image disque (ADR 0065) ; une
   copie de `Hirzla.app` glissée ailleurs à la main ne trouve son manifeste que si le `.pkg`
   de la même version est installé.
-- **AppImage** : publiée seulement si ses exécutables sont identiques, octet pour octet, à
-  ceux du manifeste signé (le flux le vérifie et l'écarte sinon).
+- **Pas d'AppImage** : son outil de fabrication (linuxdeploy) réécrit les exécutables, qui ne
+  seraient plus ceux du manifeste signé ; le flux l'écarte. Sur une autre distribution, seule la
+  ligne de commande est proposée, en archive.
 
 {{MARQUE}}

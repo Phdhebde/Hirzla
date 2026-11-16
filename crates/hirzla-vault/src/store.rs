@@ -126,6 +126,16 @@ pub fn create(path: &Path) -> Result<Connection, VaultError> {
     if path.exists() {
         return Err(VaultError::AlreadyExists);
     }
+    create_private_file(path)?;
+    // A failure leaves no empty file behind (SQLite refuses, for example, a path that goes
+    // through a symbolic link, after the file was created).
+    init_container(path).inspect_err(|_| {
+        let _ = std::fs::remove_file(path);
+    })
+}
+
+/// Opens the freshly created, empty file and writes the header and the schema.
+fn init_container(path: &Path) -> Result<Connection, VaultError> {
     let conn = Connection::open_with_flags(path, flags(true))?;
     conn.pragma_update(None, "page_size", 4096)?;
     conn.pragma_update(None, "auto_vacuum", "FULL")?;
@@ -140,6 +150,25 @@ pub fn create(path: &Path) -> Result<Connection, VaultError> {
     configure(&conn)?;
     conn.execute_batch(&format!("BEGIN;\n{SCHEMA}\nCOMMIT;"))?;
     Ok(conn)
+}
+
+/// Creates the empty container file readable by its owner only (0600 on Unix), before
+/// SQLite opens it: SQLite would otherwise create it with the umask (often 0644), and it
+/// gives its journal the permissions of the database file. Windows: the default ACL of the
+/// user's profile folder applies.
+fn create_private_file(path: &Path) -> Result<(), VaultError> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    match o.open(path) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(VaultError::AlreadyExists),
+        Err(_) => Err(VaultError::Storage),
+    }
 }
 
 /// Opens an existing container and runs steps 1 to 4 of § 5.3.

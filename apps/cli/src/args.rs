@@ -88,6 +88,7 @@ Mises à jour hors ligne (sans réseau ni noyau) :
                           --cle-editeur FICHIER : clé publique d'éditeur (développement).
 
 Options globales :
+  --version               Affiche la version de hirzla.
   --socket POINT          Point de connexion du noyau (ou HIRZLA_SOCKET).
   --core EXÉCUTABLE       Exécutable du noyau attendu (par défaut : hirzla-core à côté
                           de hirzla).
@@ -258,6 +259,8 @@ pub enum Command {
     Quarantine(QuarantineCommand),
     DeviceRevoke(DeviceRevokeCommand),
     Update(UpdateCommand),
+    /// `--version`: prints the version of `hirzla`, without starting the core.
+    Version,
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
@@ -300,6 +303,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--core" => core = Some(PathBuf::from(value("--core")?)),
             "--vault" => vault = Some(PathBuf::from(value("--vault")?)),
             "-h" | "--help" | "help" => return Err(USAGE.to_owned()),
+            "-V" | "--version" => {
+                return Ok(Args {
+                    socket,
+                    core,
+                    vault,
+                    command: Command::Version,
+                })
+            }
             _ if arg.starts_with('-') => return Err(format!("option inconnue : {arg}\n\n{USAGE}")),
             _ => break arg,
         }
@@ -888,6 +899,12 @@ mod tests {
 
     fn p(a: &[&str]) -> Result<Args, String> {
         parse(a.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn version_needs_no_command() {
+        assert_eq!(p(&["--version"]).unwrap().command, Command::Version);
+        assert_eq!(p(&["-V"]).unwrap().command, Command::Version);
     }
 
     #[test]
