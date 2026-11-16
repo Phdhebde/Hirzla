@@ -387,8 +387,11 @@ jobs:
     if: github.event_name == 'workflow_dispatch'
     needs: version
     runs-on: ubuntu-24.04
+    # contents: write only so that the token can SEE the draft release: GitHub shows drafts
+    # to writers alone, and a read-only token gets "release not found". This job writes
+    # nothing to the release (stage-2 uploads happen in the "attach" job).
     permissions:
-      contents: read
+      contents: write
       actions: read
     outputs:
       run_id: ${{ steps.stage1.outputs.run_id }}
@@ -401,8 +404,12 @@ jobs:
       - name: Stage-1 run of this tag
         id: stage1
         run: |
-          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
-            echo "::error::No draft release for $GITHUB_REF_NAME: push the tag first (stage 1)."
+          if ! state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)"; then
+            echo "::error::No draft release found for $GITHUB_REF_NAME. Push the tag first (stage 1). A release published by mistake and turned back into a draft is detached from its tag: delete it, re-run stage 1 and sign again (docs/livraison.md § 2.1)."
+            exit 1
+          fi
+          if [ "$state" != "true" ]; then
+            echo "::error::Release $GITHUB_REF_NAME is published, not a draft: a published version is never completed. If it was published by mistake, delete it, re-run stage 1 and sign again (docs/livraison.md § 2.1)."
             exit 1
           fi
           gh release view "$GITHUB_REF_NAME" --json body --jq .body \
