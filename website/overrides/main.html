@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{#- Titre : « Page · Hirzla », ou le titre long de l'accueil. -#}
+{% block htmltitle %}
+  {% set accueil = page.canonical_url == config.site_url %}
+  {% if page.meta and page.meta.title_seo %}
+    <title>{{ page.meta.title_seo }}</title>
+  {% elif page.meta and page.meta.title %}
+    <title>{{ page.meta.title }} · {{ config.site_name }}</title>
+  {% elif page.title and not accueil %}
+    <title>{{ page.title | striptags }} · {{ config.site_name }}</title>
+  {% else %}
+    <title>{{ config.site_name }}</title>
+  {% endif %}
+{% endblock %}
+
+{#- Métadonnées de partage et données structurées (schema.org). -#}
+{% block extrahead %}
+  {% set description = page.meta.description if page.meta and page.meta.description else config.site_description %}
+  {% set titre = page.meta.title_seo if page.meta and page.meta.title_seo else (page.meta.title if page.meta and page.meta.title else page.title) %}
+  {% set racine = config.site_url %}
+  {% set accueil = page.canonical_url == racine %}
+  {% set image = racine ~ "assets/hirzla-partage.png" %}
+  <meta name="robots" content="index, follow, max-image-preview:large">
+  <meta name="theme-color" content="#1B2023">
+  <meta property="og:type" content="{{ 'website' if accueil else 'article' }}">
+  <meta property="og:site_name" content="Hirzla">
+  <meta property="og:locale" content="fr_FR">
+  <meta property="og:title" content="{{ titre | striptags }}">
+  <meta property="og:description" content="{{ description }}">
+  <meta property="og:url" content="{{ page.canonical_url }}">
+  <meta property="og:image" content="{{ image }}">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Hirzla, coffre-fort de mots de passe post-quantique, libre et gratuit">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{{ titre | striptags }}">
+  <meta name="twitter:description" content="{{ description }}">
+  <meta name="twitter:image" content="{{ image }}">
+  <link rel="alternate" type="text/plain" href="{{ racine }}llms.txt" title="Résumé du site pour les assistants (llms.txt)">
+  {% if accueil %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebSite",
+        "@id": "{{ racine }}#site",
+        "url": "{{ racine }}",
+        "name": "Hirzla",
+        "description": {{ config.site_description | tojson }},
+        "inLanguage": "fr-FR"
+      },
+      {
+        "@type": "SoftwareApplication",
+        "@id": "{{ racine }}#logiciel",
+        "name": "Hirzla",
+        "description": {{ config.site_description | tojson }},
+        "url": "{{ racine }}",
+        "image": "{{ image }}",
+        "applicationCategory": "SecurityApplication",
+        "applicationSubCategory": "Gestionnaire de mots de passe",
+        "operatingSystem": "Windows 10, Windows 11, macOS, Linux",
+        "softwareVersion": "1.0.0",
+        "inLanguage": "fr-FR",
+        "isAccessibleForFree": true,
+        "license": "https://www.apache.org/licenses/LICENSE-2.0",
+        "codeRepository": "https://github.com/Phdhebde/Hirzla",
+        "downloadUrl": "https://github.com/Phdhebde/Hirzla/releases",
+        "releaseNotes": "https://github.com/Phdhebde/Hirzla/releases",
+        "softwareHelp": "{{ racine }}installer/",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "EUR" },
+        "featureList": [
+          "Chiffrement de bout en bout sur le poste",
+          "Chiffrement post-quantique hybride : ECDH P-384 + ML-KEM-1024, ECDSA P-384 + ML-DSA-87",
+          "Mode Self : coffre local, sans serveur ni compte",
+          "Mode Serveur : casiers partagés, rôles, synchronisation, journal d'audit",
+          "Serveur aveugle auto-hébergé",
+          "Fonctionne en réseau isolé, sans télémétrie",
+          "Import KeePass (KDBX 4) et CSV",
+          "Extension Firefox et Chromium",
+          "Ligne de commande"
+        ]
+      }
+    ]
+  }
+  </script>
+  {% else %}
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "TechArticle",
+    "headline": {{ titre | striptags | tojson }},
+    "description": {{ description | tojson }},
+    "url": "{{ page.canonical_url }}",
+    "inLanguage": "fr-FR",
+    "image": "{{ image }}",
+    "isPartOf": { "@id": "{{ racine }}#site" },
+    "about": { "@id": "{{ racine }}#logiciel" }
+  }
+  </script>
+  {% endif %}
+{% endblock %}

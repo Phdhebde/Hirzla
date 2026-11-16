@@ -1,0 +1,5 @@
+# Hirzla : tout le site est public, y compris pour les robots des assistants.
+User-agent: *
+Allow: /
+
+Sitemap: https://phdhebde.github.io/Hirzla/sitemap.xml

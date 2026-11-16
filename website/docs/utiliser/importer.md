@@ -1,0 +1,50 @@
+---
+title: Importer depuis KeePass ou un fichier CSV
+description: Migrer vers Hirzla depuis KeePass, KeePassXC, Bitwarden, Firefox ou Chrome - import direct d'une base KDBX 4 ou d'un export CSV, et ce qui n'est pas repris.
+---
+
+# Importer depuis KeePass ou un fichier CSV
+
+L'import se fait dans **Réglages › Importer**. Chaque entrée est créée dans votre casier
+personnel. Rien n'est envoyé hors de votre poste.
+
+![Import d'une base KeePass KDBX dans Hirzla](../assets/captures/import-kdbx-clair.webp){ .capture .clair width="1600" height="1030" loading="lazy" }
+![Import d'une base KeePass KDBX dans Hirzla](../assets/captures/import-kdbx-sombre.webp){ .capture .sombre width="1600" height="1030" loading="lazy" }
+
+## Depuis KeePass ou KeePassXC (KDBX)
+
+C'est la voie à préférer : la base reste chiffrée jusqu'au noyau, qui la lit et la déchiffre
+lui-même.
+
+1. Cliquez sur **Importer depuis KeePass (KDBX)…**
+2. **Choisir la base…**, puis saisissez le mot de passe de la base KeePass.
+3. Cliquez sur **Importer**. Un compte rendu indique ce qui a été créé.
+
+| | |
+| --- | --- |
+| Bases acceptées | KDBX 4 (KeePass 2.35 et suivants, KeePassXC), protégées par un mot de passe seul, chiffrées en AES-256 ou ChaCha20 avec Argon2 |
+| Non importés | Pièces jointes, historique des entrées, codes TOTP. Le compte rendu les signale |
+
+En ligne de commande :
+
+```sh
+hirzla import-kdbx ancienne-base.kdbx
+```
+
+## Depuis un fichier CSV
+
+1. Exportez vos mots de passe en CSV depuis votre gestionnaire actuel.
+2. Cliquez sur **Importer un fichier CSV…** et choisissez le fichier.
+
+CSV reconnus : KeePass, KeePassXC, Bitwarden, Firefox, Chrome, et les tableurs dont la première
+ligne nomme les colonnes (titre, identifiant, mot de passe, URL, notes, groupe).
+
+!!! warning "Supprimez le fichier CSV aussitôt"
+    Un export CSV contient tous vos mots de passe **en clair**. Supprimez-le dès que l'import
+    est terminé, et videz la corbeille du système.
+
+## Après l'import
+
+- Vérifiez quelques entrées, puis créez un [kit de recouvrement](recouvrement.md).
+- Gardez votre ancienne base quelques jours, le temps de valider la migration, puis
+  supprimez-la.

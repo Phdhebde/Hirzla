@@ -1,0 +1,311 @@
+/* Hirzla — habillage du site selon la charte (brand/README.md, brand/tokens.css). */
+
+/* Typographies de la charte, servies par le site : aucun CDN. Licence OFL (assets/fonts). */
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/inter-latin-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Inter";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("../assets/fonts/inter-latin-ext-wght-normal.woff2") format("woff2-variations");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Space Grotesk";
+  font-style: normal;
+  font-weight: 300 700;
+  font-display: swap;
+  src: url("../assets/fonts/space-grotesk-latin-wght-normal.woff2") format("woff2-variations");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("../assets/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
+}
+
+:root {
+  --hz-braise: #EF753C;
+  --hz-braise-foncee: #B8501C;
+  --hz-fonte: #1B2023;
+  --hz-ardoise: #30373C;
+  --hz-acier: #5C6870;
+  --hz-brume: #A9B4BA;
+  --hz-trait: #DDE3E6;
+  --hz-givre: #F5F7F8;
+  --hz-glacier: #8FB3C2;
+  --hz-scelle: #1F6245;
+  --hz-scelle-fond: #E3F1EA;
+  --hz-alerte: #9B2520;
+  --hz-alerte-fond: #FBE4E2;
+
+  --md-text-font: "Inter", system-ui, sans-serif;
+  --md-code-font: "JetBrains Mono", ui-monospace, monospace;
+  --hz-font-titre: "Space Grotesk", system-ui, sans-serif;
+}
+
+/* En-tête et onglets sur Fonte, dans les deux thèmes : le symbole de référence y est posé. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color: var(--hz-fonte);
+  --md-primary-fg-color--light: var(--hz-ardoise);
+  --md-primary-fg-color--dark: var(--hz-fonte);
+  --md-primary-bg-color: var(--hz-givre);
+  --md-primary-bg-color--light: var(--hz-brume);
+}
+
+/* Thème clair : texte orange en Braise foncée, jamais en Braise. */
+[data-md-color-scheme="default"] {
+  --md-default-bg-color: var(--hz-givre);
+  --md-default-fg-color: var(--hz-fonte);
+  --md-default-fg-color--light: var(--hz-acier);
+  --md-typeset-color: var(--hz-fonte);
+  --md-typeset-a-color: var(--hz-braise-foncee);
+  --md-accent-fg-color: var(--hz-braise-foncee);
+  --md-code-bg-color: #FFFFFF;
+  --md-code-fg-color: var(--hz-ardoise);
+  --md-footer-bg-color: var(--hz-fonte);
+  --md-footer-bg-color--dark: var(--hz-fonte);
+  --hz-surface: #FFFFFF;
+  --hz-bordure: var(--hz-trait);
+  --hz-secondaire: var(--hz-acier);
+}
+
+/* Thème sombre : fond Fonte, surfaces Ardoise. */
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color: var(--hz-fonte);
+  --md-default-fg-color: var(--hz-givre);
+  --md-default-fg-color--light: var(--hz-brume);
+  --md-default-fg-color--lighter: #A9B4BA80;
+  --md-default-fg-color--lightest: #A9B4BA33;
+  --md-typeset-color: var(--hz-givre);
+  --md-typeset-a-color: var(--hz-braise);
+  --md-accent-fg-color: var(--hz-braise);
+  --md-code-bg-color: var(--hz-ardoise);
+  --md-code-fg-color: var(--hz-givre);
+  --md-footer-bg-color: #14181A;
+  --md-footer-bg-color--dark: #14181A;
+  --hz-surface: var(--hz-ardoise);
+  --hz-bordure: var(--hz-acier);
+  --hz-secondaire: var(--hz-brume);
+}
+
+/* Titres en Space Grotesk. */
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4,
+.md-header__title,
+.md-nav__title {
+  font-family: var(--hz-font-titre);
+}
+.md-typeset h1 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--md-default-fg-color);
+}
+.md-typeset h2 {
+  font-weight: 600;
+  letter-spacing: -0.005em;
+}
+.md-typeset h3 {
+  font-weight: 500;
+}
+
+/* Logotype : HIRZLA en capitales, Space Grotesk 600, interlettrage +6 %. */
+.md-header__title .md-header__topic:first-child .md-ellipsis {
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* Captures d'écran : une version par thème. */
+.md-typeset img.capture {
+  border: 1px solid var(--hz-bordure);
+  border-radius: 8px;
+  display: block;
+}
+[data-md-color-scheme="default"] .md-typeset img.sombre,
+[data-md-color-scheme="slate"] .md-typeset img.clair {
+  display: none;
+}
+
+/* Bandeau d'accueil. */
+.hz-accueil {
+  margin: 0.5rem 0 2rem;
+}
+.md-typeset .hz-accueil h1 {
+  font-size: 2.3rem;
+  line-height: 1.15;
+  margin-bottom: 0.8rem;
+}
+.md-typeset .hz-accueil .hz-chapeau {
+  font-size: 1rem;
+  color: var(--hz-secondaire);
+  max-width: 38rem;
+}
+
+/* Boutons : texte sur Braise toujours en Fonte. */
+.md-typeset .md-button {
+  border-radius: 6px;
+  border-color: var(--hz-bordure);
+  color: var(--md-default-fg-color);
+  font-weight: 600;
+}
+.md-typeset .md-button--primary,
+.md-typeset .md-button--primary:focus,
+.md-typeset .md-button--primary:hover {
+  background-color: var(--hz-braise);
+  border-color: var(--hz-braise);
+  color: var(--hz-fonte);
+}
+.md-typeset .md-button:not(.md-button--primary):focus,
+.md-typeset .md-button:not(.md-button--primary):hover {
+  background-color: transparent;
+  border-color: var(--md-accent-fg-color);
+  color: var(--md-accent-fg-color);
+}
+
+/* Cartes. */
+.md-typeset .hz-cartes {
+  display: grid;
+  gap: 0.8rem;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  margin: 1.2rem 0;
+}
+.md-typeset .hz-carte {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 8px;
+  padding: 0.2rem 1rem 0.6rem;
+}
+.md-typeset .hz-carte h3 {
+  font-size: 0.9rem;
+  margin: 0.8rem 0 0.3rem;
+}
+.md-typeset .hz-carte p {
+  font-size: 0.72rem;
+  margin: 0.3rem 0;
+}
+
+/* Tableaux et blocs. */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--hz-bordure);
+  border-radius: 8px;
+  box-shadow: none;
+  background: var(--hz-surface);
+}
+.md-typeset table:not([class]) th {
+  font-family: var(--hz-font-titre);
+  font-weight: 600;
+}
+.md-typeset code {
+  border-radius: 4px;
+}
+.md-typeset .admonition,
+.md-typeset details {
+  border-radius: 8px;
+  box-shadow: none;
+  border-width: 1px;
+}
+
+/* Pied de page : liens lisibles sur Fonte. */
+.md-footer-meta {
+  background-color: transparent;
+}
+.md-copyright {
+  max-width: 40rem;
+}
+
+/* Schémas : des boîtes reliées par des flèches, sans script. */
+.md-typeset .hz-schema {
+  align-items: stretch;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 1rem 0;
+}
+.md-typeset .hz-noeud {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 8px;
+  display: flex;
+  flex: 1 1 6rem;
+  flex-direction: column;
+  font-family: var(--hz-font-titre);
+  font-size: 0.75rem;
+  font-weight: 600;
+  justify-content: center;
+  padding: 0.7rem 0.8rem;
+  text-align: center;
+}
+.md-typeset .hz-noeud small {
+  color: var(--hz-secondaire);
+  font-family: var(--md-text-font);
+  font-size: 0.65rem;
+  font-weight: 400;
+  margin-top: 0.2rem;
+}
+.md-typeset .hz-noeud-fort {
+  border-color: var(--hz-glacier);
+  border-width: 2px;
+}
+.md-typeset .hz-fleche {
+  align-self: center;
+  color: var(--hz-secondaire);
+  flex: 0 1 5.5rem;
+  font-size: 0.62rem;
+  text-align: center;
+}
+.md-typeset .hz-fleche::after {
+  content: "→";
+  display: block;
+  font-size: 1rem;
+  line-height: 1;
+}
+.md-typeset .hz-fleche.hz-double::after {
+  content: "⇄";
+}
+@media screen and (max-width: 44.9em) {
+  .md-typeset .hz-schema {
+    flex-direction: column;
+  }
+  .md-typeset .hz-fleche {
+    flex-basis: auto;
+  }
+  .md-typeset .hz-fleche::after {
+    content: "↓";
+  }
+  .md-typeset .hz-fleche.hz-double::after {
+    content: "⇅";
+  }
+}
+
+/* Symbole : version fond clair par défaut, version fond sombre dans le thème sombre. */
+[data-md-color-scheme="slate"] .md-logo img {
+  content: url("../assets/logo/hirzla-symbole-fond-sombre.svg");
+}
+
+/* Élément actif de la navigation : teinte Braise, pas de bleu. */
+[data-md-color-scheme="default"] {
+  --md-accent-fg-color--transparent: #EF753C1F;
+}
+[data-md-color-scheme="slate"] {
+  --md-accent-fg-color--transparent: #EF753C26;
+}
+@media screen and (max-width: 44.9em) {
+  .md-typeset .hz-accueil h1 {
+    font-size: 1.6rem;
+  }
+}
