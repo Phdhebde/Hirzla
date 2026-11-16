@@ -13,6 +13,7 @@
 //! - [`agent`]: the machine member of a Hornn agent (`docs/integration-hornn.md`);
 //! - [`server_mode`]: the client of `hirzlad` and the local API version 4 (ADR 0032);
 //! - [`selfmode`]: the Self-mode operations (version 5): settings, history, recovery, import;
+//! - [`connections`]: SSH and RDP connections (version 6, ADR 0067);
 //! - [`codesign`]: the signature of the core's clients (ADR 0042);
 //! - [`release`]: documents signed by the publisher key, client manifest and offline update
 //!   package (ADR 0042, 0043).
@@ -23,6 +24,7 @@ pub mod agent;
 pub mod auth;
 pub mod client;
 pub mod codesign;
+pub mod connections;
 pub mod daemon;
 pub mod events;
 pub mod generator;

@@ -47,6 +47,21 @@ Commandes :
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.
+  connexion ssh NOM --hote H
+                          Range une connexion SSH. --port P, --identifiant U, --cle CLÉ,
+                          --rebond REBOND, --empreinte E, --mot-de-passe (demandé),
+                          --casier CASIER, --tag T.
+  connexion rdp NOM --hote H
+                          Range une connexion RDP. --port P, --identifiant U, --domaine D,
+                          --rebond REBOND, --empreinte E, --mot-de-passe (demandé),
+                          --casier CASIER, --tag T.
+  connexion voir NOM      Fiche d'une connexion, sans son mot de passe. --id ID.
+  connexion modifier NOM  Modifie une connexion : options de création (sauf --casier et
+                          --tag), --titre T, --effacer CHAMP. --id ID.
+  cle-ssh ajouter NOM FICHIER
+                          Range une clé SSH privée existante (format OpenSSH).
+                          --publique FICHIER, --identifiant U, --phrase (demandée),
+                          --casier CASIER, --tag T.
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
                           Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
@@ -116,6 +131,8 @@ Options globales :
   --vault FICHIER         Coffre, transmis au noyau quand hirzla le démarre (ou HIRZLA_VAULT).
 
 Champs : titre, identifiant, mot-de-passe, notes.
+CLÉ, REBOND : titre d'une clé SSH, d'une connexion SSH du coffre. --effacer accepte port,
+identifiant, domaine, mot-de-passe, cle, rebond, empreinte, notes.
 Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
 CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
 moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
@@ -216,6 +233,57 @@ pub enum LockerCommand {
     },
 }
 
+/// Fields of a connection given on the command line (`docs/api-locale.md` § 17.5). The
+/// password is never an argument: `password` asks for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectionOptions {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub domain: Option<String>,
+    /// Title of an SSH key of the vault.
+    pub key: Option<String>,
+    /// Title of an SSH connection of the vault.
+    pub jump: Option<String>,
+    pub host_key: Option<String>,
+    pub password: bool,
+}
+
+/// `connexion ssh|rdp|voir|modifier` (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionCommand {
+    Create {
+        rdp: bool,
+        name: String,
+        options: ConnectionOptions,
+        locker: Option<String>,
+        tags: Vec<String>,
+    },
+    Show {
+        name: Option<String>,
+        id: Option<String>,
+    },
+    Update {
+        name: Option<String>,
+        id: Option<String>,
+        options: ConnectionOptions,
+        title: Option<String>,
+        clear: Vec<String>,
+    },
+}
+
+/// `cle-ssh ajouter NOM FICHIER` (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshKeyAdd {
+    pub name: String,
+    pub file: PathBuf,
+    pub public: Option<PathBuf>,
+    pub username: Option<String>,
+    pub passphrase: bool,
+    pub locker: Option<String>,
+    pub tags: Vec<String>,
+}
+
 /// An offline update command (ADR 0043).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UpdateCommand {
@@ -284,6 +352,8 @@ pub enum Command {
     Passwd,
     Settings(SettingsChange),
     Recovery(Recovery),
+    Connection(ConnectionCommand),
+    SshKeyAdd(SshKeyAdd),
     Status,
     Stop,
     Server(ServerCommand),
@@ -566,6 +636,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--empreinte",
         "--repertoire",
         "--cle-editeur",
+        "--hote",
+        "--port",
+        "--domaine",
+        "--cle",
+        "--rebond",
+        "--titre",
+        "--effacer",
+        "--publique",
         "--mode",
         "--profil",
         "--min",
@@ -611,6 +689,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--note",
             "--generer",
             "--casier",
+        ],
+        "connexion" => &[
+            "--hote",
+            "--port",
+            "--identifiant",
+            "--domaine",
+            "--cle",
+            "--rebond",
+            "--empreinte",
+            "--mot-de-passe",
+            "--casier",
+            "--tag",
+            "--id",
+            "--titre",
+            "--effacer",
+        ],
+        "cle-ssh" => &[
+            "--publique",
+            "--identifiant",
+            "--phrase",
+            "--casier",
+            "--tag",
         ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte"],
@@ -822,6 +922,150 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 note: has("--note"),
                 generate,
                 locker: one("--casier")?,
+            }
+        }
+        "connexion" => {
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            max_positional(2)?;
+            let only = |names: &[&str]| -> Result<(), String> {
+                match flags.iter().find(|(f, _)| !names.contains(&f.as_str())) {
+                    Some((f, _)) => Err(format!("option inconnue pour « connexion {sub} » : {f}")),
+                    None => Ok(()),
+                }
+            };
+            let options = || -> Result<ConnectionOptions, String> {
+                let port = one("--port")?
+                    .map(|p| number::<u16>(&p, "--port"))
+                    .transpose()?;
+                if port == Some(0) {
+                    return Err("--port : de 1 à 65535.".to_owned());
+                }
+                Ok(ConnectionOptions {
+                    host: one("--hote")?,
+                    port,
+                    username: one("--identifiant")?,
+                    domain: one("--domaine")?,
+                    key: one("--cle")?,
+                    jump: one("--rebond")?,
+                    host_key: one("--empreinte")?,
+                    password: has("--mot-de-passe"),
+                })
+            };
+            let name = positional.get(1).cloned();
+            let sub_command = match sub {
+                "ssh" | "rdp" => {
+                    let rdp = sub == "rdp";
+                    if rdp {
+                        only(&[
+                            "--hote",
+                            "--port",
+                            "--identifiant",
+                            "--domaine",
+                            "--rebond",
+                            "--empreinte",
+                            "--mot-de-passe",
+                            "--casier",
+                            "--tag",
+                        ])?;
+                    } else {
+                        only(&[
+                            "--hote",
+                            "--port",
+                            "--identifiant",
+                            "--cle",
+                            "--rebond",
+                            "--empreinte",
+                            "--mot-de-passe",
+                            "--casier",
+                            "--tag",
+                        ])?;
+                    }
+                    let options = options()?;
+                    if options.host.is_none() {
+                        return Err(format!("« connexion {sub} » attend --hote H."));
+                    }
+                    ConnectionCommand::Create {
+                        rdp,
+                        name: name.ok_or_else(|| format!("« connexion {sub} » attend le NOM."))?,
+                        options,
+                        locker: one("--casier")?,
+                        tags: all("--tag"),
+                    }
+                }
+                "voir" => {
+                    only(&["--id"])?;
+                    let id = one("--id")?;
+                    if name.is_some() == id.is_some() {
+                        return Err(
+                            "« connexion voir » attend un NOM ou --id ID, l'un des deux.".into(),
+                        );
+                    }
+                    ConnectionCommand::Show { name, id }
+                }
+                "modifier" => {
+                    only(&[
+                        "--hote",
+                        "--port",
+                        "--identifiant",
+                        "--domaine",
+                        "--cle",
+                        "--rebond",
+                        "--empreinte",
+                        "--mot-de-passe",
+                        "--id",
+                        "--titre",
+                        "--effacer",
+                    ])?;
+                    let id = one("--id")?;
+                    if name.is_some() == id.is_some() {
+                        return Err(
+                            "« connexion modifier » attend un NOM ou --id ID, l'un des deux."
+                                .into(),
+                        );
+                    }
+                    let options = options()?;
+                    let title = one("--titre")?;
+                    let clear = all("--effacer");
+                    if options == ConnectionOptions::default()
+                        && title.is_none()
+                        && clear.is_empty()
+                    {
+                        return Err("« connexion modifier » : rien à modifier.".into());
+                    }
+                    ConnectionCommand::Update {
+                        name,
+                        id,
+                        options,
+                        title,
+                        clear,
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "sous-commande de « connexion » inconnue.\n\n{USAGE}"
+                    ))
+                }
+            };
+            Command::Connection(sub_command)
+        }
+        "cle-ssh" => {
+            max_positional(3)?;
+            let usage = "« cle-ssh » attend ajouter NOM FICHIER.";
+            match (
+                positional.first().map(String::as_str),
+                positional.get(1),
+                positional.get(2),
+            ) {
+                (Some("ajouter"), Some(name), Some(file)) => Command::SshKeyAdd(SshKeyAdd {
+                    name: name.clone(),
+                    file: PathBuf::from(file),
+                    public: one("--publique")?.map(PathBuf::from),
+                    username: one("--identifiant")?,
+                    passphrase: has("--phrase"),
+                    locker: one("--casier")?,
+                    tags: all("--tag"),
+                }),
+                _ => return Err(usage.to_owned()),
             }
         }
         "serveur" => {
@@ -1240,6 +1484,150 @@ mod tests {
                 kdf: Some((65536, 3, 1))
             }
         );
+    }
+
+    #[test]
+    fn parses_connection_commands() {
+        assert_eq!(
+            p(&[
+                "connexion",
+                "ssh",
+                "Serveur web",
+                "--hote",
+                "web-01.exemple.test",
+                "--port",
+                "2222",
+                "--identifiant",
+                "admin",
+                "--cle",
+                "Clé de déploiement",
+                "--rebond",
+                "Bastion Hornn",
+                "--mot-de-passe",
+                "--tag",
+                "prod",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Create {
+                rdp: false,
+                name: "Serveur web".into(),
+                options: ConnectionOptions {
+                    host: Some("web-01.exemple.test".into()),
+                    port: Some(2222),
+                    username: Some("admin".into()),
+                    key: Some("Clé de déploiement".into()),
+                    jump: Some("Bastion Hornn".into()),
+                    password: true,
+                    ..ConnectionOptions::default()
+                },
+                locker: None,
+                tags: vec!["prod".into()],
+            })
+        );
+        assert_eq!(
+            p(&[
+                "connexion",
+                "rdp",
+                "Poste",
+                "--hote",
+                "10.0.0.12",
+                "--domaine",
+                "EXEMPLE",
+                "--casier",
+                "Ops",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Create {
+                rdp: true,
+                name: "Poste".into(),
+                options: ConnectionOptions {
+                    host: Some("10.0.0.12".into()),
+                    domain: Some("EXEMPLE".into()),
+                    ..ConnectionOptions::default()
+                },
+                locker: Some("Ops".into()),
+                tags: vec![],
+            })
+        );
+        assert_eq!(
+            p(&["connexion", "voir", "--id", "00ff"]).unwrap().command,
+            Command::Connection(ConnectionCommand::Show {
+                name: None,
+                id: Some("00ff".into()),
+            })
+        );
+        assert_eq!(
+            p(&[
+                "connexion",
+                "modifier",
+                "Poste",
+                "--titre",
+                "Poste 2",
+                "--effacer",
+                "port",
+                "--effacer",
+                "rebond",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Update {
+                name: Some("Poste".into()),
+                id: None,
+                options: ConnectionOptions::default(),
+                title: Some("Poste 2".into()),
+                clear: vec!["port".into(), "rebond".into()],
+            })
+        );
+        assert_eq!(
+            p(&["cle-ssh", "ajouter", "Clé", "id_ed25519", "--phrase"])
+                .unwrap()
+                .command,
+            Command::SshKeyAdd(SshKeyAdd {
+                name: "Clé".into(),
+                file: PathBuf::from("id_ed25519"),
+                public: None,
+                username: None,
+                passphrase: true,
+                locker: None,
+                tags: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_bad_connection_usage() {
+        // A host is required; a port is 1 to 65535; no secret is an argument.
+        assert!(p(&["connexion", "ssh", "x"]).is_err());
+        assert!(p(&["connexion", "ssh", "--hote", "h"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--port", "0"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--port", "65536"]).is_err());
+        assert!(p(&[
+            "connexion",
+            "ssh",
+            "x",
+            "--hote",
+            "h",
+            "--mot-de-passe",
+            "secret"
+        ])
+        .is_err());
+        // Options of the other protocol.
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--domaine", "d"]).is_err());
+        assert!(p(&["connexion", "rdp", "x", "--hote", "h", "--cle", "k"]).is_err());
+        // Creation options that an update does not take, and the reverse.
+        assert!(p(&["connexion", "modifier", "x", "--casier", "c", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "modifier", "x", "--tag", "t"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--titre", "t"]).is_err());
+        assert!(p(&["connexion", "modifier", "x"]).is_err());
+        assert!(p(&["connexion", "modifier", "x", "--id", "00ff", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "voir"]).is_err());
+        assert!(p(&["connexion", "voir", "x", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "ouvrir", "x"]).is_err());
+        assert!(p(&["cle-ssh", "ajouter", "x"]).is_err());
+        assert!(p(&["cle-ssh", "generer", "x", "f"]).is_err());
+        assert!(p(&["cle-ssh", "ajouter", "x", "f", "--mot-de-passe"]).is_err());
     }
 
     #[test]

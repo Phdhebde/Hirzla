@@ -58,3 +58,8 @@ l'anglais dans le code.
 | Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |
 | Paquet de mise à jour | `UpdatePackage` | Fichier signé qui porte une nouvelle version, appliqué sans réseau (ADR 0043) |
 | Identifiant de bloc | `BlockId` | Identifiant opaque d'un contenu scellé, lié aux données associées |
+| Connexion SSH | `SshConnection` | Secret qui décrit un accès SSH : hôte, port, compte, mot de passe ou clé liée, rebond, empreinte de l'hôte (ADR 0067) |
+| Connexion RDP | `RdpConnection` | Secret qui décrit un accès Bureau à distance : hôte, port, domaine, compte, mot de passe, rebond (ADR 0067) |
+| Lien de secret | `SecretLink` | Référence faible d'un secret vers un autre (casier et secret) ; ne donne aucun droit et peut être rompue |
+| Rebond | `Jump` | Connexion SSH par laquelle passe une autre connexion (bastion) |
+| Empreinte de l'hôte | `HostKey` | Empreinte SHA-256 de la clé publique d'un hôte SSH ou du certificat d'un serveur RDP, comparée à la connexion |

@@ -1,9 +1,13 @@
-# Format du coffre `.hirzla` — spécification v1
+# Format du coffre `.hirzla` — spécification v2
 
 - Statut : proposé pour relecture (étape 1 de `PROMPTS.md`)
-- `FORMAT_VERSION` : 1
+- `FORMAT_VERSION` : 2. La version 1 reste lisible (§ 5.3, ADR 0067).
 - Documents liés : `docs/crypto.md` (mécanismes), `docs/sync-protocol.md` (sémantique des
-  opérations, fusion, échanges), ADR 0002, 0005, 0006, 0010.
+  opérations, fusion, échanges), ADR 0002, 0005, 0006, 0010, 0067.
+
+La version 2 ajoute les connexions SSH et RDP : types de secret 7 et 8, champs 50 à 55, lien
+de secret (§ 8.1, § 8.3, § 8.5). Tout le reste est celui de la version 1. Les étiquettes
+`hirzla/v1/…` (§ 2.5) nomment la génération du schéma cryptographique, qui ne change pas.
 
 « Doit » est une obligation. Un lecteur qui rencontre une valeur non conforme **refuse** le
 fichier ou l'objet. Il ne lit jamais « au mieux ».
@@ -447,7 +451,7 @@ de l'en-tête : les anciennes parts n'ouvrent plus rien.
 | Réglage | Valeur | Raison |
 | --- | --- | --- |
 | `application_id` | `0x487A6C61` (« Hzla ») | Reconnaître un coffre sans le déchiffrer |
-| `user_version` | `1` | Doit être égal à `format_version` de l'en-tête |
+| `user_version` | `1` ou `2` | Doit être égal à `format_version` de l'en-tête |
 | `page_size` | 4096 | Identique sur les trois systèmes |
 | `encoding` | UTF-8 | |
 | `auto_vacuum` | `FULL`, fixé avant la première table | Rendre l'espace libéré, limiter les restes |
@@ -569,8 +573,19 @@ Dans cet ordre. Le premier échec arrête l'ouverture.
 8. Desceller l'identité. Vérifier que les clés privées redonnent les clés publiques et que
    le certificat de l'appareil est signé par la clé du membre.
 
-Un fichier dont `format_version` est inconnu est refusé, même plus récent. La migration est
-une opération explicite qui écrit un nouveau fichier.
+Un fichier dont `format_version` est inconnu est refusé, même plus récent. Un `user_version`
+différent du `format_version` de l'en-tête est refusé (`Corrupt`).
+
+**Versions lues et montée de version (ADR 0067).** Un lecteur v2 ouvre les fichiers v1 et v2,
+et ne réécrit rien à l'ouverture. Un coffre neuf est créé en v2. Un coffre v1 reste v1 tant
+qu'aucun objet propre à la v2 n'y est écrit (§ 8.1 : secret de type 7 ou 8). Le rédacteur le
+passe en v2 **dans la transaction** qui écrit le premier : il réécrit `header.body` avec
+`format_version = 2`, `header.auth`, et `user_version`, avec l'opération elle-même. Il n'y a
+pas de retour en v1. Un rédacteur n'écrit jamais d'objet v2 dans un fichier resté v1.
+
+Une migration qui **transformerait** des données existantes reste une opération explicite qui
+écrit un nouveau fichier. La montée v1 → v2 n'en est pas une : elle est additive et ne touche
+que l'en-tête.
 
 ### 5.4 En-tête
 
@@ -579,7 +594,7 @@ une opération explicite qui écrit un nouveau fichier.
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `magic` | `tstr` | `"hirzla"` |
-| 2 | `format_version` | `uint` | `1` |
+| 2 | `format_version` | `uint` | `1` ou `2` (§ 5.3) |
 | 3 | `vault_id` | `ID16` | |
 | 4 | `suite_write` | `uint` | Suite des nouvelles écritures, `1` |
 | 5 | `suites_read` | `array<uint>` | Trié, contient `suite_write` |
@@ -837,8 +852,12 @@ Les deux clés sont toujours présentes. `parents` est vide à la première vers
 | 4 | Clé d'accès | `Passkey` |
 | 5 | Note | `Note` |
 | 6 | Fichier joint | `File` |
+| 7 | Connexion SSH | `SshConnection` |
+| 8 | Connexion RDP | `RdpConnection` |
 
-Le format **stocke** ces six types. Le calcul d'un code TOTP et la signature avec une clé
+Les types 7 et 8 sont propres à la **version 2** (§ 5.3, § 8.5, ADR 0067).
+
+Le format **stocke** ces huit types. Le calcul d'un code TOTP et la signature avec une clé
 d'accès ou une clé SSH suivent l'ADR 0010 (accepté) et la section « Mécanismes
 d'interopérabilité » de `docs/crypto.md`. Ces mécanismes sont hors du périmètre post-quantique.
 
@@ -865,7 +884,8 @@ Règle de fusion par champ, appliquée selon `sync-protocol.md` § 8 :
 | Type | Clé | Où | Nom | Valeur | Fusion | Sensible | Limite |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1, 2, 3, 4 | 10 | `fields` | `username` | `tstr` | R | Non | 1 024 |
-| 1 | 11 | `fields` | `password` | `tstr` | R | Oui | 4 096 |
+| 7, 8 | 10 | `fields` | `username` | `tstr` (texte de connexion, § 8.5) | R | Non | 1 024 |
+| 1, 7, 8 | 11 | `fields` | `password` | `tstr` | R | Oui | 4 096 |
 | 1, 3 | 12 | `fields` | `totp` | `TotpConfig` | R | Oui | |
 | 1, 3 | 2 | `sets` | `urls` | `tstr` (URL absolue) | S | Non | 2 048, 32 éléments |
 | 2 | 20 | `fields` | `private_key` | `bstr` (format `openssh-key-v1`) | R | Oui | 64 Kio |
@@ -881,6 +901,12 @@ Règle de fusion par champ, appliquée selon `sync-protocol.md` § 8 :
 | 4 | 46 | `fields` | `sign_count` | `uint` | **C** | Non | |
 | 4 | 47 | `fields` | `discoverable` | `bool` | R | Non | |
 | 6 | — | `sets` | `attachments` | | S | Oui | Au moins 1 élément |
+| 7, 8 | 50 | `fields` | `host` | `tstr` (hôte, § 8.5) | R | Non | 255, obligatoire |
+| 7, 8 | 51 | `fields` | `port` | `uint` | R | Non | 1 à 65 535 |
+| 8 | 52 | `fields` | `domain` | `tstr` (texte de connexion, § 8.5) | R | Non | 255 |
+| 7 | 53 | `fields` | `ssh_key` | `SecretLink` (§ 8.5) | R | Non | Cible de type 2 |
+| 7, 8 | 54 | `fields` | `jump` | `SecretLink` (§ 8.5) | R | Non | Cible de type 7 |
+| 7, 8 | 55 | `fields` | `host_key` | `tstr` (empreinte, § 8.5) | R | Non | 50 exactement |
 
 Un champ absent du tableau pour un type est interdit dans ce type. `Note` (5) n'a que les
 champs communs : sa valeur est `notes`.
@@ -928,6 +954,45 @@ Chaque morceau est une `SealedBox` :
 L'AAD fixe le rang et le nombre de morceaux : un morceau échangé, retiré ou ajouté est refusé.
 La clé du fichier joint n'est lisible que dans une version scellée du secret. Un fichier joint
 est immuable. Le modifier, c'est retirer l'ancien et en ajouter un nouveau.
+
+### 8.5 Connexions SSH et RDP (v2)
+
+Décision : ADR 0067. Une connexion décrit **où** se connecter et **avec quoi**. Le format la
+stocke ; il ne se connecte à rien et ne calcule aucune empreinte.
+
+| Notion | Règle |
+| --- | --- |
+| Hôte (`host`) | 1 à 255 octets parmi `A-Z a-z 0-9 . - _ :`, sans `-` initial. Nom DNS (international : en A-label), adresse IPv4, ou adresse IPv6 sans crochets ni zone |
+| Port (`port`) | Absent : port par défaut du protocole, 22 pour le type 7, 3389 pour le type 8. Le défaut ne s'écrit pas forcément : une valeur égale au défaut est admise |
+| Texte de connexion (`username`, `domain` des types 7 et 8) | Aucun caractère de contrôle (U+0000 à U+001F, U+007F), pas de `-` initial. L'espace est permise |
+| Empreinte (`host_key`) | `SHA256:` suivi de 43 caractères parmi `A-Z a-z 0-9 + /` (base64 sans bourrage d'un SHA-256) : forme qu'affiche OpenSSH. En SSH, empreinte de la clé publique de l'hôte ; en RDP, empreinte du certificat du serveur |
+
+Ces restrictions empêchent qu'un client qui compose une ligne de commande (`ssh hôte`) y voie
+une valeur du coffre prise pour une option.
+
+`SecretLink` — lien vers un autre secret :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `locker_id` | `ID16` | Casier de la cible, qui peut être un autre casier |
+| 2 | `secret_id` | `ID16` | Secret cible |
+
+Un lien est une **référence faible** :
+
+1. Il ne donne aucun droit. La cible n'est lisible qu'avec la clé de son casier.
+2. Il peut pendre : cible absente, purgée, d'un autre type que celui attendu, ou casier que le
+   lecteur ne détient pas. Par exception à la règle générale de ce document, un lecteur **ne
+   refuse pas** une version pour un lien pendant : la structure du lien est contrôlée, pas sa
+   cible. Il présente le lien comme rompu.
+3. Le rédacteur vérifie, quand il pose un lien, que la cible existe, n'est pas purgée et a le
+   type attendu : 2 pour `ssh_key`, 7 pour `jump`.
+4. `jump` ne désigne pas le secret qui le porte. Une chaîne de rebonds se suit sur 8 sauts au
+   plus. Au-delà, ou sur un cycle (deux écritures concurrentes peuvent en créer un), le lecteur
+   s'arrête et présente la chaîne comme rompue ; le rédacteur refuse d'en créer une.
+5. La fusion traite un lien comme toute valeur de registre (R).
+
+Authentification d'une connexion SSH : `password`, `ssh_key`, les deux, ou aucun (agent ou clé
+hors du coffre). Connexion RDP : `password`.
 
 ## 9. Historique des versions et suppression
 
@@ -997,7 +1062,7 @@ AAD = `CBOR({1: "hirzla/v1/index", 2: vault_id, 3: locker_id})`.
 | 3 | `heads` | `array<OpId>` | Versions de tête : ce qu'il faut desceller pour lire le secret |
 | 4 | `title` | `tstr` | |
 | 5 | `username` | `tstr?` | |
-| 6 | `hosts` | `array<tstr>` | Hôtes des `urls`, trié, sans doublon (règle ci-dessous) |
+| 6 | `hosts` | `array<tstr>` | Hôtes des `urls` et, pour une connexion, son `host` ; trié, sans doublon (règle ci-dessous) |
 | 7 | `tags` | `array<tstr>` | |
 | 8 | `favorite` | `bool` | |
 | 9 | `state` | `uint` | |
@@ -1007,6 +1072,10 @@ Règle des `hosts` : chaque URL est analysée selon le *URL Standard* du WHATWG 
 ASCII (A-label IDNA, minuscules), entre dans `hosts`. Une URL sans hôte ou qui ne s'analyse
 pas n'y entre pas, mais reste stockée telle quelle dans le secret. Le remplissage automatique
 compare ces hôtes exactement (`modele-de-menace.md`).
+
+Pour une connexion (types 7 et 8, v2), `hosts` contient le champ `host` en minuscules ASCII :
+la recherche trouve une connexion par son hôte. Le remplissage automatique du navigateur ne
+regarde que le type 1 : une connexion n'y est jamais candidate.
 
 L'index ne contient **jamais** de champ sensible (§ 8). La recherche se fait en mémoire, dans
 le noyau, après descellement des fragments. Aucun index n'est lisible sans la clé du poste.
@@ -1099,9 +1168,14 @@ Fichiers dans `crates/hirzla-vault/tests/fixtures/v1/` :
 | `unlock.expected.txt` | Pour la méthode mot de passe : paramètres Argon2id, `vault_id`, `wrapped_device_key` et la `DeviceKey` attendue. Ce calcul est déterministe et se vérifie seul |
 
 Les tests de refus dérivent leurs fichiers du coffre de référence, en mémoire : contenu
-d'opération déplacé vers une autre ligne, fichier tronqué, `format_version = 2`,
+d'opération déplacé vers une autre ligne, fichier tronqué, `format_version = 3`,
 `user_version` différent, table en trop, déclencheur, vue, mode WAL, bourrage non nul,
 `suites_read` modifié, paramètres Argon2id sous le plancher.
+
+Ces fichiers sont en **version 1** et le restent : ils prouvent qu'un lecteur v2 lit la v1.
+Les tests de la version 2 en partent : ouverture sans réécriture, montée en v2 à la première
+connexion écrite (en-tête, `user_version`, relecture), absence de montée quand l'écriture
+échoue, refus d'un `user_version` différent de l'en-tête et d'un `format_version = 3`.
 
 L'extension `.hirzla.fixture` évite que la protection de secrets de l'intégration continue
 (fichiers `*.hirzla` suivis) bloque les fichiers de référence.
@@ -1201,6 +1275,11 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
     contre les en-têtes du journal, avec reconstruction.
 
+26. **Version 2, connexions SSH et RDP** (ADR 0067) : montée de version en place et à la
+    première écriture, plutôt qu'à l'ouverture ou par copie ; une seule empreinte par hôte ;
+    rebond limité à une connexion SSH ; alphabet de `host` sans zone IPv6. La préférence
+    « ouvrir avec » et l'usage de la clé par un agent SSH ne sont pas dans le format.
+
 ## 15. Fichier annexe du mode Serveur (v4)
 
 Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
@@ -1212,7 +1291,7 @@ Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les 
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
 garde l'état du mode Serveur dans un fichier **à côté** du coffre : `<chemin du coffre>.serveur`
 (par exemple `coffre.hirzla.serveur`). Ce fichier ne change pas le format du coffre :
-`format_version` reste 1. Sans serveur rattaché, il n'existe pas.
+il n'a pas d'effet sur `format_version`. Sans serveur rattaché, il n'existe pas.
 
 ### 15.1 Enveloppe
 

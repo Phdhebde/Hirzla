@@ -1,6 +1,7 @@
 //! Secret versions (`SecretBody`, § 7.3), locker metadata (`LockerBody`, § 7.4), the field
-//! schema of the six secret types (§ 8), the merge rules (`sync-protocol.md` § 8) and the
-//! index entries (§ 10).
+//! schema of the eight secret types (§ 8), the merge rules (`sync-protocol.md` § 8) and the
+//! index entries (§ 10). Types 7 and 8 (SSH and RDP connections) belong to format version 2
+//! (§ 8.5, ADR 0067).
 
 use std::collections::BTreeMap;
 
@@ -27,18 +28,50 @@ pub enum SecretType {
     Note = 5,
     /// File.
     File = 6,
+    /// SSH connection (format version 2).
+    SshConnection = 7,
+    /// RDP connection (format version 2).
+    RdpConnection = 8,
 }
 
 impl SecretType {
     /// All types.
-    pub const ALL: [SecretType; 6] = [
+    pub const ALL: [SecretType; 8] = [
         SecretType::Password,
         SecretType::SshKey,
         SecretType::Totp,
         SecretType::Passkey,
         SecretType::Note,
         SecretType::File,
+        SecretType::SshConnection,
+        SecretType::RdpConnection,
     ];
+
+    /// The first format version that knows this type (`docs/format.md` § 5.3).
+    #[must_use]
+    pub fn min_format_version(self) -> u16 {
+        if self.is_connection() {
+            2
+        } else {
+            1
+        }
+    }
+
+    /// Whether the type is an SSH or RDP connection (§ 8.5).
+    #[must_use]
+    pub fn is_connection(self) -> bool {
+        matches!(self, SecretType::SshConnection | SecretType::RdpConnection)
+    }
+
+    /// Port used when a connection carries none (§ 8.5); `None` for the other types.
+    #[must_use]
+    pub fn default_port(self) -> Option<u16> {
+        match self {
+            SecretType::SshConnection => Some(22),
+            SecretType::RdpConnection => Some(3389),
+            _ => None,
+        }
+    }
 
     fn from_u64(n: u64) -> Result<Self, CborError> {
         SecretType::ALL
@@ -85,10 +118,22 @@ pub enum Field {
     SignCount = 46,
     /// Discoverable passkey.
     Discoverable = 47,
+    /// Host of a connection.
+    Host = 50,
+    /// Port of a connection.
+    Port = 51,
+    /// Domain of an RDP connection.
+    Domain = 52,
+    /// SSH key of an SSH connection (link to a secret of type 2).
+    SshKeyLink = 53,
+    /// Jump host of a connection (link to an SSH connection).
+    Jump = 54,
+    /// Host key fingerprint of a connection.
+    HostKey = 55,
 }
 
 impl Field {
-    const ALL: [Field; 17] = [
+    const ALL: [Field; 23] = [
         Field::Title,
         Field::Notes,
         Field::Favorite,
@@ -106,6 +151,12 @@ impl Field {
         Field::Alg,
         Field::SignCount,
         Field::Discoverable,
+        Field::Host,
+        Field::Port,
+        Field::Domain,
+        Field::SshKeyLink,
+        Field::Jump,
+        Field::HostKey,
     ];
 
     fn from_u64(n: u64) -> Option<Self> {
@@ -147,6 +198,51 @@ enum Kind {
     Uint,
     Alg,
     Totp,
+    /// Host name or address of a connection (§ 8.5).
+    Host,
+    /// Port, 1 to 65 535.
+    Port,
+    /// User name or domain of a connection: no control character, no leading `-` (§ 8.5).
+    Login(usize),
+    /// Link to another secret (§ 8.5).
+    Link,
+    /// Host key fingerprint, `SHA256:` and 43 base64 characters (§ 8.5).
+    HostKey,
+}
+
+/// Longest host of a connection, in bytes.
+pub const MAX_HOST: usize = 255;
+/// Prefix of a host key fingerprint.
+const HOST_KEY_PREFIX: &str = "SHA256:";
+/// Characters of an unpadded base64 SHA-256 after the prefix.
+const HOST_KEY_DIGEST_CHARS: usize = 43;
+
+/// Whether `s` is an acceptable host of a connection (§ 8.5): 1 to 255 bytes among
+/// `A-Z a-z 0-9 . - _ :`, not starting with `-`.
+#[must_use]
+pub fn is_valid_host(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= MAX_HOST
+        && !s.starts_with('-')
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b':'))
+}
+
+/// Whether `s` is an acceptable user name or domain of a connection (§ 8.5).
+#[must_use]
+pub fn is_valid_login(s: &str) -> bool {
+    !s.starts_with('-') && !s.chars().any(char::is_control)
+}
+
+/// Whether `s` has the form of a host key fingerprint (§ 8.5). The digest is not decoded:
+/// only its alphabet and length are checked.
+#[must_use]
+pub fn is_valid_host_key(s: &str) -> bool {
+    s.strip_prefix(HOST_KEY_PREFIX).is_some_and(|d| {
+        d.len() == HOST_KEY_DIGEST_CHARS
+            && d.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/'))
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -179,7 +275,14 @@ fn field_spec(t: SecretType, f: Field) -> Option<FieldSpec> {
         Field::Username if matches!(t, T::Password | T::SshKey | T::Totp | T::Passkey) => {
             s(Kind::Text(1024), false)
         }
-        Field::Password if t == T::Password => s(Kind::Text(4096), true),
+        Field::Username if t.is_connection() => s(Kind::Login(1024), false),
+        Field::Password if t == T::Password || t.is_connection() => s(Kind::Text(4096), true),
+        Field::Host if t.is_connection() => s(Kind::Host, false),
+        Field::Port if t.is_connection() => s(Kind::Port, false),
+        Field::Domain if t == T::RdpConnection => s(Kind::Login(255), false),
+        Field::SshKeyLink if t == T::SshConnection => s(Kind::Link, false),
+        Field::Jump if t.is_connection() => s(Kind::Link, false),
+        Field::HostKey if t.is_connection() => s(Kind::HostKey, false),
         Field::Totp if matches!(t, T::Password | T::Totp) => s(Kind::Totp, true),
         Field::SshPrivateKey if t == T::SshKey => s(Kind::Bytes(64 * 1024), true),
         Field::SshPublicKey if t == T::SshKey => s(Kind::Text(16 * 1024), false),
@@ -242,6 +345,7 @@ fn required_fields(t: SecretType) -> &'static [Field] {
             Field::CredentialId,
             Field::PasskeyPrivateKey,
         ],
+        SecretType::SshConnection | SecretType::RdpConnection => &[Field::Title, Field::Host],
         _ => &[Field::Title],
     }
 }
@@ -288,6 +392,15 @@ pub struct AttachmentRef {
     pub chunks: u64,
 }
 
+/// Link to another secret (§ 8.5): a weak reference, which grants nothing and may dangle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SecretLink {
+    /// Locker of the target.
+    pub locker: Id16,
+    /// Target secret.
+    pub secret: Id16,
+}
+
 /// Value of a field.
 #[derive(Clone, PartialEq, Eq)]
 pub enum FieldValue {
@@ -303,6 +416,8 @@ pub enum FieldValue {
     Alg(i64),
     /// TOTP configuration.
     Totp(TotpConfig),
+    /// Link to another secret.
+    Link(SecretLink),
 }
 
 impl FieldValue {
@@ -366,6 +481,10 @@ fn field_to_value(v: &FieldValue) -> Value {
             }
             Value::map(e)
         }
+        FieldValue::Link(l) => Value::map(vec![
+            (1, Value::bytes(&l.locker)),
+            (2, Value::bytes(&l.secret)),
+        ]),
     }
 }
 
@@ -401,6 +520,35 @@ fn field_from_value(kind: Kind, v: &Value) -> Result<FieldValue, CborError> {
                     .transpose()?,
             })
         }
+        Kind::Host => {
+            let t = text_max(v, MAX_HOST)?;
+            if !is_valid_host(t) {
+                return Err(CborError::Malformed);
+            }
+            FieldValue::Text(Zeroizing::new(t.to_owned()))
+        }
+        Kind::Port => FieldValue::Uint(uint_in(v, 1..=u64::from(u16::MAX))?),
+        Kind::Login(max) => {
+            let t = text_max(v, max)?;
+            if !is_valid_login(t) {
+                return Err(CborError::Malformed);
+            }
+            FieldValue::Text(Zeroizing::new(t.to_owned()))
+        }
+        Kind::Link => {
+            let f = Fields::new(v, &[1, 2])?;
+            FieldValue::Link(SecretLink {
+                locker: fixed::<16>(f.req(1)?)?,
+                secret: fixed::<16>(f.req(2)?)?,
+            })
+        }
+        Kind::HostKey => {
+            let t = text_max(v, HOST_KEY_PREFIX.len() + HOST_KEY_DIGEST_CHARS)?;
+            if !is_valid_host_key(t) {
+                return Err(CborError::Malformed);
+            }
+            FieldValue::Text(Zeroizing::new(t.to_owned()))
+        }
     })
 }
 
@@ -417,6 +565,11 @@ fn kind_matches(kind: Kind, v: &FieldValue) -> bool {
                 && (15..=300).contains(&t.period)
                 && t.issuer.as_ref().is_none_or(|i| i.len() <= 256)
         }
+        (Kind::Host, FieldValue::Text(t)) => is_valid_host(t),
+        (Kind::Port, FieldValue::Uint(n)) => (1..=u64::from(u16::MAX)).contains(n),
+        (Kind::Login(max), FieldValue::Text(t)) => t.len() <= max && is_valid_login(t),
+        (Kind::Link, FieldValue::Link(_)) => true,
+        (Kind::HostKey, FieldValue::Text(t)) => is_valid_host_key(t),
         _ => false,
     }
 }
@@ -1237,6 +1390,12 @@ impl IndexEntry {
             .iter()
             .filter_map(|u| url_host(u))
             .collect();
+        if body.secret_type.is_connection() {
+            // § 10: a connection is found by its host, in lower case.
+            if let Some(h) = text(Field::Host) {
+                hosts.push(h.to_ascii_lowercase());
+            }
+        }
         hosts.sort();
         hosts.dedup();
         let mut tags = set_texts(SetKind::Tags);

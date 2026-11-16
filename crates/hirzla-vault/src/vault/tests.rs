@@ -671,8 +671,8 @@ fn format_and_structure_checks() {
     rewrite_header(&p, |h| {
         let mut body = h.encode().unwrap();
         // key 2 (format_version) is the byte after "02" following the magic text.
-        let at = body.windows(2).position(|w| w == [0x02, 0x01]).unwrap();
-        body[at + 1] = 0x02;
+        let at = body.windows(2).position(|w| w == [0x02, 0x02]).unwrap();
+        body[at + 1] = 0x03;
         body
     });
     assert_eq!(
@@ -680,11 +680,15 @@ fn format_and_structure_checks() {
         Some(VaultError::UnsupportedVersion)
     );
     let (_d, p) = make();
-    tamper(&p, "PRAGMA user_version = 2;");
+    tamper(&p, "PRAGMA user_version = 3;");
     assert_eq!(
         Vault::open(&p, PASSWORD).err(),
         Some(VaultError::UnsupportedVersion)
     );
+    // A readable `user_version` that is not the one of the header.
+    let (_d, p) = make();
+    tamper(&p, "PRAGMA user_version = 1;");
+    assert_eq!(Vault::open(&p, PASSWORD).err(), Some(VaultError::Corrupt));
 
     // Not a vault.
     let (_d, p) = make();
@@ -1200,6 +1204,8 @@ fn reference_unlock_is_deterministic() {
     .unwrap();
     let vault_id: Id16 = hex(&r["vault_id"]).try_into().unwrap();
     let header = Header {
+        // The reference files are frozen in version 1.
+        format_version: 1,
         vault_id,
         suite_write: 1,
         suites_read: vec![1],
@@ -1220,11 +1226,17 @@ fn reference_unlock_is_deterministic() {
     assert_eq!(decode_header(&body).unwrap(), header);
 }
 
-/// Produces the reference files. Run once, by hand, only for a deliberate format change:
-/// `cargo test -p hirzla-vault generate_reference_files -- --ignored`.
+/// Produced the format v1 reference files, once, by hand. They stay frozen as the
+/// compatibility and migration test of later versions (ADR 0067): this build writes v2, so
+/// the generator refuses to run.
 #[test]
 #[ignore = "writes the frozen reference files"]
 fn generate_reference_files() {
+    assert_eq!(
+        crate::FORMAT_VERSION,
+        1,
+        "the v1 reference files are frozen (ADR 0067)"
+    );
     let dir = Path::new(FIXTURE_DIR);
     std::fs::create_dir_all(dir).unwrap();
     let tmp = tempdir();

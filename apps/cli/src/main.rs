@@ -8,6 +8,7 @@
 
 mod args;
 mod clipboard;
+mod connections;
 mod selfmode;
 mod server;
 mod term;
@@ -129,6 +130,8 @@ fn type_name(t: u64) -> &'static str {
         4 => "clé d'accès",
         5 => "note",
         6 => "fichier",
+        7 => "connexion SSH",
+        8 => "connexion RDP",
         _ => "?",
     }
 }
@@ -278,7 +281,7 @@ fn print_entries(entries: &[ListEntry]) {
         let trash = if e.state == 1 { "  (corbeille)" } else { "" };
         let _ = writeln!(
             out,
-            "{}  {:<12}  {}  {}{}",
+            "{}  {:<13}  {}  {}{}",
             hex(&e.id[..4]),
             type_name(e.secret_type),
             e.title.as_str(),
@@ -588,6 +591,8 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Passwd => selfmode::change_password(&session),
         Command::Settings(change) => selfmode::settings(&session, change),
         Command::Recovery(what) => selfmode::recovery(&session, what),
+        Command::Connection(command) => connections::run(&session, command),
+        Command::SshKeyAdd(command) => connections::add_ssh_key(&session, command),
         Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }
