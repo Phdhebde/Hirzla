@@ -388,6 +388,9 @@ impl Core {
             Request::Generate { length, classes } => {
                 Ok(Reply::Generated(generator::generate(length, classes)?))
             }
+            Request::GenerateWith { spec } => {
+                Ok(Reply::GeneratedWith(generator::generate_with(&spec)?))
+            }
             Request::Init { password, kdf } => self.init(&password, kdf),
             Request::Unlock { password } => self.unlock(&password),
             Request::Lock => {

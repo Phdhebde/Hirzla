@@ -2,7 +2,7 @@
 // The open vault: lockers, list of secrets, search and the record of one secret.
 
 import { api } from "./api.js";
-import { announce, byId, h, mask } from "./dom.js";
+import { announce, byId, h, icon, mask } from "./dom.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
 /** @typedef {import("./api.js").Locker} Locker */
@@ -17,6 +17,20 @@ const TYPE_NAMES = /** @type {Record<string, string>} */ ({
   file: "Fichier",
   unknown: "Secret",
 });
+
+/** Icon of each type of secret (sprite of index.html). */
+const TYPE_ICONS = /** @type {Record<string, string>} */ ({
+  password: "identifiant",
+  note: "note",
+  ssh_key: "cle",
+  totp: "totp",
+  passkey: "cle",
+  file: "fichier",
+  unknown: "secret",
+});
+
+/** Types that have their own filter in the navigation. */
+const TYPE_FILTERS = ["password", "ssh_key", "note"];
 
 const FIELD_LABELS = /** @type {Record<string, string>} */ ({
   title: "titre",
@@ -108,6 +122,21 @@ export class VaultView {
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
     byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
     byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    // The menu of the record closes once an action is chosen, or on Escape.
+    const menu = /** @type {HTMLDetailsElement} */ (byId("fiche-menu"));
+    menu.addEventListener("click", (e) => {
+      if (/** @type {HTMLElement} */ (e.target).closest(".menu-action")) menu.open = false;
+    });
+    menu.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && menu.open) {
+        e.stopPropagation();
+        menu.open = false;
+        menu.querySelector("summary")?.focus();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (menu.open && !menu.contains(/** @type {Node} */ (e.target))) menu.open = false;
+    });
     byId("liste-membres").addEventListener("click", () => {
       const id = this.lockerFilter();
       const locker = this.lockers.find((l) => l.id === id);
@@ -141,6 +170,28 @@ export class VaultView {
     }
   }
 
+  /** Icon name of a type of secret. @param {string} kind @returns {string} */
+  static iconOf(kind) {
+    return TYPE_ICONS[kind] ?? TYPE_ICONS.unknown;
+  }
+
+  /**
+   * Shows the record of a secret from anywhere (quick access): back to the whole vault, no
+   * search, this secret selected.
+   * @param {Entry} entry
+   */
+  async reveal(entry) {
+    this.filter = "tous";
+    this.query = "";
+    /** @type {HTMLInputElement} */ (byId("recherche")).value = "";
+    this.selectedId = null;
+    await this.refresh();
+    if (this.shown.some((e) => e.id === entry.id)) {
+      this.select(entry.id, true);
+      byId("fiche-titre").focus();
+    }
+  }
+
   /** @param {string} filter */
   setFilter(filter) {
     this.filter = filter;
@@ -162,6 +213,11 @@ export class VaultView {
     byId("liste-casiers").replaceChildren();
     byId("liste-casier-partage").hidden = true;
     byId("fiche-champs").replaceChildren();
+    byId("fiche-principales").replaceChildren();
+    byId("fiche-icone").replaceChildren();
+    for (const id of ["compte-tous", "compte-favoris", ...TYPE_FILTERS.map((t) => `compte-${t}`)]) {
+      byId(id).textContent = "";
+    }
     byId("fiche-titre").textContent = "";
     byId("fiche-contenu").hidden = true;
     byId("fiche-vide").hidden = false;
@@ -182,7 +238,19 @@ export class VaultView {
       return;
     }
     this.renderLockers();
+    this.renderCounts();
     this.renderList();
+  }
+
+  /** Counts of the navigation: only when the whole vault is listed (no search, no trash). */
+  renderCounts() {
+    if (this.query || this.filter === "corbeille") return;
+    const live = this.entries.filter((e) => !e.trash);
+    byId("compte-tous").textContent = String(live.length);
+    byId("compte-favoris").textContent = String(live.filter((e) => e.favorite).length);
+    for (const t of TYPE_FILTERS) {
+      byId(`compte-${t}`).textContent = String(live.filter((e) => e.kind === t).length);
+    }
   }
 
   renderLockers() {
@@ -195,8 +263,8 @@ export class VaultView {
           "button",
           { class: "nav-lien", type: "button", "data-vue": "secrets", "data-filtre": `casier:${l.id}` },
           [
-            h("span", { class: "nom-casier", text: l.name }),
-            l.personal ? null : h("span", { class: "marque-partage", text: "Partagé", "aria-hidden": "true" }),
+            l.personal ? icon("casier") : icon("membres", "marque-partage"),
+            h("span", { class: "nav-nom nom-casier", text: l.name }),
             shared && !shared.access ? h("span", { class: "forme forme-triangle", "aria-hidden": "true" }) : null,
             h("span", { class: "compte", text: String(count), "aria-hidden": "true" }),
           ],
@@ -231,6 +299,9 @@ export class VaultView {
   filterTitle() {
     if (this.filter === "favoris") return "Favoris";
     if (this.filter === "corbeille") return "Corbeille";
+    if (this.filter === "type:password") return "Mots de passe";
+    if (this.filter === "type:ssh_key") return "Clés SSH";
+    if (this.filter === "type:note") return "Notes";
     if (this.filter.startsWith("casier:")) {
       const id = this.filter.slice("casier:".length);
       return this.lockers.find((l) => l.id === id)?.name ?? "Casier";
@@ -244,13 +315,16 @@ export class VaultView {
       if (f === "corbeille") return e.trash;
       if (e.trash) return false;
       if (f === "favoris") return e.favorite;
+      if (f.startsWith("type:")) return e.kind === f.slice("type:".length);
       if (f.startsWith("casier:")) return e.locker === f.slice("casier:".length);
       return true;
     });
     byId("liste-titre").textContent = this.filterTitle();
     this.renderLockerHeader();
     const n = this.shown.length;
-    byId("liste-compte").textContent = n === 0 ? "" : n === 1 ? "1 secret" : `${n} secrets`;
+    const count = byId("liste-compte");
+    count.textContent = n === 0 ? "" : String(n);
+    count.setAttribute("aria-label", n === 1 ? "1 secret" : `${n} secrets`);
     const empty = byId("liste-vide");
     if (n === 0) {
       empty.textContent = this.query
@@ -269,9 +343,11 @@ export class VaultView {
           "li",
           { id: `opt-${e.id}`, class: "element", role: "option", "aria-selected": e.id === this.selectedId ? "true" : "false" },
           [
-            h("span", { class: "element-pastille", "aria-hidden": "true", text: initial(e.title) }),
+            h("span", { class: "vignette", "aria-hidden": "true" }, [icon(TYPE_ICONS[e.kind] ?? TYPE_ICONS.unknown)]),
             h("span", { class: "element-titre", text: e.title }),
-            e.favorite ? h("span", { class: "element-favori", text: "★", title: "Favori" }) : h("span"),
+            e.favorite
+              ? h("span", { class: "element-favori", title: "Favori" }, [icon("favori", "icone-pleine")])
+              : h("span"),
             h("span", { class: "element-sous", text: subtitle(e) }),
           ],
         ),
@@ -338,17 +414,46 @@ export class VaultView {
     const fields = byId("fiche-champs");
     fields.replaceChildren();
     if (!entry) return;
-    byId("fiche-type").textContent = TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown;
+    const locker = this.lockers.find((l) => l.id === entry.locker);
+    byId("fiche-type").textContent =
+      (TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown) +
+      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "");
+    byId("fiche-icone").replaceChildren(icon(TYPE_ICONS[entry.kind] ?? TYPE_ICONS.unknown));
     byId("fiche-titre").textContent = entry.title;
+    /** @type {HTMLDetailsElement} */ (byId("fiche-menu")).open = false;
     const fav = byId("fiche-favori");
     fav.setAttribute("aria-pressed", entry.favorite ? "true" : "false");
-    fav.textContent = entry.favorite ? "Favori" : "Ajouter aux favoris";
+    fav.setAttribute("aria-label", entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris");
+    fav.title = entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris";
     fav.hidden = entry.trash;
     byId("fiche-modifier").hidden = entry.trash || !["password", "note"].includes(entry.kind);
-    byId("fiche-supprimer").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
+    byId("fiche-supprimer-texte").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
     byId("fiche-restaurer").hidden = !entry.trash;
 
     const ref = { locker: entry.locker, id: entry.id };
+    // The most frequent action of each type comes first, above the fields.
+    const main = byId("fiche-principales");
+    main.replaceChildren();
+    const quick = /** @type {Record<string, [FieldName, string]>} */ ({
+      password: ["password", "Mot de passe"],
+      note: ["notes", "Contenu"],
+      ssh_key: ["ssh_public_key", "Clé publique"],
+    })[entry.kind];
+    if (quick && !entry.trash) {
+      const [field, label] = quick;
+      const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
+        icon("copier"),
+        `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
+      ]);
+      b.addEventListener("click", () => void this.copy(ref, field, label));
+      main.append(b);
+      if (entry.kind === "password" && entry.username) {
+        const u = h("button", { class: "bouton bouton-secondaire", type: "button" }, [icon("copier"), "Copier l'identifiant"]);
+        u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
+        main.append(u);
+      }
+    }
+    main.hidden = main.childElementCount === 0;
     if (entry.trash) {
       fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
     }
@@ -377,8 +482,7 @@ export class VaultView {
    * @param {FieldName} field
    */
   plainField(label, value, ref, field) {
-    const copy = h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Copier" });
-    copy.setAttribute("aria-label", `Copier : ${label.toLowerCase()}`);
+    const copy = iconButton("copier", `Copier : ${label.toLowerCase()}`);
     copy.addEventListener("click", () => void this.copy(ref, field, label));
     return h("div", { class: "champ-fiche" }, [
       h("dt", { text: label }),
@@ -401,14 +505,11 @@ export class VaultView {
       h("span", { class: "forme forme-carre", "aria-hidden": "true" }),
       "Scellé",
     ]);
-    const reveal = /** @type {HTMLButtonElement} */ (
-      h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Révéler", "aria-pressed": "false" })
-    );
-    reveal.setAttribute("aria-label", `Révéler : ${label.toLowerCase()}`);
-    const copy = /** @type {HTMLButtonElement} */ (
-      h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Copier" })
-    );
-    copy.setAttribute("aria-label", `Copier : ${label.toLowerCase()}`);
+    const revealLabel = `Révéler : ${label.toLowerCase()}`;
+    const hideLabel = `Masquer : ${label.toLowerCase()}`;
+    const reveal = iconButton("oeil", revealLabel);
+    reveal.setAttribute("aria-pressed", "false");
+    const copy = iconButton("copier", `Copier : ${label.toLowerCase()}`);
 
     let timer = 0;
     let left = 0;
@@ -418,7 +519,7 @@ export class VaultView {
       value.textContent = mask();
       value.classList.add("valeur-masquee");
       countdown.textContent = "";
-      reveal.textContent = "Révéler";
+      setIconButton(reveal, "oeil", revealLabel);
       reveal.setAttribute("aria-pressed", "false");
       shape.className = "etat etat-scelle";
       shape.replaceChildren(h("span", { class: "forme forme-carre", "aria-hidden": "true" }), "Scellé");
@@ -447,7 +548,7 @@ export class VaultView {
       value.textContent = text;
       text = "";
       value.classList.remove("valeur-masquee");
-      reveal.textContent = "Masquer";
+      setIconButton(reveal, "oeil-barre", hideLabel);
       reveal.setAttribute("aria-pressed", "true");
       shape.className = "etat etat-ouvert";
       shape.replaceChildren(h("span", { class: "forme forme-rond", "aria-hidden": "true" }), "Descellé");
@@ -462,8 +563,8 @@ export class VaultView {
     });
     copy.addEventListener("click", () => void this.copy(ref, field, label));
     return h("div", { class: "champ-fiche" }, [
-      h("dt", {}, [h("span", { class: "libelle-champ", text: label }), shape]),
-      h("dd", {}, [value, countdown]),
+      h("dt", { text: label }),
+      h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, countdown]), shape]),
       h("dd", { class: "actions-champ" }, [reveal, copy]),
     ]);
   }
@@ -662,10 +763,27 @@ export class VaultView {
   }
 }
 
-/** @param {string} title */
-function initial(title) {
-  const c = title.trim().charAt(0);
-  return c ? c.toLocaleUpperCase("fr") : "?";
+/**
+ * A button that shows only an icon; its name is its `aria-label` and its tooltip.
+ * @param {string} name  Icon.
+ * @param {string} label
+ * @returns {HTMLButtonElement}
+ */
+function iconButton(name, label) {
+  const b = /** @type {HTMLButtonElement} */ (h("button", { class: "bouton bouton-icone bouton-discret", type: "button" }));
+  setIconButton(b, name, label);
+  return b;
+}
+
+/**
+ * @param {HTMLButtonElement} b
+ * @param {string} name
+ * @param {string} label
+ */
+function setIconButton(b, name, label) {
+  b.replaceChildren(icon(name));
+  b.setAttribute("aria-label", label);
+  b.title = label;
 }
 
 /** @param {Entry} e */

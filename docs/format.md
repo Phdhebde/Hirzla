@@ -135,6 +135,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/locker-key` | Contexte KEM, enveloppe de clé de casier | § 3.3 |
 | `hirzla/v1/device-cert` | Signature d'un certificat d'appareil | § 3.6 |
 | `hirzla/v1/device-revoke` | Signature d'une révocation d'appareil | § 3.6 |
+| `hirzla/v1/member-profile` | Signature d'un profil de membre (nom affiché) | § 3.7 |
 | `hirzla/v1/contacts` | AAD, clés épinglées | § 5.9 |
 | `hirzla/v1/approval` | Signature d'un accord de validation à plusieurs | `sync-protocol.md` |
 | `hirzla/v1/op` | Signature d'une opération | § 7.1 |
@@ -174,7 +175,7 @@ cet encodage binaire**. En cas d'écart, `docs/crypto.md` fait foi.
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `member` | `ID16` | |
-| 2 | `sig` | `SigPublicKey` | Clé du membre. Ne signe que des certificats et des révocations d'appareil |
+| 2 | `sig` | `SigPublicKey` | Clé du membre. Ne signe que des certificats d'appareil, des révocations d'appareil et les profils du membre (§ 3.7) |
 
 Empreinte d'un membre : les 20 premiers caractères de `base32(key_id(sig))` (RFC 4648, sans
 bourrage). C'est elle que les utilisateurs comparent hors bande (§ 5.9).
@@ -250,7 +251,7 @@ l'étiquette. Chaque clé a un rôle et ne signe que ses domaines (ADR 0011) :
 
 | Clé | Étiquettes |
 | --- | --- |
-| Clé du membre | `device-cert`, `device-revoke` |
+| Clé du membre | `device-cert`, `device-revoke`, `member-profile` |
 | Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol` |
 | Clé du serveur | `server-auth`, `receipt`, `keylog-head` |
 
@@ -319,6 +320,35 @@ contrôles ci-dessus.
 
 Un certificat et une révocation se vérifient seuls, avec la seule `MemberKeys` du membre.
 Une révocation est définitive : un `device_id` révoqué ne redevient jamais valide.
+
+### 3.7 Profil de membre (`MemberProfile`)
+
+Décision : ADR 0069. Le **nom affiché** qu'un membre se donne, signé par sa clé de membre.
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `member` | `ID16` | |
+| 2 | `seq` | `uint` | ≥ 1 ; croît strictement à chaque profil du membre |
+| 3 | `name` | `tstr` | 0 à 64 octets UTF-8 ; vide : le membre retire son nom |
+| 4 | `issued_ms` | `uint` | Indicatif |
+| 5 | `sig` | `HybridSignature` | Clé du membre, sur `"hirzla/v1/member-profile"` ‖ `0x00` ‖ `CBOR(clés 1 à 4)` |
+
+Encodage : au plus 8 Kio. Un `name` est **valide** s'il ne contient :
+
+- aucun caractère de contrôle ;
+- aucun caractère invisible ou de sens d'écriture : U+00AD, U+061C, U+180E, U+200B à U+200F,
+  U+2028 à U+202E, U+2060 à U+206F, U+FEFF, U+FFF9 à U+FFFB, U+E0000 à U+E0FFF ;
+- aucun blanc autre que l'espace U+0020 ;
+- aucune espace au début, à la fin, ni deux espaces de suite.
+
+Un profil dont le nom n'est pas valide ou dont `seq` vaut 0 est refusé au décodage. Aucune
+normalisation Unicode n'est faite : deux noms qui se ressemblent sont deux noms (ADR 0069,
+point 4).
+
+Un profil se vérifie seul, avec la seule `MemberKeys` du membre. Il est inscrit au registre
+de transparence (`transparence.md` § 3.1, type 6) : le profil courant d'un membre est celui
+de sa dernière entrée de type 6. **Un nom ne prouve rien sur l'identité du titulaire de la
+clé** : l'empreinte (§ 3.1) reste ce que les utilisateurs comparent.
 
 ## 4. Clé du poste et déverrouillage
 
@@ -1250,11 +1280,12 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     rebond limité à une connexion SSH ; alphabet de `host` sans zone IPv6. La préférence
     « ouvrir avec » et l'usage de la clé par un agent SSH ne sont pas dans le format.
 
-## 15. Fichier annexe du mode Serveur (v3)
+## 15. Fichier annexe du mode Serveur (v4)
 
 Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
 stable). Version 3 : ADR 0044 (demandes d'accord en cours) et ADR 0045 (surveillance datée :
-révocations retenues, inscriptions, opérations retenues).
+révocations retenues, inscriptions, opérations retenues). Version 4 : ADR 0069 (noms
+affichés, empreintes comparées).
 
 Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
@@ -1278,15 +1309,28 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | `3` écrit ; `1` et `2` encore lus |
+| 1 | `v` | `uint` | `4` écrit ; `1` à `3` encore lus |
 | 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
 | 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
 | 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
-| 5 | `keylog` | `KeyLogState` | Requis en v2 et v3, absent en v1 |
+| 5 | `keylog` | `KeyLogState` | Requis à partir de la v2, absent en v1 |
 | 6 | `requests` | `array<PendingRequest>` | v3 : demandes d'accord en cours (ADR 0044), au plus 64, triées par `request_id`, sans doublon |
 | 7 | `watch` | `Watch` | v3 : surveillance datée (ADR 0045) |
+| 8 | `profiles` | `Profiles` | v4 : noms affichés et empreintes comparées (ADR 0069) |
 
-Une annexe v1 ou v2 n'a pas les clés 6 et 7 : aucune demande, surveillance vide.
+Une annexe v1 ou v2 n'a pas les clés 6 et 7 : aucune demande, surveillance vide. Une annexe
+v1 à v3 n'a pas la clé 8 : aucun nom, aucune empreinte comparée.
+
+`Profiles` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `issued` | `array<bstr(48)>` | `SHA-384(CBOR(MemberProfile))` des profils émis par le poste, au plus 512 : attendus au registre (`transparence.md` § 6.4) |
+| 2 | `names` | `array<{1: member, 2: seq, 3: name, 4: object bstr(48)}>` | Profils vérifiés (`api-locale.md` § 15.9.1), au plus 65 536, triés par membre, un par membre ; `name` valide (§ 3.7), `seq` ≥ 1, `object` = empreinte du profil |
+| 3 | `verified` | `array<{1: member, 2: bstr(48)}>` | `SHA-384(CBOR(MemberKeys))` de la clé dont l'utilisateur a comparé l'empreinte hors bande, au plus 65 536, triés par membre, un par membre |
+
+Un nom de `names` n'est rendu que tant que son `object` est celui du profil courant du membre
+dans le registre local. Une empreinte de `verified` ne vaut que pour la clé qu'elle désigne.
 
 `PendingRequest` :
 
@@ -1342,7 +1386,8 @@ une entrée. Les clés 4 (rang de l'entrée) et 5 (règle : 1 décodage R1, 2 à
 sont présentes si et seulement si `reason = 3`.
 
 `Alert` = `{1: kind, 2: index, 3: device?}`. `kind` : 1 clé de membre étrangère au poste,
-2 appareil du membre inconnu du poste, 3 retrait d'un appareil du membre inconnu du poste ;
+2 appareil du membre inconnu du poste, 3 retrait d'un appareil du membre inconnu du poste,
+4 profil du membre que le poste n'a pas émis (ADR 0069) ;
 `device` présent si et seulement si `kind` vaut 2 ou 3 ; `index` = rang de l'entrée.
 
 ### 15.3 Lecture
@@ -1374,6 +1419,9 @@ Version 2, dans cet ordre :
    attendue au registre local (`transparence.md` § 6.4). Rien n'est ajouté à l'annexe : une
    révocation émise juste avant un redémarrage et inscrite après ne lève pas l'alerte
    « révocation inconnue ».
+7. Version 4 : `profiles`, gardé tel quel ; chaque empreinte de `issued` est de nouveau
+   déclarée attendue au registre local (pas d'alerte « nom affiché inconnu » pour un profil
+   émis ici).
 
 Le noyau tient aussi `SyncState.quarantine_seen` (`sync-protocol.md` § 11.4, clé 5) : l'heure
 de la première synchronisation qui a vu chaque opération en quarantaine, d'où court le délai de

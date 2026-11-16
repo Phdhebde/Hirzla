@@ -6,6 +6,7 @@
 import { api } from "./api.js";
 import { announce, byId, h, showError } from "./dom.js";
 import { SecretForm } from "./form.js";
+import { Palette } from "./palette.js";
 import { applyTheme, loadPrefs } from "./prefs.js";
 import { ROLE_NAMES, ServerView, WRITING_ROLES } from "./server.js";
 import { GeneratorView, SettingsView } from "./tools.js";
@@ -111,11 +112,37 @@ function newSecret() {
 }
 
 const generator = new GeneratorView(onGlobalError);
+
+/** Shows a view of the open vault and marks it in the navigation. @param {string} view */
+function goTo(view) {
+  showView(view);
+  markNav(view, view === "secrets" ? "tous" : null);
+  byId(`vue-${view}`).querySelector("h1")?.focus();
+}
+
+const palette = new Palette({
+  onError: onGlobalError,
+  iconOf: (kind) => VaultView.iconOf(kind),
+  onOpen: (entry) => {
+    showView("secrets");
+    markNav("secrets", "tous");
+    void vault.reveal(entry);
+  },
+  actions: () => [
+    { label: "Nouveau secret", icon: "plus", keys: "Ctrl N", run: () => newSecret() },
+    { label: "Générateur de mots de passe", icon: "generateur", keys: "Ctrl G", run: () => goTo("generateur") },
+    { label: "Serveur", icon: "serveur", run: () => goTo("serveur") },
+    { label: "Réglages", icon: "reglages", run: () => goTo("reglages") },
+    { label: "Verrouiller le coffre", icon: "verrou", keys: "Ctrl L", run: () => void lockNow() },
+  ],
+});
+byId("bouton-palette").addEventListener("click", () => palette.open());
 const settings = new SettingsView(prefs, onGlobalError, () => void vault.refresh());
 
 /** Forgets everything the vault showed. */
 function wipe() {
   vault.wipe();
+  palette.close();
   generator.wipe();
   for (const d of document.querySelectorAll("dialog[open]")) {
     /** @type {HTMLDialogElement} */ (d).close();
@@ -167,13 +194,29 @@ async function poll() {
       await vault.refresh();
       await server.refresh();
     }
-    if (s.state === "unlocked") settings.render(s);
+    if (s.state === "unlocked") {
+      settings.render(s);
+      byId("etat-coffre-texte").textContent = `Ouvert · verrouillage après ${duration(s.auto_lock_s)}`;
+    }
   } catch (e) {
     const err = /** @type {ApiError} */ (e);
     showWaiting(err);
     if (err.code === "core_lost") return;
   }
   pollTimer = window.setTimeout(() => void poll(), POLL_MS);
+}
+
+/**
+ * A delay in plain words: « 30 s », « 5 min », « 1 h 30 ».
+ * @param {number} seconds
+ * @returns {string}
+ */
+function duration(seconds) {
+  if (seconds < 60) return `${seconds} s`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const rest = minutes % 60;
+  return rest ? `${Math.floor(minutes / 60)} h ${rest}` : `${minutes / 60} h`;
 }
 
 // --- Creation of the vault -------------------------------------------------------------
@@ -264,6 +307,37 @@ byId("form-deverrouillage").addEventListener("submit", async (ev) => {
     }
   }
 });
+
+// Show or hide the master password while typing, and warn about Caps Lock.
+{
+  const pw = /** @type {HTMLInputElement} */ (byId("deverrouillage-mdp"));
+  const see = byId("deverrouillage-voir");
+  const mask = () => {
+    pw.type = "password";
+    see.setAttribute("aria-pressed", "false");
+    see.setAttribute("aria-label", "Afficher le mot de passe maître");
+  };
+  see.addEventListener("click", () => {
+    if (pw.type === "password") {
+      pw.type = "text";
+      see.setAttribute("aria-pressed", "true");
+      see.setAttribute("aria-label", "Masquer le mot de passe maître");
+    } else mask();
+    pw.focus();
+  });
+  byId("form-deverrouillage").addEventListener("submit", mask);
+  /** @param {KeyboardEvent} ev */
+  const caps = (ev) => {
+    if (typeof ev.getModifierState === "function") {
+      byId("deverrouillage-majuscules").hidden = !ev.getModifierState("CapsLock");
+    }
+  };
+  pw.addEventListener("keydown", caps);
+  pw.addEventListener("keyup", caps);
+  pw.addEventListener("blur", () => {
+    byId("deverrouillage-majuscules").hidden = true;
+  });
+}
 
 // --- Recovery kit (ADR 0034) -----------------------------------------------------------
 
@@ -421,7 +495,10 @@ document.addEventListener("keydown", (ev) => {
   if (currentScreen() !== "coffre" || document.querySelector("dialog[open]")) return;
   if (!(ev.ctrlKey || ev.metaKey) || ev.altKey) return;
   const key = ev.key.toLowerCase();
-  if (key === "f") {
+  if (key === "k") {
+    ev.preventDefault();
+    palette.open();
+  } else if (key === "f") {
     ev.preventDefault();
     showView("secrets");
     byId("recherche").focus();

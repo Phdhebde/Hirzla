@@ -63,6 +63,8 @@ pub enum Domain {
     DeviceCert,
     /// A device revocation (§ 3.6).
     DeviceRevoke,
+    /// A member profile: the display name a member gives itself (§ 3.7, ADR 0069).
+    MemberProfile,
     /// An approval of a multi-owner action (`docs/sync-protocol.md` § 7.7).
     Approval,
     /// The server side of session authentication (§ 11.3).
@@ -99,6 +101,7 @@ impl Domain {
             Domain::Operation => b"hirzla/v1/op",
             Domain::DeviceCert => b"hirzla/v1/device-cert",
             Domain::DeviceRevoke => b"hirzla/v1/device-revoke",
+            Domain::MemberProfile => b"hirzla/v1/member-profile",
             Domain::Approval => b"hirzla/v1/approval",
             Domain::ServerAuth => b"hirzla/v1/server-auth",
             Domain::DeviceAuth => b"hirzla/v1/device-auth",
@@ -132,6 +135,8 @@ pub enum MemberDomain {
     DeviceCert,
     /// A device revocation.
     DeviceRevoke,
+    /// A member profile (ADR 0069).
+    Profile,
 }
 
 /// Domains a device key may sign.
@@ -206,6 +211,7 @@ impl From<MemberDomain> for Domain {
         match d {
             MemberDomain::DeviceCert => Domain::DeviceCert,
             MemberDomain::DeviceRevoke => Domain::DeviceRevoke,
+            MemberDomain::Profile => Domain::MemberProfile,
         }
     }
 }
@@ -553,6 +559,14 @@ impl MemberSigningKey {
     /// [`Error::Internal`] if the underlying library fails.
     pub fn revoke_device(&self, revocation_body: &[u8]) -> Result<Signature, Error> {
         self.sign(MemberDomain::DeviceRevoke, revocation_body)
+    }
+
+    /// Signs an encoded member profile body (`docs/format.md` § 3.7, ADR 0069).
+    ///
+    /// # Errors
+    /// [`Error::Internal`] if the underlying library fails.
+    pub fn sign_profile(&self, profile_body: &[u8]) -> Result<Signature, Error> {
+        self.sign(MemberDomain::Profile, profile_body)
     }
 }
 

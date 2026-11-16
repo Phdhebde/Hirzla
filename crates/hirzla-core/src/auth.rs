@@ -93,6 +93,7 @@ impl ClientProfile {
                 Request::Status
                 | Request::Lock
                 | Request::Generate { .. }
+                | Request::GenerateWith { .. }
                 | Request::Match { .. }
                 | Request::Fill { .. } => true,
                 // A new login proposed by the extension: a password secret, bound to at
@@ -340,6 +341,9 @@ mod tests {
             Request::Generate {
                 length: 20,
                 classes: 15,
+            },
+            Request::GenerateWith {
+                spec: crate::generator::Profile::Default.spec(),
             },
             Request::Match {
                 origin: "https://a.example".into(),

@@ -40,7 +40,7 @@ hirzla restore Messagerie  # sort de la corbeille
 | `get NOM` | Copie un secret, ou l'écrit sur la sortie standard si elle n'est pas un terminal | `--champ`, `--id`, `--stdout` |
 | `ls [RECHERCHE]` | Liste les secrets | `--corbeille` |
 | `rm NOM` | Met à la corbeille | `--purger` (suppression définitive) |
-| `gen [LONGUEUR]` | Génère un mot de passe, 24 caractères par défaut | `--sans-symboles`, `--sans-chiffres`, `--sans-majuscules`, `--stdout` |
+| `gen [TAILLE]` | Génère un mot de passe, 24 caractères par défaut, et affiche son entropie | `--mode caracteres\|phrase\|prononcable\|pin\|modele`, `--profil`, `--sans-symboles`, `--sans-chiffres`, `--sans-majuscules`, `--min`, `--symboles`, `--exclure`, `--sans-ambigus`, `--memes-touches`, `--sans-repetition`, `--lettre-en-tete`, `--separateur`, `--majuscule`, `--chiffres`, `--modele`, `--stdout` |
 | `history NOM` | Versions d'un secret, la plus récente en premier | `--version N --champ CHAMP` |
 | `restore NOM` | Sort de la corbeille, ou rétablit une version | `--version N` |
 

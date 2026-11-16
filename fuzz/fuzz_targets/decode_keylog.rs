@@ -1,15 +1,17 @@
 //! Key transparency objects served by `hirzlad` (`docs/transparence.md`): log entries, signed
-//! heads, inclusion and consistency proofs, and the fork evidence and alerts kept in the annex.
-//! Must never panic.
+//! heads, inclusion and consistency proofs, the member profiles inscribed in it (ADR 0069), and
+//! the fork evidence and alerts kept in the annex. Must never panic.
 #![no_main]
 
 use hirzla_access::keylog::{Alert, ForkEvidence, KeyLogEntry, KeyLogHead, KeyLogProof};
+use hirzla_access::profile::MemberProfile;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let _ = KeyLogEntry::decode(data);
     let _ = KeyLogHead::decode(data);
     let _ = KeyLogProof::decode(data);
+    let _ = MemberProfile::decode(data);
     if let Ok(v) = hirzla_vault::cbor::decode(data) {
         let _ = KeyLogHead::from_value(&v);
         let _ = ForkEvidence::from_value(&v);

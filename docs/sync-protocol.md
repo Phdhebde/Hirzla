@@ -796,6 +796,7 @@ appareil. `PeerVector` = `{1: device, 2: vector (array<VectorEntry>)}`. Tableaux
 | 32 | `MailboxPut` | P → S | `{1: device (destinataire), 2: blob (bstr(≤ 64 Kio))}`. Conservé 10 minutes (§ 7.7, § 14) |
 | 33 | `MailboxGet` | P → S | `{1: device}` → réponse `MailboxBlob` (34) `{1: blob}` |
 | 40 | `Error` | S → P | `{1: code (uint)}` |
+| 50 à 53 | Profils de membre | | § 11.11 (ADR 0069) |
 | 60 à 67 | Registre de transparence | | `transparence.md` § 4 |
 | 41 | `Ping` / 42 `Pong` | Les deux | `{}` |
 | 43 | `Bye` | Les deux | `{}` |
@@ -949,6 +950,28 @@ empreinte : il compare la clé reçue dans `HelloAck` à l'empreinte avant d'env
 (§ 11.3). `hirzlad invitation` produit le lien à partir de l'en-tête en clair de son
 répertoire de données.
 
+### 11.11 Profils de membre et annuaire (ADR 0069)
+
+| Type | Nom | Sens | Contenu |
+| --- | --- | --- | --- |
+| 50 | `PutMemberProfile` | P → S | `{1: profile (bstr)}` : `CBOR(MemberProfile)` (`format.md` § 3.7), ≤ 8 Kio |
+| 51 | `MemberProfileResult` | S → P | `{1: index (uint)}` : rang de l'entrée kind 6 inscrite |
+| 52 | `FindMembers` | P → S | `{1: query (tstr, 2 à 64 octets)}` |
+| 53 | `MembersFound` | S → P | `{1: items (array<{1: keys (MemberKeys), 2: profile (bstr)}>), 2: more (bool)}` |
+
+**`PutMemberProfile`** — le serveur inscrit le profil (entrée kind 6, `transparence.md`
+§ 5.1) si : `member` est le membre de la session (sinon code 4) ; la signature vérifie avec
+la clé inscrite du membre (sinon code 7) ; le nom est valide et `seq` dépasse celui du profil
+courant (sinon code 1) ; le membre a moins de 256 profils (sinon code 8). Un profil déjà
+inscrit est refusé (R7). Le serveur garde le profil complet pour `GetKeyLogObject`.
+
+**`FindMembers`** — au plus 32 membres dont le **nom courant** (non vide) contient `query`,
+casse ignorée (minuscules Unicode), triés par nom puis identifiant ; `more` vaut `true` s'il y
+en a davantage. Chaque élément porte la `MemberKeys` inscrite et le profil courant encodé. Le
+poste n'en croit rien : il applique à chaque élément les contrôles de `transparence.md` § 6.8
+et écarte ceux qui échouent. Le serveur peut cacher un membre, pas en inventer un ni lui
+prêter un nom.
+
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
 | Il apprend | D'où | Pourquoi c'est nécessaire | Réduction |
@@ -963,6 +986,7 @@ répertoire de données.
 | Opérations en quarantaine (`late`) | Son propre filtrage | Limiter la diffusion | — |
 | Qu'une action à plusieurs a eu lieu, et qui l'a approuvée | Accords joints en clair | Vérifier le quorum | Les accords ne circulent pas avant publication (§ 7.7) |
 | Destinataire, taille et heure des paquets de la boîte aux lettres ; identifiant et adresse IP d'un appareil en cours d'enrôlement | `MailboxPut`, `MailboxGet` (§ 11.9) | Acheminer l'enrôlement et les accords | Paquets chiffrés pour le destinataire, gardés 10 minutes, en mémoire seulement |
+| Le nom affiché que chaque membre s'est donné, ses changements, et les textes cherchés dans l'annuaire | `PutMemberProfile`, `FindMembers` (§ 11.11, ADR 0069) | Trouver un membre avant de partager avec lui | Nom facultatif et libre (pseudonyme possible) ; le serveur n'apprend pas quelles empreintes ont été comparées |
 | Quels appareils ont accusé quelle `Compact` ; jour de la dernière authentification de chaque appareil | `Ack`, session (§ 10.2, ADR 0040) | Décider de la stabilité, écarter les appareils inactifs | Le `CompactPast` reste scellé ; dernière authentification gardée au jour près |
 
 Il n'apprend **pas** : les titres, adresses, noms d'utilisateur, valeurs, notes, noms de

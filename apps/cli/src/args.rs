@@ -4,6 +4,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use hirzla_core::generator::{rules, Profile, Spec};
+use hirzla_core::proto::classes;
+
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -23,8 +26,19 @@ Commandes :
                           --casier CASIER (casier partagé, à la création).
   rm NOM                  Met un secret à la corbeille. --purger : suppression définitive.
                           --id ID.
-  gen [LONGUEUR]          Génère un mot de passe (24 caractères par défaut).
-                          --sans-symboles, --sans-chiffres, --sans-majuscules, --stdout.
+  gen [TAILLE]            Génère un mot de passe (24 caractères par défaut) et affiche
+                          son entropie. --stdout. TAILLE : caractères, mots, syllabes
+                          ou chiffres selon le mode.
+                          --mode caracteres|phrase|prononcable|pin|modele
+                          --profil defaut|longue-duree|site-capricieux|wifi|compte-de-service
+                          Caractères : --sans-minuscules, --sans-majuscules,
+                          --sans-chiffres, --sans-symboles, --min MIN,MAJ,CHIFFRES,SYMBOLES,
+                          --symboles LISTE, --exclure LISTE.
+                          Règles : --sans-ambigus, --memes-touches (AZERTY et QWERTY),
+                          --sans-repetition, --lettre-en-tete, --sans-suite (pin).
+                          Phrase, prononçable : --separateur C, --majuscule, --chiffres N.
+                          Modèle : --modele MODELE (a A 9 # * tirés, le reste recopié,
+                          \\x pour un x littéral), --symboles, --exclure.
   history NOM             Versions d'un secret, la plus récente en premier. --id ID.
                           --version N --champ CHAMP : un champ d'une version (comme get).
   restore NOM             Sort un secret de la corbeille. --id ID.
@@ -69,6 +83,13 @@ Mode Serveur :
                           Confirme l'empreinte du serveur, vérifiée hors bande.
   serveur etat            Serveur rattaché et état des casiers partagés.
   serveur sync            Synchronise les casiers partagés.
+  serveur nom NOM         Donne à votre clé de membre le nom affiché aux autres membres
+                          du serveur (64 octets au plus), signé par cette clé et inscrit
+                          au registre. NOM vide (\"\") : retire le nom.
+  serveur chercher TEXTE  Cherche des membres du serveur par leur nom affiché. Un nom ne
+                          prouve rien : comparez l'empreinte avant de partager.
+  serveur verifier MEMBRE EMPREINTE
+                          Note que vous avez comparé hors bande l'empreinte d'un membre.
   casier creer NOM        Crée un casier partagé.
   casier membres CASIER   Liste les membres d'un casier partagé et leurs rôles.
   casier ajouter CASIER MEMBRE ROLE [--empreinte E]
@@ -140,6 +161,19 @@ pub enum ServerCommand {
     },
     Status,
     Sync,
+    /// Set (or, empty, withdraw) the display name of the member (ADR 0069).
+    Name {
+        name: String,
+    },
+    /// Search members by display name.
+    Search {
+        text: String,
+    },
+    /// Record a fingerprint compared out of band.
+    Verify {
+        member: String,
+        fingerprint: String,
+    },
 }
 
 /// What a quorum request does (`docs/api-locale.md` § 15.8).
@@ -297,8 +331,7 @@ pub enum Command {
         purge: bool,
     },
     Gen {
-        length: u32,
-        classes: u64,
+        spec: Spec,
         stdout: bool,
     },
     History {
@@ -348,6 +381,200 @@ pub struct Args {
 fn text(v: OsString, what: &str) -> Result<String, String> {
     v.into_string()
         .map_err(|_| format!("{what} : texte non valide (UTF-8 attendu)."))
+}
+
+/// Options of `gen`.
+const GEN_OPTIONS: &[&str] = &[
+    "--stdout",
+    "--mode",
+    "--profil",
+    "--sans-minuscules",
+    "--sans-majuscules",
+    "--sans-chiffres",
+    "--sans-symboles",
+    "--min",
+    "--symboles",
+    "--exclure",
+    "--sans-ambigus",
+    "--memes-touches",
+    "--sans-repetition",
+    "--lettre-en-tete",
+    "--sans-suite",
+    "--separateur",
+    "--majuscule",
+    "--chiffres",
+    "--modele",
+];
+
+/// Settings of `gen` from its size, its flags and its valued options. An option that
+/// does not belong to the mode is refused here; bounds are checked by the core.
+fn gen_spec(
+    size: Option<u32>,
+    has: &dyn Fn(&str) -> bool,
+    values: &[(&str, String)],
+) -> Result<Spec, String> {
+    let value = |name: &str| {
+        values
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.as_str())
+    };
+    let given = |name: &str| has(name) || value(name).is_some();
+    // Everything but `--stdout`, to tell which options a mode may not take.
+    let settings = &GEN_OPTIONS[1..];
+    let only = |mode: &str, allowed: &[&str]| -> Result<(), String> {
+        match settings
+            .iter()
+            .find(|o| given(o) && !allowed.contains(o) && **o != "--mode")
+        {
+            Some(o) => Err(format!("{o} ne s'applique pas à « {mode} ».")),
+            None => Ok(()),
+        }
+    };
+
+    if let Some(id) = value("--profil") {
+        only("--profil", &["--profil"])?;
+        if size.is_some() || given("--mode") {
+            return Err("--profil fixe tous les réglages : ni TAILLE ni --mode.".into());
+        }
+        return Profile::from_id(id).map(Profile::spec).ok_or_else(|| {
+            format!(
+                "--profil : profil inconnu. Profils : {}.",
+                Profile::ALL.map(Profile::id).join(", ")
+            )
+        });
+    }
+
+    let mut rule_mask = 0;
+    for (flag, bit) in [
+        ("--sans-ambigus", rules::NO_AMBIGUOUS),
+        ("--memes-touches", rules::SAME_KEYS),
+        ("--sans-repetition", rules::NO_REPEAT),
+        ("--lettre-en-tete", rules::START_LETTER),
+        ("--sans-suite", rules::NO_SEQUENCE),
+    ] {
+        if has(flag) {
+            rule_mask |= bit;
+        }
+    }
+    let digits = value("--chiffres")
+        .map(|v| number(v, "--chiffres"))
+        .transpose()?
+        .unwrap_or(0);
+    let mode = match value("--mode") {
+        Some(m) => m,
+        None if given("--modele") => "modele",
+        None => "caracteres",
+    };
+    match mode {
+        "caracteres" => {
+            only(
+                mode,
+                &[
+                    "--sans-minuscules",
+                    "--sans-majuscules",
+                    "--sans-chiffres",
+                    "--sans-symboles",
+                    "--min",
+                    "--symboles",
+                    "--exclure",
+                    "--sans-ambigus",
+                    "--memes-touches",
+                    "--sans-repetition",
+                    "--lettre-en-tete",
+                ],
+            )?;
+            let families = [
+                ("--sans-minuscules", classes::LOWER),
+                ("--sans-majuscules", classes::UPPER),
+                ("--sans-chiffres", classes::DIGITS),
+                ("--sans-symboles", classes::SYMBOLS),
+            ];
+            let mut mask = classes::ALL;
+            for (flag, bit) in families {
+                if has(flag) {
+                    mask &= !bit;
+                }
+            }
+            let minimums = match value("--min") {
+                // One of each chosen family, as before.
+                None => families.map(|(_, bit)| u8::from(mask & bit != 0)),
+                Some(v) => {
+                    let parts: Vec<&str> = v.split(',').collect();
+                    let parts: [&str; 4] = parts.try_into().map_err(|_| {
+                        "--min : quatre nombres attendus, MIN,MAJ,CHIFFRES,SYMBOLES.".to_owned()
+                    })?;
+                    let mut minimums = [0u8; 4];
+                    for (slot, part) in minimums.iter_mut().zip(parts) {
+                        *slot = number(part, "--min")?;
+                    }
+                    minimums
+                }
+            };
+            Ok(Spec::Characters {
+                length: size.unwrap_or(24),
+                classes: mask,
+                minimums,
+                symbols: value("--symboles").map(str::to_owned),
+                excluded: value("--exclure").unwrap_or_default().to_owned(),
+                rules: rule_mask,
+            })
+        }
+        "phrase" => {
+            only(mode, &["--separateur", "--majuscule", "--chiffres"])?;
+            let mut separator = value("--separateur").unwrap_or("-").chars();
+            let (Some(separator), None) = (separator.next(), separator.next()) else {
+                return Err("--separateur : un seul caractère attendu.".into());
+            };
+            Ok(Spec::Passphrase {
+                words: size.unwrap_or(6),
+                separator,
+                capitalize: has("--majuscule"),
+                digits,
+            })
+        }
+        "prononcable" => {
+            only(mode, &["--majuscule", "--chiffres", "--sans-ambigus"])?;
+            Ok(Spec::Pronounceable {
+                syllables: size.unwrap_or(9),
+                capitalize: has("--majuscule"),
+                digits,
+                rules: rule_mask,
+            })
+        }
+        "pin" => {
+            only(mode, &["--sans-repetition", "--sans-suite"])?;
+            Ok(Spec::Pin {
+                length: size.unwrap_or(6),
+                rules: rule_mask,
+            })
+        }
+        "modele" => {
+            only(
+                mode,
+                &[
+                    "--modele",
+                    "--symboles",
+                    "--exclure",
+                    "--sans-ambigus",
+                    "--memes-touches",
+                    "--sans-repetition",
+                ],
+            )?;
+            if size.is_some() {
+                return Err("le mode « modele » ne prend pas de TAILLE.".into());
+            }
+            Ok(Spec::Template {
+                template: value("--modele")
+                    .ok_or_else(|| "--modele MODELE attendu.".to_owned())?
+                    .to_owned(),
+                symbols: value("--symboles").map(str::to_owned),
+                excluded: value("--exclure").unwrap_or_default().to_owned(),
+                rules: rule_mask,
+            })
+        }
+        _ => Err("--mode : caracteres, phrase, prononcable, pin ou modele.".into()),
+    }
 }
 
 fn number<T: std::str::FromStr>(v: &str, what: &str) -> Result<T, String> {
@@ -417,6 +644,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--titre",
         "--effacer",
         "--publique",
+        "--mode",
+        "--profil",
+        "--min",
+        "--symboles",
+        "--exclure",
+        "--separateur",
+        "--chiffres",
+        "--modele",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -490,12 +725,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--veille",
             "--session",
         ],
-        "gen" => &[
-            "--sans-symboles",
-            "--sans-chiffres",
-            "--sans-majuscules",
-            "--stdout",
-        ],
+        "gen" => GEN_OPTIONS,
         _ => &[],
     };
     if let Some((f, _)) = flags.iter().find(|(f, _)| !allowed.contains(&f.as_str())) {
@@ -899,6 +1129,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     only(&[])?;
                     ServerCommand::Sync
                 }
+                "nom" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Name {
+                        name: arg(1, "le NOM à afficher (\"\" pour le retirer)")?,
+                    }
+                }
+                "chercher" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Search {
+                        text: arg(1, "le TEXTE à chercher")?,
+                    }
+                }
+                "verifier" => {
+                    max_positional(3)?;
+                    only(&[])?;
+                    ServerCommand::Verify {
+                        member: arg(1, "le MEMBRE et son EMPREINTE")?,
+                        fingerprint: arg(2, "le MEMBRE et son EMPREINTE")?,
+                    }
+                }
                 _ => return Err(format!("sous-commande de « serveur » inconnue.\n\n{USAGE}")),
             };
             Command::Server(sub_command)
@@ -1096,24 +1348,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         }
         "gen" => {
             max_positional(1)?;
-            let length = positional
+            let size = positional
                 .first()
-                .map(|l| number(l, "LONGUEUR"))
-                .transpose()?
-                .unwrap_or(24);
-            let mut classes = hirzla_core::proto::classes::ALL;
-            if has("--sans-symboles") {
-                classes &= !hirzla_core::proto::classes::SYMBOLS;
+                .map(|l| number(l, "TAILLE"))
+                .transpose()?;
+            let mut values = Vec::new();
+            for name in GEN_OPTIONS {
+                if let Some(v) = one(name)? {
+                    values.push((*name, v));
+                }
             }
-            if has("--sans-chiffres") {
-                classes &= !hirzla_core::proto::classes::DIGITS;
-            }
-            if has("--sans-majuscules") {
-                classes &= !hirzla_core::proto::classes::UPPER;
-            }
+            let spec = gen_spec(size, &|name| has(name), &values)?;
             Command::Gen {
-                length,
-                classes,
+                spec,
                 stdout: has("--stdout"),
             }
         }
@@ -1225,8 +1472,7 @@ mod tests {
         assert_eq!(
             p(&["gen", "16", "--sans-symboles"]).unwrap().command,
             Command::Gen {
-                length: 16,
-                classes: 7,
+                spec: Spec::characters(16, 7),
                 stdout: false
             }
         );
@@ -1382,6 +1628,125 @@ mod tests {
         assert!(p(&["cle-ssh", "ajouter", "x"]).is_err());
         assert!(p(&["cle-ssh", "generer", "x", "f"]).is_err());
         assert!(p(&["cle-ssh", "ajouter", "x", "f", "--mot-de-passe"]).is_err());
+    }
+
+    #[test]
+    fn parses_generator_settings() {
+        let spec = |a: &[&str]| match p(a).unwrap().command {
+            Command::Gen { spec, .. } => spec,
+            _ => Spec::characters(0, 0),
+        };
+        assert_eq!(spec(&["gen"]), Spec::characters(24, classes::ALL));
+        assert_eq!(
+            spec(&[
+                "gen",
+                "32",
+                "--sans-symboles",
+                "--min",
+                "2,2,4,0",
+                "--exclure",
+                "-x",
+                "--sans-ambigus",
+                "--sans-repetition",
+                "--lettre-en-tete",
+            ]),
+            Spec::Characters {
+                length: 32,
+                classes: 7,
+                minimums: [2, 2, 4, 0],
+                symbols: None,
+                excluded: "-x".into(),
+                rules: rules::NO_AMBIGUOUS | rules::NO_REPEAT | rules::START_LETTER,
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--symboles", "-_", "--memes-touches"]),
+            Spec::Characters {
+                length: 24,
+                classes: classes::ALL,
+                minimums: [1; 4],
+                symbols: Some("-_".into()),
+                excluded: String::new(),
+                rules: rules::SAME_KEYS,
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--mode", "phrase"]),
+            Spec::Passphrase {
+                words: 6,
+                separator: '-',
+                capitalize: false,
+                digits: 0
+            }
+        );
+        assert_eq!(
+            spec(&[
+                "gen",
+                "8",
+                "--mode",
+                "phrase",
+                "--separateur",
+                " ",
+                "--majuscule",
+                "--chiffres",
+                "2"
+            ]),
+            Spec::Passphrase {
+                words: 8,
+                separator: ' ',
+                capitalize: true,
+                digits: 2
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--mode", "prononcable", "--sans-ambigus"]),
+            Spec::Pronounceable {
+                syllables: 9,
+                capitalize: false,
+                digits: 0,
+                rules: rules::NO_AMBIGUOUS
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "8", "--mode", "pin", "--sans-suite"]),
+            Spec::Pin {
+                length: 8,
+                rules: rules::NO_SEQUENCE
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--modele", "Aa-9999", "--sans-repetition"]),
+            Spec::Template {
+                template: "Aa-9999".into(),
+                symbols: None,
+                excluded: String::new(),
+                rules: rules::NO_REPEAT
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--profil", "longue-duree"]),
+            Profile::LongTerm.spec()
+        );
+        for refused in [
+            &["gen", "--mode", "inconnu"][..],
+            &["gen", "--profil", "inconnu"],
+            &["gen", "12", "--profil", "wifi"],
+            &["gen", "--profil", "wifi", "--sans-ambigus"],
+            &["gen", "--profil", "wifi", "--mode", "pin"],
+            &["gen", "--mode", "pin", "--sans-ambigus"],
+            &["gen", "--mode", "phrase", "--sans-symboles"],
+            &["gen", "--mode", "phrase", "--separateur", "--"],
+            &["gen", "--mode", "modele"],
+            &["gen", "4", "--modele", "aaaa"],
+            &["gen", "--sans-suite"],
+            &["gen", "--min", "1,1,1"],
+            &["gen", "--min", "1,1,1,x"],
+            &["gen", "--chiffres", "deux", "--mode", "phrase"],
+            &["gen", "--mode", "pin", "--mode", "phrase"],
+            &["gen", "--inconnu"],
+        ] {
+            assert!(p(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
@@ -1543,6 +1908,34 @@ mod tests {
         assert!(p(&["quarantaine"]).is_err());
         assert!(p(&["quarantaine", "Ops", "accepter"]).is_err());
         assert!(p(&["quarantaine", "Ops", "ignorer", "x"]).is_err());
+        assert_eq!(
+            p(&["serveur", "nom", "Marie Durand"]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: "Marie Durand".into()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "nom", ""]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: String::new()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "chercher", "dur"]).unwrap().command,
+            Command::Server(ServerCommand::Search { text: "dur".into() })
+        );
+        assert_eq!(
+            p(&["serveur", "verifier", "00ff", "ABCD"]).unwrap().command,
+            Command::Server(ServerCommand::Verify {
+                member: "00ff".into(),
+                fingerprint: "ABCD".into()
+            })
+        );
+        assert!(p(&["serveur", "nom"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "b"]).is_err());
+        assert!(p(&["serveur", "chercher"]).is_err());
+        assert!(p(&["serveur", "verifier", "00ff"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "--empreinte", "E"]).is_err());
         assert!(p(&["serveur"]).is_err());
         assert!(p(&["serveur", "rejoindre", "hirzla://h"]).is_err());
         assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());

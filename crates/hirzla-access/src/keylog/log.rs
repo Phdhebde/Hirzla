@@ -12,6 +12,7 @@ use super::directory::Directory;
 use super::entry::{InclusionItem, KeyLogEntry, KeyLogHead, KeyLogProof};
 use super::merkle::{self, Sha384};
 use crate::control::{verify_device_cert, DeviceRevocation};
+use crate::profile::MemberProfile;
 use crate::{AccessError, KeyLogFailure};
 
 /// An append-only key log.
@@ -23,7 +24,13 @@ pub struct KeyLog {
     leaves: Vec<[u8; 48]>,
     directory: Directory,
     objects: BTreeMap<[u8; 48], Vec<u8>>,
+    /// Current profile of each member that has one (ADR 0069).
+    profiles: BTreeMap<Id16, MemberProfile>,
 }
+
+/// Most profiles inscribed for one member (ADR 0069, point 2): the log is append-only and
+/// replicated by every device.
+pub const MAX_PROFILES_PER_MEMBER: u64 = 256;
 
 fn rejected() -> AccessError {
     AccessError::KeyLog(KeyLogFailure::BadResponse)
@@ -40,6 +47,7 @@ impl KeyLog {
             leaves: Vec::new(),
             directory: Directory::default(),
             objects: BTreeMap::new(),
+            profiles: BTreeMap::new(),
         }
     }
 
@@ -120,6 +128,59 @@ impl KeyLog {
         rev.verify(&keys)?;
         let obj = cbor::encode(&rev.to_value())?.to_vec();
         self.push(KeyLogEntry::revocation(rev, now_ms)?, Some(obj))
+    }
+
+    /// Checks a profile before inscribing it (ADR 0069, point 2): signed by the inscribed
+    /// member key, a rank above the current one, not inscribed yet, under the limit.
+    ///
+    /// # Errors
+    /// [`AccessError::InvalidSignature`] or [`AccessError::Malformed`] for a bad profile,
+    /// [`KeyLogFailure::BadResponse`] for an unknown member, a rank that does not grow or a
+    /// profile already inscribed, [`AccessError::Denied`] with [`crate::Denial::Invalid`]
+    /// past [`MAX_PROFILES_PER_MEMBER`].
+    pub fn check_profile(&self, profile: &MemberProfile) -> Result<(), AccessError> {
+        let keys = self.member_keys(&profile.member)?;
+        profile.verify(&keys)?;
+        if self
+            .profiles
+            .get(&profile.member)
+            .is_some_and(|p| p.seq >= profile.seq)
+        {
+            return Err(rejected());
+        }
+        if self.directory.profile_count(&profile.member) >= MAX_PROFILES_PER_MEMBER {
+            return Err(AccessError::Denied(crate::Denial::Invalid));
+        }
+        self.directory
+            .check(&KeyLogEntry::member_profile(profile, 0)?)
+            .map_err(|_| rejected())
+    }
+
+    /// Inscribes a member profile, after [`KeyLog::check_profile`].
+    ///
+    /// # Errors
+    /// As [`KeyLog::check_profile`].
+    pub fn append_profile(
+        &mut self,
+        profile: &MemberProfile,
+        now_ms: u64,
+    ) -> Result<u64, AccessError> {
+        self.check_profile(profile)?;
+        let obj = profile.encode()?;
+        let index = self.push(KeyLogEntry::member_profile(profile, now_ms)?, Some(obj))?;
+        self.profiles.insert(profile.member, profile.clone());
+        Ok(index)
+    }
+
+    /// Current profile of a member, if it has one.
+    #[must_use]
+    pub fn profile(&self, member: &Id16) -> Option<&MemberProfile> {
+        self.profiles.get(member)
+    }
+
+    /// Current profiles, by member.
+    pub fn profiles(&self) -> impl Iterator<Item = &MemberProfile> {
+        self.profiles.values()
     }
 
     /// Inscribes the removal of `member` from `locker` by the `Revoke` `op_id`.

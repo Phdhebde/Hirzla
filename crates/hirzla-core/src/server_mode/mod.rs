@@ -17,9 +17,12 @@
 //!   quorum is met, quarantine decisions, automatic rejection from the kept local reception,
 //!   and the dated watch of the key log that freezes a locker whose announced removal is
 //!   withheld.
+//! - Display names (ADR 0069): the profile of this member, the verified names of the members
+//!   of the lockers held here, and the keys whose fingerprint the user compared.
 
 mod devices;
 mod governance;
+mod profiles;
 pub mod proto;
 
 #[cfg(feature = "fuzzing")]
@@ -61,9 +64,9 @@ use crate::proto::ErrorCode;
 /// A replica of a shared locker.
 pub type SharedReplica = Replica<AccessAuthorizer>;
 
-/// Version of the annex file written (`format.md` § 15.2, ADR 0040, ADR 0044, ADR 0045).
-/// Versions 1 and 2 are still read.
-const ANNEX_VERSION: u64 = 3;
+/// Version of the annex file written (`format.md` § 15.2, ADR 0040, ADR 0044, ADR 0045,
+/// ADR 0069). Versions 1 to 3 are still read.
+const ANNEX_VERSION: u64 = 4;
 /// Most elements of each list of the dated watch (`format.md` § 15.2).
 const MAX_WATCH: usize = 100_000;
 /// The delays of `transparence.md` § 6.4 and § 6.5: one hour.
@@ -256,6 +259,8 @@ struct Joined {
     /// Pending approval requests, by request identifier.
     requests: BTreeMap<Id16, PendingRequest>,
     watch: Watch,
+    /// Display names and compared fingerprints (ADR 0069).
+    profiles: profiles::Profiles,
 }
 
 /// A locked monitor: a poisoned lock (panic while updating) counts as a corrupt state.
@@ -280,6 +285,9 @@ pub struct ServerMode {
     last_sync_ms: Option<u64>,
     /// Wall clock, milliseconds (replaced by the tests that need days to pass).
     clock: fn() -> u64,
+    /// Members found by the searches of this session: their key (`SHA-384(CBOR(MemberKeys))`)
+    /// and its fingerprint, for `MemberVerify` before a first grant (not kept).
+    seen: BTreeMap<Id16, ([u8; 48], String)>,
 }
 
 /// Wall clock, milliseconds since 1970 (0 before).
@@ -321,6 +329,12 @@ fn keylog_status(log: &LocalKeyLog) -> Result<KeyLogStatus, ServerCode> {
                 kind: AlertKind::UnknownOwnRevocation,
                 index: Some(index),
                 device: Some(device),
+                locker: None,
+            },
+            Alert::UnknownOwnProfile { index } => KeyLogAlert {
+                kind: AlertKind::UnknownOwnProfile,
+                index: Some(index),
+                device: None,
                 locker: None,
             },
         })
@@ -385,6 +399,7 @@ impl ServerMode {
             joined: None,
             last_sync_ms: None,
             clock: wall_ms,
+            seen: BTreeMap::new(),
         };
         match std::fs::symlink_metadata(&mode.annex) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(mode),
@@ -518,7 +533,7 @@ impl ServerMode {
 
     fn decode(&self, content: &[u8]) -> Result<Joined, ServerCode> {
         let v = cbor::decode(content).map_err(corrupt)?;
-        let f = Fields::new(&v, &[1, 2, 3, 4, 5, 6, 7]).map_err(corrupt)?;
+        let f = Fields::new(&v, &[1, 2, 3, 4, 5, 6, 7, 8]).map_err(corrupt)?;
         let version = uint_in(f.req(1).map_err(corrupt)?, 1..=ANNEX_VERSION).map_err(corrupt)?;
         let info = ServerInfo::from_value(f.req(2).map_err(corrupt)?).map_err(corrupt)?;
         let roots = bytes_max(f.req(3).map_err(corrupt)?, MAX_ROOTS)
@@ -528,16 +543,22 @@ impl ServerMode {
         // Version 1 kept no key log: it starts empty and is filled at the next session.
         let keylog = match (version, f.opt(5)) {
             (1, None) => self.new_keylog(&info)?,
-            (2 | 3, Some(k)) => self.decode_keylog(&info, k)?,
+            (2..=4, Some(k)) => self.decode_keylog(&info, k)?,
             _ => return Err(general(ErrorCode::Corrupt)),
         };
         // Version 3 (ADR 0044, ADR 0045): pending requests and the dated watch.
         let (requests, watch) = match (version, f.opt(6), f.opt(7)) {
             (1 | 2, None, None) => (BTreeMap::new(), Watch::default()),
-            (3, Some(r), Some(w)) => (
+            (3 | 4, Some(r), Some(w)) => (
                 governance::decode_requests(r)?,
                 governance::decode_watch(w)?,
             ),
+            _ => return Err(general(ErrorCode::Corrupt)),
+        };
+        // Version 4 (ADR 0069): display names and compared fingerprints.
+        let profiles = match (version, f.opt(8)) {
+            (1..=3, None) => profiles::Profiles::default(),
+            (4, Some(p)) => profiles::Profiles::from_value(p)?,
             _ => return Err(general(ErrorCode::Corrupt)),
         };
         let locker_keys: &[u64] = if version == 1 {
@@ -623,6 +644,10 @@ impl ServerMode {
                     m.expect_own(revocation_object(&rev).map_err(corrupt)?);
                 }
             }
+            // So does a profile this device issued (`ProfileSet`, ADR 0069): no alert 8.
+            for object in profiles.issued() {
+                m.expect_own(*object);
+            }
         }
         Ok(Joined {
             info,
@@ -631,6 +656,7 @@ impl ServerMode {
             keylog,
             requests,
             watch,
+            profiles,
         })
     }
 
@@ -688,6 +714,7 @@ impl ServerMode {
             (5, Self::encode_keylog(&joined.keylog)?),
             (6, governance::encode_requests(&joined.requests)),
             (7, governance::encode_watch(&joined.watch)),
+            (8, joined.profiles.to_value()),
         ]))
         .map_err(internal)
     }
@@ -841,6 +868,12 @@ impl ServerMode {
                 ops,
                 accept,
             } => self.quarantine_decide(vault, locker, ops, accept),
+            ServerRequest::ProfileSet { name } => self.profile_set(vault, &name),
+            ServerRequest::MemberSearch { text } => self.member_search(vault, &text),
+            ServerRequest::MemberVerify {
+                member,
+                fingerprint,
+            } => self.member_verify(vault, member, &fingerprint),
         }
     }
 
@@ -900,6 +933,7 @@ impl ServerMode {
             fingerprint: fingerprint(&keys.sig),
             device: self.device.device_id(),
             control_code: crate::agent::control_code(self.device.cert()).map_err(internal)?,
+            name: self.display_name(&self.device.member_id())?,
         })
     }
 
@@ -958,6 +992,7 @@ impl ServerMode {
             keylog,
             requests: BTreeMap::new(),
             watch: Watch::default(),
+            profiles: profiles::Profiles::default(),
         });
         self.save(vault)?;
         let account = if verified { self.try_auth()? } else { false };
@@ -1042,6 +1077,8 @@ impl ServerMode {
                 apply_stable(s, &c);
             }
         }
+        // Display names of the members of the lockers held here (ADR 0069), best effort.
+        let named = self.refresh_names(&mut client);
         let _ = client.bye();
         self.compare_with_keylog()?;
         if self.joined()?.watch.enrolled_ms.is_none() {
@@ -1053,6 +1090,7 @@ impl ServerMode {
         }
         self.refresh_watch()?;
         self.save(vault)?;
+        named?;
         match failure {
             Some(e) => Err(e),
             None => {
@@ -1313,13 +1351,13 @@ impl ServerMode {
         let mut client = self.session()?;
         self.update_keylog(vault, &mut client)?;
         self.keylog_sound()?;
-        let (fp, devices) = match present {
+        let (fp, devices, keys) = match present {
             Some(e) => {
                 let s = self.shared_mut(&locker)?;
                 s.replica
                     .grant(e.keys.clone(), role, Vec::new(), None)
                     .map_err(emit_error)?;
-                (fingerprint(&e.keys.sig), e.devices.len() as u64)
+                (fingerprint(&e.keys.sig), e.devices.len() as u64, e.keys)
             }
             None => {
                 let (keys, devices, proof) = self.member_keys(&mut client, &member)?;
@@ -1330,16 +1368,22 @@ impl ServerMode {
                 let n = devices.len() as u64;
                 let s = self.shared_mut(&locker)?;
                 s.replica
-                    .grant_with_proof(keys, role, devices, None, Some(proof))
+                    .grant_with_proof(keys.clone(), role, devices, None, Some(proof))
                     .map_err(emit_error)?;
-                (fp, n)
+                (fp, n, keys)
             }
         };
+        if expected.is_some() {
+            // The caller gave the fingerprint compared out of band, and it matched: kept
+            // with the key, so that the comparison is not asked again (ADR 0069, point 4).
+            self.note_verified(&keys)?;
+        }
         self.publish(vault, &mut client, &locker)?;
         let _ = client.bye();
         Ok(ServerReply::Granted {
             fingerprint: fp,
             devices,
+            name: self.display_name(&member)?,
         })
     }
 
@@ -1428,6 +1472,8 @@ impl ServerMode {
                 change_to,
                 change_refusal,
                 remove_refusal,
+                name: self.display_name(id)?,
+                verified: self.fingerprint_verified(&e.keys),
             });
         }
         Ok(ServerReply::Members {

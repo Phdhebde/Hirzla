@@ -22,6 +22,17 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   rendue.
 - Ligne de commande : `connexion ssh|rdp|voir|modifier`, `cle-ssh ajouter`.
 
+### Générateur
+
+- Cinq modes : caractères, phrase de passe (liste française embarquée de 2 048 mots),
+  prononçable, code PIN et modèle (ADR 0068).
+- Réglages : minimum par famille, symboles et exclusions au choix, règles « sans ambigus »,
+  « mêmes touches en AZERTY et en QWERTY », « sans répétition », « lettre en tête ».
+- Entropie renvoyée avec chaque valeur, calculée après filtrage par les règles.
+- Profils intégrés, dont « longue durée » à 256 bits.
+- API locale version 7 : opération `GenerateWith` (14). `Generate` (10) ne change pas.
+- Ligne de commande : `hirzla gen --mode …`, `--profil …` et les réglages correspondants.
+
 ## [1.0.0] — 2026-11-16
 
 Première version publiée. Installeurs pour Windows (MSI), macOS (paquet d'installation
@@ -66,6 +77,11 @@ pour Linux, extension Firefox et Chromium.
 - Accords et quorum, quarantaine, gel des écritures et délais (ADR 0044, 0045) ; lien
   d'invitation (ADR 0046) ; purge et rétention configurable des opérations tardives
   (ADR 0047, 0058) ; révocation de son propre appareil depuis une alerte (ADR 0059).
+- Nom affiché des membres : signé par la clé du membre, inscrit au registre de transparence
+  (entrée de type 6, règle R7), recherche dans l'annuaire du serveur, vérification de toute
+  la chaîne par le poste avant d'afficher un nom, drapeau « empreinte comparée » et alerte
+  « nom affiché inconnu inscrit à votre nom » (ADR 0069 ; `hirzla serveur nom`,
+  `serveur chercher`, `serveur verifier`).
 - Sceau du serveur à quorum, descellement et administration par un port distinct à
   certificat client (`hirzlad admin`, ADR 0053) ; bornes de connexion réglables (ADR 0051).
 - Journal d'audit chaîné et signé, export CEF et syslog TLS, vérification hors ligne par

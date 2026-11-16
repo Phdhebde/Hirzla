@@ -92,7 +92,8 @@ versionnés : la construction ne les régénère pas.
 
 | Touche | Action |
 | --- | --- |
-| Ctrl+F (Cmd+F) | Rechercher |
+| Ctrl+F (Cmd+F) | Filtrer la liste |
+| Ctrl+K (Cmd+K) | Palette : aller à un secret ou à une action, Ctrl+Entrée copie le mot de passe |
 | Ctrl+N | Nouveau secret |
 | Ctrl+G | Générateur |
 | Ctrl+L | Verrouiller |

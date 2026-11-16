@@ -519,24 +519,32 @@ fn run(args: &Args) -> Result<(), String> {
             let clear_s = status(&mut c)?.clipboard_clear_s;
             deliver(&value, *stdout, clear_s)
         }
-        Command::Gen {
-            length,
-            classes,
-            stdout,
-        } => {
+        Command::Gen { spec, stdout } => {
             let mut c = session.connect(true)?;
-            let password = match call(
-                &mut c,
-                &Request::Generate {
-                    length: *length,
-                    classes: *classes,
-                },
-            )? {
-                Reply::Generated(p) => p,
-                _ => return Err("réponse non valide du noyau.".into()),
+            let generated = match c.call(&Request::GenerateWith { spec: spec.clone() }) {
+                Ok(Reply::GeneratedWith(g)) => g,
+                Ok(_) => return Err("réponse non valide du noyau.".into()),
+                Err(ClientError::Refused(e)) if e.code == ErrorCode::InvalidInput => {
+                    return Err("réglages refusés : hors bornes, contradictoires, ou si \
+                                contraints que les règles écarteraient presque tous les \
+                                tirages."
+                        .into())
+                }
+                Err(e) => return Err(client_message(&e)),
             };
             let clear_s = status(&mut c)?.clipboard_clear_s;
-            deliver(&password, *stdout, clear_s)
+            deliver(&generated.value, *stdout, clear_s)?;
+            // On the error stream: the standard output may carry the value alone.
+            let bits = generated.estimate.entropy_millibits / 100;
+            let _ = writeln!(
+                std::io::stderr(),
+                "Entropie : {},{} bits ({},{} face à une recherche quantique).",
+                bits / 10,
+                bits % 10,
+                bits / 20,
+                bits / 2 % 10
+            );
+            Ok(())
         }
         Command::Rm { name, id, purge } => {
             let mut c = session.connect(false)?;

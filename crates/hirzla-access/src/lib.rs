@@ -13,6 +13,7 @@
 //! | [`group`] | Groups: what to grant or revoke when a membership changes |
 //! | [`hornn`] | Session grants signed by Hornn, single use, `BlindUser` use (`integration-hornn.md`) |
 //! | [`keylog`] | Key transparency log: RFC 9162 tree, signed heads, proofs, monitor |
+//! | [`profile`] | Member profile: the signed display name inscribed in the key log (ADR 0069) |
 //! | [`revocation`] | After a removal: recipients, exposed secrets, reseal plan |
 //! | [`recovery`] | Recovery of the member key through trustees |
 //!
@@ -27,6 +28,7 @@ mod error;
 pub mod group;
 pub mod hornn;
 pub mod keylog;
+pub mod profile;
 pub mod recovery;
 pub mod revocation;
 pub mod role;

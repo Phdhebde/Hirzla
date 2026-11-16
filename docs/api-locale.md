@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v6
+# API locale du noyau — spécification v7
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -9,7 +9,8 @@ sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
-les connexions SSH et RDP (version 6) par l'ADR 0067.
+les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
+§ 6.2) par l'ADR 0068.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -90,7 +91,7 @@ noyau d'après son exécutable, jamais d'après un message :
 | Profil | Exécutables | Opérations permises |
 | --- | --- | --- |
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
-| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
+| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
 **Signature du client** (ADR 0042, 0063). En plus du chemin, le noyau peut exiger que
 l'exécutable du client soit signé. Ce qui est vérifié est **fixé à la compilation**, jamais
@@ -250,6 +251,7 @@ secret non purgé (corbeille comprise).
 | 11 | `Shutdown` | non | — | — (le noyau verrouille, répond, puis s'arrête) |
 | 12 | `Match` (v2) | ouvert | `{1: origine}` | `{1: [entrée]}` |
 | 13 | `Fill` (v2) | ouvert | `{1: casier, 2: secret, 3: origine}` | `{1?: identifiant, 2: mot de passe}` |
+| 14 | `GenerateWith` (v7) | non | réglages du générateur (§ 6.2) | `{1: valeur, 2: entropie en millibits, 3?: taille de l'ensemble}` |
 
 Détails :
 
@@ -269,7 +271,7 @@ Détails :
    Argon2id ; il est perdu si le noyau redémarre.
 4. **Verrouillage automatique** — le noyau verrouille le coffre après `auto_lock_s` secondes sans
    opération sur le coffre (`List`, `Read`, `Create`, `Update`, `Delete`, `Unlock`, `Init`).
-   `Status` et `Generate` ne prolongent pas l'ouverture : une interface qui sonde l'état ne
+   `Status`, `Generate` et `GenerateWith` ne prolongent pas l'ouverture : une interface qui sonde l'état ne
    garde pas le coffre ouvert. Le délai vient des réglages du coffre (`format.md` § 5.6) ; une
    valeur 0 est remplacée par le défaut (300 s). `--auto-lock S` le remplace (1 à 86 400 s).
    Vérification toutes les 250 ms.
@@ -287,7 +289,8 @@ Détails :
 10. **`Generate`** — classes en masque : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles
     (`!#$%&()*+,-./:;<=>?@[]^_{|}~`, sans espace, guillemets, barre oblique inverse ni accent
     grave). Chaque caractère est tiré uniformément par rejet sur l'aléa du système (AWS-LC) ;
-    un tirage qui manque une classe demandée est refait en entier.
+    un tirage qui manque une classe demandée est refait en entier. Cas particulier de
+    `GenerateWith` (§ 6.2) : minimum de 1 par famille demandée, aucune règle.
 
 11. **`Match`** (v2) — les secrets **actifs** de type mot de passe dont les `hosts` de l'index
     (`format.md` § 10, règle des `hosts`) contiennent **exactement** l'hôte de l'origine. Même
@@ -301,6 +304,69 @@ Détails :
     exactement dans ses `hosts`. Sinon `NotFound`, sans dire lequel de ces points manque (un
     client ne peut pas apprendre par `Fill` qu'un secret existe hors de son origine). Pas de
     mot de passe : `NotFound`.
+
+### 6.2 Générateur complet (v7)
+
+Décisions : ADR 0068. `GenerateWith` (14) ne lit ni ne modifie le coffre, et ne prolonge pas
+son ouverture. Les réglages ne sont pas secrets ; la valeur renvoyée l'est.
+
+**Arguments.** La clé 1 donne le mode ; les autres clés dépendent du mode. Une clé qui
+n'appartient pas au mode est refusée (`Malformed`), une valeur hors bornes aussi
+(`InvalidInput`). Une clé facultative absente vaut son défaut ; un client n'écrit pas une
+valeur par défaut.
+
+| Clé | Nom | Type | Modes | Valeur |
+| --- | --- | --- | --- | --- |
+| 1 | mode | `uint` | tous | 1 caractères, 2 phrase de passe, 3 prononçable, 4 code PIN, 5 modèle |
+| 2 | taille | `uint` | 1, 2, 3, 4 | caractères 8..256, mots 3..32, syllabes 4..128, chiffres 4..12 |
+| 3 | familles | `uint` | 1 | masque de `Generate` : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles |
+| 4 | minimums | `[uint; 4]` | 1 | minimum de minuscules, majuscules, chiffres, symboles, chacun 0..9 ; 0 pour une famille non demandée |
+| 5? | symboles | `text` | 1, 5 | symboles autorisés à la place de la liste par défaut : ponctuation ASCII, chacun une fois, au moins un. En mode 1, seulement si la famille des symboles est demandée |
+| 6? | exclusions | `text` | 1, 5 | caractères ASCII imprimables retirés de toutes les familles, chacun une fois |
+| 7? | règles | `uint` | 1, 3, 4, 5 | masque ci-dessous ; défaut 0 |
+| 8 | séparateur | `text` | 2 | un caractère ASCII qui n'est ni une lettre ni un chiffre (espace admise) |
+| 9? | majuscule | `bool` | 2, 3 | majuscule initiale de chaque mot (2) ou de la valeur (3) |
+| 10? | chiffres | `uint` | 2, 3 | 0..4 : nombre placé au hasard parmi les mots (2), bloc final (3) |
+| 11 | modèle | `text` | 5 | 256 octets au plus : `a` minuscule, `A` majuscule, `9` chiffre, `#` symbole, `*` l'une des quatre familles ; ponctuation et espace recopiées ; `\x` recopie `x` ; toute autre lettre ou chiffre est refusé ; au moins une position tirée |
+
+**Règles** (clé 7), en masque :
+
+| Bit | Règle | Modes | Effet |
+| --- | --- | --- | --- |
+| 1 | sans ambigus | 1, 3, 5 | retire `0 O o 1 l I` |
+| 2 | mêmes touches AZERTY et QWERTY | 1, 5 | ne garde que les lettres autres que `a q z w m` ; tous les chiffres et symboles sont retirés |
+| 4 | sans répétition | 1, 4, 5 | aucun caractère deux fois de suite |
+| 8 | lettre en tête | 1 | le premier caractère est une lettre |
+| 16 | sans suite | 4 | pas trois chiffres consécutifs croissants ou décroissants |
+
+Une règle hors de son mode : `InvalidInput`.
+
+**Tirage.** Chaque unité est tirée uniformément par rejet sur l'aléa du système. Les règles 1
+et 2 et les exclusions réduisent les ensembles avant le tirage ; les minimums et les règles 4,
+8 et 16 filtrent : un candidat qui les enfreint est jeté et retiré en entier. Le résultat est
+uniforme sur les candidats conformes.
+
+**Refus** (`InvalidInput`) : famille demandée vidée par les exclusions ou les règles (par
+exemple des chiffres avec « mêmes touches ») ; minimum pour une famille non demandée ; somme
+des minimums supérieure à la longueur ; « lettre en tête » sans famille de lettres ; modèle
+sans position tirée ; réglages dont les règles laisseraient passer moins d'un candidat sur
+1 024. Le noyau n'ajuste jamais un réglage de lui-même.
+
+**Résultat.**
+
+- 1 : la valeur. Phrase de passe : mots de la liste française embarquée (2 048 mots, sans
+  accents), séparés par le séparateur. Prononçable : syllabes consonne-voyelle par blocs de
+  trois séparés par `-`, puis `-` et les chiffres. PIN : les chiffres seuls, sans espace.
+- 2 : l'entropie de la valeur **après filtrage**, en millièmes de bit, arrondie par défaut :
+  log₂ du nombre de candidats conformes. L'interface affiche cette valeur face à une recherche
+  classique et sa moitié face à une recherche quantique.
+- 3 : la taille de l'ensemble où chaque unité est tirée, après filtrage : caractères du mode
+  1, 2 048 mots, syllabes possibles, 10 chiffres. Absente pour un modèle, dont les positions
+  diffèrent.
+
+**Profils.** Les profils intégrés (`defaut`, `longue-duree`, `site-capricieux`, `wifi`,
+`compte-de-service`, ADR 0068 § 5) sont une table de réglages de `hirzla-core`
+(`generator::Profile`), pas un message : le client y lit des réglages complets et les envoie.
 
 ### 6.1 Origine (v2)
 
@@ -409,7 +475,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **2** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **7** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
   qu'avant, portant `v = 1`. Un client envoie chaque requête avec **la plus petite version qui
@@ -433,7 +500,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `get NOM \| --id ID [--champ C] [--stdout]` | `List` (résolution), `Read`, `Status` |
 | `set NOM [--identifiant U] [--url U]… [--tag T]… [--note] [--generer [N]]` | `List`, (`Generate`), `Create` ou `Update` |
 | `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
-| `gen [N] [--sans-symboles] [--sans-chiffres] [--sans-majuscules] [--stdout]` | `Generate`, `Status` |
+| `gen [TAILLE] [--mode M \| --profil P] [réglages] [--stdout]` | `GenerateWith`, `Status` |
 | `status`, `stop` | `Status` ; `Shutdown` |
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
@@ -452,6 +519,15 @@ RDP au § 17.5.
   synchronisation, et effacée après `clipboard_clear_s` secondes (30 par défaut) si le
   presse-papiers la contient encore. Sans presse-papiers disponible, la commande échoue et
   invite à utiliser `--stdout`.
+- **`gen`** — modes `caracteres` (défaut : 24 caractères, quatre familles, une de chaque au
+  moins), `phrase` (6 mots), `prononcable` (9 syllabes), `pin` (6 chiffres), `modele`
+  (`--modele MODELE`). Réglages : `--sans-minuscules`, `--sans-majuscules`, `--sans-chiffres`,
+  `--sans-symboles`, `--min MIN,MAJ,CHIFFRES,SYMBOLES`, `--symboles LISTE`, `--exclure LISTE`,
+  `--sans-ambigus`, `--memes-touches`, `--sans-repetition`, `--lettre-en-tete`, `--sans-suite`,
+  `--separateur C`, `--majuscule`, `--chiffres N`. `--profil` prend un profil intégré et
+  exclut tout autre réglage. Une option hors de son mode est une erreur d'usage. L'entropie
+  s'écrit sur la **sortie d'erreur** (`Entropie : 145,1 bits (72,5 face à une recherche
+  quantique).`), pour que la sortie standard ne porte que la valeur.
 - `init`, `unlock` et `gen` **démarrent le noyau** s'il ne tourne pas (`hirzla-core` à côté de
   `hirzla`, détaché du terminal). Les autres commandes ne le démarrent pas.
 - `--id` attend au moins 4 chiffres hexadécimaux du début de l'identifiant affiché par `ls`.
@@ -605,15 +681,16 @@ l'autorisation) :
 
 Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
-partagés, rôles, accords, quarantaine et révocation d'un appareil. Codes : opérations **40 à
-49** et **90 à 99** (ADR 0044, 0045, 0059), erreurs **40 à 49** et **90 à 99**. Toutes exigent un coffre
+partagés, rôles, accords, quarantaine, révocation d'un appareil et noms affichés. Codes :
+opérations **40 à 49**, **90 à 99** (ADR 0044, 0045, 0059) et **120 à 129** (ADR 0069),
+erreurs **40 à 49**, **90 à 99** et **120 à 129** (réservées). Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
 pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
 
 ### 15.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-40 à 49 ou 90 à 99 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
+40 à 49, 90 à 99 ou 120 à 129 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
 `{2: [4]}`. Les réponses portent `v = 4`. Ces opérations sont refusées au profil navigateur
 (`Unauthorized`). `Status` (§ 6) n'annonce pas la version 4 : un client la découvre par
 `ServerStatus`.
@@ -629,11 +706,12 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Rôle | `uint`, codes de `sync-protocol.md` § 7.1 (1 `Owner` … 6 `Auditor`) |
 | État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool, 9: gelé bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle ; 9 : écritures gelées par une révocation retenue (ADR 0045) |
 | État du registre | `{1: suspect bool, 2: entrées uint, 3?: motif uint, 4: [alerte]}` (ADR 0041) ; 3 présent si et seulement si 1 vaut `true` : 1 racine différente, 2 tête plus petite, 3 règle R1 à R5 violée, 4 tête d'un pair incohérente, 5 tête d'un pair non servie, 6 entrée d'une preuve différente (`transparence.md` § 6.7) |
-| Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 2 présent pour les types 1 à 4, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
+| Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 8 nom affiché inconnu inscrit à votre nom (ADR 0069) ; 2 présent pour les types 1 à 4 et 8, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
 | Action d'accord | `uint` : 1 retrait d'un `Owner`, 2 changement de rôle d'un `Owner`, 3 changement du quorum (`sync-protocol.md` § 7.7) |
 | Demande, accord, lien | `tstr` (≤ 96 Kio) dans l'enveloppe texte de `sync-protocol.md` § 11.10 : `hirzla-demande:…`, `hirzla-accord:…`, `hirzla-invitation:…` ; les blancs sont retirés avant le décodage |
 | État d'une demande | `{1: request_id bstr(16), 2: casier, 3: action, 4?: cible, 5?: détail uint, 6: [membre], 7: requis uint, 8: demande tstr, 9: créée uint (ms)}` ; 6 : membres comptés (l'initiateur d'abord, puis les approbateurs) ; 7 : quorum en vigueur ; 4 et 5 comme dans la demande |
 | Opération en quarantaine | `{1: op_id bstr(48), 2: membre, 3: appareil bstr(16), 4: cause uint (1 retrait concurrent, 2 bifurcation), 5: classe uint (1 donnée, 2 contrôle), 6?: heure annoncée uint, 7?: titre tstr, 8?: secret bstr(16), 9: reçue uint, 10: échéance uint}` ; 6 à 8 pour une donnée lisible ; 9 et 10 en millisecondes (réception locale, rejet automatique) |
+| Nom affiché | `tstr` (≤ 64 octets), valide selon `format.md` § 3.7 ; dans une réponse, présent seulement si le membre en a un et si le noyau l'a vérifié (§ 15.9) : jamais vide, jamais « non vérifié » |
 | Refus | `uint`, pourquoi le rôle du membre courant ne permet pas une action (ADR 0041) : 1 rôle insuffisant, 2 quorum de propriétaires requis, 3 dernier propriétaire, 4 accès au casier retiré par le serveur |
 
 ### 15.3 Opérations
@@ -641,14 +719,14 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier], 7?: dernière synchronisation uint, 8?: état du registre}` ; 2 à 5 et 8 présents si et seulement si rattaché ; 7 en millisecondes depuis 1970, absent sans synchronisation réussie depuis l'ouverture du coffre |
-| 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20)}` |
+| 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20), 5?: nom affiché}` |
 | 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` ou `{4: lien d'invitation}` (ADR 0046) | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
 | 43 | `ServerConfirm` | oui | `{1: empreinte}` | `{1: compte reconnu bool}` |
 | 44 | `ServerSync` | oui | — | `{1: [{1: casier, 2: reçues uint, 3: envoyées uint, 4: refusées uint, 5: accès bool}]}` |
 | 45 | `SharedLockerCreate` | oui | `{1: nom tstr (1 à 256 octets)}` | `{1: casier}` |
-| 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
+| 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint, 3?: nom affiché}` |
 | 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
-| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
+| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus, 9?: nom affiché, 10: empreinte comparée bool}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
 | 49 | `DeviceRevoke` | oui | `{1: appareil bstr(16)}` | `{1: casiers uint}` (ADR 0059) |
 
 Détails :
@@ -779,6 +857,10 @@ casiers partagés, sans changer leurs messages :
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
 
+**Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
+clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
+et les opérations 120 à 122 étendent la version 4 de la même façon.
+
 **Compatibilité** (ADR 0041, 0044 à 0046, 0059) : la clé 9 de l'état d'un casier, la clé 4 de
 l'alerte, la clé 5 de `LockerMembers`, la clé 4 de `ServerJoin`, les opérations 90 à 98,
 l'opération 49 et l'erreur 49 étendent aussi la version 4. Les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
@@ -796,6 +878,9 @@ aucun autre client de la version 4 n'existe.
 | `serveur confirmer EMPREINTE` | `ServerConfirm` |
 | `serveur etat` | `ServerStatus` |
 | `serveur sync` | `ServerSync` |
+| `serveur nom NOM` | `ProfileSet` (`NOM` vide : retire le nom) |
+| `serveur chercher TEXTE` | `MemberSearch` |
+| `serveur verifier MEMBRE EMPREINTE` | `MemberVerify` |
 | `casier creer NOM` | `SharedLockerCreate` |
 | `casier membres CASIER` | `LockerMembers` |
 | `casier ajouter CASIER MEMBRE ROLE [--empreinte E]` | `RoleGrant` |
@@ -826,7 +911,7 @@ hexadécimaux du début de l'`op_id` ; `APPAREIL`, l'identifiant de l'appareil e
    point 9).
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
 3. ~~Pas d'accords à plusieurs, de décisions de quarantaine~~ (faits : § 15.8, ADR 0044 et
-   0045). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
+   0045 ; noms affichés : § 15.9, ADR 0069). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
    partagés : à spécifier dans une version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
@@ -846,7 +931,7 @@ pour le casier personnel).
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 90 | `QuorumPrepare` | non | `{1: casier, 2: action, 3?: cible, 4?: détail uint}` | état d'une demande |
-| 91 | `QuorumInspect` | non | `{1: demande}` | `{1: casier, 2?: nom tstr, 3: action, 4?: cible, 5?: empreinte de la cible, 6?: détail, 7: initiateur, 8?: empreinte de l'initiateur, 9: peut signer bool}` |
+| 91 | `QuorumInspect` | non | `{1: demande}` | `{1: casier, 2?: nom tstr, 3: action, 4?: cible, 5?: empreinte de la cible, 6?: détail, 7: initiateur, 8?: empreinte de l'initiateur, 9: peut signer bool, 10?: nom affiché de la cible, 11?: nom affiché de l'initiateur}` |
 | 92 | `QuorumApprove` | non | `{1: demande}` | `{1: accord}` |
 | 93 | `QuorumCollect` | non | `{1: accord}` | état d'une demande |
 | 94 | `QuorumApply` | oui | `{1: request_id bstr(16)}` | — |
@@ -891,6 +976,71 @@ Détails :
     `RoleGrant`, `RoleRevoke` (`LockerFrozen`) et les écritures de secrets (`InvalidInput`,
     § 15.4).
 
+
+### 15.9 Noms affichés (opérations 120 à 122)
+
+Décision : ADR 0069. Un membre se donne un **nom affiché**, signé par sa clé de membre et
+inscrit au registre de transparence (`format.md` § 3.7, `transparence.md` § 6.8). Les plages
+120 à 129 (opérations et erreurs) sont réservées au mode Serveur ; aucune erreur nouvelle
+n'est définie.
+
+| Code | Nom | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 120 | `ProfileSet` | oui | `{1: nom tstr (0 à 64 octets)}` | — |
+| 121 | `MemberSearch` | oui | `{1: texte tstr (2 à 64 octets)}` | `{1: [{1: membre, 2: nom affiché, 3: empreinte, 4: empreinte comparée bool}], 2: tronqué bool}`, au plus 32 |
+| 122 | `MemberVerify` | non | `{1: membre, 2: empreinte}` | — |
+
+Détails :
+
+1. **`ProfileSet`** — nom invalide (`format.md` § 3.7) : `InvalidInput`, rien n'est signé.
+   `NotJoined` sans serveur ; `Forbidden` si le poste n'a pas la clé du membre (pas un
+   appareil de certification). Le noyau met le registre à jour, lit le profil courant inscrit
+   pour le membre (rang suivant ; illisible ou invérifiable : `KeyLogRejected`), fait signer
+   le `MemberProfile` par la clé du membre **dans le coffre**, note son empreinte comme
+   attendue (pas d'alerte 8, même après un redémarrage), l'envoie (`PutMemberProfile`) et
+   relit le registre. Nom vide : le membre retire son nom. Nom égal au nom courant : rien
+   n'est inscrit. Au-delà de 256 profils : `ServerRefused` (code 8).
+2. **`MemberSearch`** — texte de moins de 2 ou de plus de 64 octets : `InvalidInput`. Le
+   noyau met le registre à jour, interroge l'annuaire (`FindMembers`), puis **vérifie chaque
+   réponse** (§ 15.9.1) et écarte sans erreur celles qui échouent. « Tronqué » : le serveur
+   a plus de résultats qu'il n'en rend. Le serveur apprend le texte cherché
+   (`sync-protocol.md` § 12).
+3. **`MemberVerify`** — l'utilisateur a comparé hors bande l'empreinte du membre et la donne.
+   Membre inconnu du poste (ni dans un casier tenu ici, ni dans une recherche faite depuis
+   l'ouverture du coffre) : `NotFound`. Empreinte différente de celle de sa clé :
+   `FingerprintMismatch`, rien n'est noté. Sinon le noyau garde dans l'annexe l'empreinte
+   complète de la clé comparée (`format.md` § 15.2, clé 8). Rien n'est envoyé au serveur.
+
+#### 15.9.1 Ce que le noyau vérifie avant de rendre un nom
+
+Un nom n'est rendu (clés « nom affiché » de `ServerIdentity`, `LockerMembers`, `RoleGrant`,
+`QuorumInspect`, `MemberSearch`) que si le noyau a vérifié lui-même toute la chaîne :
+
+1. le profil est le **profil courant** du membre dans le registre local (dernière entrée de
+   type 6) : `SHA-384(CBOR(MemberProfile))` égale son `object` ;
+2. la clé du membre dont le noyau dispose est celle que le registre inscrit (type 1) ;
+3. la signature du profil vérifie avec cette clé ;
+4. son rang dépasse celui du profil que le noyau gardait pour ce membre.
+
+Un échec, un nom retiré ou un profil pas encore lu : la clé est absente, et l'interface
+affiche l'identifiant et l'empreinte. Le noyau ne rend jamais un nom « non vérifié ».
+
+Les noms sont mis à jour à chaque `ServerSync` pour le membre du poste et pour les membres
+des casiers tenus ici, puis gardés dans l'annexe : `LockerMembers`, `ServerIdentity` et
+`QuorumInspect` restent sans réseau.
+
+#### 15.9.2 Un nom ne prouve rien : « empreinte comparée »
+
+Un nom est **déclaré par le membre lui-même**. Deux membres peuvent porter le même nom, ou
+deux noms qui se ressemblent. Le noyau rend donc toujours l'empreinte avec le nom, et un
+drapeau **« empreinte comparée »** : vrai si l'utilisateur a comparé hors bande l'empreinte
+de la clé actuelle de ce membre, par `MemberVerify` ou par un `RoleGrant` avec une empreinte
+attendue ; toujours vrai pour le membre du poste ; faux si la clé a changé depuis.
+
+- L'interface fait comparer l'empreinte une fois avant le premier partage avec un membre
+  dont l'empreinte n'est pas comparée.
+- Le noyau n'en fait pas une condition de `RoleGrant` (ADR 0069, point 4).
+- Aucune opération ne désigne un membre par son nom : `MemberSearch` rend des identifiants.
 
 ## 16. Mode Self (version 5)
 

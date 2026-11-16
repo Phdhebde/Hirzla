@@ -1372,6 +1372,35 @@ fn device_revocation_is_signed_by_the_member_key() {
         .is_err());
 }
 
+/// ADR 0069: the member key signs a member profile inside the vault; the signature verifies
+/// with the member key over keys 1 to 4 of § 3.7, in the profile domain only.
+#[test]
+fn member_profile_is_signed_by_the_member_key() {
+    let (_d, _p, mut v) = new_vault();
+    let sig = v.sign_member_profile(1, "Marie Durand", 42).unwrap();
+    let sig = Signature::from_bytes(&sig).unwrap();
+    let body = cbor::encode(&Value::map(vec![
+        (1, Value::bytes(&v.member_id())),
+        (2, Value::Uint(1)),
+        (3, Value::text("Marie Durand")),
+        (4, Value::Uint(42)),
+    ]))
+    .unwrap();
+    let vk = VerifyingKey::from_bytes(&v.member_keys().sig).unwrap();
+    vk.verify(Domain::MemberProfile, &body, &sig).unwrap();
+    assert!(vk.verify(Domain::DeviceRevoke, &body, &sig).is_err());
+    assert!(vk.verify(Domain::DeviceCert, &body, &sig).is_err());
+    assert_eq!(
+        v.sign_member_profile(0, "Marie Durand", 42),
+        Err(VaultError::InvalidInput)
+    );
+    v.identity.member_private = None;
+    assert_eq!(
+        v.sign_member_profile(1, "Marie Durand", 42),
+        Err(VaultError::Unsupported)
+    );
+}
+
 /// ADR 0059: the device never revokes itself, and a device without the member key (not a
 /// certification device) signs nothing.
 #[test]

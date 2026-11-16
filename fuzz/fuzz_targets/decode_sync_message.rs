@@ -4,10 +4,10 @@
 #![no_main]
 
 use hirzla_sync::net::proto::{
-    read_account, read_ack, read_blob, read_create_account, read_get_chunk,
-    read_get_keylog_proof, read_id, read_mailbox_put, read_message, read_object_hash, read_pair,
-    read_push, read_push_result, read_subscribe, AdminStatus, Auth, AuthOk, Hello, HelloAck,
-    KeyLogEntries, MemberKeysResult, Message, Ops, Pull, PutChunk, Receipt,
+    read_account, read_ack, read_blob, read_create_account, read_find_members, read_get_chunk,
+    read_get_keylog_proof, read_id, read_index, read_mailbox_put, read_message, read_object_hash,
+    read_pair, read_push, read_push_result, read_subscribe, AdminStatus, Auth, AuthOk, Hello,
+    HelloAck, KeyLogEntries, MemberKeysResult, MembersFound, Message, Ops, Pull, PutChunk, Receipt,
 };
 use hirzla_vault::cbor::Value;
 use libfuzzer_sys::fuzz_target;
@@ -37,6 +37,9 @@ fn bodies(v: &Value) {
     let _ = read_object_hash(v);
     let _ = read_create_account(v);
     let _ = read_account(v);
+    let _ = read_index(v);
+    let _ = read_find_members(v);
+    let _ = MembersFound::from_value(v);
 }
 
 fuzz_target!(|data: &[u8]| {

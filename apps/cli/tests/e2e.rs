@@ -210,6 +210,24 @@ fn self_mode_from_the_command_line() {
     let g = g.trim_end();
     assert_eq!(g.len(), 20);
     assert!(g.chars().all(|c| c.is_ascii_alphanumeric()));
+    // Full settings; the entropy goes to the error stream, the value alone to the output.
+    let out = hirzla(
+        &sock,
+        &["gen", "5", "--mode", "phrase", "--separateur", "."],
+        None,
+    );
+    assert_eq!(ok(&out).trim_end().split('.').count(), 5);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).trim_end(),
+        "Entropie : 55,0 bits (27,5 face à une recherche quantique)."
+    );
+    let long = ok(&hirzla(&sock, &["gen", "--profil", "longue-duree"], None));
+    assert_eq!(long.trim_end().len(), 40);
+    let shaped = ok(&hirzla(&sock, &["gen", "--modele", "Aa-9999"], None));
+    assert_eq!(shaped.trim_end().len(), 7);
+    let out = hirzla(&sock, &["gen", "3", "--mode", "pin"], None);
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("réglages refusés"));
 
     // Delete: trash, then purge by identifier.
     ok(&hirzla(&sock, &["rm", "Codes"], None));
