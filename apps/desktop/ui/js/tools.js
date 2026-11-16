@@ -138,8 +138,8 @@ export class SettingsView {
     showError(byId("recouvrement-erreur"), null);
     try {
       const s = await api.getSettings();
-      /** @type {HTMLInputElement} */ (byId("reglage-auto")).value = String(s.auto_lock_s);
-      /** @type {HTMLInputElement} */ (byId("reglage-pp")).value = String(s.clipboard_clear_s);
+      this.choose("reglage-auto", s.auto_lock_s);
+      this.choose("reglage-pp", s.clipboard_clear_s);
       /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked = s.lock_on_sleep;
       /** @type {HTMLInputElement} */ (byId("reglage-session")).checked = s.lock_on_session_lock;
       this.renderKit(await api.recoveryStatus());
@@ -159,6 +159,24 @@ export class SettingsView {
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
   }
 
+  /**
+   * Selects a delay in a list of durations. A value set elsewhere (CLI, older version) that
+   * the list does not offer is added as is, so saving the form never changes it silently.
+   * @param {string} id
+   * @param {number} seconds
+   */
+  choose(id, seconds) {
+    const select = /** @type {HTMLSelectElement} */ (byId(id));
+    const value = String(seconds);
+    if (![...select.options].some((o) => o.value === value)) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = seconds === 0 ? "Délai par défaut du noyau" : `${seconds} secondes`;
+      select.append(option);
+    }
+    select.value = value;
+  }
+
   /** @param {string} id */
   number(id) {
     return Number(/** @type {HTMLInputElement} */ (byId(id)).value);
@@ -173,10 +191,6 @@ export class SettingsView {
       lock_on_sleep: /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked,
       lock_on_session_lock: /** @type {HTMLInputElement} */ (byId("reglage-session")).checked,
     };
-    if (!Number.isInteger(settings.auto_lock_s) || !Number.isInteger(settings.clipboard_clear_s)) {
-      showError(error, "Les délais s'expriment en secondes entières.");
-      return;
-    }
     try {
       await api.setSettings(settings);
       announce("Réglages du coffre enregistrés.");

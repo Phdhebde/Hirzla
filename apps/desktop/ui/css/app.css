@@ -173,6 +173,9 @@ p { margin: 0; }
 textarea.saisie { resize: vertical; }
 .saisie-groupe { display: flex; gap: 8px; }
 .saisie-groupe .saisie { flex: 1; }
+/* Settings forms: their fields are siblings, not grid cells. */
+#form-reglages-coffre, #form-mdp, #form-recouvrement { display: flex; flex-direction: column; gap: 16px; }
+#form-reglages-coffre .aide { margin: -10px 0 0; }
 .cases { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .cases-ligne { flex-direction: row; flex-wrap: wrap; gap: 8px 20px; }
 .cases legend { margin-bottom: 8px; padding: 0; }

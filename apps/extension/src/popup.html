@@ -9,13 +9,20 @@
   </head>
   <body>
     <header>
-      <img src="icons/hirzla-32.png" alt="" width="20" height="20" />
+      <img src="icons/hirzla-32.png" alt="" width="22" height="22" />
       <span class="brand">HIRZLA</span>
-      <button id="lock" type="button" class="link" hidden>Verrouiller</button>
+      <span id="state" class="state" hidden><span class="dot" aria-hidden="true"></span><span id="state-text"></span></span>
+      <button id="lock" type="button" class="icon-button" aria-label="Verrouiller le coffre" title="Verrouiller le coffre" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3" /></svg>
+      </button>
     </header>
 
+    <p id="site" class="site" hidden>
+      <span class="square" aria-hidden="true"></span>
+      <span class="site-text"><code id="origin"></code><span id="site-note" class="site-note"></span></span>
+    </p>
+
     <main>
-      <p id="site" class="site" hidden><span class="label">Site</span> <code id="origin"></code></p>
       <p id="message" class="message" role="status" hidden></p>
 
       <section id="logins" hidden>
@@ -24,31 +31,33 @@
         <p id="truncated" class="hint" hidden>D’autres identifiants existent : utilisez l’application.</p>
       </section>
 
-      <section id="actions" hidden>
-        <button id="propose" type="button">Enregistrer l’identifiant saisi</button>
-      </section>
-
-      <form id="save" hidden>
+      <form id="save" class="card" hidden>
         <h2>Nouvel identifiant</h2>
         <label>Titre <input id="save-title" type="text" maxlength="512" autocomplete="off" /></label>
         <label>Identifiant <input id="save-username" type="text" maxlength="1024" autocomplete="off" /></label>
         <p class="hint">Le mot de passe saisi dans la page sera enregistré pour <code id="save-origin"></code> uniquement.</p>
         <div class="row">
-          <button type="submit">Enregistrer</button>
-          <button id="save-cancel" type="button" class="secondary">Annuler</button>
+          <button type="submit" class="primary">Enregistrer</button>
+          <button id="save-cancel" type="button">Annuler</button>
         </div>
       </form>
 
-      <section id="generator">
-        <h2>Générateur</h2>
+      <section id="generator" class="card">
         <div class="row">
+          <h2 class="grow">Générateur</h2>
           <label class="inline">Longueur <input id="gen-length" type="number" min="8" max="128" value="20" /></label>
           <label class="inline"><input id="gen-symbols" type="checkbox" checked /> Symboles</label>
-          <button id="gen" type="button">Générer</button>
         </div>
         <p id="gen-output" class="secret" hidden><code id="gen-value"></code></p>
-        <button id="gen-use" type="button" hidden>Utiliser sur cette page</button>
+        <div class="row">
+          <button id="gen" type="button">Générer</button>
+          <button id="gen-use" type="button" hidden>Utiliser sur cette page</button>
+        </div>
       </section>
     </main>
+
+    <footer id="actions" hidden>
+      <button id="propose" type="button" class="primary">Enregistrer l’identifiant saisi</button>
+    </footer>
   </body>
 </html>

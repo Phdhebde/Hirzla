@@ -464,14 +464,30 @@
         <h2 id="reglages-coffre" class="titre-carte">Coffre</h2>
         <form id="form-reglages-coffre" novalidate>
           <label class="champ">
-            <span class="champ-libelle">Verrouillage automatique après inactivité (secondes)</span>
-            <input id="reglage-auto" class="saisie" type="number" min="0" max="86400" step="1" required
-                   aria-describedby="reglage-auto-aide">
+            <span class="champ-libelle">Verrouillage automatique après inactivité</span>
+            <select id="reglage-auto" class="saisie" aria-describedby="reglage-auto-aide">
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+              <option value="600">10 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+              <option value="3600">1 heure</option>
+              <option value="14400">4 heures</option>
+              <option value="28800">8 heures</option>
+            </select>
           </label>
-          <p id="reglage-auto-aide" class="aide">De 30 s à 24 h (86 400 s) ; 0 rend le délai par défaut du noyau.</p>
+          <p id="reglage-auto-aide" class="aide">Le coffre se verrouille seul quand vous ne l'utilisez plus pendant cette durée.</p>
           <label class="champ">
-            <span class="champ-libelle">Effacement du presse-papiers après une copie (secondes)</span>
-            <input id="reglage-pp" class="saisie" type="number" min="5" max="600" step="1" required>
+            <span class="champ-libelle">Effacement du presse-papiers après une copie</span>
+            <select id="reglage-pp" class="saisie">
+              <option value="10">10 secondes</option>
+              <option value="20">20 secondes</option>
+              <option value="30">30 secondes</option>
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
           </label>
           <fieldset class="cases">
             <legend class="champ-libelle">Verrouiller aussi le coffre</legend>
