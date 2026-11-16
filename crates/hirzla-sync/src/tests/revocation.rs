@@ -257,6 +257,11 @@ fn device_removal_table() {
     assert_eq!(w.status_among(&before, &honest), OpStatus::Applied);
     assert_eq!(w.status_among(&during, &honest), Q);
     assert_eq!(w.status_among(&rm, &honest), OpStatus::Applied);
+    // Only the device that published the revocation counts it as its own (ADR 0059).
+    let own = w.replicas[0].own_device_revocations();
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].device, w.devices[d2].device_id());
+    assert!(w.replicas[1].own_device_revocations().is_empty());
     assert!(!w.replicas[0]
         .authorization()
         .unwrap()

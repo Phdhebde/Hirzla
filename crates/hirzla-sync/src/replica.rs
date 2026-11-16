@@ -425,6 +425,29 @@ impl<A: Authorizer> Replica<A> {
             .collect()
     }
 
+    /// Device revocations this device published itself: those carried by the applied
+    /// `DeviceRemove` operations it authored (§ 9.7). The core declares them expected in its
+    /// local key log again after a restart (`transparence.md` § 6.4, ADR 0059): their
+    /// inscription is then no « révocation inconnue ».
+    #[must_use]
+    pub fn own_device_revocations(&self) -> Vec<crate::control::DeviceRevocation> {
+        let member = self.device.member_id();
+        let device = self.device.device_id();
+        self.status
+            .iter()
+            .filter(|(_, s)| **s == OpStatus::Applied)
+            .filter_map(|(id, _)| match self.decoded.get(id) {
+                Some(Ok(d)) if d.op.opref.member == member && d.op.opref.device == device => {
+                    match &d.control {
+                        Some(ControlBody::DeviceRemove(r)) => Some(r.revocation.clone()),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
     fn applied_controls(&self) -> impl Iterator<Item = &ControlBody> {
         self.causality
             .total_order()
