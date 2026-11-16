@@ -63,6 +63,12 @@
     "allow-quorum-apply",
     "allow-quorum-cancel",
     "allow-quarantine-list",
-    "allow-quarantine-decide"
+    "allow-quarantine-decide",
+    "allow-profile-set",
+    "allow-member-search",
+    "allow-member-verify",
+    "allow-quorum-send",
+    "allow-quorum-inbox",
+    "allow-quorum-respond"
   ]
 }

@@ -62,6 +62,12 @@ const COMMANDS: &[&str] = &[
     "quorum_cancel",
     "quarantine_list",
     "quarantine_decide",
+    "profile_set",
+    "member_search",
+    "member_verify",
+    "quorum_send",
+    "quorum_inbox",
+    "quorum_respond",
 ];
 
 fn main() {

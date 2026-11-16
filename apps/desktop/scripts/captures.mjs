@@ -345,10 +345,16 @@ for (const theme of only && only !== "serveur" ? [] : ["clair", "sombre"]) {
   await p.click("#liste-casiers li:nth-child(2) button");
   await p.click("#liste-membres");
   await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
-  await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
-  await p.fill("#ajout-empreinte", "N3KQ7 XZB2T VW5RM H4DJC");
+  // Adding a member found by its display name: its fingerprint is compared once (ADR 0069).
+  await p.fill("#ajout-recherche", "inès");
+  await p.click("#ajout-chercher");
+  await p.waitForSelector("#ajout-resultats li");
+  await p.check("#ajout-resultats li:first-child input");
   await shot(p, "24-membres-proprietaire", theme);
   await p.click("#ajout-envoyer");
+  await p.waitForSelector("#dialogue-empreinte[open]");
+  await shot(p, "24b-comparer-l-empreinte", theme);
+  await p.click("#dialogue-empreinte button[value='oui']");
   await p.waitForFunction(() => document.querySelectorAll("#membres-lignes tr").length === 5);
   await p.keyboard.press("Escape");
 
@@ -397,6 +403,7 @@ for (const theme of only && only !== "serveur" ? [] : ["clair", "sombre"]) {
   // Sharing is refused while the log is suspect.
   await p.click("#casiers-lignes tr:first-child button");
   await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  await p.click("#membres-ajout summary");
   await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
   await p.click("#ajout-envoyer");
   await p.waitForSelector("#membres-erreur:not([hidden])");
@@ -446,6 +453,7 @@ for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("Escape");
 
   // Another owner signs a request received: inspect, then sign.
+  await p.click("#serveur-accords summary");
   await p.click("#accords-signer");
   await p.waitForSelector("#dialogue-accord-signer[open]");
   await p.fill("#signer-saisie", "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQAx7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX");
@@ -494,6 +502,31 @@ for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
     card.closest(".vue").scrollTop = card.offsetTop - 120;
   });
   await shot(p, "38-casier-gele", theme);
+  await p.close();
+
+  // Requests carried by the server (ADR 0070): one to examine, one of mine waiting; then the
+  // display name in the identity (ADR 0069).
+  p = await page(theme, "unlocked", { ...SYNCED, mail: true });
+  await serverView(p);
+  await p.waitForSelector("#recues-lignes li");
+  await p.waitForSelector("#compte-serveur:not([hidden])");
+  await quiet(p);
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-accords");
+    card.closest(".vue").scrollTop = card.offsetTop - 16;
+  });
+  await shot(p, "39-demandes-a-examiner", theme);
+  await p.click("#recues-lignes li:first-child button.bouton-principal");
+  await p.waitForSelector("#dialogue-confirmation[open]");
+  await shot(p, "40-signer-une-demande", theme);
+  await p.click("#confirmation-oui");
+  await p.waitForFunction(() => document.querySelectorAll("#recues-lignes li").length === 0);
+  await quiet(p);
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-identite");
+    card.closest(".vue").scrollTop = card.offsetTop - 16;
+  });
+  await shot(p, "41-nom-affiche", theme);
   await p.close();
 }
 
