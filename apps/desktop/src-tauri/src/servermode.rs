@@ -114,7 +114,8 @@ impl From<LockerStatus> for SharedLockerDto {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AlertDto {
     /// `foreign_member_key`, `unknown_device`, `unknown_revocation`, `withheld_removal`,
-    /// `uninscribed_removal`, `withheld_inscription` or `withheld_operation`.
+    /// `uninscribed_removal`, `withheld_inscription`, `withheld_operation` or
+    /// `unknown_profile` (ADR 0069).
     kind: &'static str,
     /// Rank of the entry in the log, when there is one.
     index: Option<u64>,
@@ -156,6 +157,7 @@ impl From<KeyLogStatus> for KeyLogDto {
                         AlertKind::UninscribedRemoval => "uninscribed_removal",
                         AlertKind::WithheldInscription => "withheld_inscription",
                         AlertKind::WithheldOperation => "withheld_operation",
+                        AlertKind::UnknownOwnProfile => "unknown_profile",
                     },
                     index: a.index,
                     device: a.device.as_ref().map(|d| hex(d)),
@@ -590,6 +592,7 @@ impl AppState {
             fingerprint,
             device,
             control_code,
+            ..
         } = self.call_server(&ServerRequest::ServerIdentity)?
         else {
             return Err(DesktopError::Protocol);
@@ -852,6 +855,7 @@ impl AppState {
                 issuer,
                 issuer_fingerprint,
                 can_sign,
+                ..
             } => {
                 let (role, quorum) = detail_names(action, detail);
                 Ok(InspectedDto {
@@ -1230,6 +1234,8 @@ mod tests {
                 change_to: vec![Role::Manager],
                 change_refusal: None,
                 remove_refusal: Some(Refusal::LastOwner),
+                name: None,
+                verified: true,
             }],
             &[Role::Editor, Role::Reader],
             None,

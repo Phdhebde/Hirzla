@@ -95,7 +95,11 @@ fn signed_message(domain: Domain, msg: &[u8]) -> Vec<u8> {
 #[test]
 fn each_role_signs_and_verifies_its_domains() {
     let member = MemberSigningKey::generate().unwrap();
-    for d in [MemberDomain::DeviceCert, MemberDomain::DeviceRevoke] {
+    for d in [
+        MemberDomain::DeviceCert,
+        MemberDomain::DeviceRevoke,
+        MemberDomain::Profile,
+    ] {
         let sig = member.sign(d, MSG).unwrap();
         member.verifying_key().verify(d, MSG, &sig).unwrap();
     }
@@ -230,6 +234,7 @@ fn signature_does_not_verify_in_another_domain_or_for_another_message() {
     for d in [
         Domain::DeviceCert,
         Domain::DeviceRevoke,
+        Domain::MemberProfile,
         Domain::Approval,
         Domain::ServerAuth,
         Domain::DeviceAuth,
@@ -265,6 +270,7 @@ fn domain_labels_are_distinct_and_prefix_free() {
         Domain::Operation,
         Domain::DeviceCert,
         Domain::DeviceRevoke,
+        Domain::MemberProfile,
         Domain::Approval,
         Domain::ServerAuth,
         Domain::DeviceAuth,

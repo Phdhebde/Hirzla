@@ -68,6 +68,13 @@ Mode Serveur :
                           Confirme l'empreinte du serveur, vérifiée hors bande.
   serveur etat            Serveur rattaché et état des casiers partagés.
   serveur sync            Synchronise les casiers partagés.
+  serveur nom NOM         Donne à votre clé de membre le nom affiché aux autres membres
+                          du serveur (64 octets au plus), signé par cette clé et inscrit
+                          au registre. NOM vide (\"\") : retire le nom.
+  serveur chercher TEXTE  Cherche des membres du serveur par leur nom affiché. Un nom ne
+                          prouve rien : comparez l'empreinte avant de partager.
+  serveur verifier MEMBRE EMPREINTE
+                          Note que vous avez comparé hors bande l'empreinte d'un membre.
   casier creer NOM        Crée un casier partagé.
   casier membres CASIER   Liste les membres d'un casier partagé et leurs rôles.
   casier ajouter CASIER MEMBRE ROLE [--empreinte E]
@@ -137,6 +144,19 @@ pub enum ServerCommand {
     },
     Status,
     Sync,
+    /// Set (or, empty, withdraw) the display name of the member (ADR 0069).
+    Name {
+        name: String,
+    },
+    /// Search members by display name.
+    Search {
+        text: String,
+    },
+    /// Record a fingerprint compared out of band.
+    Verify {
+        member: String,
+        fingerprint: String,
+    },
 }
 
 /// What a quorum request does (`docs/api-locale.md` § 15.8).
@@ -865,6 +885,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     only(&[])?;
                     ServerCommand::Sync
                 }
+                "nom" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Name {
+                        name: arg(1, "le NOM à afficher (\"\" pour le retirer)")?,
+                    }
+                }
+                "chercher" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Search {
+                        text: arg(1, "le TEXTE à chercher")?,
+                    }
+                }
+                "verifier" => {
+                    max_positional(3)?;
+                    only(&[])?;
+                    ServerCommand::Verify {
+                        member: arg(1, "le MEMBRE et son EMPREINTE")?,
+                        fingerprint: arg(2, "le MEMBRE et son EMPREINTE")?,
+                    }
+                }
                 _ => return Err(format!("sous-commande de « serveur » inconnue.\n\n{USAGE}")),
             };
             Command::Server(sub_command)
@@ -1478,6 +1520,34 @@ mod tests {
         assert!(p(&["quarantaine"]).is_err());
         assert!(p(&["quarantaine", "Ops", "accepter"]).is_err());
         assert!(p(&["quarantaine", "Ops", "ignorer", "x"]).is_err());
+        assert_eq!(
+            p(&["serveur", "nom", "Marie Durand"]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: "Marie Durand".into()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "nom", ""]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: String::new()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "chercher", "dur"]).unwrap().command,
+            Command::Server(ServerCommand::Search { text: "dur".into() })
+        );
+        assert_eq!(
+            p(&["serveur", "verifier", "00ff", "ABCD"]).unwrap().command,
+            Command::Server(ServerCommand::Verify {
+                member: "00ff".into(),
+                fingerprint: "ABCD".into()
+            })
+        );
+        assert!(p(&["serveur", "nom"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "b"]).is_err());
+        assert!(p(&["serveur", "chercher"]).is_err());
+        assert!(p(&["serveur", "verifier", "00ff"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "--empreinte", "E"]).is_err());
         assert!(p(&["serveur"]).is_err());
         assert!(p(&["serveur", "rejoindre", "hirzla://h"]).is_err());
         assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());

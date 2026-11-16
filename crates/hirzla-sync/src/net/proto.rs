@@ -63,6 +63,14 @@ pub mod kind {
     pub const MAILBOX_GET: u64 = 33;
     pub const MAILBOX_BLOB: u64 = 34;
     pub const ERROR: u64 = 40;
+    /// `PutMemberProfile` (ADR 0069).
+    pub const PUT_MEMBER_PROFILE: u64 = 50;
+    /// `MemberProfileResult` (ADR 0069).
+    pub const MEMBER_PROFILE_RESULT: u64 = 51;
+    /// `FindMembers` (ADR 0069).
+    pub const FIND_MEMBERS: u64 = 52;
+    /// `MembersFound` (ADR 0069).
+    pub const MEMBERS_FOUND: u64 = 53;
     pub const PING: u64 = 41;
     pub const PONG: u64 = 42;
     pub const BYE: u64 = 43;
@@ -1015,6 +1023,120 @@ impl MemberKeysResult {
 }
 
 // -----------------------------------------------------------------------------------------
+// Member profiles and directory search (§ 11.11, ADR 0069)
+// -----------------------------------------------------------------------------------------
+
+/// Largest encoded `MemberProfile` (`format.md` § 3.7).
+pub const MAX_PROFILE: usize = hirzla_access::profile::MAX_PROFILE_LEN;
+/// Shortest text searched in the directory, in bytes.
+pub const MIN_FIND_QUERY: usize = 2;
+/// Longest text searched in the directory, in bytes.
+pub const MAX_FIND_QUERY: usize = hirzla_access::profile::MAX_DISPLAY_NAME;
+/// Most members in one `MembersFound`.
+pub const MAX_FOUND: usize = 32;
+
+/// `MemberProfileResult` (51) body: the rank of the entry of kind 6 in the key log.
+#[must_use]
+pub fn index_value(index: u64) -> Value {
+    Value::map(vec![(1, Value::Uint(index))])
+}
+
+/// Reads a `MemberProfileResult` (51) body.
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_index(v: &Value) -> Result<u64, NetError> {
+    let f = Fields::new(v, &[1])?;
+    Ok(uint(f.req(1)?)?)
+}
+
+/// `FindMembers` (52) body.
+#[must_use]
+pub fn find_members_value(query: &str) -> Value {
+    Value::map(vec![(1, Value::text(query))])
+}
+
+/// Reads a `FindMembers` (52) body: a text of [`MIN_FIND_QUERY`] to [`MAX_FIND_QUERY`] bytes.
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_find_members(v: &Value) -> Result<String, NetError> {
+    let f = Fields::new(v, &[1])?;
+    let q = cbor::text_max(f.req(1)?, MAX_FIND_QUERY)?;
+    if q.len() < MIN_FIND_QUERY {
+        return Err(NetError::Malformed);
+    }
+    Ok(q.to_owned())
+}
+
+/// One member of a `MembersFound` (53): its key and its current profile, as inscribed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundMember {
+    /// Member key.
+    pub keys: MemberKeys,
+    /// `CBOR(MemberProfile)`, the object of its last entry of kind 6.
+    pub profile: Vec<u8>,
+}
+
+/// `MembersFound` (53).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MembersFound {
+    /// Members whose current name holds the text, at most [`MAX_FOUND`].
+    pub items: Vec<FoundMember>,
+    /// More members match than the answer holds.
+    pub more: bool,
+}
+
+impl MembersFound {
+    /// Body.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        Value::map(vec![
+            (
+                1,
+                Value::Array(
+                    self.items
+                        .iter()
+                        .map(|m| {
+                            Value::map(vec![(1, m.keys.to_value()), (2, Value::bytes(&m.profile))])
+                        })
+                        .collect(),
+                ),
+            ),
+            (2, Value::Bool(self.more)),
+        ])
+    }
+
+    /// Strict decoding.
+    ///
+    /// # Errors
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
+        let f = Fields::new(v, &[1, 2])?;
+        let items = array_max(f.req(1)?, MAX_FOUND)?
+            .iter()
+            .map(|i| {
+                let g = Fields::new(i, &[1, 2])?;
+                Ok(FoundMember {
+                    keys: MemberKeys::from_value(g.req(1)?)?,
+                    profile: bytes(g.req(2)?, MAX_PROFILE)?,
+                })
+            })
+            .collect::<Result<_, NetError>>()?;
+        Ok(MembersFound {
+            items,
+            more: cbor::boolean(f.req(2)?)?,
+        })
+    }
+}
+
+/// `GetKeyLogObject` (64) body.
+#[must_use]
+pub fn object_hash_value(hash: &[u8; 48]) -> Value {
+    Value::map(vec![(1, Value::bytes(hash))])
+}
+
+// -----------------------------------------------------------------------------------------
 // Key log (`transparence.md` § 4)
 // -----------------------------------------------------------------------------------------
 
@@ -1268,6 +1390,41 @@ mod tests {
         }
         .to_value();
         assert!(Pull::from_value(&v).is_err());
+    }
+
+    #[test]
+    fn directory_messages_round_trip_and_are_bounded() {
+        assert_eq!(read_index(&index_value(42)).unwrap(), 42);
+        assert_eq!(
+            read_find_members(&find_members_value("Marie")).unwrap(),
+            "Marie"
+        );
+        assert!(read_find_members(&find_members_value("M")).is_err());
+        assert!(read_find_members(&find_members_value(&"a".repeat(MAX_FIND_QUERY + 1))).is_err());
+        let found = MembersFound {
+            items: vec![FoundMember {
+                keys: MemberKeys {
+                    member: [3; 16],
+                    sig: vec![0; lens::SIG_PUBLIC],
+                },
+                profile: vec![1, 2, 3],
+            }],
+            more: true,
+        };
+        assert_eq!(MembersFound::from_value(&found.to_value()).unwrap(), found);
+        let many = MembersFound {
+            items: vec![found.items[0].clone(); MAX_FOUND + 1],
+            more: false,
+        };
+        assert!(MembersFound::from_value(&many.to_value()).is_err());
+        let fat = MembersFound {
+            items: vec![FoundMember {
+                keys: found.items[0].keys.clone(),
+                profile: vec![0; MAX_PROFILE + 1],
+            }],
+            more: false,
+        };
+        assert!(MembersFound::from_value(&fat.to_value()).is_err());
     }
 
     #[test]

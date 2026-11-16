@@ -81,6 +81,7 @@ Le registre (`KeyLog`) est un journal **en ajout seul**, tenu par `hirzlad`, où
 | 3 | Révocation d'appareil | SHA-384 de `CBOR(DeviceRevocation)` complet |
 | 4 | Changement de clé de membre | Réservé (§ 8). Refusé en v1 |
 | 5 | Retrait d'un membre d'un casier | `op_id` de l'opération `Revoke` |
+| 6 | Profil de membre (nom affiché, ADR 0069) | SHA-384 de `CBOR(MemberProfile)` complet (`format.md` § 3.7) |
 
 L'entrée ne porte que des empreintes : l'objet complet se récupère par `GetKeyLogObject` (§ 4)
 ou dans les journaux de casier, et le lecteur vérifie que son SHA-384 est `object`.
@@ -173,6 +174,9 @@ Ajoutés à `sync-protocol.md` § 11.5 :
 | 66 | `GetKeyLogConsistency` | P → S | `{1: first (uint), 2: second (uint)}` |
 | 67 | `KeyLogConsistency` | S → P | `{1: path (array<bstr(48)>), 2: head (KeyLogHead)}`, `head.size` = `second` |
 
+Les messages 50 à 53 (`PutMemberProfile`, `FindMembers`, `sync-protocol.md` § 11.11)
+inscrivent et servent les profils de membre (kind 6).
+
 Les codes d'erreur sont ceux du § 11.7. Un poste qui reçoit une réponse invalide coupe la
 session et applique le § 6.7.
 
@@ -186,6 +190,7 @@ session et applique le § 6.7.
 | `DeviceAdd` dans un casier personnel, ou certificat présenté à `Auth` (premier contact) | kind 2 | Certificat signé par la clé inscrite du membre ; pas d'entrée kind 2 pour cet appareil |
 | `DeviceRemove` reçue dans un casier, ou révocation reçue par `GetMemberKeys` | kind 3 | Révocation signée par la clé inscrite ; entrée kind 2 présente ; pas d'entrée kind 3 |
 | `Revoke` acceptée par le serveur (§ 11.8) | kind 5 | Une seule entrée par `op_id` |
+| `PutMemberProfile` (`sync-protocol.md` § 11.11) | kind 6 | Session du membre ; profil signé par la clé inscrite ; nom valide ; `seq` supérieur à celui du profil courant ; au plus 256 profils par membre |
 
 Le serveur inscrit **avant** de répondre `PushResult` (inscription immédiate : délai maximal
 d'inscription nul). Il signe une nouvelle tête après chaque ajout ou lot d'ajouts.
@@ -197,12 +202,17 @@ Un registre signé qui viole une de ces règles est une **preuve** que le serveu
 
 | Règle | Exigence |
 | --- | --- |
-| R1 | Chaque entrée est canonique, `v = 1`, champs présents selon `kind`, `kind` ∈ {1, 2, 3, 5} |
+| R1 | Chaque entrée est canonique, `v = 1`, champs présents selon `kind`, `kind` ∈ {1, 2, 3, 5, 6} |
 | R2 | Au plus une entrée kind 1 par membre |
-| R3 | Une entrée kind 2 ou 3 suit une entrée kind 1 du même membre |
+| R3 | Une entrée kind 2, 3 ou 6 suit une entrée kind 1 du même membre |
 | R4 | Au plus une entrée kind 2 par `(member, device)` ; une entrée kind 3 suit l'entrée kind 2 du même appareil ; au plus une entrée kind 3 par appareil |
 | R5 | Au plus une entrée kind 5 par `object` |
 | R6 | `size` ne décroît jamais ; les entrées déjà vues ne changent jamais |
+| R7 | Au plus une entrée kind 6 par `object` : un profil déjà inscrit n'est jamais réinscrit (ADR 0069) |
+
+R7 empêche le serveur de ramener un membre à un ancien nom en rejouant un profil signé : le
+profil courant d'un membre est celui de sa **dernière** entrée kind 6, et aucun poste n'a
+besoin de télécharger un profil pour vérifier la règle.
 
 Les signatures des objets (certificats, révocations) ne sont vérifiées que pour les objets que
 le poste récupère : les siens, et ceux des membres à qui il envoie une clé de casier (§ 6.2).
@@ -283,6 +293,11 @@ Après chaque mise à jour, pour chaque nouvelle entrée dont `member` est le me
 | kind 1 | `object` = empreinte de sa propre `MemberKeys` | Alerte « clé de membre usurpée » |
 | kind 2 | Un appareil connu du casier personnel (`DeviceAdd`), ou en cours d'enrôlement | Alerte « appareil inconnu inscrit à votre nom » ; l'interface propose de le révoquer |
 | kind 3 | Une révocation connue | Alerte « révocation inconnue » |
+| kind 6 | Un profil que ce poste a émis (`ProfileSet`) | Alerte « nom affiché inconnu inscrit à votre nom » (ADR 0069) |
+
+Une entrée kind 6 inattendue signifie que la clé du membre a signé ailleurs : sur un autre
+appareil de certification du membre, ou chez qui l'a volée. Comme pour un appareil inconnu,
+c'est détecté, pas empêché.
 
 Au premier enrôlement, le poste vérifie que l'entrée kind 1 de son membre, si elle existe, est
 la sienne. Puis chaque appareil vérifie que son propre certificat est inscrit au plus tard une
@@ -326,6 +341,33 @@ Une opération en attente parce qu'une dépendance manque, alors que le serveur 
 Une **preuve de bifurcation** est une paire de têtes signées du même `log_id`, incompatibles, avec
 les entrées locales qui le montrent. Le poste la garde et permet de l'exporter pour l'audit.
 
+### 6.8 Noms affichés
+
+Décision : ADR 0069. Un poste n'affiche le nom d'un membre que s'il a vérifié lui-même toute
+la chaîne :
+
+1. son registre local (répliqué, racine recalculée, § 6.1) donne l'`object` de la dernière
+   entrée kind 6 du membre, et celui de son entrée kind 1 ;
+2. le profil reçu (`GetKeyLogObject`, ou joint à une réponse de `FindMembers`) a ce SHA-384 ;
+3. la `MemberKeys` dont le poste dispose a l'empreinte de l'entrée kind 1, et la signature du
+   profil vérifie avec elle (`format.md` § 3.7) ;
+4. `seq` dépasse celui du profil que le poste gardait pour ce membre.
+
+Un échec : pas de nom. L'identifiant et l'empreinte du membre restent affichés ; il n'existe
+pas de nom « non vérifié ».
+
+Ce que la chaîne garantit, et ce qu'elle ne garantit pas :
+
+| Garanti | Pas garanti |
+| --- | --- |
+| Ce nom est celui que le titulaire de cette clé s'est donné, et le dernier que le registre connaît | Que ce titulaire est la personne que vous croyez |
+| Le serveur ne peut ni attribuer un nom, ni en changer, ni revenir à un ancien (R7), ni montrer deux noms à deux postes sans bifurcation prouvable (§ 6.6) | Qu'aucun autre membre ne porte le même nom ou un nom qui lui ressemble |
+
+La preuve d'identité reste l'**empreinte** de la clé du membre, comparée hors bande
+(`format.md` § 3.1). Le poste garde, par membre, la clé dont l'utilisateur a comparé
+l'empreinte, et l'interface fait faire cette comparaison une fois avant le premier partage
+(`api-locale.md` § 15.9.2).
+
 ### 6.7 Échec d'une vérification
 
 | Échec | Ce que fait le poste | Message à l'utilisateur |
@@ -334,7 +376,8 @@ les entrées locales qui le montrent. Le poste la garde et permet de l'exporter 
 | Racine recalculée différente, taille qui décroît, entrée déjà vue modifiée, règle R2 à R5 violée, bifurcation prouvée | Marque le registre **suspect**. Garde la preuve. Refuse toute nouvelle enveloppe pour un tiers et toute nouvelle attribution. La lecture et l'écriture dans les casiers continuent : les opérations se vérifient seules | « Le serveur présente un registre des clés incohérent. Le partage est suspendu. Prévenez votre administrateur de sécurité. » |
 | Clé ou certificat du destinataire non inscrit | Refuse l'enveloppe pour ce destinataire | « Ce membre n'est pas encore inscrit au registre. » |
 | Clé ou certificat du destinataire différent de l'inscription | Refuse, alerte | « La clé reçue pour ce membre ne correspond pas au registre. » |
-| Entrée inconnue à son nom (§ 6.4) | Alerte haute | « Un appareil inconnu a été inscrit à votre nom. » |
+| Entrée inconnue à son nom (§ 6.4) | Alerte haute | « Un appareil inconnu a été inscrit à votre nom. » ; pour un profil : « Un nom affiché inconnu a été inscrit à votre nom. » |
+| Profil d'un membre absent, différent de l'inscription, mal signé ou de rang inférieur (§ 6.8) | N'affiche aucun nom pour ce membre | — (identifiant et empreinte seuls) |
 | Révocation retenue (§ 6.5) | Gèle les écritures dans le casier, alerte | « Une révocation annoncée n'a pas été reçue. Ce casier est en lecture seule. » |
 | `keylog_proof` invalide dans une opération | Rejette l'opération (statut 3) | — |
 
@@ -362,7 +405,9 @@ pirates (§ 6.4) et la récupération par dépositaires restitue la **même** cl
 | À qui | Quoi | Nouveau ? |
 | --- | --- | --- |
 | Serveur | Membres, appareils, révocations, retraits | Non : il le sait déjà (`sync-protocol.md` § 12) |
-| Chaque poste de l'organisation | Identifiants aléatoires de tous les membres et appareils, nombre d'appareils par membre, dates des révocations, identifiants des casiers où un retrait a eu lieu | Oui. Aucun nom, aucun rôle, aucun contenu. Un identifiant de casier ne dit rien à qui n'en est pas membre |
+| Serveur | Le nom affiché que chaque membre s'est donné, et les textes cherchés dans l'annuaire (ADR 0069) | Oui. Le nom est facultatif et libre : un site peut demander des pseudonymes, ou rien |
+| Chaque poste de l'organisation | Identifiants aléatoires de tous les membres et appareils, nombre d'appareils par membre, dates des révocations, identifiants des casiers où un retrait a eu lieu, nombre et dates des changements de nom de chaque membre | Oui. Aucun rôle, aucun contenu. Le registre lui-même ne porte aucun nom, seulement l'empreinte des profils. Un identifiant de casier ne dit rien à qui n'en est pas membre |
+| Tout membre authentifié | Le profil (nom affiché) de tout autre membre du serveur, par `FindMembers` ou `GetKeyLogObject` | Oui (ADR 0069) |
 
 ## 10. Coûts
 
@@ -383,6 +428,10 @@ pirates (§ 6.4) et la récupération par dépositaires restitue la **même** cl
 - Serveur malveillant simulé : clé substituée, appareil inscrit au nom d'un autre, deux clés
   pour un membre, bifurcation montrée à deux postes, révocation retenue, tête à racine fausse,
   taille qui décroît, entrée réécrite. Chaque cas est détecté par un poste.
+- Profils de membre (ADR 0069) : encodages figés du profil, de son corps signé et de son
+  entrée ; profil rejoué (R7), profil avant la clé (R3), profil d'une autre clé, d'un autre
+  membre ou de rang inférieur refusés ; nom invalide refusé ; profil inconnu au nom du poste
+  (alerte) ; un nom n'est rendu qu'après les quatre contrôles du § 6.8.
 
 ## 12. Points ouverts
 

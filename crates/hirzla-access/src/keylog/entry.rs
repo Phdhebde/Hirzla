@@ -8,6 +8,7 @@ use hirzla_vault::model::{lens, DeviceCert, Id16, MemberKeys, OpId};
 
 use super::merkle::{self, Sha384, MAX_PROOF_LEN};
 use crate::control::DeviceRevocation;
+use crate::profile::MemberProfile;
 use crate::{AccessError, KeyLogFailure};
 
 /// Most items in a [`KeyLogProof`].
@@ -28,6 +29,8 @@ pub enum EntryKind {
     DeviceRevocation,
     /// 5: the removal of a member from a locker.
     LockerRevoke,
+    /// 6: a member profile, the display name a member gives itself (ADR 0069).
+    MemberProfile,
 }
 
 impl EntryKind {
@@ -39,6 +42,7 @@ impl EntryKind {
             EntryKind::DeviceCert => 2,
             EntryKind::DeviceRevocation => 3,
             EntryKind::LockerRevoke => 5,
+            EntryKind::MemberProfile => 6,
         }
     }
 
@@ -50,6 +54,7 @@ impl EntryKind {
             2 => Some(EntryKind::DeviceCert),
             3 => Some(EntryKind::DeviceRevocation),
             5 => Some(EntryKind::LockerRevoke),
+            6 => Some(EntryKind::MemberProfile),
             _ => None,
         }
     }
@@ -66,7 +71,8 @@ pub struct KeyLogEntry {
     pub device: Option<Id16>,
     /// Locker, for kind 5.
     pub locker: Option<Id16>,
-    /// SHA-384 of the encoded object, or the `op_id` of the `Revoke` (kind 5).
+    /// SHA-384 of the encoded object (kinds 1, 2, 3 and 6), or the `op_id` of the `Revoke`
+    /// (kind 5).
     pub object: [u8; 48],
     /// Indicative server time.
     pub logged_ms: u64,
@@ -153,6 +159,21 @@ impl KeyLogEntry {
             object: op_id,
             logged_ms,
         }
+    }
+
+    /// Entry for a member profile (ADR 0069).
+    ///
+    /// # Errors
+    /// [`AccessError::Malformed`].
+    pub fn member_profile(profile: &MemberProfile, logged_ms: u64) -> Result<Self, AccessError> {
+        Ok(KeyLogEntry {
+            kind: EntryKind::MemberProfile,
+            member: profile.member,
+            device: None,
+            locker: None,
+            object: profile.object()?,
+            logged_ms,
+        })
     }
 
     /// Canonical value.

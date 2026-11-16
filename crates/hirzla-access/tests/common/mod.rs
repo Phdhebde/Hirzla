@@ -119,6 +119,24 @@ impl Person {
             .to_vec();
         r
     }
+
+    /// A profile of rank `seq` naming the member `name`, signed by the member key.
+    pub fn profile(&self, seq: u64, name: &str) -> hirzla_access::profile::MemberProfile {
+        let mut p = hirzla_access::profile::MemberProfile {
+            member: self.id(),
+            seq,
+            name: name.to_owned(),
+            issued_ms: 1_700_000_000_002,
+            sig: Vec::new(),
+        };
+        p.sig = self
+            .key
+            .sign_profile(&p.body().unwrap())
+            .unwrap()
+            .as_bytes()
+            .to_vec();
+        p
+    }
 }
 
 /// An envelope entry for `cert` (its content is not checked by the authorisation rules).

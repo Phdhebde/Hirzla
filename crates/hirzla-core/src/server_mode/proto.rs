@@ -1,8 +1,10 @@
 //! Server mode operations of the local API (`docs/api-locale.md` § 15): version 4, operation
-//! codes 40 to 49 (49: device revocation, ADR 0059) and 90 to 98 (approvals and quarantine,
-//! ADR 0044 and 0045), error codes 40 to 49 and 90 to 93. Same frames, same CBOR profile and same strict decoding as the rest of
-//! the API (`crate::proto`).
+//! codes 40 to 49 (49: device revocation, ADR 0059), 90 to 98 (approvals and quarantine,
+//! ADR 0044 and 0045) and 120 to 122 (display names, ADR 0069), error codes 40 to 49 and
+//! 90 to 93. Same frames, same CBOR profile and same strict decoding as the rest of the API
+//! (`crate::proto`).
 
+pub use hirzla_access::profile::{valid_display_name, MAX_DISPLAY_NAME};
 pub use hirzla_access::Role;
 use hirzla_vault::cbor::{
     self, array_max, boolean, bytes_max, fixed, text_max, uint, Fields, Value,
@@ -18,6 +20,13 @@ pub const SERVER_VERSION: u64 = 4;
 pub const SERVER_OPS: std::ops::RangeInclusive<u64> = 40..=49;
 /// Operation codes of the approvals and the quarantine, also version 4 (ADR 0044, 0045).
 pub const GOVERNANCE_OPS: std::ops::RangeInclusive<u64> = 90..=99;
+/// Operation codes of the member directory, also version 4 (ADR 0069). 120 to 129 are
+/// reserved for the server mode.
+pub const DIRECTORY_OPS: std::ops::RangeInclusive<u64> = 120..=129;
+/// Shortest text searched in the directory, in bytes (`sync-protocol.md` § 11.11).
+pub const MIN_SEARCH: usize = hirzla_sync::net::proto::MIN_FIND_QUERY;
+/// Most members in the result of a search.
+pub const MAX_FOUND: usize = hirzla_sync::net::proto::MAX_FOUND;
 /// Longest text object accepted (`sync-protocol.md` § 11.10).
 pub const MAX_TEXT: usize = hirzla_sync::text::MAX_TEXT;
 /// Most pending approval requests (`format.md` § 15.2).
@@ -76,10 +85,16 @@ pub enum ServerOp {
     QuarantineList = 97,
     /// Accept or reject quarantined operations.
     QuarantineDecide = 98,
+    /// Set or withdraw the display name of the member (ADR 0069).
+    ProfileSet = 120,
+    /// Search the members of the server by display name.
+    MemberSearch = 121,
+    /// Record that the fingerprint of a member was compared out of band.
+    MemberVerify = 122,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 19] = [
+    const ALL: [ServerOp; 22] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -99,6 +114,9 @@ impl ServerOp {
         ServerOp::QuorumCancel,
         ServerOp::QuarantineList,
         ServerOp::QuarantineDecide,
+        ServerOp::ProfileSet,
+        ServerOp::MemberSearch,
+        ServerOp::MemberVerify,
     ];
 
     /// The operation from its number.
@@ -130,6 +148,9 @@ impl ServerOp {
             ServerOp::QuorumCancel => "quorum_cancel",
             ServerOp::QuarantineList => "quarantine_list",
             ServerOp::QuarantineDecide => "quarantine_decide",
+            ServerOp::ProfileSet => "profile_set",
+            ServerOp::MemberSearch => "member_search",
+            ServerOp::MemberVerify => "member_verify",
         }
     }
 }
@@ -338,6 +359,23 @@ pub enum ServerRequest {
         /// Accept (or reject).
         accept: bool,
     },
+    /// 120.
+    ProfileSet {
+        /// Display name, valid (`format.md` § 3.7); empty to withdraw it.
+        name: String,
+    },
+    /// 121.
+    MemberSearch {
+        /// Text searched in the display names, [`MIN_SEARCH`] to [`MAX_DISPLAY_NAME`] bytes.
+        text: String,
+    },
+    /// 122.
+    MemberVerify {
+        /// Member.
+        member: Id16,
+        /// Fingerprint compared out of band, normalised.
+        fingerprint: String,
+    },
 }
 
 /// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
@@ -488,6 +526,7 @@ impl std::fmt::Debug for ServerReply {
             Self::Requests(_) => "Requests",
             Self::Quarantine { .. } => "Quarantine",
             Self::DeviceRevoked { .. } => "DeviceRevoked",
+            Self::Found { .. } => "Found",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -562,6 +601,8 @@ pub enum AlertKind {
     WithheldInscription = 6,
     /// 7: an operation waits for a dependency the server does not serve, for an hour.
     WithheldOperation = 7,
+    /// 8: a display name unknown to the member is inscribed in its name (ADR 0069).
+    UnknownOwnProfile = 8,
 }
 
 impl AlertKind {
@@ -576,6 +617,7 @@ impl AlertKind {
             AlertKind::UninscribedRemoval,
             AlertKind::WithheldInscription,
             AlertKind::WithheldOperation,
+            AlertKind::UnknownOwnProfile,
         ]
         .into_iter()
         .find(|k| *k as u64 == n)
@@ -584,7 +626,7 @@ impl AlertKind {
     /// Whether the alert names an entry of the log (key 2).
     #[must_use]
     pub fn has_index(self) -> bool {
-        (self as u64) <= 4
+        (self as u64) <= 4 || self == AlertKind::UnknownOwnProfile
     }
 
     /// Whether the alert names a device (key 3).
@@ -615,7 +657,7 @@ impl AlertKind {
 pub struct KeyLogAlert {
     /// Kind.
     pub kind: AlertKind,
-    /// Rank of the entry in the log (kinds 1 to 4).
+    /// Rank of the entry in the log (kinds 1 to 4 and 8).
     pub index: Option<u64>,
     /// Device concerned (kinds 2, 3 and 6).
     pub device: Option<Id16>,
@@ -681,6 +723,24 @@ pub struct MemberInfo {
     pub change_refusal: Option<Refusal>,
     /// Why the current member may not remove this member, if so.
     pub remove_refusal: Option<Refusal>,
+    /// Display name the member gave itself, verified against the key log (ADR 0069).
+    pub name: Option<String>,
+    /// Whether the user compared this fingerprint out of band.
+    pub verified: bool,
+}
+
+/// One member found in the directory (ADR 0069). The name is what the holder of the key
+/// calls itself: the fingerprint stays the proof.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FoundInfo {
+    /// Member.
+    pub member: Id16,
+    /// Display name, verified against the key log.
+    pub name: String,
+    /// Fingerprint of the member key.
+    pub fingerprint: String,
+    /// Whether the user compared this fingerprint out of band.
+    pub verified: bool,
 }
 
 /// A server mode reply. Holds no secret: names of lockers are in erasing buffers.
@@ -710,6 +770,8 @@ pub enum ServerReply {
         device: Id16,
         /// Control code of the device.
         control_code: String,
+        /// Current display name of the member, if it has one (ADR 0069).
+        name: Option<String>,
     },
     /// 42.
     Joined {
@@ -737,6 +799,8 @@ pub enum ServerReply {
         fingerprint: String,
         /// Devices that received an envelope or were admitted.
         devices: u64,
+        /// Display name of the member, if known and verified here (ADR 0069).
+        name: Option<String>,
     },
     /// 48.
     Members {
@@ -773,6 +837,10 @@ pub enum ServerReply {
         issuer_fingerprint: Option<String>,
         /// Whether the current member may sign it.
         can_sign: bool,
+        /// Display name of the target, if known and verified here (ADR 0069).
+        target_name: Option<String>,
+        /// Display name of the initiator, if known and verified here.
+        issuer_name: Option<String>,
     },
     /// 92: the approval to hand back.
     Approved(String),
@@ -790,10 +858,17 @@ pub enum ServerReply {
         /// Lockers where the `DeviceRemove` was emitted.
         lockers: u64,
     },
+    /// 121.
+    Found {
+        /// Members whose profile was verified against the key log.
+        members: Vec<FoundInfo>,
+        /// The server holds more matches than it returned.
+        more: bool,
+    },
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
-/// [`SERVER_OPS`]. Anything else, readable or not, goes to the other decoders.
+/// [`SERVER_OPS`], [`GOVERNANCE_OPS`] or [`DIRECTORY_OPS`]. Anything else, readable or not, goes to the other decoders.
 #[must_use]
 pub fn is_server_request(frame: &[u8]) -> bool {
     let Ok(v) = cbor::decode(frame) else {
@@ -802,9 +877,9 @@ pub fn is_server_request(frame: &[u8]) -> bool {
     let Ok(f) = Fields::new(&v, &[1, 2, 3, 4]) else {
         return false;
     };
-    f.req(3)
-        .and_then(uint)
-        .is_ok_and(|op| SERVER_OPS.contains(&op) || GOVERNANCE_OPS.contains(&op))
+    f.req(3).and_then(uint).is_ok_and(|op| {
+        SERVER_OPS.contains(&op) || GOVERNANCE_OPS.contains(&op) || DIRECTORY_OPS.contains(&op)
+    })
 }
 
 /// Normalises a typed fingerprint: spaces and dashes removed, upper case; then exactly 20
@@ -864,6 +939,9 @@ impl ServerRequest {
             ServerRequest::QuorumCancel { .. } => ServerOp::QuorumCancel,
             ServerRequest::QuarantineList { .. } => ServerOp::QuarantineList,
             ServerRequest::QuarantineDecide { .. } => ServerOp::QuarantineDecide,
+            ServerRequest::ProfileSet { .. } => ServerOp::ProfileSet,
+            ServerRequest::MemberSearch { .. } => ServerOp::MemberSearch,
+            ServerRequest::MemberVerify { .. } => ServerOp::MemberVerify,
         }
     }
 
@@ -956,6 +1034,15 @@ impl ServerRequest {
                     Value::Array(ops.iter().map(|o| Value::bytes(o)).collect()),
                 ),
                 (3, Value::Bool(*accept)),
+            ])),
+            ServerRequest::ProfileSet { name } => Some(Value::map(vec![(1, Value::text(name))])),
+            ServerRequest::MemberSearch { text } => Some(Value::map(vec![(1, Value::text(text))])),
+            ServerRequest::MemberVerify {
+                member,
+                fingerprint,
+            } => Some(Value::map(vec![
+                (1, Value::bytes(member)),
+                (2, Value::text(fingerprint)),
             ])),
         }
     }
@@ -1137,6 +1224,33 @@ impl ServerRequest {
                     accept: m(f.req(3).and_then(boolean))?,
                 })
             }
+            ServerOp::ProfileSet => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                let name = m(f.req(1).and_then(|n| text_max(n, MAX_DISPLAY_NAME)))?;
+                if !valid_display_name(name) {
+                    return Err(ServerCode::General(ErrorCode::InvalidInput));
+                }
+                Ok(ServerRequest::ProfileSet {
+                    name: name.to_owned(),
+                })
+            }
+            ServerOp::MemberSearch => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                let text = m(f.req(1).and_then(|n| text_max(n, MAX_DISPLAY_NAME)))?;
+                if text.len() < MIN_SEARCH {
+                    return Err(ServerCode::General(ErrorCode::InvalidInput));
+                }
+                Ok(ServerRequest::MemberSearch {
+                    text: text.to_owned(),
+                })
+            }
+            ServerOp::MemberVerify => {
+                let f = m(Fields::new(args()?, &[1, 2]))?;
+                Ok(ServerRequest::MemberVerify {
+                    member: id16(&f, 1)?,
+                    fingerprint: fingerprint_arg(m(f.req(2))?)?,
+                })
+            }
         }
     }
 }
@@ -1210,11 +1324,50 @@ fn member_value(mi: &MemberInfo) -> Value {
     if let Some(r) = mi.remove_refusal {
         e.push((8, Value::Uint(r as u64)));
     }
+    opt_text(&mut e, 9, mi.name.as_deref());
+    e.push((10, Value::Bool(mi.verified)));
     Value::map(e)
 }
 
+fn opt_text(e: &mut Vec<(u64, Value)>, k: u64, v: Option<&str>) {
+    if let Some(v) = v {
+        e.push((k, Value::text(v)));
+    }
+}
+
+/// A display name in a reply: present only when the member has one, so never empty.
+fn name_from(v: Option<&Value>) -> Result<Option<String>, cbor::CborError> {
+    v.map(|n| {
+        let n = text_max(n, MAX_DISPLAY_NAME)?;
+        if n.is_empty() || !valid_display_name(n) {
+            return Err(cbor::CborError::Malformed);
+        }
+        Ok(n.to_owned())
+    })
+    .transpose()
+}
+
+fn found_value(f: &FoundInfo) -> Value {
+    Value::map(vec![
+        (1, Value::bytes(&f.member)),
+        (2, Value::text(&f.name)),
+        (3, Value::text(&f.fingerprint)),
+        (4, Value::Bool(f.verified)),
+    ])
+}
+
+fn found_from(v: &Value) -> Result<FoundInfo, cbor::CborError> {
+    let f = Fields::new(v, &[1, 2, 3, 4])?;
+    Ok(FoundInfo {
+        member: fixed::<16>(f.req(1)?)?,
+        name: name_from(Some(f.req(2)?))?.ok_or(cbor::CborError::Malformed)?,
+        fingerprint: text_max(f.req(3)?, FINGERPRINT_LEN)?.to_owned(),
+        verified: boolean(f.req(4)?)?,
+    })
+}
+
 fn member_from(v: &Value) -> Result<MemberInfo, cbor::CborError> {
-    let i = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8])?;
+    let i = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])?;
     Ok(MemberInfo {
         member: fixed::<16>(i.req(1)?)?,
         role: Role::from_code(uint(i.req(2)?)?).ok_or(cbor::CborError::Malformed)?,
@@ -1224,6 +1377,8 @@ fn member_from(v: &Value) -> Result<MemberInfo, cbor::CborError> {
         change_to: roles_from(i.req(6)?)?,
         change_refusal: refusal_from(i.opt(7))?,
         remove_refusal: refusal_from(i.opt(8))?,
+        name: name_from(i.opt(9))?,
+        verified: boolean(i.req(10)?)?,
     })
 }
 
@@ -1416,12 +1571,17 @@ impl ServerReply {
                 fingerprint,
                 device,
                 control_code,
-            } => Some(Value::map(vec![
-                (1, Value::bytes(member_keys)),
-                (2, Value::text(fingerprint)),
-                (3, Value::bytes(device)),
-                (4, Value::text(control_code)),
-            ])),
+                name,
+            } => {
+                let mut e = vec![
+                    (1, Value::bytes(member_keys)),
+                    (2, Value::text(fingerprint)),
+                    (3, Value::bytes(device)),
+                    (4, Value::text(control_code)),
+                ];
+                opt_text(&mut e, 5, name.as_deref());
+                Some(Value::map(e))
+            }
             ServerReply::Joined {
                 server_id,
                 fingerprint,
@@ -1460,9 +1620,15 @@ impl ServerReply {
             ServerReply::Granted {
                 fingerprint,
                 devices,
-            } => Some(Value::map(vec![
-                (1, Value::text(fingerprint)),
-                (2, Value::Uint(*devices)),
+                name,
+            } => {
+                let mut e = vec![(1, Value::text(fingerprint)), (2, Value::Uint(*devices))];
+                opt_text(&mut e, 3, name.as_deref());
+                Some(Value::map(e))
+            }
+            ServerReply::Found { members, more } => Some(Value::map(vec![
+                (1, Value::Array(members.iter().map(found_value).collect())),
+                (2, Value::Bool(*more)),
             ])),
             ServerReply::Members {
                 me,
@@ -1497,6 +1663,8 @@ impl ServerReply {
                 issuer,
                 issuer_fingerprint,
                 can_sign,
+                target_name,
+                issuer_name,
             } => {
                 let mut e = vec![(1, Value::bytes(locker))];
                 if let Some(n) = name {
@@ -1513,6 +1681,8 @@ impl ServerReply {
                     e.push((8, Value::text(f)));
                 }
                 e.push((9, Value::Bool(*can_sign)));
+                opt_text(&mut e, 10, target_name.as_deref());
+                opt_text(&mut e, 11, issuer_name.as_deref());
                 Some(Value::map(e))
             }
             ServerReply::Approved(token) => Some(Value::map(vec![(1, Value::text(token))])),
@@ -1621,7 +1791,9 @@ impl ServerReply {
             ServerOp::RoleRevoke
             | ServerOp::QuorumApply
             | ServerOp::QuorumCancel
-            | ServerOp::QuarantineDecide => {
+            | ServerOp::QuarantineDecide
+            | ServerOp::ProfileSet
+            | ServerOp::MemberVerify => {
                 if f.opt(4).is_some() {
                     return Err(ErrorCode::Malformed);
                 }
@@ -1659,7 +1831,7 @@ impl ServerReply {
                 }
             }
             ServerOp::ServerIdentity => {
-                let b = Fields::new(body()?, &[1, 2, 3, 4]).map_err(bad)?;
+                let b = Fields::new(body()?, &[1, 2, 3, 4, 5]).map_err(bad)?;
                 ServerReply::Identity {
                     member_keys: b
                         .req(1)
@@ -1669,6 +1841,7 @@ impl ServerReply {
                     fingerprint: text(b.req(2).map_err(bad)?, FINGERPRINT_LEN)?,
                     device: b.req(3).and_then(fixed::<16>).map_err(bad)?,
                     control_code: text(b.req(4).map_err(bad)?, 64)?,
+                    name: name_from(b.opt(5)).map_err(bad)?,
                 }
             }
             ServerOp::ServerJoin => {
@@ -1712,10 +1885,25 @@ impl ServerReply {
                 }
             }
             ServerOp::RoleGrant => {
-                let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
+                let b = Fields::new(body()?, &[1, 2, 3]).map_err(bad)?;
                 ServerReply::Granted {
                     fingerprint: text(b.req(1).map_err(bad)?, FINGERPRINT_LEN)?,
                     devices: b.req(2).and_then(uint).map_err(bad)?,
+                    name: name_from(b.opt(3)).map_err(bad)?,
+                }
+            }
+            ServerOp::MemberSearch => {
+                let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
+                ServerReply::Found {
+                    members: b
+                        .req(1)
+                        .and_then(|x| array_max(x, MAX_FOUND))
+                        .map_err(bad)?
+                        .iter()
+                        .map(found_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(bad)?,
+                    more: b.req(2).and_then(boolean).map_err(bad)?,
                 }
             }
             ServerOp::QuorumPrepare | ServerOp::QuorumCollect => {
@@ -1734,7 +1922,7 @@ impl ServerReply {
                 )
             }
             ServerOp::QuorumInspect => {
-                let b = Fields::new(body()?, &[1, 2, 3, 4, 5, 6, 7, 8, 9]).map_err(bad)?;
+                let b = Fields::new(body()?, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]).map_err(bad)?;
                 ServerReply::Inspected {
                     locker: b.req(1).and_then(fixed::<16>).map_err(bad)?,
                     name: b
@@ -1749,6 +1937,8 @@ impl ServerReply {
                     issuer: b.req(7).and_then(fixed::<16>).map_err(bad)?,
                     issuer_fingerprint: b.opt(8).map(|f| text(f, FINGERPRINT_LEN)).transpose()?,
                     can_sign: b.req(9).and_then(boolean).map_err(bad)?,
+                    target_name: name_from(b.opt(10)).map_err(bad)?,
+                    issuer_name: name_from(b.opt(11)).map_err(bad)?,
                 }
             }
             ServerOp::QuorumApprove => {
@@ -1863,6 +2053,17 @@ mod tests {
                 ops: vec![[1; 48], [2; 48]],
                 accept: true,
             },
+            ServerRequest::ProfileSet {
+                name: "Marie Durand".into(),
+            },
+            ServerRequest::ProfileSet {
+                name: String::new(),
+            },
+            ServerRequest::MemberSearch { text: "dur".into() },
+            ServerRequest::MemberVerify {
+                member: [2; 16],
+                fingerprint: "ABCDEFGHIJKLMNOPQRST".into(),
+            },
         ];
         for r in &all {
             assert_eq!(&round(r), r);
@@ -1972,6 +2173,43 @@ mod tests {
                 .1,
             ServerCode::General(ErrorCode::InvalidInput)
         );
+        // Display names (ADR 0069): an invalid name, a search text too short, a fingerprint
+        // that is not one; 123 to 129 are reserved, not known.
+        for name in ["Marie ", "Marie\u{202E}", "a\u{200B}b"] {
+            let set = Value::map(vec![(1, Value::text(name))]);
+            assert_eq!(
+                ServerRequest::decode(&enc(4, 120, Some(set)))
+                    .unwrap_err()
+                    .1,
+                ServerCode::General(ErrorCode::InvalidInput)
+            );
+        }
+        let long = Value::map(vec![(1, Value::text(&"a".repeat(MAX_DISPLAY_NAME + 1)))]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 120, Some(long)))
+                .unwrap_err()
+                .1,
+            ServerCode::General(ErrorCode::Malformed)
+        );
+        let short = Value::map(vec![(1, Value::text("a"))]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 121, Some(short)))
+                .unwrap_err()
+                .1,
+            ServerCode::General(ErrorCode::InvalidInput)
+        );
+        let verify = Value::map(vec![(1, Value::bytes(&[1; 16])), (2, Value::text("ABC"))]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 122, Some(verify)))
+                .unwrap_err()
+                .1,
+            ServerCode::General(ErrorCode::InvalidInput)
+        );
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 123, None)).unwrap_err(),
+            (3, ServerCode::General(ErrorCode::UnknownOperation))
+        );
+        assert!(is_server_request(&enc(4, 129, None)));
         // Not a server request.
         assert!(!is_server_request(&enc(1, 5, None)));
         assert!(is_server_request(&enc(4, 95, None)));
@@ -2081,6 +2319,8 @@ mod tests {
                         change_to: vec![Role::Manager, Role::Editor],
                         change_refusal: None,
                         remove_refusal: Some(Refusal::LastOwner),
+                        name: Some("Marie Durand".into()),
+                        verified: true,
                     }],
                     grantable: Vec::new(),
                     grant_refusal: Some(Refusal::AccessLost),
@@ -2114,8 +2354,42 @@ mod tests {
                     issuer: [4; 16],
                     issuer_fingerprint: Some("C".repeat(20)),
                     can_sign: true,
+                    target_name: None,
+                    issuer_name: Some("Zoé".into()),
                 },
             ),
+            (
+                ServerOp::ServerIdentity,
+                ServerReply::Identity {
+                    member_keys: vec![1, 2, 3],
+                    fingerprint: "D".repeat(20),
+                    device: [6; 16],
+                    control_code: "AB-CD".into(),
+                    name: Some("Marie Durand".into()),
+                },
+            ),
+            (
+                ServerOp::RoleGrant,
+                ServerReply::Granted {
+                    fingerprint: "D".repeat(20),
+                    devices: 2,
+                    name: None,
+                },
+            ),
+            (
+                ServerOp::MemberSearch,
+                ServerReply::Found {
+                    members: vec![FoundInfo {
+                        member: [7; 16],
+                        name: "Paul Renaud".into(),
+                        fingerprint: "E".repeat(20),
+                        verified: false,
+                    }],
+                    more: true,
+                },
+            ),
+            (ServerOp::ProfileSet, ServerReply::Done),
+            (ServerOp::MemberVerify, ServerReply::Done),
             (
                 ServerOp::QuorumApprove,
                 ServerReply::Approved("hirzla-accord:AAAA".into()),

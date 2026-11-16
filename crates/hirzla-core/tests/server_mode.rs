@@ -502,6 +502,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
     let ServerReply::Granted {
         fingerprint,
         devices,
+        ..
     } = grant(&mut alice, locker, bob.id, Role::Reader, Some(&bob_fp)).unwrap()
     else {
         panic!("granted expected");
@@ -1833,5 +1834,264 @@ fn an_own_revocation_read_after_a_restart_raises_no_alert() {
     assert_eq!(
         alice.server(ServerRequest::DeviceRevoke { device: p }),
         Err(ServerCode::AlreadyRevoked)
+    );
+}
+
+// -----------------------------------------------------------------------------------------
+// Display names (ADR 0069)
+// -----------------------------------------------------------------------------------------
+
+fn set_name(m: &mut Member, name: &str) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::ProfileSet {
+        name: name.to_owned(),
+    })
+}
+
+fn own_name(m: &mut Member) -> Option<String> {
+    match m.server(ServerRequest::ServerIdentity).unwrap() {
+        ServerReply::Identity { name, .. } => name,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn search(
+    m: &mut Member,
+    text: &str,
+) -> Result<(Vec<hirzla_core::server_mode::proto::FoundInfo>, bool), ServerCode> {
+    match m.server(ServerRequest::MemberSearch {
+        text: text.to_owned(),
+    })? {
+        ServerReply::Found { members, more } => Ok((members, more)),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Name and « fingerprint compared » of each member of `locker`, as `m` sees them.
+fn names_in(m: &mut Member, locker: Id16) -> Vec<(Id16, Option<String>, bool)> {
+    match m.server(ServerRequest::LockerMembers { locker }).unwrap() {
+        ServerReply::Members { members, .. } => members
+            .into_iter()
+            .map(|x| (x.member, x.name, x.verified))
+            .collect(),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn keylog_entries(m: &mut Member) -> u64 {
+    match m.server(ServerRequest::ServerStatus).unwrap() {
+        ServerReply::Status {
+            keylog: Some(k), ..
+        } => k.entries,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// ADR 0069: each member signs its display name with its member key; the name is inscribed
+/// in the key log and another member sees it only once its own core verified the chain. A
+/// member is found by its name, added by its identifier, and its fingerprint compared once.
+/// The names and the compared fingerprints come back from the annex without network.
+#[test]
+fn display_names_are_signed_inscribed_and_searched() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol"]);
+    let [alice, bob, carol] = &mut m[..] else {
+        unreachable!()
+    };
+    let n = |s: &str| Some(s.to_owned());
+
+    // No name before one is given; an invalid one is refused before anything is signed.
+    assert_eq!(own_name(alice), None);
+    for bad in ["Alice ", " Alice", "Al\u{202E}ice", "A\u{200B}", "a\tb"] {
+        assert_eq!(
+            set_name(alice, bad),
+            Err(ServerCode::General(ErrorCode::InvalidInput)),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(own_name(alice), n("Alice Martin"));
+    // The same name again inscribes nothing.
+    let before = keylog_entries(alice);
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(keylog_entries(alice), before);
+    assert_eq!(set_name(bob, "Bob Durand"), Ok(ServerReply::Done));
+    assert_eq!(set_name(carol, "Carole DURAND"), Ok(ServerReply::Done));
+    // Her own profile is expected in the key log: no alert.
+    assert!(alerts(alice).is_empty());
+
+    // Search: case ignored, each answer verified against the local key log.
+    assert_eq!(
+        search(alice, "d").unwrap_err(),
+        ServerCode::General(ErrorCode::InvalidInput)
+    );
+    assert_eq!(search(alice, "personne").unwrap(), (Vec::new(), false));
+    let (found, more) = search(alice, "durand").unwrap();
+    assert!(!more);
+    assert_eq!(
+        found
+            .iter()
+            .map(|f| (
+                f.member,
+                f.name.as_str(),
+                f.fingerprint.as_str(),
+                f.verified
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (bob.id, "Bob Durand", bob.fingerprint.as_str(), false),
+            (carol.id, "Carole DURAND", carol.fingerprint.as_str(), false),
+        ]
+    );
+
+    // The fingerprint compared out of band: refused if it is not the one of the key, or for
+    // a member this core never saw.
+    let verify = |m: &mut Member, member: Id16, fp: &str| {
+        m.server(ServerRequest::MemberVerify {
+            member,
+            fingerprint: fp.to_owned(),
+        })
+    };
+    let (bob_fp, carol_fp) = (bob.fingerprint.clone(), carol.fingerprint.clone());
+    assert_eq!(
+        verify(alice, bob.id, &carol_fp),
+        Err(ServerCode::FingerprintMismatch)
+    );
+    assert_eq!(
+        verify(alice, [0x77; 16], &bob_fp),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+    assert_eq!(verify(alice, bob.id, &bob_fp), Ok(ServerReply::Done));
+    let (found, _) = search(alice, "Durand").unwrap();
+    assert_eq!(
+        found.iter().map(|f| f.verified).collect::<Vec<_>>(),
+        vec![true, false]
+    );
+
+    // Members are added by identifier; the grant gives the name back. A grant with the
+    // expected fingerprint counts as a comparison, a grant without does not.
+    let ServerReply::Granted { name, .. } =
+        grant(alice, locker, bob.id, Role::Editor, None).unwrap()
+    else {
+        panic!("granted expected");
+    };
+    assert_eq!(name, n("Bob Durand"));
+    grant(alice, locker, carol.id, Role::Reader, None).unwrap();
+    assert_eq!(names_in(alice, locker), {
+        let mut v = vec![
+            (alice.id, n("Alice Martin"), true),
+            (bob.id, n("Bob Durand"), true),
+            (carol.id, n("Carole DURAND"), false),
+        ];
+        v.sort();
+        v
+    });
+    grant(alice, locker, carol.id, Role::Editor, Some(&carol_fp)).unwrap();
+    assert!(names_in(alice, locker)
+        .iter()
+        .all(|(_, name, verified)| name.is_some() && *verified));
+
+    // Bob learns the names of the locker at his next synchronisation, each verified by his
+    // own core; he compared no fingerprint.
+    bob.sync();
+    let seen = names_in(bob, locker);
+    assert!(seen.contains(&(alice.id, n("Alice Martin"), false)));
+    assert!(seen.contains(&(bob.id, n("Bob Durand"), true)));
+    assert!(seen.contains(&(carol.id, n("Carole DURAND"), false)));
+
+    // A new name replaces the old one once the key log is read; a withdrawn name leaves
+    // the identifier and the fingerprint only, and is no longer found.
+    assert_eq!(set_name(bob, "Robert Durand"), Ok(ServerReply::Done));
+    assert_eq!(set_name(carol, ""), Ok(ServerReply::Done));
+    assert_eq!(own_name(carol), None);
+    assert!(names_in(alice, locker).contains(&(bob.id, n("Bob Durand"), true)));
+    alice.sync();
+    let seen = names_in(alice, locker);
+    assert!(seen.contains(&(bob.id, n("Robert Durand"), true)));
+    assert!(seen.contains(&(carol.id, None, true)));
+    assert_eq!(search(alice, "carole").unwrap().0, Vec::new());
+
+    // Everything comes back from the annex, without the server.
+    alice.restart();
+    let running = server.running;
+    running.stop();
+    assert_eq!(own_name(alice), n("Alice Martin"));
+    assert_eq!(names_in(alice, locker), seen);
+    assert_eq!(set_name(alice, "Alice"), Err(ServerCode::ServerUnreachable));
+}
+
+/// ADR 0069, point 2: a profile signed with the member key but not issued by this core
+/// (a stolen key, a server replaying nothing but inscribing what it received) raises the
+/// alert « nom affiché inconnu inscrit à votre nom ». A profile issued here does not, even
+/// when its inscription is read after a restart; its rank follows the inscribed one.
+#[test]
+fn a_profile_issued_elsewhere_raises_an_alert() {
+    use hirzla_access::profile::MemberProfile;
+    let tmp = tempdir();
+    let (server, mut m, _locker) = joined(tmp.path(), &["alice"]);
+    let alice = &mut m[0];
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    alice.sync();
+    assert!(alerts(alice).is_empty());
+    let before = std::fs::read(annex_path(&alice.vault)).unwrap();
+
+    // Her own second profile, whose inscription the core forgets before a restart.
+    assert_eq!(set_name(alice, "Alice M."), Ok(ServerReply::Done));
+    alice.core.handle(Request::Lock).unwrap();
+    rewind_keylog(alice, &before);
+    alice.restart();
+    alice.sync();
+    assert!(alerts(alice).is_empty());
+    assert_eq!(own_name(alice), Some("Alice M.".to_owned()));
+
+    // Someone else signs with her member key.
+    alice.core.handle(Request::Lock).unwrap();
+    let forged = {
+        let v = Vault::open(&alice.vault, PASSWORD).unwrap();
+        let mut p = MemberProfile {
+            member: v.member_id(),
+            seq: 3,
+            name: "Mallory".to_owned(),
+            issued_ms: 9,
+            sig: Vec::new(),
+        };
+        p.sig = v.sign_member_profile(p.seq, &p.name, p.issued_ms).unwrap();
+        p.encode().unwrap()
+    };
+    let device = alice.device();
+    let mut c = Client::connect(
+        server.running.addr,
+        SERVER_NAME,
+        &server.device_tls,
+        None,
+        &Identity::Device {
+            device: &device,
+            present_cert: true,
+        },
+    )
+    .unwrap();
+    let index = c.put_member_profile(&forged).unwrap();
+    // A profile already inscribed is not inscribed again (R7), nor one of a lower rank.
+    assert!(c.put_member_profile(&forged).is_err());
+    let _ = c.bye();
+    alice.restart();
+    alice.sync();
+    assert_eq!(
+        alerts(alice)
+            .iter()
+            .filter(|a| a.kind == AlertKind::UnknownOwnProfile)
+            .map(|a| a.index)
+            .collect::<Vec<_>>(),
+        vec![Some(index)]
+    );
+    // The name is the one her key signed last; she takes it back with a higher rank.
+    assert_eq!(own_name(alice), Some("Mallory".to_owned()));
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(own_name(alice), Some("Alice Martin".to_owned()));
+    assert_eq!(
+        alerts(alice)
+            .iter()
+            .filter(|a| a.kind == AlertKind::UnknownOwnProfile)
+            .count(),
+        1
     );
 }

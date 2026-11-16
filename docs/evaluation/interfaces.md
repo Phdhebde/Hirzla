@@ -90,7 +90,7 @@ tournent 60 secondes chacune dans le travail informatif `fuzz` de la CI.
 | `decode_release` | Enveloppe signée et manifeste des paquets et du manifeste des clients | Fichier de mise à jour |
 | `decode_audit_log` | Lecture stricte et tolérante, vérification de la chaîne | Journal remis |
 | `decode_recovery_share` | Fichier de part, colis de recouvrement | Support d'un dépositaire |
-| `decode_keylog` | Entrées, têtes, preuves du registre ; preuves de bifurcation et alertes | Serveur |
+| `decode_keylog` | Entrées, têtes, preuves du registre ; profils de membre (ADR 0069) ; preuves de bifurcation et alertes | Serveur |
 | `decode_hornn_grant` | Autorisations Hornn, inscription d'un membre machine | Hornn, administrateur |
 | `parse_csv` | Lecteur CSV de l'import (bornes vérifiées) | Fichier importé |
 | `parse_native_json` | Lecteur JSON de l'hôte natif | Extension, page web |
