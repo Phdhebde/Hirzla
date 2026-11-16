@@ -9,7 +9,8 @@ sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
-le générateur complet (version 7, § 6.2) par l'ADR 0068.
+les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
+§ 6.2) par l'ADR 0068.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -226,7 +227,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 | Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées, plus tard (ADR 0010) : `Unsupported` |
 | Valeur de champ | `tstr` (≤ 1 Mio ; le coffre applique ses propres limites par champ), `bool` pour le favori |
 | Sélecteur | `{1: casier, 2: secret}` **ou** `{3: titre}` (exactement l'un des deux) |
-| Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note |
+| Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note. Les connexions (7, 8) et les clés SSH (2) se créent par la version 6 (§ 17) |
 | Origine (v2) | `tstr` (1 à 2 048 octets) : origine web sérialisée `https://hôte[:port]`, voir § 6.1 |
 
 Un sélecteur par titre désigne le secret **actif** dont le titre est égal, sans tenir compte
@@ -474,7 +475,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **7** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15) et Self (version 5, § 16) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **7** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
@@ -503,7 +504,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `status`, `stop` | `Status` ; `Shutdown` |
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
-import KeePass, mot de passe, réglages, recouvrement) au § 16.5.
+import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
+RDP au § 17.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -1248,3 +1250,167 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
+
+## 17. Connexions SSH et RDP (version 6)
+
+Décision : ADR 0067. Format : `format.md` § 8.5 (types de secret 7 et 8, format du coffre v2).
+Le noyau parle en plus la **version 6**, qui crée, lit et modifie les connexions SSH et RDP, et
+range une clé SSH existante. Codes : opérations **100 à 119**, erreurs **100 à 109** réservées
+(aucune n'est définie : les codes généraux du § 7 suffisent). Code :
+`crates/hirzla-core/src/connections`.
+
+Le noyau **range** une connexion. Il ne se connecte à aucun hôte, ne lance aucun client et ne
+calcule aucune empreinte (ADR 0067 § 7).
+
+### 17.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+100 à 119 va aux connexions ; elle doit porter `v = 6`, sinon `UnsupportedVersion` avec
+`{2: [6]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 6`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé. `Status` (§ 6) n'annonce pas la version 6 : un
+client la découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`). Ces opérations comptent comme une activité pour le verrouillage
+automatique (§ 6, point 4).
+
+### 17.2 Types
+
+**Lien** : `{1: casier bstr(16), 2: secret bstr(16)}` (`SecretLink`, `format.md` § 8.5).
+
+**Connexion** — les mêmes numéros servent à la création, à la modification et à la lecture :
+
+| Clé | Nom | Type | Types | Règle |
+| --- | --- | --- | --- | --- |
+| 1 | titre | `tstr` | 7, 8 | 1 à 1 024 octets |
+| 2 | hôte | `tstr` | 7, 8 | `format.md` § 8.5 : `A-Z a-z 0-9 . - _ :`, sans `-` initial, 255 octets au plus |
+| 3 | port | `uint` | 7, 8 | 1 à 65 535 ; absent : port par défaut (22, 3389) |
+| 4 | identifiant | `tstr` | 7, 8 | Ni caractère de contrôle ni `-` initial |
+| 5 | domaine | `tstr` | 8 | Idem, 255 octets au plus |
+| 6 | mot de passe | `tstr` | 7, 8 | **Écriture seulement** |
+| 7 | clé SSH | lien | 7 | Vers un secret de type 2 |
+| 8 | rebond | lien | 7, 8 | Vers une connexion SSH (type 7) |
+| 9 | empreinte de l'hôte | `tstr` | 7, 8 | `SHA256:` et 43 caractères base64 |
+| 10 | notes | `tstr` | 7, 8 | **Écriture seulement**, 1 Mio au plus |
+| 11 | favori | `bool` | 7, 8 | |
+
+Une clé absente est un champ absent. Une clé qui n'est pas permise pour le type (domaine d'une
+connexion SSH, clé SSH d'une connexion RDP) : `InvalidInput`.
+
+**Lien résolu** — ce que le noyau sait de la cible d'un lien :
+
+| Clé | Nom | Type | Présence |
+| --- | --- | --- | --- |
+| 1 | casier | `bstr(16)` | Toujours |
+| 2 | secret | `bstr(16)` | Toujours |
+| 3 | état du lien | `uint` | Toujours |
+| 4 | titre | `tstr` | État 0 ou 2 |
+| 5 | hôte | `tstr` | Rebond, état 0 ou 2 |
+| 6 | port | `uint` | Rebond, état 0 ou 2 : le port **effectif** (défaut compris) |
+| 7 | identifiant | `tstr` | État 0 ou 2, si la cible en a un |
+| 8 | clé publique | `tstr` | Clé SSH, état 0 ou 2, si la cible en a une |
+
+États d'un lien : **0** valide ; **1** rompu (cible absente, purgée, ou dans un casier que ce
+poste ne détient pas) ; **2** cible à la corbeille ; **3** cible d'un type inattendu ; **4**
+chaîne de rebonds cyclique ou de plus de 8 sauts. Un lien résolu ne porte jamais de valeur
+sensible.
+
+**Fiche** — résultat de `ConnectionRead` :
+
+| Clé | Nom | Type | Règle |
+| --- | --- | --- | --- |
+| 1 | type | `uint` | 7 ou 8 |
+| 2 | état | `uint` | 0 actif, 1 corbeille |
+| 3 | connexion | Connexion | Sans les clés 6 et 10 |
+| 4 | mot de passe présent | `bool` | |
+| 5 | notes présentes | `bool` | |
+| 6 | étiquettes | `[tstr]` | Triées |
+| 7 | port effectif | `uint` | Le port, ou le défaut du type |
+| 8 | clé SSH | lien résolu | Présent si et seulement si la connexion porte la clé 7 |
+| 9 | rebonds | `[lien résolu]` | Chaîne des rebonds, du plus proche de la connexion au plus lointain ; vide sans rebond ; 9 éléments au plus |
+
+La chaîne des rebonds suit le champ `rebond` de chaque connexion traversée. Elle s'arrête au
+premier lien d'état 1, 3 ou 4, qui en est le dernier élément. Un client ne compose une
+commande (`ssh -J …`) que si tous les éléments sont à l'état 0.
+
+### 17.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 100 | `ConnectionCreate` | ouvert | `{1?: casier, 2: type, 3: connexion, 4?: [étiquette]}` | `{1: casier, 2: secret}` |
+| 101 | `ConnectionRead` | ouvert | `{1: casier, 2: secret}` | fiche |
+| 102 | `ConnectionUpdate` | ouvert | `{1: casier, 2: secret, 3?: connexion, 4?: [clé à effacer]}` | — |
+| 103 | `SshKeyCreate` | ouvert | `{1?: casier, 2: titre, 3: clé privée bstr, 4?: clé publique tstr, 5?: phrase de passe tstr, 6?: identifiant tstr, 7?: [étiquette]}` | `{1: casier, 2: secret}` |
+
+Détails :
+
+1. **`ConnectionCreate`** — type 7 (SSH) ou 8 (RDP), sinon `InvalidInput`. Les clés 1 (titre)
+   et 2 (hôte) sont obligatoires. Casier personnel par défaut ; un casier partagé est permis
+   selon le rôle du membre (§ 15.4). 64 étiquettes au plus. Dans un coffre encore au format v1,
+   la première connexion créée le passe au format v2, dans la même transaction (`format.md`
+   § 5.3).
+2. **Liens à l'écriture** (`ConnectionCreate`, `ConnectionUpdate`) — la cible d'un lien doit
+   exister dans un casier que ce poste détient, ne pas être purgée, et avoir le type attendu
+   (2 pour la clé, 7 pour le rebond). Un rebond ne désigne pas la connexion elle-même, et la
+   chaîne qu'il ouvre ne dépasse pas 8 sauts ni ne revient sur elle-même. Sinon `InvalidInput`,
+   sans dire lequel de ces points manque.
+3. **`ConnectionRead`** — `NotFound` si le secret est absent, purgé ou n'est pas une connexion.
+   Le mot de passe et les notes ne sont **pas** dans la fiche : ils se lisent un par un par
+   `Read` (6), champs 11 et 2, comme pour tout secret.
+4. **`ConnectionUpdate`** — pose les clés données (clé 3) et efface les clés listées (clé 4).
+   Au moins un changement ; une même clé ne peut pas être posée et effacée ; le titre (1),
+   l'hôte (2) et le favori (11) ne s'effacent pas (`InvalidInput`). Effaçables : 3 à 10. Le type
+   d'une connexion ne change pas. `NotFound` comme pour `ConnectionRead`.
+5. **`SshKeyCreate`** — range une clé SSH **existante** dans un secret de type 2. La clé
+   privée (1 octet à 64 Kio) est le fichier tel qu'OpenSSH l'écrit ; elle doit commencer par
+   `-----BEGIN OPENSSH PRIVATE KEY-----`, sinon `InvalidInput`. Le noyau ne l'analyse pas, ne
+   la déchiffre pas et ne vérifie pas que la clé publique (une ligne OpenSSH, 16 Kio au plus)
+   lui correspond. **Aucune opération ne rend la clé privée** : le champ 20 n'est pas lisible
+   par `Read`. La phrase de passe se lit par `Read` (champ 22), la clé publique par `Read`
+   (champ 21).
+6. **Autres opérations** — `List` (5) rend les connexions avec leur type (7, 8), leur hôte dans
+   `hôtes` et leur identifiant ; la recherche porte sur ces champs. `Update` (8) accepte sur
+   une connexion les champs 1, 2, 3, 10 et 11 du § 5.3. `Delete` (9), `RestoreSecret` (64),
+   `History` (65), `ReadVersion` (66) et `RestoreVersion` (67) valent pour les connexions
+   comme pour tout secret ; `History` nomme les champs par leur numéro de `format.md` § 8
+   (50 hôte, 51 port, 52 domaine, 53 clé SSH, 54 rebond, 55 empreinte). `Match` et `Fill` ne
+   rendent jamais une connexion.
+
+### 17.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de secret, d'hôte ni d'identifiant de secret. Le journal du noyau n'écrit que l'opération et
+le nom du résultat : `event=connection_request op=<nom> result=<ok|nom>`, avec les noms
+`connection_create`, `connection_read`, `connection_update`, `ssh_key_create`.
+
+### 17.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `connexion ssh NOM --hote H [--port P] [--identifiant U] [--cle CLÉ] [--rebond REBOND] [--empreinte E] [--mot-de-passe] [--casier C] [--tag T]…` | `List` (résolution de CLÉ, REBOND, C), `ConnectionCreate` |
+| `connexion rdp NOM --hote H [--port P] [--identifiant U] [--domaine D] [--rebond REBOND] [--empreinte E] [--mot-de-passe] [--casier C] [--tag T]…` | `List`, `ConnectionCreate` |
+| `connexion voir NOM \| --id ID` | `List`, `ConnectionRead` |
+| `connexion modifier NOM \| --id ID [options de création, sauf --casier et --tag] [--titre T] [--effacer CHAMP]…` | `List`, `ConnectionUpdate` |
+| `cle-ssh ajouter NOM FICHIER [--publique FICHIER] [--identifiant U] [--phrase] [--casier C] [--tag T]…` | `List`, `SshKeyCreate` |
+
+- `--mot-de-passe` et `--phrase` **demandent** la valeur sans écho (ou la lisent sur l'entrée
+  standard) : aucun secret en argument (§ 11).
+- CLÉ et REBOND sont le titre d'un secret actif, unique sans tenir compte de la casse, du type
+  attendu ; `Ambiguous` s'il y en a plusieurs.
+- `--effacer` accepte `port`, `identifiant`, `domaine`, `mot-de-passe`, `cle`, `rebond`,
+  `empreinte`, `notes`.
+- `connexion voir` affiche la fiche, sans le mot de passe, et, pour une connexion SSH dont
+  tous les rebonds sont valides, la commande `ssh` correspondante. Le mot de passe se copie
+  par `hirzla get NOM`.
+- `cle-ssh ajouter` lit FICHIER (64 Kio au plus) dans un tampon effacé ; `--publique` lit la
+  première ligne du fichier donné (à défaut, `FICHIER.pub` s'il existe).
+- `ls`, `get`, `rm`, `history` et `restore` valent pour les connexions et les clés SSH.
+
+### 17.6 Points ouverts
+
+1. **Ouverture de session** : lancer le client du système, tenir un agent SSH dans le noyau,
+   remettre le mot de passe au client RDP. ADR à venir (ADR 0067 § 7).
+2. **Génération d'une clé SSH** dans le noyau : relève de l'ADR 0010, pas encore codé.
+3. **Lecture par lot** : `ConnectionRead` descelle la connexion et chaque cible de ses liens.
+   Une liste de connexions avec leurs rebonds coûte un appel par connexion.
+4. **`connexion modifier` ne change pas les étiquettes** : l'API n'a pas encore d'opération
+   sur les ensembles d'un secret existant, quel que soit son type.

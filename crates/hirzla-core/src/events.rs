@@ -10,6 +10,7 @@ use hirzla_keystore::platform::HardeningReport;
 
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
+use crate::connections::proto::ConnectionOp;
 use crate::proto::{ErrorCode, Op};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -145,6 +146,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A connection request was answered (`docs/api-locale.md` § 17). `result` is `ok` or the
+    /// name of the error: fixed words only.
+    ConnectionRequest {
+        /// Operation.
+        op: ConnectionOp,
+        /// Outcome.
+        result: &'static str,
+    },
     /// A server mode request was answered (`docs/api-locale.md` § 15). `result` is `ok` or
     /// the name of the error: fixed words only.
     ServerRequest {
@@ -224,6 +233,13 @@ impl Event {
             ),
             Event::SelfRequest { op, result } => {
                 write!(out, "event=self_request op={} result={result}", op.name())
+            }
+            Event::ConnectionRequest { op, result } => {
+                write!(
+                    out,
+                    "event=connection_request op={} result={result}",
+                    op.name()
+                )
             }
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
@@ -361,6 +377,11 @@ mod tests {
             let op = SelfOp::from_u64(n).unwrap_or(SelfOp::GetSettings);
             for result in ["ok", "import_key_rejected", "unlock_failed"] {
                 events.push(Event::SelfRequest { op, result });
+            }
+        }
+        for op in ConnectionOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
+                events.push(Event::ConnectionRequest { op, result });
             }
         }
         for n in 40..=48 {

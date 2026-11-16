@@ -11,7 +11,7 @@ use hirzla_crypto::shamir::{self, SignedShare, SIGNED_SHARE_LEN};
 use hirzla_crypto::sign::VerifyingKey;
 use hirzla_crypto::sym::{self, SymmetricKey};
 use hirzla_crypto::util::{constant_time_eq, random_array};
-use rusqlite::params;
+use rusqlite::{params, Connection};
 use zeroize::Zeroizing;
 
 use super::{
@@ -242,13 +242,21 @@ impl Vault {
 
     /// Rewrites the header and its authentication in one transaction.
     fn write_header(&self, header: &Header) -> Result<(), VaultError> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.write_header_in(&tx, header)?;
+        before_commit();
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Rewrites the header and its authentication inside the transaction `tx`.
+    fn write_header_in(&self, tx: &Connection, header: &Header) -> Result<(), VaultError> {
         let body = header.encode()?;
         let auth = seal_padded(
             &self.dev_wrap,
             &aad_header(&body)?,
             &cbor::encode(&Value::map(vec![(1, Value::bytes(&self.vault_id))]))?,
         )?;
-        let tx = self.conn.unchecked_transaction()?;
         let changed = tx.execute(
             "UPDATE header SET body = ?1, auth = ?2 WHERE id = 1",
             params![body, auth],
@@ -256,8 +264,28 @@ impl Vault {
         if changed != 1 {
             return Err(VaultError::Corrupt);
         }
-        before_commit();
-        tx.commit()?;
+        Ok(())
+    }
+
+    /// Raises the format version of the file to `version` inside the transaction `tx`
+    /// (`docs/format.md` § 5.3, ADR 0067): the header, its authentication and `user_version`
+    /// change with the object that needs the later version, or nothing changes. The caller
+    /// updates its own copy of the version once the transaction is committed.
+    pub(super) fn raise_format_version(
+        &self,
+        tx: &Connection,
+        version: u16,
+    ) -> Result<(), VaultError> {
+        if !crate::reads_format_version(u64::from(version)) {
+            return Err(VaultError::Unsupported);
+        }
+        let (_, _, mut header) = Self::read_header(tx)?;
+        if header.format_version >= version {
+            return Ok(());
+        }
+        header.format_version = version;
+        self.write_header_in(tx, &header)?;
+        tx.pragma_update(None, "user_version", i64::from(version))?;
         Ok(())
     }
 

@@ -10,6 +10,18 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 
 ## [Non publié]
 
+### Connexions SSH et RDP (ADR 0067)
+
+- Deux types de secret : connexion SSH et connexion RDP (hôte, port, identifiant, domaine,
+  mot de passe, clé SSH liée, rebond, empreinte de l'hôte). Le coffre les range et les
+  montre ; il n'ouvre aucune session.
+- Format du coffre v2, sur-ensemble du v1 : un coffre v1 s'ouvre sans changement et ne passe
+  en v2 qu'à l'écriture de sa première connexion, dans la même transaction.
+- API locale version 6 (`docs/api-locale.md` § 17) : `ConnectionCreate`, `ConnectionRead`,
+  `ConnectionUpdate`, `SshKeyCreate`, profil complet seulement. La clé privée n'est jamais
+  rendue.
+- Ligne de commande : `connexion ssh|rdp|voir|modifier`, `cle-ssh ajouter`.
+
 ### Générateur
 
 - Cinq modes : caractères, phrase de passe (liste française embarquée de 2 048 mots),

@@ -320,6 +320,8 @@ impl UnlockMethod {
 /// Clear header of the vault.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
+    /// Format version of the file: 1 or 2 (§ 5.3).
+    pub format_version: u16,
     /// Vault identifier, also the HKDF salt.
     pub vault_id: Id16,
     /// Suite of new writes.
@@ -341,7 +343,7 @@ impl Header {
     pub fn encode(&self) -> Result<Vec<u8>, CborError> {
         let v = Value::map(vec![
             (1, Value::text("hirzla")),
-            (2, Value::Uint(u64::from(crate::FORMAT_VERSION))),
+            (2, Value::Uint(u64::from(self.format_version))),
             (3, Value::bytes(&self.vault_id)),
             (4, Value::Uint(self.suite_write)),
             (
@@ -367,9 +369,11 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, HeaderError> {
     if text_max(f.req(1)?, 16)? != "hirzla" {
         return Err(HeaderError::Malformed);
     }
-    if uint(f.req(2)?)? != u64::from(crate::FORMAT_VERSION) {
+    let version = uint(f.req(2)?)?;
+    if !crate::reads_format_version(version) {
         return Err(HeaderError::UnsupportedVersion);
     }
+    let format_version = u16::try_from(version).map_err(|_| HeaderError::UnsupportedVersion)?;
     let suite_write = uint(f.req(4)?)?;
     let read_items = array_max(f.req(5)?, 16)?;
     check_sorted(read_items)?;
@@ -391,6 +395,7 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, HeaderError> {
         return Err(HeaderError::Malformed);
     }
     Ok(Header {
+        format_version,
         vault_id: id(f.req(3)?)?,
         suite_write,
         suites_read,
