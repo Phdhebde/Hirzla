@@ -109,7 +109,7 @@ impl FieldsDto {
 }
 
 /// A new connection.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NewConnection {
     kind: ConnectionKind,
@@ -118,6 +118,15 @@ pub struct NewConnection {
     fields: FieldsDto,
     #[serde(default)]
     tags: Vec<Zeroizing<String>>,
+}
+
+impl std::fmt::Debug for NewConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NewConnection")
+            .field("kind", &self.kind)
+            .field("tags", &self.tags.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl NewConnection {
