@@ -1290,6 +1290,11 @@ Version 2, dans cet ordre :
 5. Version 3 : `requests` (chaque casier cité doit être dans `lockers`) et `watch`, gardés tels
    quels ; les accords ne sont pas revérifiés à la lecture, ils le sont de nouveau par le
    contrôle de `QuorumApply` et par tous les postes à la réception de l'opération.
+6. **Révocations émises par le poste** (ADR 0059) : chaque `DeviceRevocation` portée par une
+   `DeviceRemove` appliquée dont l'auteur est l'appareil du poste est de nouveau déclarée
+   attendue au registre local (`transparence.md` § 6.4). Rien n'est ajouté à l'annexe : une
+   révocation émise juste avant un redémarrage et inscrite après ne lève pas l'alerte
+   « révocation inconnue ».
 
 Le noyau tient aussi `SyncState.quarantine_seen` (`sync-protocol.md` § 11.4, clé 5) : l'heure
 de la première synchronisation qui a vu chaque opération en quarantaine, d'où court le délai de
