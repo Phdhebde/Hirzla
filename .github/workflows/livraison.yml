@@ -21,8 +21,15 @@ name: Livraison
 # signed. Stage 2 wraps that very bundle and the manifest into a .pkg (macos-pkg.sh), which
 # installs the manifest outside the bundle. No disk image is delivered.
 #
-# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS is a repository variable
-# holding public keys.
+# Dry run: a tag vX.Y.Z-essai.N runs the same two stages for workspace version X.Y.Z, but
+# compiles the throwaway test keys of HIRZLA_PUBLISHER_KEYS_ESSAI instead of
+# HIRZLA_PUBLISHER_KEYS, and keeps the GitHub release a pre-release draft titled "Essai ...".
+# Its executables trust the test keys only: they must never be published as a real release
+# (docs/livraison.md § 2.1). release-version.py refuses test keys shared with the real ones.
+#
+# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS and HIRZLA_PUBLISHER_KEYS_ESSAI
+# are repository variables holding public keys; every job takes the keys of the mode from
+# the version job, never from the variables directly.
 on:
   push:
     tags: ["v*"]
@@ -49,6 +56,11 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.check.outputs.version }}
+      # X.Y.Z, or X.Y.Z-essai.N for a dry run.
+      label: ${{ steps.check.outputs.label }}
+      essai: ${{ steps.check.outputs.essai }}
+      # HIRZLA_PUBLISHER_KEYS, or HIRZLA_PUBLISHER_KEYS_ESSAI for a dry run (public keys).
+      publisher_keys: ${{ steps.check.outputs.publisher_keys }}
     steps:
       - name: Started on a tag
         if: github.ref_type != 'tag'
@@ -56,14 +68,18 @@ jobs:
           echo "::error::Start this workflow on a release tag (Use workflow from: Tags > vX.Y.Z), not on a branch."
           exit 1
       - uses: actions/checkout@v4
-      - name: Tag equals the workspace version; HIRZLA_PUBLISHER_KEYS is set
+      - name: Tag equals the workspace version; publisher keys of the mode are set
         id: check
         env:
           HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+          HIRZLA_PUBLISHER_KEYS_ESSAI: ${{ vars.HIRZLA_PUBLISHER_KEYS_ESSAI }}
         run: |
-          version="$(python3 .github/scripts/release-version.py --tag "$GITHUB_REF_NAME" --publisher-keys)"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          version="$(python3 .github/scripts/release-version.py --tag "$GITHUB_REF_NAME" \
+            --publisher-keys --github-output "$GITHUB_OUTPUT")"
           echo "Release $version, tag $GITHUB_REF_NAME, commit $GITHUB_SHA"
+          if grep -qx 'essai=true' "$GITHUB_OUTPUT"; then
+            echo "::warning::Dry run ($GITHUB_REF_NAME): test publisher keys (HIRZLA_PUBLISHER_KEYS_ESSAI). Never publish this release; delete the draft and the tag afterwards."
+          fi
 
   # ---------------------------------------------------------------------------------------
   # Stage 1: release executables, built once. They are never modified afterwards: the client
@@ -95,8 +111,9 @@ jobs:
             triple: aarch64-apple-darwin
             ext: ""
     env:
-      # Public publisher keys compiled into the core and its clients (ADR 0042, 0043).
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+      # Public publisher keys compiled into the core and its clients (ADR 0042, 0043): the
+      # test keys in a dry run.
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -241,6 +258,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
+      LABEL: ${{ needs.version.outputs.label }}
+      ESSAI: ${{ needs.version.outputs.essai }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -249,7 +268,7 @@ jobs:
           path: dl
       - name: Publisher folder
         run: |
-          dir="hirzla-$VERSION-a-signer"
+          dir="hirzla-$LABEL-a-signer"
           mkdir -p "$dir"
           for p in linux-x86_64 windows-x86_64 macos-aarch64; do
             cp -r "dl/executables-$p/$p" "$dir/$p"
@@ -257,7 +276,17 @@ jobs:
           done
           printf '%s\n' "$VERSION" > "$dir/VERSION"
           cp .github/scripts/signer-manifestes.sh "$dir/"
-          cat > "$dir/LISEZMOI.txt" <<EOF
+          if [ "$ESSAI" = "true" ]; then
+            cat > "$dir/ESSAI" <<EOF
+          ESSAI DU FLUX DE LIVRAISON ($GITHUB_REF_NAME) : NE JAMAIS PUBLIER.
+          Ces exécutables portent les clés d'éditeur de test (HIRZLA_PUBLISHER_KEYS_ESSAI).
+          Signez les manifestes avec la clé d'éditeur jetable de l'essai, jamais avec la
+          vraie clé d'éditeur. Supprimez ensuite le brouillon et l'étiquette
+          (docs/livraison.md, § 2.1, essai à blanc).
+
+          EOF
+          fi
+          { cat "$dir/ESSAI" 2>/dev/null || true; cat <<EOF
           Hirzla $VERSION : manifestes des clients à signer (étape 1 du flux Livraison).
           Étiquette $GITHUB_REF_NAME, commit $(git rev-parse HEAD), exécution $GITHUB_RUN_ID.
           Marche à suivre complète : docs/guide-signature.md, étape 7.
@@ -300,6 +329,7 @@ jobs:
           et lancez la seconde étape : Actions > Livraison > Run workflow, sur l'étiquette
           $GITHUB_REF_NAME. Ne modifiez aucun exécutable : le manifeste les identifie.
           EOF
+          } > "$dir/LISEZMOI.txt"
           cat "$dir/LISEZMOI.txt"
           echo "FOLDER=$dir" >> "$GITHUB_ENV"
       - uses: actions/upload-artifact@v4
@@ -310,25 +340,37 @@ jobs:
           retention-days: 90
       # One draft per tag. A new stage 1 replaces the executables, so manifests signed for
       # an earlier run no longer match: they are removed from the draft.
+      # A dry run (tag vX.Y.Z-essai.N) is a pre-release draft titled "Essai ...", with a
+      # visible warning in its notes: it carries the test keys and is never published.
       - name: Draft release
         run: |
+          essai=() title="Hirzla $VERSION" prerelease=()
+          if [ "$ESSAI" = "true" ]; then
+            essai=(--essai) title="Essai Hirzla $LABEL (ne pas publier)" prerelease=(--prerelease)
+          fi
           python3 .github/scripts/release-notes.py --version "$VERSION" --stage 1 \
-            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" --output notes.md
+            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" ${essai[@]+"${essai[@]}"} \
+            --output notes.md
           if state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
             if [ "$state" != "true" ]; then
               echo "::error::Release $GITHUB_REF_NAME is already published: a published version is never rebuilt."
               exit 1
             fi
-            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --title "$title" \
+              ${prerelease[@]+"${prerelease[@]}"}
             for a in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'); do
               echo "Removing stale asset $a"
               gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes
             done
           else
             gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-              --title "Hirzla $VERSION" --notes-file notes.md
+              ${prerelease[@]+"${prerelease[@]}"} --title "$title" --notes-file notes.md
           fi
           {
+            if [ "$ESSAI" = "true" ]; then
+              echo "> **Essai à blanc** ($GITHUB_REF_NAME) : clés d'éditeur de test. Signez avec la clé jetable ; ne publiez jamais ce brouillon."
+              echo
+            fi
             echo "### Étape 1 terminée"
             echo
             echo "1. Téléchargez l'artefact \`$FOLDER\` de cette exécution."
@@ -353,7 +395,7 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Stage-1 run of this tag
@@ -472,7 +514,7 @@ jobs:
             manifest_config: ""
     env:
       VERSION: ${{ needs.version.outputs.version }}
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+      HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -681,6 +723,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
+      LABEL: ${{ needs.version.outputs.label }}
+      ESSAI: ${{ needs.version.outputs.essai }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -765,15 +809,30 @@ jobs:
           subject-path: release/*
       - name: Attach to the draft release
         run: |
+          essai=() prerelease=()
+          if [ "$ESSAI" = "true" ]; then
+            essai=(--essai) prerelease=(--prerelease)
+          fi
           python3 .github/scripts/release-notes.py --version "$VERSION" --stage 2 \
             --run-id "${{ needs.manifests.outputs.run_id }}" --sha "$(git rev-parse HEAD)" \
-            --output notes.md
+            ${essai[@]+"${essai[@]}"} --output notes.md
           if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
             echo "::error::Release $GITHUB_REF_NAME is no longer a draft: nothing attached."
             exit 1
           fi
           gh release upload "$GITHUB_REF_NAME" release/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true \
+            ${prerelease[@]+"${prerelease[@]}"}
+          if [ "$ESSAI" = "true" ]; then
+            {
+              echo "### Essai à blanc terminé : brouillon complet, À NE JAMAIS PUBLIER"
+              echo
+              echo "1. Examinez le brouillon $GITHUB_REF_NAME et ses fichiers (clés d'éditeur de test)."
+              echo "2. Supprimez-le avec son étiquette : \`gh release delete $GITHUB_REF_NAME --cleanup-tag --yes\`."
+              echo "3. Détruisez la clé d'éditeur jetable (\`docs/livraison.md\` § 2.1)."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
           {
             echo "### Étape 2 terminée : brouillon complet"
             echo

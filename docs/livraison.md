@@ -129,7 +129,9 @@ que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md
   `Cargo.lock`, `tauri.conf.json`, des `package.json`, des `package-lock.json` ou du
   manifeste de l'extension diffère (`.github/scripts/release-version.py`).
 - `HIRZLA_PUBLISHER_KEYS` est vide ou mal formée (un noyau de livraison sans clé ne démarre
-  pas).
+  pas) ; pour un essai à blanc, de même `HIRZLA_PUBLISHER_KEYS_ESSAI` (ci-dessous).
+- Les deux variables partagent une clé : une clé d'essai n'est jamais la clé d'éditeur, et une
+  vraie livraison n'accepte jamais un manifeste signé par une clé d'essai.
 - Étape 2 lancée sur une branche, sans brouillon, ou sur un commit qui n'est pas celui de
   l'étape 1.
 - Manifeste Linux, Windows ou macOS absent du brouillon ; manifeste qui ne vérifie avec
@@ -184,6 +186,69 @@ macOS contre `Contents/MacOS` (mêmes options de `hirzla-signer verifier` que le
 systèmes), construit le `.pkg` par `.github/scripts/macos-pkg.sh`, puis l'ouvre
 (`pkgutil --expand-full`) pour comparer exécutables et manifeste aux fichiers vérifiés.
 macOS est exigé comme Linux et Windows : un échec arrête la livraison.
+
+#### Essai à blanc (étiquette `vX.Y.Z-essai.N`)
+
+Avant la première vraie étiquette, ou après un changement du flux, on rejoue les deux étapes
+avec une **clé d'éditeur jetable**. Une étiquette `vX.Y.Z-essai.N` (N à partir de 1) lance le
+même flux pour la version `X.Y.Z` de l'espace de travail (que l'on ne relève pas), avec trois
+différences :
+
+- les exécutables sont compilés avec les clés de la variable `HIRZLA_PUBLISHER_KEYS_ESSAI`,
+  et non `HIRZLA_PUBLISHER_KEYS` ; le flux refuse de partir si elle est vide ou si elle
+  partage une clé avec `HIRZLA_PUBLISHER_KEYS` ;
+- le brouillon est une **pré-version** intitulée « Essai Hirzla X.Y.Z-essai.N (ne pas
+  publier) », dont les notes commencent par un avertissement visible ;
+- l'artefact de l'éditeur s'appelle `hirzla-X.Y.Z-essai.N-a-signer` et contient un fichier
+  `ESSAI`, que `signer-manifestes.sh` affiche avant de signer.
+
+> **Ne publiez jamais un essai.** Ses exécutables ne font confiance qu'à la clé jetable :
+> publiés, ils accepteraient tout manifeste signé par quiconque détient cette clé, qui n'est
+> pas gardée comme la clé d'éditeur. Le brouillon d'essai reste un brouillon et se supprime
+> avec son étiquette après examen ; une vraie livraison repart de zéro sur l'étiquette
+> `vX.Y.Z`, avec ses propres exécutables, jamais ceux d'un essai.
+
+Marche à suivre :
+
+1. Clé jetable, sur une machine quelconque (jamais la clé USB de la clé d'éditeur) :
+
+   ```sh
+   hirzla-signer cle-generer --prive essai.cle --publique essai.pub
+   hirzla-signer cle-hex --publique essai.pub
+   ```
+
+2. Sur GitHub, *Settings* › *Secrets and variables* › *Actions* › *Variables* : créer
+   `HIRZLA_PUBLISHER_KEYS_ESSAI` avec la valeur affichée (clé publique : variable, pas
+   secret).
+3. Poser et pousser l'étiquette d'essai sur le commit à essayer :
+
+   ```sh
+   git tag -a v1.0.0-essai.1 -m "Essai du flux de livraison 1.0.0"
+   git push origin v1.0.0-essai.1
+   ```
+
+   L'étape 1 compile, crée la pré-version brouillon et l'artefact
+   `hirzla-1.0.0-essai.1-a-signer`.
+4. Dans le dossier de l'artefact décompressé, signer les manifestes avec la clé jetable :
+   `sh signer-manifestes.sh essai.cle essai.pub` (manifestes de version `1.0.0`, celle du
+   noyau). Joindre les trois `hirzla-clients-*.manifest` au brouillon
+   (`gh release upload v1.0.0-essai.1 hirzla-clients-*.manifest`).
+5. Lancer l'étape 2 : *Actions* › *Livraison* › *Run workflow*, sur l'étiquette
+   `v1.0.0-essai.1`.
+6. Examiner : journal des deux étapes, fichiers joints au brouillon, installation des
+   paquets sur des postes de test (le noyau démarre avec le manifeste de la clé jetable,
+   `event=client_signatures required=1 kind=manifeste`).
+7. Supprimer le brouillon et l'étiquette, puis la clé :
+
+   ```sh
+   gh release delete v1.0.0-essai.1 --cleanup-tag --yes
+   git tag -d v1.0.0-essai.1
+   shred -u essai.cle    # ou suppression sécurisée équivalente
+   ```
+
+   Vider ou supprimer la variable `HIRZLA_PUBLISHER_KEYS_ESSAI` si aucun autre essai n'est
+   prévu. Un essai suivant prend le numéro `N + 1` (une étiquette supprimée peut aussi être
+   reposée, l'étape 1 remettant le brouillon à zéro).
 
 ### Compilation reproductible et nomenclature (ADR 0056)
 

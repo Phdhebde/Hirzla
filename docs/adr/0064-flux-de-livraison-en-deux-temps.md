@@ -130,7 +130,9 @@ artefacts de l'étape 1, `id-token`/`attestations: write` pour la provenance.
   restent la configuration recommandée (ADR 0050).
 - Rien de ce flux n'a pu être exécuté hors de GitHub : la première étiquette fera foi
   (essai conseillé sur une bifurcation de test du dépôt, avec une clé d'éditeur de test,
-  avant la vraie étiquette).
+  avant la vraie étiquette). *Depuis* : étiquettes d'essai `vX.Y.Z-essai.N` dans le dépôt
+  même, clés `HIRZLA_PUBLISHER_KEYS_ESSAI`, pré-version brouillon à supprimer
+  (`livraison.md` § 2.1, « Essai à blanc »).
 
 ## Alternatives écartées
 

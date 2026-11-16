@@ -120,6 +120,11 @@ publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
 `HIRZLA_PUBLISHER_KEYS` (étape 2) et l'outil `hirzla-signer` d'une version au moins égale
 à 1.0.0 sur le poste de signature (étape 1, point 3).
 
+Avant la première vraie version, faites un **essai à blanc** avec une clé d'éditeur jetable
+et une étiquette `v1.0.0-essai.1` (`livraison.md` § 2.1, « Essai à blanc ») : même flux,
+brouillon marqué « Essai », à supprimer ensuite. Ne publiez jamais un essai, et ne signez
+jamais ses manifestes avec la vraie clé d'éditeur.
+
 1. **Je prépare la version sur `dev`** : versions relevées partout (Cargo, application,
    extension), `CHANGELOG.md` complété. Vous fusionnez vers `main`.
 2. **Posez l'étiquette** sur le commit fusionné de `main`, puis poussez-la :

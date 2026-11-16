@@ -3,6 +3,7 @@
 # (ADR 0064, docs/guide-signature.md step 7). Copied by the first stage of the Livraison
 # workflow into the "hirzla-X.Y.Z-a-signer" artifact, next to:
 #   VERSION                 the version to sign (X.Y.Z)
+#   ESSAI                   present only in a dry run of the flow (tag vX.Y.Z-essai.N)
 #   SHA256SUMS              SHA-256 of the transferred files, to check the transfer
 #   linux-x86_64/ windows-x86_64/   the executables of each platform
 #   macos-aarch64/Hirzla.app.zip    the signed macOS application, whole (ADR 0065): its
@@ -32,6 +33,13 @@ version="$(cat VERSION)"
 case "$version" in
   *[!0-9.]* | "") echo "VERSION illisible." >&2; exit 1 ;;
 esac
+
+# Dry run of the release flow (tag vX.Y.Z-essai.N): the executables carry the test keys.
+if [ -e ESSAI ]; then
+  cat ESSAI
+  echo "Clé utilisée : $key. Ce doit être la clé d'éditeur JETABLE de l'essai."
+  echo
+fi
 
 # unzip_app ZIP DEST: extracts the zipped bundle into DEST, which must not exist.
 unzip_app() {
