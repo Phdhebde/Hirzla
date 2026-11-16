@@ -1,6 +1,6 @@
 {
   "name": "hirzla-extension",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "private": true,
   "description": "Extension navigateur Hirzla (Firefox et Chromium), reliée au noyau par messagerie native.",
   "license": "Apache-2.0",

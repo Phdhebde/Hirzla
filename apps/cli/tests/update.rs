@@ -59,7 +59,12 @@ fn verifies_applies_and_refuses_rollback() {
     let public = d.join("editeur.pub");
     fs::write(&public, key.verifying_key().as_bytes()).unwrap();
     let pkg = d.join("maj.hirzla-maj");
-    package(d, &key, "0.1.0", &pkg);
+    // Strictly newer than this build, whatever the workspace version.
+    let newer = format!(
+        "{}.0.0",
+        env!("CARGO_PKG_VERSION_MAJOR").parse::<u32>().unwrap() + 1
+    );
+    package(d, &key, &newer, &pkg);
     let install = d.join("install");
     let os = |s: &str| std::ffi::OsString::from(s);
 
@@ -88,7 +93,7 @@ fn verifies_applies_and_refuses_rollback() {
     let out = String::from_utf8_lossy(&o.stdout);
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(
-        out.contains("Paquet authentique") && out.contains("0.1.0"),
+        out.contains("Paquet authentique") && out.contains(&newer),
         "{out}"
     );
     assert_eq!(fs::read(install.join(exe("hirzla"))).unwrap(), b"old cli");
