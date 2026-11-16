@@ -27,8 +27,13 @@ description: Utiliser Hirzla au quotidien - créer un mot de passe ou une note, 
 
 ## Générer un mot de passe
 
-L'outil **Générateur** produit des mots de passe aléatoires, tirés par le noyau. Vous réglez
-la longueur et les familles de caractères.
+L'outil **Générateur** produit des valeurs aléatoires, tirées par le noyau. Cinq modes : caractères,
+phrase de passe (mots français), prononçable, code PIN et modèle position par position. Vous réglez
+la longueur, le minimum par famille, les symboles autorisés, les caractères exclus et des règles
+(pas de caractères qui se confondent, mêmes touches en AZERTY et en QWERTY, pas de répétition).
+Les profils (par défaut, longue durée à 256 bits, site capricieux, Wi-Fi, compte de service)
+remplissent ces réglages. La jauge donne l'entropie en bits, face à une recherche classique et face
+à une recherche quantique. Un réglage contradictoire est refusé, jamais ajusté en silence.
 
 ![Générateur de mots de passe de Hirzla](../assets/captures/generateur-clair.webp){ .capture .clair width="1600" height="1030" loading="lazy" }
 ![Générateur de mots de passe de Hirzla](../assets/captures/generateur-sombre.webp){ .capture .sombre width="1600" height="1030" loading="lazy" }

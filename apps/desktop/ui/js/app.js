@@ -111,7 +111,10 @@ function newSecret() {
   form.open(null, vault.lockerFilter());
 }
 
-const generator = new GeneratorView(onGlobalError);
+const generator = new GeneratorView(onGlobalError, (value) => {
+  form.open(null, vault.lockerFilter());
+  form.password.value = value;
+});
 
 /** Shows a view of the open vault and marks it in the navigation. @param {string} view */
 function goTo(view) {
@@ -443,7 +446,7 @@ function showView(view) {
   if (view !== "generateur") generator.wipe();
   if (view === "reglages" && status) settings.render(status);
   if (view === "reglages") void settings.load();
-  if (view === "generateur") void generator.generate();
+  if (view === "generateur") void generator.open();
 }
 
 /** @param {string} view @param {string | null} filter */

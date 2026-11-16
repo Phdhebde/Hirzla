@@ -221,31 +221,174 @@
     </main>
 
     <!-- Generator. -->
-    <main id="vue-generateur" class="vue vue-page" data-vue="generateur" hidden>
-      <h1 class="titre-section" tabindex="-1">Générateur de mots de passe</h1>
-      <p class="texte-secondaire">Le noyau tire chaque caractère uniformément sur l'aléa du système.</p>
-      <form id="form-generateur" class="carte" novalidate>
-        <div class="resultat-generateur">
-          <output id="generateur-resultat" class="valeur-secrete valeur-grande" aria-live="polite" for="generateur-longueur"></output>
+    <main id="vue-generateur" class="vue vue-page vue-large" data-vue="generateur" hidden>
+      <div class="entete-generateur">
+        <h1 class="titre-section" tabindex="-1">Générateur</h1>
+        <div id="generateur-modes" class="segments" role="group" aria-label="Mode de génération">
+          <button class="segment" type="button" data-mode="characters" aria-pressed="true">Caractères</button>
+          <button class="segment" type="button" data-mode="passphrase" aria-pressed="false">Phrase de passe</button>
+          <button class="segment" type="button" data-mode="pronounceable" aria-pressed="false">Prononçable</button>
+          <button class="segment" type="button" data-mode="pin" aria-pressed="false">Code PIN</button>
+          <button class="segment" type="button" data-mode="template" aria-pressed="false">Modèle</button>
         </div>
-        <div class="ligne-actions">
-          <button id="generateur-generer" class="bouton bouton-principal" type="submit">Générer</button>
-          <button id="generateur-copier" class="bouton bouton-secondaire" type="button" disabled>Copier</button>
+      </div>
+      <form id="form-generateur" class="colonnes-generateur" novalidate>
+        <div class="colonne">
+          <section class="carte" aria-label="Valeur générée">
+            <div class="resultat-generateur">
+              <output id="generateur-resultat" class="valeur-secrete valeur-grande" aria-live="polite"></output>
+            </div>
+            <p class="legende-generateur aide"><span>Lettres</span> <span class="car-chiffre">Chiffres</span> <span class="car-symbole">Symboles</span></p>
+            <div class="ligne-actions">
+              <button id="generateur-generer" class="bouton bouton-principal" type="submit">
+                <svg class="icone" aria-hidden="true"><use href="#i-generateur"></use></svg> Générer</button>
+              <button id="generateur-copier" class="bouton bouton-secondaire" type="button" disabled>Copier</button>
+              <button id="generateur-creer" class="bouton bouton-secondaire" type="button" disabled>Créer un secret avec</button>
+              <button id="generateur-lot" class="bouton bouton-secondaire" type="button">Générer un lot de 10</button>
+            </div>
+            <ol id="generateur-lot-liste" class="lot-generateur" aria-label="Lot de valeurs générées" hidden></ol>
+            <div id="generateur-erreur" class="alerte" role="alert" hidden>
+              <span class="forme forme-triangle" aria-hidden="true"></span>
+              <p></p>
+            </div>
+          </section>
+          <section class="carte" aria-labelledby="generateur-robustesse-titre">
+            <div class="ligne-titre">
+              <h2 id="generateur-robustesse-titre" class="titre-carte">Robustesse</h2>
+              <span id="generateur-bits" class="mono bits-generateur"></span>
+            </div>
+            <div class="jauge">
+              <progress id="generateur-jauge" class="jauge-barre" max="256" value="0" aria-labelledby="generateur-robustesse-titre"></progress>
+              <span id="generateur-cible" class="jauge-cible" aria-hidden="true"></span>
+            </div>
+            <p class="jauge-echelle aide"><span>0</span><strong id="generateur-cible-texte"></strong><span>256 bits</span></p>
+            <dl class="tableau-etat tableau-robustesse">
+              <dt>Tirages possibles</dt><dd id="generateur-tirage" class="mono"></dd>
+              <dt>Face à une recherche classique</dt><dd id="generateur-classique"></dd>
+              <dt>Face à une recherche quantique (Grover)</dt><dd id="generateur-quantique"></dd>
+            </dl>
+            <p class="aide">Un calculateur quantique divise par deux l'entropie utile d'un secret tiré au hasard. Le profil
+              « Longue durée » vise 256 bits pour en garder 128 dans ce cas.</p>
+          </section>
         </div>
-        <label class="champ">
-          <span class="champ-libelle">Longueur : <strong id="generateur-longueur-valeur">24</strong> caractères</span>
-          <input id="generateur-longueur" type="range" min="8" max="128" value="24" class="curseur">
-        </label>
-        <fieldset class="cases">
-          <legend class="champ-libelle">Familles de caractères</legend>
-          <label class="case"><input type="checkbox" id="generateur-minuscules" checked> Minuscules (a–z)</label>
-          <label class="case"><input type="checkbox" id="generateur-majuscules" checked> Majuscules (A–Z)</label>
-          <label class="case"><input type="checkbox" id="generateur-chiffres" checked> Chiffres (0–9)</label>
-          <label class="case"><input type="checkbox" id="generateur-symboles" checked> Symboles (!#$%…)</label>
-        </fieldset>
-        <div id="generateur-erreur" class="alerte" role="alert" hidden>
-          <span class="forme forme-triangle" aria-hidden="true"></span>
-          <p></p>
+        <div class="colonne">
+          <section class="carte" aria-labelledby="generateur-profil-titre">
+            <h2 id="generateur-profil-titre" class="titre-carte">Profil</h2>
+            <div id="generateur-profils" class="pastilles" role="group" aria-labelledby="generateur-profil-titre"></div>
+            <p class="aide">Un profil remplit les réglages ci-dessous ; vous pouvez ensuite les ajuster.</p>
+          </section>
+          <section class="carte" aria-labelledby="generateur-reglages-titre">
+            <h2 id="generateur-reglages-titre" class="titre-carte">Réglages</h2>
+
+            <div class="panneau-mode" data-mode-panneau="characters">
+              <div class="champ">
+                <div class="ligne-titre">
+                  <label class="champ-libelle" for="generateur-longueur">Longueur</label>
+                  <input id="generateur-longueur-nombre" class="saisie saisie-nombre" type="number" min="8" max="256" step="1" value="24" aria-label="Longueur en caractères">
+                </div>
+                <input id="generateur-longueur" type="range" min="8" max="256" value="24" class="curseur">
+              </div>
+              <div class="familles" role="group" aria-label="Familles de caractères">
+                <div class="famille famille-entete aide"><span class="famille-nom">Famille</span><span>Au moins</span></div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-minuscules" checked> <span>Minuscules</span> <span class="famille-jeu mono">a à z</span></label>
+                <input id="generateur-minuscules-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : minuscules">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-majuscules" checked> <span>Majuscules</span> <span class="famille-jeu mono">A à Z</span></label>
+                <input id="generateur-majuscules-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : majuscules">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-chiffres" checked> <span>Chiffres</span> <span class="famille-jeu mono">0 à 9</span></label>
+                <input id="generateur-chiffres-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : chiffres">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-symboles" checked> <span>Symboles</span> <span class="famille-jeu mono">liste ci-dessous</span></label>
+                <input id="generateur-symboles-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : symboles">
+              </div>
+              </div>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Symboles autorisés</span>
+                  <input id="generateur-jeu" class="saisie mono" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Jeu par défaut"></label>
+                <label class="champ"><span class="champ-libelle">Caractères exclus</span>
+                  <input id="generateur-exclus" class="saisie mono" type="text" maxlength="94" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-memes-touches"> <span class="case-nom">Mêmes touches en AZERTY et en QWERTY</span><span class="aide-ligne">lettres seulement</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-debut-lettre"> <span class="case-nom">Commencer par une lettre</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-sans-repetition"> <span class="case-nom">Aucun caractère répété à la suite</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="passphrase" hidden>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Nombre de mots (3 à 32)</span>
+                  <input id="generateur-mots" class="saisie" type="number" min="3" max="32" step="1" value="6"></label>
+                <label class="champ"><span class="champ-libelle">Séparateur</span>
+                  <select id="generateur-separateur" class="saisie">
+                    <option value="-">Tiret (-)</option>
+                    <option value=".">Point (.)</option>
+                    <option value="_">Tiret bas (_)</option>
+                    <option value=",">Virgule (,)</option>
+                    <option value=" ">Espace</option>
+                  </select></label>
+              </div>
+              <label class="champ"><span class="champ-libelle">Chiffres ajoutés (0 à 4)</span>
+                <input id="generateur-mots-chiffres" class="saisie" type="number" min="0" max="4" step="1" value="1"></label>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Options</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-mots-majuscule"> <span class="case-nom">Majuscule au début de chaque mot</span></label>
+              </fieldset>
+              <p class="aide">Les mots sont tirés d'une liste française embarquée dans le noyau.</p>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="pronounceable" hidden>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Nombre de syllabes (4 à 128)</span>
+                  <input id="generateur-syllabes" class="saisie" type="number" min="4" max="128" step="1" value="12"></label>
+                <label class="champ"><span class="champ-libelle">Chiffres ajoutés (0 à 4)</span>
+                  <input id="generateur-syllabes-chiffres" class="saisie" type="number" min="0" max="4" step="1" value="2"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Options</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-syllabes-majuscule"> <span class="case-nom">Majuscule au début</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-syllabes-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="pin" hidden>
+              <label class="champ"><span class="champ-libelle">Nombre de chiffres (4 à 12)</span>
+                <input id="generateur-pin" class="saisie" type="number" min="4" max="12" step="1" value="6"></label>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-pin-sans-repetition"> <span class="case-nom">Aucun chiffre répété à la suite</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-pin-sans-suite"> <span class="case-nom">Aucune suite montante ou descendante</span><span class="aide-ligne">123, 987</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="template" hidden>
+              <label class="champ"><span class="champ-libelle">Modèle</span>
+                <input id="generateur-modele" class="saisie mono" type="text" maxlength="256" autocomplete="off" spellcheck="false" value="Aa-9999-aaa-AA" aria-describedby="generateur-modele-aide"></label>
+              <p id="generateur-modele-aide" class="aide"><span class="mono">a</span> minuscule, <span class="mono">A</span> majuscule,
+                <span class="mono">9</span> chiffre, <span class="mono">#</span> symbole, <span class="mono">*</span> l'un des quatre.
+                La ponctuation et l'espace restent tels quels ; <span class="mono">\x</span> écrit le caractère x lui-même.</p>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Symboles autorisés</span>
+                  <input id="generateur-modele-jeu" class="saisie mono" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Jeu par défaut"></label>
+                <label class="champ"><span class="champ-libelle">Caractères exclus</span>
+                  <input id="generateur-modele-exclus" class="saisie mono" type="text" maxlength="94" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-memes-touches"> <span class="case-nom">Mêmes touches en AZERTY et en QWERTY</span><span class="aide-ligne">lettres seulement</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-sans-repetition"> <span class="case-nom">Aucun caractère répété à la suite</span></label>
+              </fieldset>
+            </div>
+          </section>
+          <p class="aide">Chaque valeur est tirée uniformément par le noyau, sur l'aléa du système.</p>
         </div>
       </form>
     </main>

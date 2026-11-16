@@ -192,6 +192,39 @@
     },
     generate_password: () => "Vn4%tB8qZ!e2Lr6#Wm9sKd3x",
     copy_generated: () => 30,
+    generator_profiles: () => {
+      const base = { mode: "characters", lower: true, upper: true, digits: true, symbols: true, excluded: "",
+        no_ambiguous: false, same_keys: false, no_repeat: false, start_letter: false };
+      return [
+        { id: "defaut", target_bits: 128, spec: { ...base, length: 24, minimums: [2, 2, 2, 2], symbol_set: "!#$%&*+-=?@^_", no_ambiguous: true, no_repeat: true, start_letter: true } },
+        { id: "longue-duree", target_bits: 256, spec: { ...base, length: 40, minimums: [1, 1, 1, 1], symbol_set: null } },
+        { id: "site-capricieux", target_bits: 80, spec: { ...base, length: 16, minimums: [1, 1, 1, 1], symbol_set: "-_!", no_repeat: true, start_letter: true } },
+        { id: "wifi", target_bits: 80, spec: { ...base, length: 20, symbols: false, minimums: [1, 1, 1, 0], symbol_set: null, no_ambiguous: true } },
+        { id: "compte-de-service", target_bits: 128, spec: { ...base, length: 32, minimums: [1, 1, 1, 1], symbol_set: "-_.+=^~", no_repeat: true } },
+      ];
+    },
+    generate_with: (a) => {
+      const samples = {
+        characters: ["v7#Kq2m!Rz9@Lp4&Xt6$Wn8%", "Hb3?tN8=wQ5@yC2!mV7#zK4+", "r9^Gd2&Lx6!Ps3@Fj8$Tn5*W", "Mq4!vB7#cZ2@hK9$xD5&gR3=",
+          "t6@Yw3!Nf8#Lc2$Hp7&Jm4^Q", "Xz5#kG2!bV9@nT4$rW7&dS3?", "j8$Pm3@Qx6!Fc2#Lh9&Tv4=B", "Dn7!wK4#zR2@gY9$cM5&xH3+",
+          "p3@Vt8!Lq6#Bn2$Fz7&Kd4^W", "Gh9#rC2!mX5@jT8$wN4&Pv3="],
+        passphrase: ["cuivre-lanterne-9-orage-velours-matin"],
+        pronounceable: ["Tovirudak-menlosiba-kunefalo-37"],
+        pin: ["804157"],
+        template: ["Kd-4821-mqz-TR"],
+      };
+      const bits = { characters: a.spec.length * 6.13, passphrase: 81.4, pronounceable: 66.2, pin: 19.6, template: 64.1 };
+      const pool = { characters: 70, passphrase: 7776, pronounceable: 80, pin: 10, template: 0 };
+      if (a.spec.mode === "characters" && !(a.spec.lower || a.spec.upper || a.spec.digits || a.spec.symbols)) {
+        return refuse("invalid", "Ces réglages sont refusés : ils sont hors limites, se contredisent, ou leurs règles écartent presque tous les tirages.");
+      }
+      const list = samples[a.spec.mode];
+      return {
+        values: Array.from({ length: a.count }, (_, i) => list[i % list.length]),
+        strength: { entropy_millibits: Math.floor(bits[a.spec.mode] * 1000), pool: pool[a.spec.mode] },
+      };
+    },
+    copy_generated_at: () => 30,
     import_csv: () => ({ imported: 42, empty: 1, refused_lines: [17], totp_skipped: 2 }),
     get_settings: () => ({ ...settings }),
     set_settings: (a) => {
