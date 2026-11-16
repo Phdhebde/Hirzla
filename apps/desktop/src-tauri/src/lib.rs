@@ -8,6 +8,8 @@
 //! - [`link`]: the connection to the core, hardening of this process after it is accepted;
 //! - [`commands`]: what the web view may ask, checked strictly;
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
+//! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
+//!   ADR 0067);
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
@@ -21,6 +23,7 @@
 
 pub mod clipboard;
 pub mod commands;
+pub mod connections;
 pub mod csv;
 pub mod error;
 #[cfg(target_os = "linux")]
@@ -75,6 +78,11 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::delete_secret,
             commands::generate_password,
             commands::copy_generated,
+            connections::create_connection,
+            connections::connection_card,
+            connections::update_connection,
+            connections::choose_ssh_key_file,
+            connections::create_ssh_key,
             generator::generator_profiles,
             generator::generate_with,
             generator::copy_generated_at,

@@ -35,6 +35,8 @@ pub struct AppState {
     pub(crate) generated_batch: Mutex<Vec<Zeroizing<String>>>,
     /// KeePass database chosen with the file picker, waiting for its password.
     pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
+    /// SSH private key file chosen with the file picker, waiting for its title.
+    pub(crate) pending_ssh_key: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
     pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
     /// Site CA chosen with the file picker, waiting for the address of the server.
@@ -56,6 +58,7 @@ impl AppState {
             generated: Mutex::new(None),
             generated_batch: Mutex::new(Vec::new()),
             pending_kdbx: Mutex::new(None),
+            pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
         }
@@ -250,6 +253,8 @@ fn type_name(t: u64) -> &'static str {
         4 => "passkey",
         5 => "note",
         6 => "file",
+        7 => "ssh_connection",
+        8 => "rdp_connection",
         _ => "unknown",
     }
 }
