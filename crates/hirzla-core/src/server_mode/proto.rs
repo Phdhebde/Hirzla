@@ -31,6 +31,8 @@ pub const MAX_FOUND: usize = hirzla_sync::net::proto::MAX_FOUND;
 pub const MAX_TEXT: usize = hirzla_sync::text::MAX_TEXT;
 /// Most pending approval requests (`format.md` § 15.2).
 pub const MAX_REQUESTS: usize = 64;
+/// Most requests received and kept to examine (ADR 0070, `format.md` § 15.2).
+pub const MAX_INBOX: usize = 64;
 /// Largest site CA file, in bytes.
 pub const MAX_ROOTS: usize = 64 * 1024;
 /// Largest shared locker name, in bytes.
@@ -91,10 +93,16 @@ pub enum ServerOp {
     MemberSearch = 121,
     /// Record that the fingerprint of a member was compared out of band.
     MemberVerify = 122,
+    /// Send a prepared request to the other owners through the server (ADR 0070).
+    QuorumSend = 123,
+    /// Requests received, to examine.
+    QuorumInbox = 124,
+    /// Sign or decline a received request, and send the answer.
+    QuorumRespond = 125,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 22] = [
+    const ALL: [ServerOp; 25] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -117,6 +125,9 @@ impl ServerOp {
         ServerOp::ProfileSet,
         ServerOp::MemberSearch,
         ServerOp::MemberVerify,
+        ServerOp::QuorumSend,
+        ServerOp::QuorumInbox,
+        ServerOp::QuorumRespond,
     ];
 
     /// The operation from its number.
@@ -151,6 +162,9 @@ impl ServerOp {
             ServerOp::ProfileSet => "profile_set",
             ServerOp::MemberSearch => "member_search",
             ServerOp::MemberVerify => "member_verify",
+            ServerOp::QuorumSend => "quorum_send",
+            ServerOp::QuorumInbox => "quorum_inbox",
+            ServerOp::QuorumRespond => "quorum_respond",
         }
     }
 }
@@ -376,6 +390,22 @@ pub enum ServerRequest {
         /// Fingerprint compared out of band, normalised.
         fingerprint: String,
     },
+    /// 123.
+    QuorumSend {
+        /// Request identifier, prepared here.
+        request: Id16,
+    },
+    /// 124.
+    QuorumInbox,
+    /// 125.
+    QuorumRespond {
+        /// Locker.
+        locker: Id16,
+        /// Request identifier, received.
+        request: Id16,
+        /// Sign (or decline).
+        accept: bool,
+    },
 }
 
 /// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
@@ -424,6 +454,52 @@ pub struct QuorumState {
     pub offer: String,
     /// When it was prepared, wall clock milliseconds.
     pub created_ms: u64,
+    /// When it was last sent through the server (ADR 0070), if it was.
+    pub sent_ms: Option<u64>,
+    /// Owners who declined it, by mail.
+    pub declined: Vec<Id16>,
+    /// Mails of this request waiting to reach the server.
+    pub queued: u64,
+}
+
+/// A request received through the server, to examine (ADR 0070, `QuorumInbox`). What
+/// `QuorumInspect` says of it, with the reception and the quorum.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ReceivedRequest {
+    /// Request identifier.
+    pub request: Id16,
+    /// Locker.
+    pub locker: Id16,
+    /// Its name, if readable here.
+    pub name: Option<Zeroizing<String>>,
+    /// Action.
+    pub action: QuorumAction,
+    /// Member targeted.
+    pub target: Option<Id16>,
+    /// Fingerprint of the target.
+    pub target_fingerprint: Option<String>,
+    /// Display name of the target, if known and verified here (ADR 0069).
+    pub target_name: Option<String>,
+    /// Whether the user compared the target's fingerprint out of band.
+    pub target_verified: bool,
+    /// New role or quorum.
+    pub detail: Option<u64>,
+    /// Initiator.
+    pub issuer: Id16,
+    /// Fingerprint of the initiator.
+    pub issuer_fingerprint: Option<String>,
+    /// Display name of the initiator, if known and verified here.
+    pub issuer_name: Option<String>,
+    /// Whether the user compared the initiator's fingerprint out of band.
+    pub issuer_verified: bool,
+    /// Whether the current member may sign it.
+    pub can_sign: bool,
+    /// Quorum in force.
+    pub required: u64,
+    /// When this device received it, wall clock milliseconds.
+    pub received_ms: u64,
+    /// The `hirzla-demande:…` text, for the copy route.
+    pub offer: String,
 }
 
 /// A quarantined operation, as an `Owner` judges it (ADR 0045). Never a secret value.
@@ -507,6 +583,18 @@ impl std::fmt::Debug for QuarantinedOp {
     }
 }
 
+impl std::fmt::Debug for ReceivedRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Never the name of the locker: it is confidential metadata.
+        f.debug_struct("ReceivedRequest")
+            .field("action", &self.action)
+            .field("can_sign", &self.can_sign)
+            .field("required", &self.required)
+            .field("received_ms", &self.received_ms)
+            .finish_non_exhaustive()
+    }
+}
+
 impl std::fmt::Debug for ServerReply {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The variant only: replies carry locker names and titles (confidential metadata).
@@ -527,6 +615,7 @@ impl std::fmt::Debug for ServerReply {
             Self::Quarantine { .. } => "Quarantine",
             Self::DeviceRevoked { .. } => "DeviceRevoked",
             Self::Found { .. } => "Found",
+            Self::Inbox(_) => "Inbox",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -865,6 +954,8 @@ pub enum ServerReply {
         /// The server holds more matches than it returned.
         more: bool,
     },
+    /// 124: received requests, oldest first.
+    Inbox(Vec<ReceivedRequest>),
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
@@ -942,6 +1033,9 @@ impl ServerRequest {
             ServerRequest::ProfileSet { .. } => ServerOp::ProfileSet,
             ServerRequest::MemberSearch { .. } => ServerOp::MemberSearch,
             ServerRequest::MemberVerify { .. } => ServerOp::MemberVerify,
+            ServerRequest::QuorumSend { .. } => ServerOp::QuorumSend,
+            ServerRequest::QuorumInbox => ServerOp::QuorumInbox,
+            ServerRequest::QuorumRespond { .. } => ServerOp::QuorumRespond,
         }
     }
 
@@ -949,7 +1043,8 @@ impl ServerRequest {
         match self {
             ServerRequest::ServerStatus
             | ServerRequest::ServerIdentity
-            | ServerRequest::ServerSync => None,
+            | ServerRequest::ServerSync
+            | ServerRequest::QuorumInbox => None,
             ServerRequest::ServerJoin {
                 url,
                 roots,
@@ -1017,7 +1112,9 @@ impl ServerRequest {
             ServerRequest::QuorumCollect { token } => {
                 Some(Value::map(vec![(1, Value::text(token))]))
             }
-            ServerRequest::QuorumApply { request } | ServerRequest::QuorumCancel { request } => {
+            ServerRequest::QuorumApply { request }
+            | ServerRequest::QuorumCancel { request }
+            | ServerRequest::QuorumSend { request } => {
                 Some(Value::map(vec![(1, Value::bytes(request))]))
             }
             ServerRequest::QuorumList { locker } => Some(Value::map(
@@ -1043,6 +1140,15 @@ impl ServerRequest {
             } => Some(Value::map(vec![
                 (1, Value::bytes(member)),
                 (2, Value::text(fingerprint)),
+            ])),
+            ServerRequest::QuorumRespond {
+                locker,
+                request,
+                accept,
+            } => Some(Value::map(vec![
+                (1, Value::bytes(locker)),
+                (2, Value::bytes(request)),
+                (3, Value::Bool(*accept)),
             ])),
         }
     }
@@ -1097,6 +1203,7 @@ impl ServerRequest {
             ServerOp::ServerStatus => none(ServerRequest::ServerStatus),
             ServerOp::ServerIdentity => none(ServerRequest::ServerIdentity),
             ServerOp::ServerSync => none(ServerRequest::ServerSync),
+            ServerOp::QuorumInbox => none(ServerRequest::QuorumInbox),
             ServerOp::ServerJoin => {
                 let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
                 if let Some(link) = f.opt(4) {
@@ -1186,13 +1293,21 @@ impl ServerRequest {
                     _ => ServerRequest::QuorumCollect { token: text },
                 })
             }
-            ServerOp::QuorumApply | ServerOp::QuorumCancel => {
+            ServerOp::QuorumApply | ServerOp::QuorumCancel | ServerOp::QuorumSend => {
                 let f = m(Fields::new(args()?, &[1]))?;
                 let request = id16(&f, 1)?;
-                Ok(if op == ServerOp::QuorumApply {
-                    ServerRequest::QuorumApply { request }
-                } else {
-                    ServerRequest::QuorumCancel { request }
+                Ok(match op {
+                    ServerOp::QuorumApply => ServerRequest::QuorumApply { request },
+                    ServerOp::QuorumCancel => ServerRequest::QuorumCancel { request },
+                    _ => ServerRequest::QuorumSend { request },
+                })
+            }
+            ServerOp::QuorumRespond => {
+                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
+                Ok(ServerRequest::QuorumRespond {
+                    locker: id16(&f, 1)?,
+                    request: id16(&f, 2)?,
+                    accept: m(f.req(3).and_then(boolean))?,
                 })
             }
             ServerOp::QuorumList => {
@@ -1478,7 +1593,69 @@ fn quorum_value(q: &QuorumState) -> Value {
     e.push((7, Value::Uint(q.required)));
     e.push((8, Value::text(&q.offer)));
     e.push((9, Value::Uint(q.created_ms)));
+    opt_uint(&mut e, 10, q.sent_ms);
+    e.push((
+        11,
+        Value::Array(q.declined.iter().map(|m| Value::bytes(m)).collect()),
+    ));
+    e.push((12, Value::Uint(q.queued)));
     Value::map(e)
+}
+
+fn received_value(r: &ReceivedRequest) -> Value {
+    let mut e = vec![(1, Value::bytes(&r.request)), (2, Value::bytes(&r.locker))];
+    if let Some(n) = &r.name {
+        e.push((3, Value::text(n)));
+    }
+    e.push((4, Value::Uint(r.action as u64)));
+    opt_id(&mut e, 5, r.target.as_ref());
+    opt_text(&mut e, 6, r.target_fingerprint.as_deref());
+    opt_text(&mut e, 7, r.target_name.as_deref());
+    e.push((8, Value::Bool(r.target_verified)));
+    opt_uint(&mut e, 9, r.detail);
+    e.push((10, Value::bytes(&r.issuer)));
+    opt_text(&mut e, 11, r.issuer_fingerprint.as_deref());
+    opt_text(&mut e, 12, r.issuer_name.as_deref());
+    e.push((13, Value::Bool(r.issuer_verified)));
+    e.push((14, Value::Bool(r.can_sign)));
+    e.push((15, Value::Uint(r.required)));
+    e.push((16, Value::Uint(r.received_ms)));
+    e.push((17, Value::text(&r.offer)));
+    Value::map(e)
+}
+
+fn received_from(v: &Value) -> Result<ReceivedRequest, cbor::CborError> {
+    let f = Fields::new(
+        v,
+        &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+    )?;
+    let fp = |k| {
+        f.opt(k)
+            .map(|x| text_max(x, FINGERPRINT_LEN).map(str::to_owned))
+            .transpose()
+    };
+    Ok(ReceivedRequest {
+        request: fixed::<16>(f.req(1)?)?,
+        locker: fixed::<16>(f.req(2)?)?,
+        name: f
+            .opt(3)
+            .map(|n| text_max(n, MAX_LOCKER_NAME).map(|s| Zeroizing::new(s.to_owned())))
+            .transpose()?,
+        action: action_from(f.req(4)?)?,
+        target: f.opt(5).map(fixed::<16>).transpose()?,
+        target_fingerprint: fp(6)?,
+        target_name: name_from(f.opt(7))?,
+        target_verified: boolean(f.req(8)?)?,
+        detail: f.opt(9).map(uint).transpose()?,
+        issuer: fixed::<16>(f.req(10)?)?,
+        issuer_fingerprint: fp(11)?,
+        issuer_name: name_from(f.opt(12))?,
+        issuer_verified: boolean(f.req(13)?)?,
+        can_sign: boolean(f.req(14)?)?,
+        required: uint(f.req(15)?)?,
+        received_ms: uint(f.req(16)?)?,
+        offer: text_max(f.req(17)?, MAX_TEXT)?.to_owned(),
+    })
 }
 
 fn action_from(v: &Value) -> Result<QuorumAction, cbor::CborError> {
@@ -1486,7 +1663,7 @@ fn action_from(v: &Value) -> Result<QuorumAction, cbor::CborError> {
 }
 
 fn quorum_from(v: &Value) -> Result<QuorumState, cbor::CborError> {
-    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9])?;
+    let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])?;
     Ok(QuorumState {
         request: fixed::<16>(f.req(1)?)?,
         locker: fixed::<16>(f.req(2)?)?,
@@ -1500,6 +1677,12 @@ fn quorum_from(v: &Value) -> Result<QuorumState, cbor::CborError> {
         required: uint(f.req(7)?)?,
         offer: text_max(f.req(8)?, MAX_TEXT)?.to_owned(),
         created_ms: uint(f.req(9)?)?,
+        sent_ms: f.opt(10).map(uint).transpose()?,
+        declined: array_max(f.req(11)?, 16)?
+            .iter()
+            .map(fixed::<16>)
+            .collect::<Result<_, _>>()?,
+        queued: uint(f.req(12)?)?,
     })
 }
 
@@ -1686,6 +1869,10 @@ impl ServerReply {
                 Some(Value::map(e))
             }
             ServerReply::Approved(token) => Some(Value::map(vec![(1, Value::text(token))])),
+            ServerReply::Inbox(items) => Some(Value::map(vec![(
+                1,
+                Value::Array(items.iter().map(received_value).collect()),
+            )])),
             ServerReply::Quarantine { ops, can_decide } => Some(Value::map(vec![
                 (1, Value::Array(ops.iter().map(quarantined_value).collect())),
                 (2, Value::Bool(*can_decide)),
@@ -1906,7 +2093,7 @@ impl ServerReply {
                     more: b.req(2).and_then(boolean).map_err(bad)?,
                 }
             }
-            ServerOp::QuorumPrepare | ServerOp::QuorumCollect => {
+            ServerOp::QuorumPrepare | ServerOp::QuorumCollect | ServerOp::QuorumSend => {
                 ServerReply::Request(quorum_from(body()?).map_err(bad)?)
             }
             ServerOp::QuorumList => {
@@ -1944,6 +2131,26 @@ impl ServerReply {
             ServerOp::QuorumApprove => {
                 let b = Fields::new(body()?, &[1]).map_err(bad)?;
                 ServerReply::Approved(text(b.req(1).map_err(bad)?, MAX_TEXT)?)
+            }
+            // Signed: the approval, also to hand over by copy; declined: nothing.
+            ServerOp::QuorumRespond => match f.opt(4) {
+                None => ServerReply::Done,
+                Some(v) => {
+                    let b = Fields::new(v, &[1]).map_err(bad)?;
+                    ServerReply::Approved(text(b.req(1).map_err(bad)?, MAX_TEXT)?)
+                }
+            },
+            ServerOp::QuorumInbox => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::Inbox(
+                    b.req(1)
+                        .and_then(|x| array_max(x, MAX_INBOX))
+                        .map_err(bad)?
+                        .iter()
+                        .map(received_from)
+                        .collect::<Result<_, _>>()
+                        .map_err(bad)?,
+                )
             }
             ServerOp::QuarantineList => {
                 let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
@@ -2060,6 +2267,13 @@ mod tests {
                 name: String::new(),
             },
             ServerRequest::MemberSearch { text: "dur".into() },
+            ServerRequest::QuorumSend { request: [8; 16] },
+            ServerRequest::QuorumInbox,
+            ServerRequest::QuorumRespond {
+                locker: [1; 16],
+                request: [8; 16],
+                accept: true,
+            },
             ServerRequest::MemberVerify {
                 member: [2; 16],
                 fingerprint: "ABCDEFGHIJKLMNOPQRST".into(),
@@ -2206,8 +2420,25 @@ mod tests {
             ServerCode::General(ErrorCode::InvalidInput)
         );
         assert_eq!(
-            ServerRequest::decode(&enc(4, 123, None)).unwrap_err(),
+            ServerRequest::decode(&enc(4, 126, None)).unwrap_err(),
             (3, ServerCode::General(ErrorCode::UnknownOperation))
+        );
+        // ADR 0070: a request to send, no argument for the inbox, a choice to answer.
+        let malformed = ServerCode::General(ErrorCode::Malformed);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 123, None)).unwrap_err().1,
+            malformed
+        );
+        let id = Value::map(vec![(1, Value::bytes(&[1; 16]))]);
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 124, Some(id.clone())))
+                .unwrap_err()
+                .1,
+            malformed
+        );
+        assert_eq!(
+            ServerRequest::decode(&enc(4, 125, Some(id))).unwrap_err().1,
+            malformed
         );
         assert!(is_server_request(&enc(4, 129, None)));
         // Not a server request.
@@ -2339,9 +2570,40 @@ mod tests {
                     required: 3,
                     offer: "hirzla-demande:AAAA".into(),
                     created_ms: 12,
+                    sent_ms: Some(13),
+                    declined: vec![[6; 16]],
+                    queued: 1,
                 }),
             ),
             (ServerOp::QuorumList, ServerReply::Requests(Vec::new())),
+            (ServerOp::QuorumRespond, ServerReply::Done),
+            (
+                ServerOp::QuorumRespond,
+                ServerReply::Approved("hirzla-accord:AAAA".into()),
+            ),
+            (
+                ServerOp::QuorumInbox,
+                ServerReply::Inbox(vec![ReceivedRequest {
+                    request: [1; 16],
+                    locker: [2; 16],
+                    name: Some(Zeroizing::new("Équipe".into())),
+                    action: QuorumAction::OwnerRemoval,
+                    target: Some([3; 16]),
+                    target_fingerprint: Some("C".repeat(20)),
+                    target_name: Some("Paul".into()),
+                    target_verified: false,
+                    detail: None,
+                    issuer: [4; 16],
+                    issuer_fingerprint: Some("D".repeat(20)),
+                    issuer_name: None,
+                    issuer_verified: true,
+                    can_sign: true,
+                    required: 2,
+                    received_ms: 7,
+                    offer: "hirzla-demande:AAAA".into(),
+                }]),
+            ),
+            (ServerOp::QuorumInbox, ServerReply::Inbox(Vec::new())),
             (
                 ServerOp::QuorumInspect,
                 ServerReply::Inspected {

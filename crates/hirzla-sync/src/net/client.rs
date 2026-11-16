@@ -430,6 +430,28 @@ impl Client {
         proto::read_blob(&m.body, max)
     }
 
+    /// `MailPut` (§ 11.12, ADR 0070): one status per mail, 0 when kept.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn mail_put(&mut self, mails: &[Vec<u8>]) -> Result<Vec<u64>, NetError> {
+        let m = self.request(kind::MAIL_PUT, proto::mail_put_value(mails))?;
+        let statuses = proto::read_mail_put_result(&m.body)?;
+        if statuses.len() != mails.len() {
+            return Err(NetError::Malformed);
+        }
+        Ok(statuses)
+    }
+
+    /// `MailGet` (§ 11.12): erases the mails `ack`, then returns at most `limit` waiting.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn mail_get(&mut self, ack: &[Id16], limit: u64) -> Result<proto::MailItems, NetError> {
+        let m = self.request(kind::MAIL_GET, proto::mail_get_value(ack, limit))?;
+        proto::MailItems::from_value(&m.body)
+    }
+
     /// `MailboxPut` (§ 11.5).
     ///
     /// # Errors

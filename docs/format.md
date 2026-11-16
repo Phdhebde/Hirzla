@@ -142,6 +142,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/op-payload` | AAD, contenu scellé d'une opération | § 7.2 |
 | `hirzla/v1/attachment-chunk` | AAD, morceau de fichier joint | § 8.4 |
 | `hirzla/v1/device-enrol` | Contexte KEM, transfert des clés à l'enrôlement | `sync-protocol.md` |
+| `hirzla/v1/quorum-mail` | Contexte KEM, AAD et signature d'un paquet du courrier des accords (ADR 0070) | `sync-protocol.md` § 11.12 |
 | `hirzla/v1/recovery-share` | Signature d'une part de récupération (Shamir) | `crypto.md` |
 | `hirzla/v1/exchange-file` | Contexte KEM et signature, fichier d'échange | `sync-protocol.md` |
 | `hirzla/v1/server-auth` | Signature du serveur à l'ouverture de session | `sync-protocol.md` |
@@ -252,7 +253,7 @@ l'étiquette. Chaque clé a un rôle et ne signe que ses domaines (ADR 0011) :
 | Clé | Étiquettes |
 | --- | --- |
 | Clé du membre | `device-cert`, `device-revoke`, `member-profile` |
-| Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol` |
+| Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol`, `quorum-mail` |
 | Clé du serveur | `server-auth`, `receipt`, `keylog-head` |
 
 ### 3.5 Clés privées
@@ -1280,12 +1281,13 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     rebond limité à une connexion SSH ; alphabet de `host` sans zone IPv6. La préférence
     « ouvrir avec » et l'usage de la clé par un agent SSH ne sont pas dans le format.
 
-## 15. Fichier annexe du mode Serveur (v4)
+## 15. Fichier annexe du mode Serveur (v5)
 
 Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
 stable). Version 3 : ADR 0044 (demandes d'accord en cours) et ADR 0045 (surveillance datée :
 révocations retenues, inscriptions, opérations retenues). Version 4 : ADR 0069 (noms
-affichés, empreintes comparées).
+affichés, empreintes comparées). Version 5 : ADR 0070 (boîte de réception et file d'envoi
+du courrier des accords).
 
 Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
 casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
@@ -1309,7 +1311,7 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `v` | `uint` | `4` écrit ; `1` à `3` encore lus |
+| 1 | `v` | `uint` | `5` écrit ; `1` à `4` encore lus |
 | 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
 | 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
 | 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
@@ -1317,9 +1319,18 @@ sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
 | 6 | `requests` | `array<PendingRequest>` | v3 : demandes d'accord en cours (ADR 0044), au plus 64, triées par `request_id`, sans doublon |
 | 7 | `watch` | `Watch` | v3 : surveillance datée (ADR 0045) |
 | 8 | `profiles` | `Profiles` | v4 : noms affichés et empreintes comparées (ADR 0069) |
+| 9 | `courier` | `Courier` | v5 : demandes reçues et paquets à envoyer (ADR 0070) |
 
 Une annexe v1 ou v2 n'a pas les clés 6 et 7 : aucune demande, surveillance vide. Une annexe
-v1 à v3 n'a pas la clé 8 : aucun nom, aucune empreinte comparée.
+v1 à v3 n'a pas la clé 8 : aucun nom, aucune empreinte comparée. Une annexe v1 à v4 n'a pas
+la clé 9 : boîte de réception et file d'envoi vides.
+
+`Courier` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `inbox` | `array<{1: offer tstr, 2: received_ms uint}>` | Demandes reçues par le courrier (`sync-protocol.md` § 11.12), au plus 64 : texte `hirzla-demande:…` tel que reçu et vérifié, heure murale de réception ; triées par `(locker_id, request_id)` de la demande, sans doublon, chacune d'un casier de `lockers` |
+| 2 | `outbox` | `array<{1: request_id bstr(16), 2: mail bstr}>` | Paquets `ApprovalMail` scellés pas encore remis au serveur, au plus 256, chacun ≤ 32 Kio, dans l'ordre d'envoi, avec la demande qu'ils concernent |
 
 `Profiles` :
 
@@ -1343,6 +1354,9 @@ dans le registre local. Une empreinte de `verified` ne vaut que pour la clé qu'
 | 5 | `detail` | `uint?` | Présent si et seulement si `action` vaut 2 ou 3 |
 | 6 | `approvals` | `array<Approval>` | Accords vérifiés à leur ajout, au plus 15, triés par membre, un par membre |
 | 7 | `created_ms` | `uint` | Heure murale de la préparation |
+| 8 | `sent_ms` | `uint?` | v5 : heure murale du dernier `QuorumSend` (ADR 0070) |
+| 9 | `recipients` | `array<[member, device]>` | v5 : appareils servis par le courrier (leurres de la cible compris), au plus 256, triés, sans doublon ; absent : aucun |
+| 10 | `declined` | `array<ID16>` | v5 : propriétaires qui ont refusé par le courrier, au plus 15, triés, sans doublon ; absent : aucun |
 
 `Watch` :
 

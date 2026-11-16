@@ -105,6 +105,12 @@ Mode Serveur :
   accord liste [CASIER]   Demandes en cours et accords recueillis.
   accord appliquer ID     Publie l'action quand le quorum est atteint.
   accord annuler ID       Abandonne une demande.
+  accord envoyer ID       Envoie la demande aux autres propriétaires, scellée par le
+                          serveur, qui ne peut ni la lire ni la signer.
+  accord recues           Demandes reçues par le serveur, à examiner.
+  accord repondre ID accepter|refuser
+                          Signe ou refuse une demande reçue et renvoie la réponse. Vérifiez
+                          d'abord de vive voix que la demande vient bien du demandeur.
   quarantaine CASIER [accepter|rejeter OP…]
                           Opérations en quarantaine d'un casier ; les accepte ou les
                           rejette (propriétaires).
@@ -187,13 +193,37 @@ pub enum QuorumWhat {
 /// A command on approvals (`docs/api-locale.md` § 15.6, ADR 0044). Texts may be `@FILE`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuorumCommand {
-    Prepare { locker: String, what: QuorumWhat },
-    Inspect { offer: String },
-    Approve { offer: String },
-    Collect { token: String },
-    List { locker: Option<String> },
-    Apply { request: String },
-    Cancel { request: String },
+    Prepare {
+        locker: String,
+        what: QuorumWhat,
+    },
+    Inspect {
+        offer: String,
+    },
+    Approve {
+        offer: String,
+    },
+    Collect {
+        token: String,
+    },
+    List {
+        locker: Option<String>,
+    },
+    Apply {
+        request: String,
+    },
+    Cancel {
+        request: String,
+    },
+    /// ADR 0070.
+    Send {
+        request: String,
+    },
+    Inbox,
+    Respond {
+        request: String,
+        accept: bool,
+    },
 }
 
 /// `quarantaine CASIER [accepter|rejeter OP…]` (ADR 0045).
@@ -1277,6 +1307,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                         request: arg(1, "l'ID de la demande")?,
                     }
                 }
+                "envoyer" => {
+                    max_positional(2)?;
+                    QuorumCommand::Send {
+                        request: arg(1, "l'ID de la demande")?,
+                    }
+                }
+                "recues" | "reçues" => {
+                    max_positional(1)?;
+                    QuorumCommand::Inbox
+                }
+                "repondre" | "répondre" => {
+                    max_positional(3)?;
+                    let request = arg(1, "l'ID de la demande et accepter ou refuser")?;
+                    let accept = match arg(2, "accepter ou refuser")?.as_str() {
+                        "accepter" => true,
+                        "refuser" => false,
+                        _ => {
+                            return Err("« accord repondre » attend accepter ou refuser.".to_owned())
+                        }
+                    };
+                    QuorumCommand::Respond { request, accept }
+                }
                 _ => return Err(format!("sous-commande de « accord » inconnue.\n\n{USAGE}")),
             };
             Command::Quorum(sub_command)
@@ -1888,6 +1940,28 @@ mod tests {
             })
         );
         assert!(p(&["accord", "appliquer"]).is_err());
+        assert_eq!(
+            p(&["accord", "envoyer", "ab12"]).unwrap().command,
+            Command::Quorum(QuorumCommand::Send {
+                request: "ab12".into()
+            })
+        );
+        assert_eq!(
+            p(&["accord", "recues"]).unwrap().command,
+            Command::Quorum(QuorumCommand::Inbox)
+        );
+        assert_eq!(
+            p(&["accord", "repondre", "ab12", "refuser"])
+                .unwrap()
+                .command,
+            Command::Quorum(QuorumCommand::Respond {
+                request: "ab12".into(),
+                accept: false
+            })
+        );
+        assert!(p(&["accord", "repondre", "ab12"]).is_err());
+        assert!(p(&["accord", "repondre", "ab12", "peut-etre"]).is_err());
+        assert!(p(&["accord", "recues", "x"]).is_err());
         assert!(p(&["accord", "voter", "x"]).is_err());
         assert_eq!(
             p(&["quarantaine", "Ops"]).unwrap().command,

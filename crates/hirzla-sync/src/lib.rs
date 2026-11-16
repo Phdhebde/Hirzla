@@ -31,6 +31,7 @@ pub mod device;
 mod error;
 pub mod exchange;
 pub mod keylog;
+pub mod mail;
 mod merge;
 #[cfg(feature = "net")]
 pub mod net;
