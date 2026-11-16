@@ -173,6 +173,8 @@ p { margin: 0; }
 textarea.saisie { resize: vertical; }
 .saisie-groupe { display: flex; gap: 8px; }
 .saisie-groupe .saisie { flex: 1; }
+.fichier-choisi { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hz-texte-secondaire); }
+.fichier-choisi.choisi { color: var(--hz-texte); }
 /* Settings forms: their fields are siblings, not grid cells. */
 #form-reglages-coffre, #form-mdp, #form-recouvrement { display: flex; flex-direction: column; gap: 16px; }
 #form-reglages-coffre .aide { margin: -10px 0 0; }
@@ -366,6 +368,11 @@ button.touche:hover { color: var(--hz-texte); border-color: var(--hz-texte-secon
   display: inline-block; padding: 2px 8px; margin: 2px 6px 2px 0; border-radius: var(--hz-rayon-petit); font-size: 13px;
   border: 1px solid var(--hz-bordure);
 }
+/* Record of a connection: links to a key and to jump hosts. */
+.chaine { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.maillon { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.maillon .icone { width: 16px; height: 16px; color: var(--hz-texte-secondaire); flex: none; }
+.maillon-sous { font-size: 13px; color: var(--hz-texte-secondaire); }
 .lien { color: var(--hz-lien); }
 button.lien { border: 0; background: none; padding: 6px 0; font: inherit; font-size: 13px; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
 button.lien:hover { color: var(--hz-texte); }

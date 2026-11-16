@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use hirzla_core::connections::proto::{
     ConnectionCard, ConnectionFields, ConnectionKey, ConnectionReply, ConnectionRequest, LinkState,
-    ResolvedLink, MAX_PRIVATE_KEY,
+    ResolvedLink, MAX_PRIVATE_KEY, MAX_PUBLIC_KEY,
 };
 use hirzla_core::proto::{ErrorCode, ErrorReply, MAX_ITEMS, MAX_TEXT};
 use hirzla_vault::secret::{SecretLink, SecretType};
@@ -309,6 +309,29 @@ fn read_private_key(path: &Path) -> Result<Zeroizing<Vec<u8>>, DesktopError> {
     Ok(bytes)
 }
 
+/// The public key written by OpenSSH next to the private one (`FILE.pub`): its first line, when
+/// the file is there and readable. A public key is not required, so anything else is `None`.
+fn sibling_public_key(private: &Path) -> Option<Zeroizing<String>> {
+    let mut name = private.as_os_str().to_owned();
+    name.push(".pub");
+    let file = std::fs::File::open(PathBuf::from(name)).ok()?;
+    let limit = u64::try_from(MAX_PUBLIC_KEY).ok()?;
+    let mut bytes = Vec::with_capacity(1024);
+    file.take(limit.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() > MAX_PUBLIC_KEY {
+        return None;
+    }
+    let line = bytes.split(|b| *b == b'\n').next()?;
+    let line = std::str::from_utf8(line).ok()?.trim();
+    if line.is_empty() {
+        None
+    } else {
+        Some(Zeroizing::new(line.to_owned()))
+    }
+}
+
 fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
@@ -380,7 +403,7 @@ impl AppState {
             locker: new.locker.as_deref().map(id16).transpose()?,
             title: text(new.title)?,
             private_key: read_private_key(path)?,
-            public_key: None,
+            public_key: sibling_public_key(path),
             passphrase: new.passphrase.map(text).transpose()?,
             username: new.username.map(text).transpose()?,
             tags: tags(new.tags)?,
@@ -553,6 +576,28 @@ mod tests {
             read_private_key(&dir.join("missing")),
             Err(DesktopError::Import(_))
         ));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_public_key_next_to_the_private_one_is_picked_up() {
+        let dir = std::env::temp_dir().join(format!("hirzla-desktop-pub-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("id_ed25519");
+        assert!(sibling_public_key(&key).is_none());
+        std::fs::write(
+            dir.join("id_ed25519.pub"),
+            b"ssh-ed25519 AAAA me@host\nrest\n",
+        )
+        .unwrap();
+        assert_eq!(
+            sibling_public_key(&key).unwrap().as_str(),
+            "ssh-ed25519 AAAA me@host"
+        );
+        std::fs::write(dir.join("id_ed25519.pub"), b"\n").unwrap();
+        assert!(sibling_public_key(&key).is_none());
+        std::fs::write(dir.join("id_ed25519.pub"), vec![b'a'; MAX_PUBLIC_KEY + 1]).unwrap();
+        assert!(sibling_public_key(&key).is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

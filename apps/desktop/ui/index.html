@@ -21,6 +21,8 @@
     <symbol id="i-favori" viewBox="0 0 24 24"><path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5L12 16.6 7.1 19.2 8 13.7 4 9.8 9.5 9z"/></symbol>
     <symbol id="i-identifiant" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/></symbol>
     <symbol id="i-cle" viewBox="0 0 24 24"><path d="M21 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM14 11l-9 9M8 17l2 2M5 20l1.5 1.5"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM7 10l3 2.5L7 15M12.5 15H17"/></symbol>
+    <symbol id="i-ecran" viewBox="0 0 24 24"><path d="M3 4h18v12H3zM9 20h6M12 16v4"/></symbol>
     <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM9 10h7M9 14h7M9 18h4"/></symbol>
     <symbol id="i-fichier" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM15 3v4h4"/></symbol>
     <symbol id="i-totp" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2"/></symbol>
@@ -162,6 +164,7 @@
       <ul class="nav-liste" aria-labelledby="titre-types">
         <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:password"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-identifiant"/></svg><span class="nav-nom">Mots de passe</span><span class="compte" id="compte-password" aria-hidden="true"></span></button></li>
         <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:ssh_key"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-cle"/></svg><span class="nav-nom">Clés SSH</span><span class="compte" id="compte-ssh_key" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:connexion"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-terminal"/></svg><span class="nav-nom">Connexions</span><span class="compte" id="compte-connexion" aria-hidden="true"></span></button></li>
         <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:note"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-note"/></svg><span class="nav-nom">Notes</span><span class="compte" id="compte-note" aria-hidden="true"></span></button></li>
       </ul>
       <h2 class="nav-titre" id="titre-casiers">Casiers</h2>
@@ -741,6 +744,9 @@
         <legend class="champ-libelle">Type</legend>
         <label class="case"><input type="radio" name="secret-type" value="password" checked> Mot de passe</label>
         <label class="case"><input type="radio" name="secret-type" value="note"> Note</label>
+        <label class="case"><input type="radio" name="secret-type" value="ssh"> Connexion SSH</label>
+        <label class="case"><input type="radio" name="secret-type" value="rdp"> Connexion RDP</label>
+        <label class="case"><input type="radio" name="secret-type" value="ssh_key"> Clé SSH</label>
       </fieldset>
       <label class="champ">
         <span class="champ-libelle">Titre</span>
@@ -750,11 +756,39 @@
         <span class="champ-libelle">Casier</span>
         <select id="secret-casier" class="saisie"></select>
       </label>
-      <label class="champ" data-pour="password">
+      <div class="grille-ajout" data-pour="ssh rdp">
+        <label class="champ">
+          <span class="champ-libelle">Hôte (nom ou adresse)</span>
+          <input id="secret-hote" class="saisie saisie-mono" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="champ">
+          <span class="champ-libelle">Port</span>
+          <input id="secret-port" class="saisie saisie-mono" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div class="champ" data-pour="ssh_key" data-creation>
+        <span class="champ-libelle" id="secret-fichier-libelle">Fichier de la clé privée</span>
+        <div class="saisie-groupe">
+          <output id="secret-fichier-nom" class="saisie saisie-mono fichier-choisi" aria-labelledby="secret-fichier-libelle">Aucun fichier choisi</output>
+          <button id="secret-fichier-choisir" class="bouton bouton-secondaire" type="button">Choisir…</button>
+        </div>
+        <p class="aide">Une clé au format OpenSSH (« BEGIN OPENSSH PRIVATE KEY »). Si le fichier « .pub » se trouve à
+          côté, la clé publique est rangée avec elle. La clé privée reste scellée dans le coffre et aucune commande
+          ne la rend : conservez votre fichier tant que l'ouverture de session n'est pas disponible.</p>
+      </div>
+      <label class="champ" data-pour="ssh_key" data-creation>
+        <span class="champ-libelle">Phrase de passe de la clé (si elle en a une)</span>
+        <input id="secret-phrase" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="champ" data-pour="password ssh rdp ssh_key">
         <span class="champ-libelle">Identifiant</span>
         <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
-      <div class="champ" data-pour="password">
+      <label class="champ" data-pour="rdp">
+        <span class="champ-libelle">Domaine</span>
+        <input id="secret-domaine" class="saisie saisie-mono" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="champ" data-pour="password ssh rdp">
         <label class="champ-libelle" for="secret-mdp">Mot de passe</label>
         <div class="saisie-groupe">
           <input id="secret-mdp" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
@@ -763,6 +797,19 @@
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
       </div>
+      <label class="champ" data-pour="ssh">
+        <span class="champ-libelle">Clé SSH du coffre</span>
+        <select id="secret-cle" class="saisie"></select>
+      </label>
+      <label class="champ" data-pour="ssh rdp">
+        <span class="champ-libelle">Rebond (connexion SSH par laquelle passer)</span>
+        <select id="secret-rebond" class="saisie"></select>
+      </label>
+      <label class="champ" data-pour="ssh rdp">
+        <span class="champ-libelle">Empreinte de la clé de l'hôte</span>
+        <input id="secret-empreinte" class="saisie saisie-mono" type="text" maxlength="50" autocomplete="off" spellcheck="false">
+        <span class="aide">Facultative. Forme attendue : « SHA256: » suivi de 43 caractères.</span>
+      </label>
       <label class="champ" data-pour="password" data-creation>
         <span class="champ-libelle">Adresses web (une par ligne)</span>
         <textarea id="secret-urls" class="saisie saisie-mono" rows="2" maxlength="8192" spellcheck="false"></textarea>
@@ -771,12 +818,12 @@
         <span class="champ-libelle">Étiquettes (séparées par des virgules)</span>
         <input id="secret-etiquettes" class="saisie" type="text" maxlength="2048" autocomplete="off">
       </label>
-      <label class="champ">
+      <label class="champ" data-pour="password note ssh rdp">
         <span class="champ-libelle">Notes</span>
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
-      <label class="case"><input type="checkbox" id="secret-favori"> Favori</label>
+      <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>

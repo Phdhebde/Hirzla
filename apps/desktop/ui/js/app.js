@@ -64,8 +64,9 @@ const vault = new VaultView({
     if (!onGlobalError(e)) announce(e.message, 6000);
   },
   revealSeconds: () => prefs.reveal_s,
-  onEdit: (entry) => form.open(entry),
+  onEdit: (entry) => void form.open(entry),
   onMembers: (locker, name) => void server.members.open(locker, name),
+  onFilter: (filter) => markNav("secrets", filter),
 });
 
 const form = new SecretForm({
@@ -108,12 +109,13 @@ function newSecret() {
       return !!s && s.access && !!s.role && WRITING_ROLES.includes(s.role);
     }),
   );
-  form.open(null, vault.lockerFilter());
+  void form.open(null, vault.lockerFilter());
 }
 
 const generator = new GeneratorView(onGlobalError, (value) => {
-  form.open(null, vault.lockerFilter());
-  form.password.value = value;
+  void form.open(null, vault.lockerFilter()).then(() => {
+    form.password.value = value;
+  });
 });
 
 /** Shows a view of the open vault and marks it in the navigation. @param {string} view */

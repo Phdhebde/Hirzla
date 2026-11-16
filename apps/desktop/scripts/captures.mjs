@@ -146,6 +146,38 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "06-nouveau-secret", theme);
   await p.keyboard.press("Escape");
 
+  // Connections: the record of an SSH connection through a jump host, then an RDP one.
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("[data-filtre='type:connexion']");
+  await p.waitForFunction(() => document.getElementById("liste-titre")?.textContent === "Connexions");
+  await p.click("#opt-00000000000000000000000000000016");
+  await p.waitForSelector("#fiche-champs .chaine");
+  await shot(p, "06b-connexion-ssh", theme);
+  await p.click("#opt-00000000000000000000000000000017");
+  await p.waitForFunction(() => document.getElementById("fiche-champs")?.textContent?.includes("ATELIER"));
+  await shot(p, "06c-connexion-rdp", theme);
+
+  // A new SSH connection, linked to a key of the vault and to a jump host.
+  await p.keyboard.press("Control+n");
+  await p.waitForSelector("#dialogue-secret[open]");
+  await p.check("input[name='secret-type'][value='ssh']");
+  await p.fill("#secret-titre", "Serveur web de préproduction");
+  await p.fill("#secret-hote", "preprod.atelier-durand.fr");
+  await p.fill("#secret-identifiant", "deploiement");
+  await p.selectOption("#secret-cle", { index: 1 });
+  await p.selectOption("#secret-rebond", { index: 1 });
+  await shot(p, "06d-nouvelle-connexion-ssh", theme);
+
+  // An existing SSH key, read from a file chosen with the system's file picker.
+  await p.check("input[name='secret-type'][value='ssh_key']");
+  await p.fill("#secret-titre", "");
+  await p.click("#secret-fichier-choisir");
+  await p.waitForSelector("#secret-fichier-nom.choisi");
+  await shot(p, "06e-nouvelle-cle-ssh", theme);
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("[data-filtre='tous']");
+
   // Generator.
   await p.keyboard.press("Control+g");
   await p.waitForFunction(() => document.querySelector("#generateur-resultat").textContent.length > 0);

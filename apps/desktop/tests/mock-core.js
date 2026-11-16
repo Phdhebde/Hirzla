@@ -15,6 +15,10 @@
     { locker: L, id: id(4), kind: "password", title: "Impots.gouv.fr", username: "1 23 45 678 901 234", hosts: ["impots.gouv.fr"], tags: ["administration"], favorite: false, trash: false },
     { locker: L, id: id(5), kind: "password", title: "Routeur de la maison", username: "admin", hosts: ["192.168.1.1"], tags: ["réseau"], favorite: false, trash: false },
     { locker: W, id: id(6), kind: "ssh_key", title: "Serveur de sauvegarde", username: null, hosts: [], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(24), kind: "ssh_key", title: "Clé d'administration", username: "marie", hosts: [], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(21), kind: "ssh_connection", title: "Bastion de l'atelier", username: "marie", hosts: ["bastion.atelier-durand.fr"], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(22), kind: "ssh_connection", title: "Serveur de sauvegarde", username: "sauvegarde", hosts: ["10.20.0.14"], tags: ["infra"], favorite: true, trash: false },
+    { locker: L, id: id(23), kind: "rdp_connection", title: "Poste de comptabilité", username: "m.durand", hosts: ["compta-01.atelier.lan"], tags: [], favorite: false, trash: false },
     { locker: L, id: id(7), kind: "password", title: "Wi-Fi maison", username: null, hosts: [], tags: [], favorite: false, trash: false },
     { locker: L, id: id(8), kind: "password", title: "Ancien forum", username: "mdurand", hosts: ["forum.example"], tags: [], favorite: false, trash: true },
     { locker: W, id: id(9), kind: "password", title: "Console du NAS", username: "atelier", hosts: ["nas.atelier.lan"], tags: ["infra"], favorite: false, trash: false },
@@ -153,6 +157,14 @@
     { version: v(2), wall_ms: Date.UTC(2026, 3, 18, 17, 2), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["notes"], custom: 0 },
     { version: v(1), wall_ms: Date.UTC(2025, 11, 4, 10, 40), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "username", "password"], changed: ["title", "username", "password"], custom: 0 },
   ];
+  // Cards of the connections (local API version 6): what the list does not carry.
+  const jumpBastion = { locker: L, id: id(21), state: "valid", title: "Bastion de l'atelier", host: "bastion.atelier-durand.fr", port: 2222, username: "marie", public_key: null };
+  const keyLink = { locker: L, id: id(24), state: "valid", title: "Clé d'administration", host: null, port: null, username: null, public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8mVh0kq2 sauvegarde@atelier" };
+  const cards = {
+    [id(21)]: { kind: "ssh", port: 2222, effective_port: 2222, domain: null, host_key: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", has_password: false, has_notes: true, ssh_key: keyLink, jumps: [] },
+    [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
+    [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
+  };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
   const handlers = {
@@ -189,6 +201,52 @@
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);
       if (i >= 0) { if (a.purge) entries.splice(i, 1); else entries[i].trash = true; }
+    },
+    connection_card: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e || !cards[e.id]) return refuse("not_found", "Secret ou champ introuvable.");
+      return { ...cards[e.id], trashed: e.trash, title: e.title, host: e.hosts[0], username: e.username, favorite: e.favorite, tags: e.tags };
+    },
+    create_connection: (a) => {
+      const f = a.connection.fields;
+      const kind = a.connection.kind;
+      const e = { locker: a.connection.locker || L, id: id(entries.length + 40), kind: `${kind}_connection`, title: f.title, username: f.username || null, hosts: [f.host], tags: a.connection.tags || [], favorite: !!f.favorite, trash: false };
+      entries.push(e);
+      const target = (ref) => entries.find((x) => ref && x.id === ref.id);
+      const key = target(f.ssh_key);
+      const jump = target(f.jump);
+      cards[e.id] = {
+        kind, port: f.port ?? null, effective_port: f.port ?? (kind === "rdp" ? 3389 : 22), domain: f.domain || null,
+        host_key: f.host_key || null, has_password: !!f.password, has_notes: !!f.notes,
+        ssh_key: key ? { locker: key.locker, id: key.id, state: "valid", title: key.title, host: null, port: null, username: null, public_key: null } : null,
+        jumps: jump ? [{ locker: jump.locker, id: jump.id, state: "valid", title: jump.title, host: jump.hosts[0], port: cards[jump.id]?.effective_port ?? 22, username: jump.username, public_key: null }, ...(cards[jump.id]?.jumps ?? [])] : [],
+      };
+      return { locker: e.locker, id: e.id };
+    },
+    update_connection: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      const c = e && cards[e.id];
+      if (!e || !c) return refuse("not_found", "Secret ou champ introuvable.");
+      if (a.set.title) e.title = a.set.title;
+      if (a.set.host) e.hosts = [a.set.host];
+      if (a.set.username) e.username = a.set.username;
+      if ("favorite" in a.set) e.favorite = a.set.favorite;
+      if (a.set.port) { c.port = a.set.port; c.effective_port = a.set.port; }
+      if (a.set.host_key) c.host_key = a.set.host_key;
+      if (a.set.password) c.has_password = true;
+      for (const k of a.clear) {
+        if (k === "port") { c.port = null; c.effective_port = c.kind === "rdp" ? 3389 : 22; }
+        if (k === "username") e.username = null;
+        if (k === "host_key") c.host_key = null;
+        if (k === "ssh_key") c.ssh_key = null;
+        if (k === "jump") c.jumps = [];
+      }
+    },
+    choose_ssh_key_file: () => "id_ed25519",
+    create_ssh_key: (a) => {
+      const e = { locker: a.key.locker || L, id: id(entries.length + 40), kind: "ssh_key", title: a.key.title, username: a.key.username || null, hosts: [], tags: a.key.tags || [], favorite: false, trash: false };
+      entries.push(e);
+      return { locker: e.locker, id: e.id };
     },
     generate_password: () => "Vn4%tB8qZ!e2Lr6#Wm9sKd3x",
     copy_generated: () => 30,
