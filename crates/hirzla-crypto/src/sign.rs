@@ -75,6 +75,8 @@ pub enum Domain {
     Receipt,
     /// A Self-mode exchange file (§ 13.1).
     ExchangeFile,
+    /// A sealed approval mail carried by the server (§ 11.12, ADR 0070).
+    QuorumMail,
     /// A device enrolment package (§ 14).
     DeviceEnrol,
     /// A secret share for recovery (ADR 0012).
@@ -107,6 +109,7 @@ impl Domain {
             Domain::DeviceAuth => b"hirzla/v1/device-auth",
             Domain::Receipt => b"hirzla/v1/receipt",
             Domain::ExchangeFile => b"hirzla/v1/exchange-file",
+            Domain::QuorumMail => b"hirzla/v1/quorum-mail",
             Domain::DeviceEnrol => b"hirzla/v1/device-enrol",
             Domain::RecoveryShare => b"hirzla/v1/recovery-share",
             Domain::KeyLogHead => b"hirzla/v1/keylog-head",
@@ -150,6 +153,8 @@ pub enum DeviceDomain {
     DeviceAuth,
     /// An exchange file.
     ExchangeFile,
+    /// A sealed approval mail (ADR 0070).
+    QuorumMail,
     /// An enrolment package.
     DeviceEnrol,
     /// A recovery share.
@@ -223,6 +228,7 @@ impl From<DeviceDomain> for Domain {
             DeviceDomain::Approval => Domain::Approval,
             DeviceDomain::DeviceAuth => Domain::DeviceAuth,
             DeviceDomain::ExchangeFile => Domain::ExchangeFile,
+            DeviceDomain::QuorumMail => Domain::QuorumMail,
             DeviceDomain::DeviceEnrol => Domain::DeviceEnrol,
             DeviceDomain::RecoveryShare => Domain::RecoveryShare,
             DeviceDomain::AuditCheckpoint => Domain::DeviceAuditCheckpoint,

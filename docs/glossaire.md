@@ -53,6 +53,9 @@ l'anglais dans le code.
 | Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
 | Nom affiché | `DisplayName` | Nom qu'un membre se donne, signé par sa clé et inscrit au registre ; ne prouve rien (ADR 0069) |
 | Profil de membre | `MemberProfile` | Objet signé par la clé du membre qui porte son nom affiché (ADR 0069) |
+| Courrier des accords | `ApprovalMail` | Paquet scellé pour un appareil propriétaire et signé par l'appareil expéditeur, qui porte une demande, un accord, un refus ou un retrait par le serveur (ADR 0070) |
+| Paquet leurre | `Cover` | Paquet du courrier envoyé à la cible d'une demande, de même taille, que son noyau jette : le serveur ne peut pas désigner la cible ; à ne pas confondre avec un leurre (`Decoy`) (ADR 0070) |
+| Demande à examiner | `ReceivedRequest` | Demande d'accord reçue par le courrier, gardée dans la boîte de réception jusqu'à la réponse (ADR 0070) |
 | Empreinte comparée | `verified` | L'utilisateur a comparé hors bande l'empreinte de la clé actuelle d'un membre |
 | Clé d'éditeur | `PublisherKey` | Clé hybride de l'éditeur, hors ligne ; signe le manifeste des clients et les paquets de mise à jour (ADR 0042, 0043) |
 | Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |

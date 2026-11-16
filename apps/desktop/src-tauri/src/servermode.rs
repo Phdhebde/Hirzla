@@ -1287,6 +1287,9 @@ mod tests {
             required: 2,
             offer: "hirzla-demande:x".into(),
             created_ms: 5,
+            sent_ms: None,
+            declined: Vec::new(),
+            queued: 0,
         }
         .into();
         let json = serde_json::to_value(&q).unwrap();

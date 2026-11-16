@@ -70,6 +70,11 @@ pour Linux, extension Firefox et Chromium.
   la chaîne par le poste avant d'afficher un nom, drapeau « empreinte comparée » et alerte
   « nom affiché inconnu inscrit à votre nom » (ADR 0069 ; `hirzla serveur nom`,
   `serveur chercher`, `serveur verifier`).
+- Demandes d'accord transportées par le serveur : scellées pour chaque appareil
+  propriétaire et signées par l'appareil expéditeur, de taille fixe, avec un leurre pour la
+  cible ; boîte « à examiner », refus et retraits ; le serveur les garde 30 jours au plus sans
+  pouvoir les lire ni les signer, et l'échange par copie reste possible (ADR 0070 ;
+  `hirzla accord envoyer`, `accord recues`, `accord repondre`).
 - Sceau du serveur à quorum, descellement et administration par un port distinct à
   certificat client (`hirzlad admin`, ADR 0053) ; bornes de connexion réglables (ADR 0051).
 - Journal d'audit chaîné et signé, export CEF et syslog TLS, vérification hors ligne par

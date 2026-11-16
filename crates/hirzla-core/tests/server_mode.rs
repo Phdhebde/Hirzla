@@ -14,8 +14,8 @@ use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
 use hirzla_core::server_mode::proto::{
-    AlertKind, QuarantinedOp, QuorumAction, QuorumState, Refusal, Role, ServerCode, ServerReply,
-    ServerRequest, SuspectReason,
+    AlertKind, QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role,
+    ServerCode, ServerReply, ServerRequest, SuspectReason,
 };
 use hirzla_core::server_mode::{annex_path, COMPACT_MIN};
 use hirzla_core::service::{Config, Core};
@@ -1365,6 +1365,158 @@ fn quorum_removes_the_senior_owner() {
         ),
         Err(ServerCode::Forbidden)
     );
+}
+
+fn inbox(m: &mut Member) -> Vec<ReceivedRequest> {
+    match m.server(ServerRequest::QuorumInbox).unwrap() {
+        ServerReply::Inbox(r) => r,
+        other => panic!("inbox expected, got {other:?}"),
+    }
+}
+
+fn send(m: &mut Member, request: Id16) -> QuorumState {
+    request_of(m.server(ServerRequest::QuorumSend { request }))
+}
+
+fn request_of(reply: Result<ServerReply, ServerCode>) -> QuorumState {
+    request(reply)
+}
+
+fn respond(
+    m: &mut Member,
+    locker: Id16,
+    request: Id16,
+    accept: bool,
+) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::QuorumRespond {
+        locker,
+        request,
+        accept,
+    })
+}
+
+fn held_mail(server: &Server, m: &Member) -> usize {
+    let device = m.device().device_id();
+    server.running.with_core(|c| c.held_mail(&device)).unwrap()
+}
+
+fn listed(m: &mut Member, request: Id16) -> QuorumState {
+    match m
+        .server(ServerRequest::QuorumList { locker: None })
+        .unwrap()
+    {
+        ServerReply::Requests(r) => r.into_iter().find(|q| q.request == request).unwrap(),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// ADR 0070: Bob sends his request to remove Alice through the server. Carol finds it in her
+/// inbox after a synchronisation (and after a restart), signs it there, and Bob collects her
+/// approval at his next synchronisation. Alice, the target, receives a cover she never sees;
+/// Dave, a reader, receives nothing. A request declined is noted; one cancelled leaves the
+/// inbox.
+#[test]
+fn approvals_travel_sealed_through_the_server() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol", "dave"]);
+    let [alice, bob, carol, dave] = &mut m[..] else {
+        unreachable!()
+    };
+    let ids = (alice.id, bob.id, carol.id, dave.id);
+    grant(alice, locker, ids.1, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.2, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.3, Role::Reader, None).unwrap();
+    bob.sync();
+    carol.sync();
+    dave.sync();
+
+    use QuorumAction::{OwnerRemoval, Policy};
+    let q = request(prepare(bob, locker, OwnerRemoval, Some(ids.0), None));
+    assert_eq!(q.sent_ms, None);
+    let sent = send(bob, q.request);
+    assert!(sent.sent_ms.is_some());
+    assert_eq!(sent.queued, 0, "the server took everything");
+    // One mail for Carol, a cover of the same size for Alice, nothing for Dave.
+    assert_eq!(held_mail(&server, carol), 1);
+    assert_eq!(held_mail(&server, alice), 1);
+    assert_eq!(held_mail(&server, dave), 0);
+    // Sent again: nobody is served twice.
+    send(bob, q.request);
+    assert_eq!(held_mail(&server, carol), 1);
+    assert_eq!(
+        respond(carol, locker, q.request, true),
+        Err(ServerCode::General(ErrorCode::NotFound)),
+        "nothing received yet"
+    );
+
+    carol.sync();
+    assert_eq!(held_mail(&server, carol), 0, "taken and acknowledged");
+    let got = inbox(carol);
+    assert_eq!(got.len(), 1);
+    let r = &got[0];
+    assert_eq!(
+        (r.request, r.locker, r.action, r.target, r.issuer),
+        (q.request, locker, OwnerRemoval, Some(ids.0), ids.1)
+    );
+    assert_eq!(r.name.as_deref().map(String::as_str), Some("Racine"));
+    assert!(r.can_sign);
+    assert_eq!(r.required, 2);
+    assert_eq!(r.offer, q.offer);
+    assert_eq!(
+        r.issuer_fingerprint.as_deref(),
+        Some(bob.fingerprint.as_str())
+    );
+    // The target and the reader see nothing.
+    alice.sync();
+    dave.sync();
+    assert!(inbox(alice).is_empty());
+    assert!(inbox(dave).is_empty());
+    assert_eq!(held_mail(&server, alice), 0);
+
+    // Kept across a restart (annex v5).
+    carol.restart();
+    assert_eq!(inbox(carol), got);
+
+    // Carol signs from her inbox; the approval reaches Bob at his next synchronisation.
+    let ServerReply::Approved(token) = respond(carol, locker, q.request, true).unwrap() else {
+        panic!("approval expected");
+    };
+    assert!(token.starts_with("hirzla-accord:"));
+    assert!(inbox(carol).is_empty());
+    assert_eq!(listed(bob, q.request).counted, vec![ids.1]);
+    bob.sync();
+    assert_eq!(listed(bob, q.request).counted, vec![ids.1, ids.2]);
+    // The same approval by copy is a replay.
+    assert_eq!(collect(bob, &token), Err(ServerCode::ApprovalInvalid));
+
+    // A request declined.
+    let p = request(prepare(bob, locker, Policy, None, Some(3)));
+    send(bob, p.request);
+    carol.sync();
+    assert_eq!(inbox(carol).len(), 1);
+    assert_eq!(
+        respond(carol, locker, p.request, false),
+        Ok(ServerReply::Done)
+    );
+    bob.sync();
+    assert_eq!(listed(bob, p.request).declined, vec![ids.2]);
+
+    // A request cancelled leaves the inbox.
+    let c = request(prepare(bob, locker, Policy, None, Some(3)));
+    send(bob, c.request);
+    carol.sync();
+    assert_eq!(inbox(carol).len(), 1);
+    bob.server(ServerRequest::QuorumCancel { request: c.request })
+        .unwrap();
+    bob.sync();
+    carol.sync();
+    assert!(inbox(carol).is_empty());
+
+    // Applied: Alice is removed.
+    bob.server(ServerRequest::QuorumApply { request: q.request })
+        .unwrap();
+    carol.sync();
+    assert!(!quorum_of(carol, locker).1.contains(&ids.0));
 }
 
 thread_local! {

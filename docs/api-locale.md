@@ -679,8 +679,9 @@ l'autorisation) :
 
 Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
-partagés, rôles, accords, quarantaine, révocation d'un appareil et noms affichés. Codes :
-opérations **40 à 49**, **90 à 99** (ADR 0044, 0045, 0059) et **120 à 129** (ADR 0069),
+partagés, rôles, accords, quarantaine, révocation d'un appareil, noms affichés et courrier
+scellé des demandes d'accord. Codes : opérations **40 à 49**, **90 à 99** (ADR 0044, 0045,
+0059) et **120 à 129** (ADR 0069, 0070),
 erreurs **40 à 49**, **90 à 99** et **120 à 129** (réservées). Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
 pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
@@ -707,7 +708,8 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 8 nom affiché inconnu inscrit à votre nom (ADR 0069) ; 2 présent pour les types 1 à 4 et 8, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
 | Action d'accord | `uint` : 1 retrait d'un `Owner`, 2 changement de rôle d'un `Owner`, 3 changement du quorum (`sync-protocol.md` § 7.7) |
 | Demande, accord, lien | `tstr` (≤ 96 Kio) dans l'enveloppe texte de `sync-protocol.md` § 11.10 : `hirzla-demande:…`, `hirzla-accord:…`, `hirzla-invitation:…` ; les blancs sont retirés avant le décodage |
-| État d'une demande | `{1: request_id bstr(16), 2: casier, 3: action, 4?: cible, 5?: détail uint, 6: [membre], 7: requis uint, 8: demande tstr, 9: créée uint (ms)}` ; 6 : membres comptés (l'initiateur d'abord, puis les approbateurs) ; 7 : quorum en vigueur ; 4 et 5 comme dans la demande |
+| État d'une demande | `{1: request_id bstr(16), 2: casier, 3: action, 4?: cible, 5?: détail uint, 6: [membre], 7: requis uint, 8: demande tstr, 9: créée uint (ms), 10?: envoyée uint (ms), 11: [membre], 12: en attente d'envoi uint}` ; 6 : membres comptés (l'initiateur d'abord, puis les approbateurs) ; 7 : quorum en vigueur ; 4 et 5 comme dans la demande ; 10 : dernier `QuorumSend` ; 11 : propriétaires qui ont refusé ; 12 : paquets de cette demande pas encore remis au serveur (ADR 0070) |
+| Demande reçue | `{1: request_id, 2: casier, 3?: nom tstr, 4: action, 5?: cible, 6?: empreinte de la cible, 7?: nom affiché de la cible, 8: empreinte de la cible comparée bool, 9?: détail uint, 10: initiateur, 11?: empreinte de l'initiateur, 12?: nom affiché de l'initiateur, 13: empreinte de l'initiateur comparée bool, 14: peut signer bool, 15: requis uint, 16: reçue uint (ms), 17: demande tstr}` (ADR 0070) |
 | Opération en quarantaine | `{1: op_id bstr(48), 2: membre, 3: appareil bstr(16), 4: cause uint (1 retrait concurrent, 2 bifurcation), 5: classe uint (1 donnée, 2 contrôle), 6?: heure annoncée uint, 7?: titre tstr, 8?: secret bstr(16), 9: reçue uint, 10: échéance uint}` ; 6 à 8 pour une donnée lisible ; 9 et 10 en millisecondes (réception locale, rejet automatique) |
 | Nom affiché | `tstr` (≤ 64 octets), valide selon `format.md` § 3.7 ; dans une réponse, présent seulement si le membre en a un et si le noyau l'a vérifié (§ 15.9) : jamais vide, jamais « non vérifié » |
 | Refus | `uint`, pourquoi le rôle du membre courant ne permet pas une action (ADR 0041) : 1 rôle insuffisant, 2 quorum de propriétaires requis, 3 dernier propriétaire, 4 accès au casier retiré par le serveur |
@@ -855,6 +857,9 @@ casiers partagés, sans changer leurs messages :
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
 
+**Compatibilité** (ADR 0070) : les clés 10 à 12 de l'état d'une demande et les opérations
+123 à 125 étendent la version 4 de la même façon.
+
 **Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
 clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
 et les opérations 120 à 122 étendent la version 4 de la même façon.
@@ -891,6 +896,10 @@ aucun autre client de la version 4 n'existe.
 | `accord liste [CASIER]` | `QuorumList` |
 | `accord appliquer ID` | `QuorumApply` |
 | `accord annuler ID` | `QuorumCancel` |
+| `accord envoyer ID` | `QuorumSend` |
+| `accord recues` | `QuorumInbox` |
+| `accord repondre ID accepter` | `QuorumInbox`, `QuorumRespond` (rappel de la vérification de vive voix, puis confirmation « oui » au terminal ; l'accord est aussi écrit sur la sortie standard) |
+| `accord repondre ID refuser` | `QuorumInbox`, `QuorumRespond` |
 | `quarantaine CASIER` | `QuarantineList` |
 | `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
 | `appareil revoquer APPAREIL [--oui]` | `DeviceRevoke` (sans `--oui`, confirmation « oui » au terminal ; sans terminal, `--oui` exigé) |
@@ -1039,6 +1048,60 @@ attendue ; toujours vrai pour le membre du poste ; faux si la clé a changé dep
   dont l'empreinte n'est pas comparée.
 - Le noyau n'en fait pas une condition de `RoleGrant` (ADR 0069, point 4).
 - Aucune opération ne désigne un membre par son nom : `MemberSearch` rend des identifiants.
+
+### 15.10 Demandes d'accord transportées par le serveur (opérations 123 à 125)
+
+Décision : ADR 0070. Le serveur porte les demandes et les accords d'un quorum **scellés**
+pour l'appareil destinataire et signés par l'appareil expéditeur (`sync-protocol.md`
+§ 11.12) : il ne peut ni les lire, ni les forger, ni les modifier. L'échange par copie
+(§ 15.8) reste entier : une demande envoyée peut aussi être collée, un accord rendu par
+`QuorumRespond` peut aussi être rendu à la main. Aucune erreur nouvelle n'est définie.
+
+| Code | Nom | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 123 | `QuorumSend` | oui | `{1: request_id}` | état d'une demande |
+| 124 | `QuorumInbox` | non | — | `{1: [demande reçue]}`, au plus 64, de la plus ancienne à la plus récente |
+| 125 | `QuorumRespond` | oui | `{1: casier, 2: request_id, 3: accepter bool}` | accepter : `{1: accord}` ; refuser : — |
+
+Détails :
+
+1. **`QuorumSend`** — demande préparée ici et pas encore appliquée (sinon `NotFound`). Le
+   noyau scelle la demande pour chaque appareil actif de chaque autre `Owner` du casier, dans
+   sa réplique, et un **leurre** de même taille pour chaque appareil de la cible ; il note les
+   appareils servis et l'heure (clé 10), met les paquets dans la file d'envoi de l'annexe
+   (`format.md` § 15.2, clé 9, au plus 256 : `InvalidInput` au-delà) et la remet au serveur
+   s'il est joignable. Serveur injoignable : pas d'erreur, la clé 12 compte ce qui partira au
+   prochain `ServerSync`. Renvoyer une demande ne sert que les appareils pas encore servis
+   (un appareil enrôlé depuis, par exemple). Accès au casier retiré : `Forbidden`.
+2. **`QuorumInbox`** — pour chaque demande reçue, ce que `QuorumInspect` rendrait (nom du
+   casier, action, cible et initiateur avec nom affiché et empreinte), plus « empreinte
+   comparée » pour l'un et l'autre (§ 15.9.2), le quorum en vigueur, l'heure de réception et
+   le texte `hirzla-demande:…`. Sans réseau. L'approbateur ne connaît pas le nombre d'accords
+   déjà recueillis : seul l'initiateur le sait (`QuorumList`).
+3. **`QuorumRespond`** — demande absente de la boîte de réception : `NotFound` (aussi si
+   l'appareil de l'initiateur n'est plus actif : la demande est alors retirée). Accepter :
+   mêmes contrôles et même signature que `QuorumApprove` (`Forbidden` si le membre ne peut
+   pas signer) ; l'accord est scellé pour l'appareil de l'initiateur, et rendu aussi en texte.
+   Refuser : un refus est scellé pour lui. Dans les deux cas la demande quitte la boîte de
+   réception, et le paquet part tout de suite si le serveur est joignable, sinon au prochain
+   `ServerSync`.
+4. **Réception** — `ServerSync` remet d'abord la file d'envoi, puis relève le courrier
+   (`MailGet`). Le noyau n'agit sur un paquet qu'après en avoir vérifié la signature avec le
+   certificat de l'expéditeur actif dans sa propre réplique du casier, où l'expéditeur doit
+   être `Owner` (`sync-protocol.md` § 11.12). Une demande que le membre peut signer entre
+   dans la boîte de réception ; un accord est joint à la demande en cours comme par
+   `QuorumCollect` ; un refus est noté sur la demande (clé 11), et effacé si le même
+   propriétaire signe ensuite ; un retrait enlève la demande de la boîte de réception. Un
+   leurre, un paquet invalide ou rejoué est jeté sans rien montrer. Chaque lot est accusé une
+   fois l'annexe écrite.
+5. **Retrait** — `QuorumApply` et `QuorumCancel` d'une demande envoyée mettent un retrait
+   dans la file d'envoi pour les appareils servis (un leurre pour la cible). `QuorumApply` le
+   remet aussitôt ; `QuorumCancel`, sans réseau, au prochain `ServerSync`.
+6. **Vérification de vive voix** — l'interface rappelle, avant chaque signature, de vérifier
+   auprès de l'initiateur que la demande vient bien de lui. Une demande arrivée par le serveur
+   n'est pas plus sûre qu'une demande collée : elle est signée par l'appareil de
+   l'initiateur, et ce poste a pu être volé. La ligne de commande affiche le rappel et demande
+   « oui ».
 
 ## 16. Mode Self (version 5)
 

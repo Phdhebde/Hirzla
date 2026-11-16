@@ -62,6 +62,14 @@ pub mod kind {
     pub const MAILBOX_PUT: u64 = 32;
     pub const MAILBOX_GET: u64 = 33;
     pub const MAILBOX_BLOB: u64 = 34;
+    /// `MailPut` (ADR 0070).
+    pub const MAIL_PUT: u64 = 35;
+    /// `MailPutResult` (ADR 0070).
+    pub const MAIL_PUT_RESULT: u64 = 36;
+    /// `MailGet` (ADR 0070).
+    pub const MAIL_GET: u64 = 37;
+    /// `MailItems` (ADR 0070).
+    pub const MAIL_ITEMS: u64 = 38;
     pub const ERROR: u64 = 40;
     /// `PutMemberProfile` (ADR 0069).
     pub const PUT_MEMBER_PROFILE: u64 = 50;
@@ -1034,6 +1042,151 @@ pub const MIN_FIND_QUERY: usize = 2;
 pub const MAX_FIND_QUERY: usize = hirzla_access::profile::MAX_DISPLAY_NAME;
 /// Most members in one `MembersFound`.
 pub const MAX_FOUND: usize = 32;
+
+/// Most mails in one `MailPut` or `MailItems` (§ 11.12, ADR 0070).
+pub const MAX_MAIL_BATCH: usize = 64;
+/// Most mails acknowledged by one `MailGet`.
+pub const MAX_MAIL_ACK: usize = 256;
+
+/// `MailPut` (35) body: encoded mails (`crate::mail`).
+#[must_use]
+pub fn mail_put_value(mails: &[Vec<u8>]) -> Value {
+    Value::map(vec![(
+        1,
+        Value::Array(mails.iter().map(|m| Value::bytes(m)).collect()),
+    )])
+}
+
+/// Reads a `MailPut` (35) body: 1 to [`MAX_MAIL_BATCH`] mails of at most
+/// [`crate::mail::MAX_MAIL_LEN`] bytes.
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_mail_put(v: &Value) -> Result<Vec<Vec<u8>>, NetError> {
+    let f = Fields::new(v, &[1])?;
+    let mails: Vec<Vec<u8>> = cbor::array_max(f.req(1)?, MAX_MAIL_BATCH)?
+        .iter()
+        .map(|m| bytes(m, crate::mail::MAX_MAIL_LEN))
+        .collect::<Result<_, _>>()?;
+    if mails.is_empty() {
+        return Err(NetError::Malformed);
+    }
+    Ok(mails)
+}
+
+/// `MailPutResult` (36) body: one status per mail, in order: 0 kept (or already kept),
+/// otherwise an error code of § 11.7.
+#[must_use]
+pub fn mail_put_result_value(statuses: &[u64]) -> Value {
+    Value::map(vec![(
+        1,
+        Value::Array(statuses.iter().map(|c| Value::Uint(*c)).collect()),
+    )])
+}
+
+/// Reads a `MailPutResult` (36) body.
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_mail_put_result(v: &Value) -> Result<Vec<u64>, NetError> {
+    let f = Fields::new(v, &[1])?;
+    Ok(cbor::array_max(f.req(1)?, MAX_MAIL_BATCH)?
+        .iter()
+        .map(uint)
+        .collect::<Result<_, _>>()?)
+}
+
+/// `MailGet` (37) body: mails handled (to erase), then at most `limit` mails to receive.
+#[must_use]
+pub fn mail_get_value(ack: &[Id16], limit: u64) -> Value {
+    Value::map(vec![
+        (
+            1,
+            Value::Array(ack.iter().map(|i| Value::bytes(i)).collect()),
+        ),
+        (2, Value::Uint(limit)),
+    ])
+}
+
+/// Reads a `MailGet` (37) body.
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_mail_get(v: &Value) -> Result<(Vec<Id16>, u64), NetError> {
+    let f = Fields::new(v, &[1, 2])?;
+    let ack = cbor::array_max(f.req(1)?, MAX_MAIL_ACK)?
+        .iter()
+        .map(id)
+        .collect::<Result<_, _>>()?;
+    let limit = cbor::uint_in(f.req(2)?, 1..=MAX_MAIL_BATCH as u64)?;
+    Ok((ack, limit))
+}
+
+/// One mail of `MailItems` (38).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailItem {
+    /// Identifier of the mail (its header's `mail_id`).
+    pub mail_id: Id16,
+    /// When the server received it, its clock.
+    pub received_ms: u64,
+    /// The encoded mail.
+    pub mail: Vec<u8>,
+}
+
+/// `MailItems` (38).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MailItems {
+    /// Mails waiting for the device, oldest first, at most [`MAX_MAIL_BATCH`].
+    pub items: Vec<MailItem>,
+    /// More mails wait.
+    pub more: bool,
+}
+
+impl MailItems {
+    /// Body.
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        Value::map(vec![
+            (
+                1,
+                Value::Array(
+                    self.items
+                        .iter()
+                        .map(|m| {
+                            Value::map(vec![
+                                (1, Value::bytes(&m.mail_id)),
+                                (2, Value::Uint(m.received_ms)),
+                                (3, Value::bytes(&m.mail)),
+                            ])
+                        })
+                        .collect(),
+                ),
+            ),
+            (2, Value::Bool(self.more)),
+        ])
+    }
+
+    /// Strict decoding.
+    ///
+    /// # Errors
+    /// [`NetError::Malformed`].
+    pub fn from_value(v: &Value) -> Result<Self, NetError> {
+        let f = Fields::new(v, &[1, 2])?;
+        let mut items = Vec::new();
+        for m in cbor::array_max(f.req(1)?, MAX_MAIL_BATCH)? {
+            let g = Fields::new(m, &[1, 2, 3])?;
+            items.push(MailItem {
+                mail_id: id(g.req(1)?)?,
+                received_ms: uint(g.req(2)?)?,
+                mail: bytes(g.req(3)?, crate::mail::MAX_MAIL_LEN)?,
+            });
+        }
+        Ok(MailItems {
+            items,
+            more: cbor::boolean(f.req(2)?)?,
+        })
+    }
+}
 
 /// `MemberProfileResult` (51) body: the rank of the entry of kind 6 in the key log.
 #[must_use]

@@ -45,6 +45,10 @@ use crate::ServerError;
 const MAILBOX_TTL_MS: u64 = 10 * 60 * 1000;
 /// Most blobs waiting for one device.
 const MAILBOX_PER_DEVICE: usize = 16;
+/// Longest a sealed approval mail is held for its recipient device (ADR 0070).
+pub const MAIL_RETENTION_MS: u64 = 30 * DAY_MS;
+/// Most mails held for one recipient device (ADR 0070).
+pub const MAIL_PER_DEVICE: usize = 256;
 /// Quota: most operations in one locker journal.
 const QUOTA_OPS: u64 = 1_000_000;
 /// Quota: most bytes in one locker journal.
@@ -256,6 +260,8 @@ pub struct Core {
     lockers: BTreeMap<Id16, Locker>,
     personal: BTreeMap<Id16, Id16>,
     mailbox: BTreeMap<Id16, VecDeque<(Vec<u8>, u64)>>,
+    /// Sealed approval mails held for each recipient device, oldest first (ADR 0070).
+    mail: BTreeMap<Id16, Vec<HeldMail>>,
     chunks: BTreeMap<(Id16, Id16, u64), (u64, Vec<u8>)>,
     /// Last authentication (or inscription) of each device, for the inactivity rule.
     seen: BTreeMap<(Id16, Id16), u64>,
@@ -272,6 +278,13 @@ pub struct Core {
     /// Rank of the next entry of `stable_feed`.
     stable_rank: u64,
     clock: fn() -> u64,
+}
+
+/// A sealed approval mail held for its recipient device (ADR 0070).
+struct HeldMail {
+    mail_id: Id16,
+    received_ms: u64,
+    mail: Vec<u8>,
 }
 
 fn mid(m: &Id16) -> MemberId {
@@ -329,6 +342,7 @@ impl Core {
             lockers: BTreeMap::new(),
             personal: BTreeMap::new(),
             mailbox: BTreeMap::new(),
+            mail: BTreeMap::new(),
             chunks: BTreeMap::new(),
             seen: BTreeMap::new(),
             purgeable: 0,
@@ -357,6 +371,7 @@ impl Core {
             })?;
             core.late_seen.insert((locker, op_id), Some(now));
         }
+        core.expire_mail(now);
         core.expire_late(now)?;
         // Deferred purge: what became stable before the stop leaves the disk now.
         if core.purgeable > 0 {
@@ -420,6 +435,9 @@ impl Core {
                     if last_seen.get(&(member, device)) != Some(&i) => {}
                 Record::LateSeen { locker, op_id, .. }
                     if !self.late_seen.contains_key(&(locker, op_id)) => {}
+                // Acknowledged or expired mails leave the disk (ADR 0070).
+                Record::MailDone { .. } => {}
+                Record::Mail { to, mail_id, .. } if !self.holds_mail(&to, &mail_id) => {}
                 other => out.push(other),
             }
         }
@@ -536,6 +554,23 @@ impl Core {
                 self.keylog
                     .append_profile(&profile, logged_ms)
                     .map_err(|_| ServerError::Storage)?;
+            }
+            Record::Mail {
+                to,
+                mail_id,
+                received_ms,
+                mail,
+            } => {
+                if !self.holds_mail(&to, &mail_id) {
+                    self.mail.entry(to).or_default().push(HeldMail {
+                        mail_id,
+                        received_ms,
+                        mail,
+                    });
+                }
+            }
+            Record::MailDone { to, mail_id } => {
+                self.drop_mail(&to, &mail_id);
             }
             Record::Op {
                 locker,
@@ -1372,6 +1407,50 @@ impl Core {
                 let d = proto::read_id(&m.body)?;
                 self.on_mailbox_get(device, d, req, now)
             }
+            kind::MAIL_PUT => {
+                // Sealed approval mails between owners (ADR 0070).
+                let mails = proto::read_mail_put(&m.body)?;
+                self.expire_mail(now);
+                let mut statuses = Vec::with_capacity(mails.len());
+                for mail in mails {
+                    statuses.push(self.put_mail(&member, &device, mail, now)?);
+                }
+                Ok(vec![Message::new(
+                    kind::MAIL_PUT_RESULT,
+                    req,
+                    proto::mail_put_result_value(&statuses),
+                )])
+            }
+            kind::MAIL_GET => {
+                let (ack, limit) = proto::read_mail_get(&m.body)?;
+                for mail_id in ack {
+                    if self.holds_mail(&device, &mail_id) {
+                        self.store.append(&Record::MailDone {
+                            to: device,
+                            mail_id,
+                        })?;
+                        self.drop_mail(&device, &mail_id);
+                    }
+                }
+                self.expire_mail(now);
+                let held = self.mail.get(&device).map_or(&[][..], Vec::as_slice);
+                let limit = usize::try_from(limit).unwrap_or(proto::MAX_MAIL_BATCH);
+                let items = held
+                    .iter()
+                    .take(limit)
+                    .map(|h| proto::MailItem {
+                        mail_id: h.mail_id,
+                        received_ms: h.received_ms,
+                        mail: h.mail.clone(),
+                    })
+                    .collect();
+                let more = held.len() > limit;
+                Ok(vec![Message::new(
+                    kind::MAIL_ITEMS,
+                    req,
+                    proto::MailItems { items, more }.to_value(),
+                )])
+            }
             kind::GET_KEYLOG => {
                 let (after, limit) = proto::read_pair(&m.body)?;
                 if limit == 0 || limit > 10_000 {
@@ -1431,6 +1510,96 @@ impl Core {
             }
             _ => err(code::MALFORMED),
         }
+    }
+
+    /// Keeps one sealed approval mail (ADR 0070, point 1): its header names the session as
+    /// sender, and sender and recipient are both owners, with an active device, of a shared
+    /// locker. Returns the status of § 11.12: 0 kept (or already kept), else an error code.
+    fn put_mail(
+        &mut self,
+        member: &Id16,
+        device: &Id16,
+        mail: Vec<u8>,
+        now: u64,
+    ) -> Result<u64, ServerError> {
+        let Ok(h) = hirzla_sync::mail::read_header(&mail) else {
+            return Ok(code::MALFORMED);
+        };
+        if h.from_member != *member || h.from_device != *device {
+            return Ok(code::ACCESS);
+        }
+        if self.revoked_in_log(&h.to_member, &h.to_device) {
+            return Ok(code::ACCESS);
+        }
+        let shared = self.lockers.values().any(|l| {
+            !l.view.personal()
+                && l.view.role(member) == Some(Role::Owner)
+                && l.view.role(&h.to_member) == Some(Role::Owner)
+                && l.view.active(member, device)
+                && l.view.active(&h.to_member, &h.to_device)
+        });
+        if !shared {
+            return Ok(code::ACCESS);
+        }
+        if self.holds_mail(&h.to_device, &h.mail_id) {
+            return Ok(0);
+        }
+        if self.mail.get(&h.to_device).map_or(0, Vec::len) >= MAIL_PER_DEVICE {
+            return Ok(code::QUOTA);
+        }
+        self.store.append(&Record::Mail {
+            to: h.to_device,
+            mail_id: h.mail_id,
+            received_ms: now,
+            mail: mail.clone(),
+        })?;
+        self.mail.entry(h.to_device).or_default().push(HeldMail {
+            mail_id: h.mail_id,
+            received_ms: now,
+            mail,
+        });
+        Ok(0)
+    }
+
+    fn holds_mail(&self, to: &Id16, mail_id: &Id16) -> bool {
+        self.mail
+            .get(to)
+            .is_some_and(|q| q.iter().any(|h| h.mail_id == *mail_id))
+    }
+
+    /// Forgets a held mail; its bytes leave the disk at the next rewrite.
+    fn drop_mail(&mut self, to: &Id16, mail_id: &Id16) {
+        if let Some(q) = self.mail.get_mut(to) {
+            if let Some(i) = q.iter().position(|h| h.mail_id == *mail_id) {
+                let h = q.remove(i);
+                self.purgeable += (h.mail.len() as u64).max(1);
+            }
+            if q.is_empty() {
+                self.mail.remove(to);
+            }
+        }
+    }
+
+    /// Forgets the mails held for more than [`MAIL_RETENTION_MS`] at `now` (ADR 0070).
+    fn expire_mail(&mut self, now: u64) {
+        let due: Vec<(Id16, Id16)> = self
+            .mail
+            .iter()
+            .flat_map(|(to, q)| {
+                q.iter()
+                    .filter(|h| h.received_ms.saturating_add(MAIL_RETENTION_MS) <= now)
+                    .map(move |h| (*to, h.mail_id))
+            })
+            .collect();
+        for (to, mail_id) in due {
+            self.drop_mail(&to, &mail_id);
+        }
+    }
+
+    /// Number of mails held for a device (tests, administration).
+    #[must_use]
+    pub fn held_mail(&self, to: &Id16) -> usize {
+        self.mail.get(to).map_or(0, Vec::len)
     }
 
     fn on_mailbox_get(
@@ -1855,6 +2024,9 @@ impl Core {
                 out.extend_from_slice(b);
             }
         }
+        for h in self.mail.values().flatten() {
+            out.extend_from_slice(&h.mail);
+        }
         for (_, b) in self.chunks.values() {
             out.extend_from_slice(b);
         }
@@ -1924,6 +2096,14 @@ impl Core {
                     out.extend_from_slice(m);
                     out.extend_from_slice(d);
                 }
+            }
+        }
+        for (to, q) in &self.mail {
+            out.extend_from_slice(to);
+            for h in q {
+                out.extend_from_slice(&h.mail_id);
+                out.extend_from_slice(&h.received_ms.to_be_bytes());
+                out.extend_from_slice(&sha384(&h.mail));
             }
         }
         sha384(&out)
