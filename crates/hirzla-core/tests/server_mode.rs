@@ -1753,3 +1753,85 @@ fn an_unknown_device_is_revoked_from_its_alert() {
     alice.restart();
     assert_eq!(revoke(alice, p), Err(ServerCode::AlreadyRevoked));
 }
+
+/// Replaces the local key log (key 5, `format.md` § 15.2) of `m`'s annex with the one of
+/// `earlier`, an annex taken before: the state of a core that emitted (and pushed) its
+/// operations but never read the key log entries the server wrote since, as after a
+/// connection lost then a restart. The core of `m` must be locked.
+fn rewind_keylog(m: &Member, earlier: &[u8]) {
+    use hirzla_vault::cbor::{self, Value};
+    let v = Vault::open(&m.vault, PASSWORD).unwrap();
+    let path = annex_path(&m.vault);
+    let key5 = |c: &Value| match c {
+        Value::Map(e) => e
+            .iter()
+            .find(|(k, _)| *k == Value::Uint(5))
+            .map(|(_, x)| x.clone())
+            .unwrap(),
+        _ => panic!("map expected"),
+    };
+    let old = cbor::decode(&v.unseal_server_state(earlier).unwrap()).unwrap();
+    let mut now = cbor::decode(
+        &v.unseal_server_state(&std::fs::read(&path).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let Value::Map(entries) = &mut now else {
+        panic!("map expected")
+    };
+    for (k, x) in entries.iter_mut() {
+        if *k == Value::Uint(5) {
+            *x = key5(&old);
+        }
+    }
+    let sealed = v.seal_server_state(&cbor::encode(&now).unwrap()).unwrap();
+    std::fs::write(&path, sealed).unwrap();
+}
+
+/// ADR 0059 § 4: the core restarts between the emission of its `DeviceRemove` and the
+/// reading of its inscription (kind 3) in the key log. The revocation it issued stays
+/// expected (its `DeviceRemove` is in the annex): no « révocation inconnue » (alert 3).
+#[test]
+fn an_own_revocation_read_after_a_restart_raises_no_alert() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["bob", "alice"]);
+    let [bob, alice] = &mut m[..] else {
+        unreachable!()
+    };
+    alice.core.handle(Request::Lock).unwrap();
+    let pirate = pirate_device(alice);
+    let p = pirate.device_id();
+    assert_eq!(session_lockers(&server, &pirate), Some(Vec::new()));
+    alice.restart();
+    grant(bob, locker, alice.id, Role::Reader, None).unwrap();
+    alice.sync();
+    assert!(alerts(alice)
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnDevice && a.device == Some(p)));
+    let before = std::fs::read(annex_path(&alice.vault)).unwrap();
+
+    assert_eq!(
+        alice.server(ServerRequest::DeviceRevoke { device: p }),
+        Ok(ServerReply::DeviceRevoked { lockers: 1 })
+    );
+    // The inscription was read in the same session: forget it, then restart.
+    alice.core.handle(Request::Lock).unwrap();
+    rewind_keylog(alice, &before);
+    alice.restart();
+    assert!(!alerts(alice)
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnRevocation));
+    // The next synchronisation reads the inscription again: still expected.
+    alice.sync();
+    let after = alerts(alice);
+    assert!(!after
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnRevocation));
+    assert!(after
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnDevice && a.device == Some(p)));
+    assert_eq!(
+        alice.server(ServerRequest::DeviceRevoke { device: p }),
+        Err(ServerCode::AlreadyRevoked)
+    );
+}

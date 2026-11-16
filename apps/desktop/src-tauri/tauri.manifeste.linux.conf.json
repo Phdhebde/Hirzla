@@ -1,0 +1,15 @@
+{
+  "bundle": {
+    "linux": {
+      "deb": {
+        "files": { "/usr/bin/hirzla-clients.manifest": "binaries/hirzla-clients.manifest" }
+      },
+      "rpm": {
+        "files": { "/usr/bin/hirzla-clients.manifest": "binaries/hirzla-clients.manifest" }
+      },
+      "appimage": {
+        "files": { "/usr/bin/hirzla-clients.manifest": "binaries/hirzla-clients.manifest" }
+      }
+    }
+  }
+}

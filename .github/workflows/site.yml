@@ -1,0 +1,67 @@
+name: Site
+
+# Builds the public site (website/, Zensical) on every change, and publishes it on GitHub
+# Pages from main. Pages must be enabled once in the repository settings, with
+# « GitHub Actions » as the source (website/README.md).
+
+on:
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/site.yml"]
+  pull_request:
+    paths: ["website/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Zensical
+        run: pip install -r website/requirements.txt
+      - name: Build
+        working-directory: website
+        run: |
+          zensical build --clean
+          python3 scripts/postbuild.py
+      # The site must not load anything from a third party (fonts, scripts, styles).
+      - name: No third-party resource
+        working-directory: website/site
+        run: |
+          if grep -rlE '(src|href)="https?://(fonts\.googleapis|fonts\.gstatic|unpkg|cdn\.jsdelivr|cdnjs)' --include='*.html' .; then
+            echo "A page loads a resource from a CDN." >&2
+            exit 1
+          fi
+      - name: Expected files
+        working-directory: website/site
+        run: test -s sitemap.xml && test -s robots.txt && test -s llms.txt && test -s llms-full.txt
+      - uses: actions/upload-pages-artifact@v3
+        if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+        with:
+          path: website/site
+
+  deploy:
+    name: Deploy
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/deploy-pages@v4
+        id: deployment

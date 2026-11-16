@@ -1,7 +1,7 @@
 {
   "productName": "Hirzla",
   "mainBinaryName": "hirzla-desktop",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "identifier": "app.hirzla.desktop",
   "build": {
     "frontendDist": "../ui"

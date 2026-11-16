@@ -57,6 +57,7 @@ Dans ces cas : propose un ADR (copie `docs/adr/0000-modele.md`), n'implémente p
 | `apps/release-signer` | `hirzla-signer`, outil de l'éditeur : clé d'éditeur, manifeste des clients, paquets de mise à jour (jamais livré aux postes, ADR 0043). |
 | `sdk/go` | Client pour l'agent gateway Hornn. |
 | `docs/` | Spécifications, ADR, cible de sécurité. |
+| `website/` | Site public (Zensical, GitHub Pages) : présentation, installation, utilisation. Pas de spécification. |
 | `brand/` | Logo, couleurs, typographies. |
 
 Sens des dépendances : `crypto` ← `vault` ← `access` ← `sync` ← `core` ← `apps/*` ; `crypto` ← `audit` ← `apps/server`

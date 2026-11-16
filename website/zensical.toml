@@ -1,0 +1,126 @@
+# Site public de Hirzla (présentation, fonctionnement, installation, utilisation).
+# Construit par Zensical, publié sur GitHub Pages par .github/workflows/site.yml.
+# Les spécifications et les ADR restent dans /docs : ce site s'adresse aux utilisateurs
+# et aux administrateurs.
+
+[project]
+site_name = "Hirzla"
+site_url = "https://phdhebde.github.io/Hirzla/"
+site_description = "Hirzla est un coffre-fort de mots de passe gratuit et open source, à chiffrement post-quantique hybride, pour Windows, macOS et Linux. Seul sur un poste, ou relié à un serveur qui ne peut rien lire."
+site_author = "Projet Hirzla"
+copyright = "Hirzla est un logiciel libre sous licence Apache 2.0. Conçu selon les recommandations de l'ANSSI ; ni certifié ni qualifié à ce jour."
+
+repo_url = "https://github.com/Phdhebde/Hirzla"
+repo_name = "Phdhebde/Hirzla"
+edit_uri = "edit/dev/website/docs/"
+
+docs_dir = "docs"
+site_dir = "site"
+
+extra_css = ["stylesheets/hirzla.css"]
+
+nav = [
+  { "Accueil" = "index.md" },
+  { "Découvrir" = [
+    { "Présentation" = "decouvrir/index.md" },
+    { "Mode Self et mode Serveur" = "decouvrir/modes.md" },
+    { "Comment Hirzla protège vos secrets" = "decouvrir/fonctionnement.md" },
+    { "Chiffrement post-quantique" = "decouvrir/post-quantique.md" },
+  ] },
+  { "Installer" = [
+    { "Télécharger et vérifier" = "installer/index.md" },
+    { "Windows" = "installer/windows.md" },
+    { "macOS" = "installer/macos.md" },
+    { "Linux" = "installer/linux.md" },
+    { "Extension de navigateur" = "installer/extension.md" },
+    { "Mettre à jour" = "installer/mise-a-jour.md" },
+  ] },
+  { "Utiliser" = [
+    { "Premiers pas" = "utiliser/index.md" },
+    { "Gérer vos secrets" = "utiliser/secrets.md" },
+    { "Importer depuis KeePass ou un CSV" = "utiliser/importer.md" },
+    { "Sauvegarde et recouvrement" = "utiliser/recouvrement.md" },
+    { "Rejoindre un serveur" = "utiliser/rejoindre-un-serveur.md" },
+    { "Partager un casier" = "utiliser/partager.md" },
+    { "Ligne de commande" = "utiliser/ligne-de-commande.md" },
+  ] },
+  { "Administrer" = [
+    { "Installer le serveur" = "administrer/index.md" },
+    { "Comptes et invitations" = "administrer/comptes.md" },
+    { "Exploiter le serveur" = "administrer/exploitation.md" },
+  ] },
+  { "Aide" = [
+    { "Questions fréquentes" = "aide/faq.md" },
+    { "Dépannage" = "aide/depannage.md" },
+    { "Glossaire" = "aide/glossaire.md" },
+    { "Sécurité et projet" = "aide/projet.md" },
+  ] },
+]
+
+[project.theme]
+language = "fr"
+custom_dir = "overrides"
+logo = "assets/logo/hirzla-symbole-fond-clair.svg"
+favicon = "assets/logo/hirzla-symbole-petit-fond-clair.svg"
+# Les typographies de la charte sont servies par le site lui-même (stylesheets/hirzla.css) :
+# aucun chargement depuis un CDN.
+font = false
+features = [
+  "content.action.edit",
+  "content.code.copy",
+  "content.tabs.link",
+  "content.tooltips",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  "navigation.path",
+  "navigation.sections",
+  "navigation.tabs",
+  "navigation.tabs.sticky",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/sun"
+toggle.name = "Passer au thème sombre"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+primary = "custom"
+accent = "custom"
+toggle.icon = "lucide/moon"
+toggle.name = "Passer au thème clair"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/Phdhebde/Hirzla"
+name = "Hirzla sur GitHub"
+
+[project.markdown_extensions]
+abbr = {}
+admonition = {}
+attr_list = {}
+def_list = {}
+footnotes = {}
+md_in_html = {}
+tables = {}
+toc.permalink = true
+pymdownx.details = {}
+pymdownx.emoji.emoji_generator = "zensical.extensions.emoji.to_svg"
+pymdownx.emoji.emoji_index = "zensical.extensions.emoji.twemoji"
+pymdownx.highlight.anchor_linenums = true
+pymdownx.highlight.pygments_lang_class = true
+pymdownx.inlinehilite = {}
+pymdownx.keys = {}
+pymdownx.superfences = {}
+pymdownx.tabbed.alternate_style = true
+pymdownx.tabbed.combine_header_slug = true

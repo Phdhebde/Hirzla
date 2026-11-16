@@ -18,6 +18,12 @@ fn v(s: &str) -> Version {
     Version::parse(s).unwrap()
 }
 
+/// A version strictly newer than this build (`major + 1 . minor . patch`), so that the
+/// rollback tests hold whatever the workspace version is.
+fn newer(minor: u32, patch: u32) -> String {
+    format!("{}.{minor}.{patch}", Version::current().major + 1)
+}
+
 fn key() -> PublisherSigningKey {
     PublisherSigningKey::generate().unwrap()
 }
@@ -343,7 +349,7 @@ fn package_verifies_and_applies() {
     let f = fixture();
     let k = key();
     let keys = keys_of(&k);
-    let built = build(&f, &k, "0.1.0", &here());
+    let built = build(&f, &k, &newer(1, 0), &here());
     assert_eq!(
         built
             .files
@@ -362,7 +368,7 @@ fn package_verifies_and_applies() {
     unchanged(&f);
 
     let applied = apply_package(&f.package, &keys, &f.install, &here()).unwrap();
-    assert_eq!(applied.version, v("0.1.0"));
+    assert_eq!(applied.version, v(&newer(1, 0)));
     assert_eq!(
         fs::read(f.install.join(exe("hirzla"))).unwrap(),
         b"new command line"
@@ -371,10 +377,10 @@ fn package_verifies_and_applies() {
         fs::read(f.install.join(exe("hirzla-core"))).unwrap(),
         vec![7u8; 200_000]
     );
-    assert_eq!(installed_version(&f.install), v("0.1.0"));
+    assert_eq!(installed_version(&f.install), v(&newer(1, 0)));
     assert_eq!(
         fs::read_to_string(f.install.join(INSTALLED_VERSION_FILE)).unwrap(),
-        "0.1.0\n"
+        format!("{}\n", newer(1, 0))
     );
     #[cfg(unix)]
     {
@@ -393,15 +399,15 @@ fn package_verifies_and_applies() {
         apply_package(&f.package, &keys, &f.install, &here()).err(),
         Some(ReleaseError::NotNewer)
     );
-    build(&f, &k, "0.0.9", &here());
+    build(&f, &k, &newer(0, 9), &here());
     assert_eq!(
         apply_package(&f.package, &keys, &f.install, &here()).err(),
         Some(ReleaseError::NotNewer)
     );
     // A newer one is accepted.
-    build(&f, &k, "0.2.0", &here());
+    build(&f, &k, &newer(2, 0), &here());
     apply_package(&f.package, &keys, &f.install, &here()).unwrap();
-    assert_eq!(installed_version(&f.install), v("0.2.0"));
+    assert_eq!(installed_version(&f.install), v(&newer(2, 0)));
 }
 
 #[test]
@@ -430,7 +436,7 @@ fn package_for_another_platform_is_refused() {
     } else {
         "plan9-mips"
     };
-    build(&f, &k, "0.1.0", other);
+    build(&f, &k, &newer(1, 0), other);
     // Verifiable anywhere, applicable only on its platform.
     assert!(verify_package(&f.package, &keys_of(&k)).is_ok());
     assert_eq!(
@@ -444,7 +450,7 @@ fn package_for_another_platform_is_refused() {
 fn package_of_another_publisher_is_refused() {
     let f = fixture();
     let k = key();
-    build(&f, &key(), "0.1.0", &here());
+    build(&f, &key(), &newer(1, 0), &here());
     assert_eq!(
         verify_package(&f.package, &keys_of(&k)).err(),
         Some(ReleaseError::Signature)
@@ -461,7 +467,7 @@ fn altered_package_changes_nothing() {
     let f = fixture();
     let k = key();
     let keys = keys_of(&k);
-    build(&f, &k, "0.1.0", &here());
+    build(&f, &k, &newer(1, 0), &here());
     let good = fs::read(&f.package).unwrap();
 
     // A byte of the last file's payload: every file is staged, then refused.
@@ -513,7 +519,7 @@ fn embedded_client_manifest_must_match_the_package() {
     let f = fixture();
     let k = key();
     let keys = keys_of(&k);
-    let version = v("0.1.0");
+    let version = v(&newer(1, 0));
     let entries = |src: &Path| {
         let mut e = vec![
             update::entry_for(exe("hirzla"), &src.join(exe("hirzla")), true).unwrap(),

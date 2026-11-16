@@ -1859,7 +1859,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hirzla-access"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hirzla-crypto",
  "hirzla-vault",
@@ -1871,7 +1871,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-audit"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "cbor4ii",
  "hirzla-crypto",
@@ -1881,7 +1881,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-cli"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "hirzla-core",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-core"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hirzla-access",
  "hirzla-crypto",
@@ -1912,7 +1912,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-crypto"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -1933,7 +1933,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-desktop"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "arboard",
  "gio",
@@ -1953,7 +1953,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-keystore"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "core-foundation",
  "hirzla-crypto",
@@ -1968,7 +1968,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-native-host"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hirzla-core",
  "hirzla-keystore",
@@ -1979,7 +1979,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-release-signer"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hirzla-core",
  "hirzla-crypto",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-server"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "hirzla-access",
  "hirzla-audit",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-sync"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "hirzla-access",
@@ -2019,7 +2019,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-vault"
-version = "0.0.0"
+version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "cbor4ii",

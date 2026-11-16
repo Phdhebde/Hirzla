@@ -32,8 +32,8 @@ use std::sync::{Arc, RwLock};
 
 use hirzla_access::authz::{Action, Author};
 use hirzla_access::keylog::{
-    device_cert_object, member_keys_object, Alert, EntryKind, ExpectedEntry, ForkEvidence,
-    KeyLogHead, KeyLogMonitor, KeyLogProof,
+    device_cert_object, member_keys_object, revocation_object, Alert, EntryKind, ExpectedEntry,
+    ForkEvidence, KeyLogHead, KeyLogMonitor, KeyLogProof,
 };
 use hirzla_access::{AccessError, Denial, KeyLogFailure, Role};
 use hirzla_crypto::sign::VerifyingKey;
@@ -611,6 +611,18 @@ impl ServerMode {
         }
         if requests.values().any(|r| !lockers.contains_key(&r.locker)) {
             return Err(general(ErrorCode::Corrupt));
+        }
+        // A revocation this device issued (`DeviceRevoke`, ADR 0059) stays expected across a
+        // restart: its `DeviceRemove` is kept in the annex with the locker's operations, so
+        // its inscription (kind 3) raises no alert 3 even if the server records it only
+        // after the restart. Nothing new is stored.
+        {
+            let mut m = write_log(&keylog.monitor)?;
+            for s in lockers.values() {
+                for rev in s.replica.own_device_revocations() {
+                    m.expect_own(revocation_object(&rev).map_err(corrupt)?);
+                }
+            }
         }
         Ok(Joined {
             info,

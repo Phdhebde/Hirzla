@@ -91,10 +91,12 @@ fonctionnement.
   macOS : `SetupError::Unsupported`. Le journal du noyau porte le mode
   (`event=client_signatures required=1 kind=manifeste`). Tests unitaires et de bout en bout
   (`apps/cli/tests/e2e.rs`) sur les trois systèmes en CI.
-- **Reste** : sous macOS, le sceau de `Hirzla.app` couvre un manifeste posé dans le paquet
-  et la signature de `hirzla-desktop` dépend de ce sceau ; le manifeste ne peut donc pas
-  contenir l'empreinte de `hirzla-desktop` s'il est dans le paquet (`livraison.md` § 9,
-  point 2). Emplacement à trancher par un ADR avant la première livraison macOS.
+- **Reste**, tranché par l'ADR 0065 : sous macOS, le sceau de `Hirzla.app` couvre un
+  manifeste posé dans le paquet et la signature de `hirzla-desktop` dépend de ce sceau ; le
+  manifeste est donc installé hors du paquet d'application, à
+  `/Library/Application Support/Hirzla/hirzla-clients.manifest`, par un paquet `.pkg`, et
+  lu à cet emplacement fixe par une version de livraison macOS après un contrôle de propriété
+  (root seul).
 
 ## Alternatives écartées
 

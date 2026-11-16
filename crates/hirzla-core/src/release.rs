@@ -50,7 +50,8 @@ pub const MAX_PAYLOAD: u64 = 1024 * 1024 * 1024;
 /// Longest platform name.
 const MAX_PLATFORM: usize = 64;
 
-/// File name of the client manifest, next to the core.
+/// File name of the client manifest: next to the core, or, in a macOS delivery build, in
+/// `/Library/Application Support/Hirzla/` (ADR 0065).
 pub const CLIENT_MANIFEST_FILE: &str = "hirzla-clients.manifest";
 
 /// Base names of the executables a manifest or a package may name.
@@ -556,9 +557,23 @@ pub const MAX_CLIENT_MANIFEST_FILE: u64 = (HEADER_LEN + 4 + MAX_MANIFEST + SIGNA
 /// # Errors
 /// [`ReleaseError`].
 pub fn load_client_manifest(path: &Path, keys: &PublisherKeys) -> Result<Manifest, ReleaseError> {
+    let file = std::fs::File::open(path).map_err(|_| ReleaseError::Io)?;
+    read_client_manifest(file, keys)
+}
+
+/// Reads and verifies a client manifest from `file`, already opened (and, on macOS delivery
+/// builds, checked as protected by root: ADR 0065). At most [`MAX_CLIENT_MANIFEST_FILE`]
+/// bytes are read.
+///
+/// # Errors
+/// [`ReleaseError`].
+pub fn read_client_manifest(
+    file: impl Read,
+    keys: &PublisherKeys,
+) -> Result<Manifest, ReleaseError> {
     let mut bytes = Vec::new();
-    std::fs::File::open(path)
-        .and_then(|f| f.take(MAX_CLIENT_MANIFEST_FILE + 1).read_to_end(&mut bytes))
+    file.take(MAX_CLIENT_MANIFEST_FILE + 1)
+        .read_to_end(&mut bytes)
         .map_err(|_| ReleaseError::Io)?;
     verify_client_manifest(&bytes, keys)
 }
