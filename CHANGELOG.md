@@ -52,6 +52,11 @@ pour Linux, extension Firefox et Chromium.
 - Accords et quorum, quarantaine, gel des écritures et délais (ADR 0044, 0045) ; lien
   d'invitation (ADR 0046) ; purge et rétention configurable des opérations tardives
   (ADR 0047, 0058) ; révocation de son propre appareil depuis une alerte (ADR 0059).
+- Nom affiché des membres : signé par la clé du membre, inscrit au registre de transparence
+  (entrée de type 6, règle R7), recherche dans l'annuaire du serveur, vérification de toute
+  la chaîne par le poste avant d'afficher un nom, drapeau « empreinte comparée » et alerte
+  « nom affiché inconnu inscrit à votre nom » (ADR 0069 ; `hirzla serveur nom`,
+  `serveur chercher`, `serveur verifier`).
 - Sceau du serveur à quorum, descellement et administration par un port distinct à
   certificat client (`hirzlad admin`, ADR 0053) ; bornes de connexion réglables (ADR 0051).
 - Journal d'audit chaîné et signé, export CEF et syslog TLS, vérification hors ligne par

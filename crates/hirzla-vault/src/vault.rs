@@ -846,6 +846,34 @@ impl Vault {
         Ok(key.revoke_device(&body)?.as_bytes().to_vec())
     }
 
+    /// Signs with the member key, inside the vault, a member profile (`format.md` § 3.7,
+    /// ADR 0069). Returns the hybrid signature over keys 1 to 4 of the `MemberProfile`
+    /// (member, `seq`, `name`, `issued_ms`): the member key never leaves the vault. The
+    /// caller checks the name; the vault only refuses a rank 0.
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] if this device does not hold the member key (not a
+    /// certification device), [`VaultError::InvalidInput`] for a rank 0, or a cryptographic
+    /// failure.
+    pub fn sign_member_profile(
+        &self,
+        seq: u64,
+        name: &str,
+        issued_ms: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        if seq == 0 {
+            return Err(VaultError::InvalidInput);
+        }
+        let key = self.member_signing_key()?;
+        let body = cbor::encode(&Value::map(vec![
+            (1, Value::bytes(&self.identity.member.member)),
+            (2, Value::Uint(seq)),
+            (3, Value::text(name)),
+            (4, Value::Uint(issued_ms)),
+        ]))?;
+        Ok(key.sign_profile(&body)?.as_bytes().to_vec())
+    }
+
     /// Certifies another device of this member (tests only: enrolling a second device is
     /// not specified yet, `api-locale.md` § 15.7). Never compiled into a shipped binary.
     ///

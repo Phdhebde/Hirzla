@@ -504,6 +504,11 @@ impl ServerMode {
             issuer: offer.issuer,
             issuer_fingerprint: fp(&offer.issuer),
             can_sign: self.may_sign(&offer).is_ok(),
+            target_name: match &offer.target {
+                Some(t) => self.display_name(t)?,
+                None => None,
+            },
+            issuer_name: self.display_name(&offer.issuer)?,
         })
     }
 

@@ -603,15 +603,16 @@ l'autorisation) :
 
 Décisions : ADR 0032 (accepté). Le noyau parle en plus la **version 4**, qui porte les
 opérations du mode Serveur : rattachement à un serveur `hirzlad`, synchronisation, casiers
-partagés, rôles, accords, quarantaine et révocation d'un appareil. Codes : opérations **40 à
-49** et **90 à 99** (ADR 0044, 0045, 0059), erreurs **40 à 49** et **90 à 99**. Toutes exigent un coffre
+partagés, rôles, accords, quarantaine, révocation d'un appareil et noms affichés. Codes :
+opérations **40 à 49**, **90 à 99** (ADR 0044, 0045, 0059) et **120 à 129** (ADR 0069),
+erreurs **40 à 49**, **90 à 99** et **120 à 129** (réservées). Toutes exigent un coffre
 ouvert (`Locked` sinon, `NoVault` sans coffre). Le noyau n'ouvre une connexion réseau que
 pendant les opérations marquées « réseau », et seulement vers le serveur rattaché (règle 7).
 
 ### 15.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-40 à 49 ou 90 à 99 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
+40 à 49, 90 à 99 ou 120 à 129 va au profil Serveur ; elle doit porter `v = 4`, sinon `UnsupportedVersion` avec
 `{2: [4]}`. Les réponses portent `v = 4`. Ces opérations sont refusées au profil navigateur
 (`Unauthorized`). `Status` (§ 6) n'annonce pas la version 4 : un client la découvre par
 `ServerStatus`.
@@ -627,11 +628,12 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Rôle | `uint`, codes de `sync-protocol.md` § 7.1 (1 `Owner` … 6 `Auditor`) |
 | État d'un casier | `{1: casier, 2?: nom tstr, 3?: rôle uint, 4: curseur uint, 5: à envoyer uint, 6: en attente uint, 7: en quarantaine uint, 8: accès bool, 9: gelé bool}` ; 2 absent si le nom n'est pas encore lisible, 3 absent si le membre n'y a pas de rôle ; 9 : écritures gelées par une révocation retenue (ADR 0045) |
 | État du registre | `{1: suspect bool, 2: entrées uint, 3?: motif uint, 4: [alerte]}` (ADR 0041) ; 3 présent si et seulement si 1 vaut `true` : 1 racine différente, 2 tête plus petite, 3 règle R1 à R5 violée, 4 tête d'un pair incohérente, 5 tête d'un pair non servie, 6 entrée d'une preuve différente (`transparence.md` § 6.7) |
-| Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 2 présent pour les types 1 à 4, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
+| Alerte | `{1: type uint, 2?: rang uint, 3?: appareil bstr(16), 4?: casier bstr(16)}` : 1 clé de membre usurpée, 2 appareil inconnu inscrit à votre nom, 3 révocation inconnue (`transparence.md` § 6.4) ; 4 révocation retenue, 5 révocation non inscrite, 6 inscription retenue, 7 opération retenue (ADR 0045, § 6.4 et § 6.5) ; 8 nom affiché inconnu inscrit à votre nom (ADR 0069) ; 2 présent pour les types 1 à 4 et 8, 3 pour les types 2, 3 et 6, 4 pour les types 4, 5 et 7 ; au plus 4 096 alertes |
 | Action d'accord | `uint` : 1 retrait d'un `Owner`, 2 changement de rôle d'un `Owner`, 3 changement du quorum (`sync-protocol.md` § 7.7) |
 | Demande, accord, lien | `tstr` (≤ 96 Kio) dans l'enveloppe texte de `sync-protocol.md` § 11.10 : `hirzla-demande:…`, `hirzla-accord:…`, `hirzla-invitation:…` ; les blancs sont retirés avant le décodage |
 | État d'une demande | `{1: request_id bstr(16), 2: casier, 3: action, 4?: cible, 5?: détail uint, 6: [membre], 7: requis uint, 8: demande tstr, 9: créée uint (ms)}` ; 6 : membres comptés (l'initiateur d'abord, puis les approbateurs) ; 7 : quorum en vigueur ; 4 et 5 comme dans la demande |
 | Opération en quarantaine | `{1: op_id bstr(48), 2: membre, 3: appareil bstr(16), 4: cause uint (1 retrait concurrent, 2 bifurcation), 5: classe uint (1 donnée, 2 contrôle), 6?: heure annoncée uint, 7?: titre tstr, 8?: secret bstr(16), 9: reçue uint, 10: échéance uint}` ; 6 à 8 pour une donnée lisible ; 9 et 10 en millisecondes (réception locale, rejet automatique) |
+| Nom affiché | `tstr` (≤ 64 octets), valide selon `format.md` § 3.7 ; dans une réponse, présent seulement si le membre en a un et si le noyau l'a vérifié (§ 15.9) : jamais vide, jamais « non vérifié » |
 | Refus | `uint`, pourquoi le rôle du membre courant ne permet pas une action (ADR 0041) : 1 rôle insuffisant, 2 quorum de propriétaires requis, 3 dernier propriétaire, 4 accès au casier retiré par le serveur |
 
 ### 15.3 Opérations
@@ -639,14 +641,14 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 40 | `ServerStatus` | non | — | `{1: rattaché bool, 2?: adresse, 3?: server_id bstr(16), 4?: empreinte, 5?: vérifiée bool, 6: [état d'un casier], 7?: dernière synchronisation uint, 8?: état du registre}` ; 2 à 5 et 8 présents si et seulement si rattaché ; 7 en millisecondes depuis 1970, absent sans synchronisation réussie depuis l'ouverture du coffre |
-| 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20)}` |
+| 41 | `ServerIdentity` | non | — | `{1: MemberKeys bstr (CBOR, format § 3.1), 2: empreinte du membre, 3: appareil bstr(16), 4: code de contrôle de l'appareil tstr(20), 5?: nom affiché}` |
 | 42 | `ServerJoin` | oui | `{1: adresse, 2: AC du site, 3?: empreinte attendue}` ou `{4: lien d'invitation}` (ADR 0046) | `{1: server_id, 2: empreinte, 3: vérifiée bool, 4: compte reconnu bool}` |
 | 43 | `ServerConfirm` | oui | `{1: empreinte}` | `{1: compte reconnu bool}` |
 | 44 | `ServerSync` | oui | — | `{1: [{1: casier, 2: reçues uint, 3: envoyées uint, 4: refusées uint, 5: accès bool}]}` |
 | 45 | `SharedLockerCreate` | oui | `{1: nom tstr (1 à 256 octets)}` | `{1: casier}` |
-| 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint}` |
+| 46 | `RoleGrant` | oui | `{1: casier, 2: membre, 3: rôle, 4?: empreinte attendue du membre}` | `{1: empreinte du membre, 2: appareils uint, 3?: nom affiché}` |
 | 47 | `RoleRevoke` | oui | `{1: casier, 2: membre}` | — |
-| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
+| 48 | `LockerMembers` | non | `{1: casier}` | `{1: [{1: membre, 2: rôle, 3: appareils uint, 4: empreinte, 5: inscription prouvée bool, 6: [rôle], 7?: refus, 8?: refus, 9?: nom affiché, 10: empreinte comparée bool}], 2: membre courant, 3: [rôle], 4?: refus, 5?: quorum uint}` ; 5 absent tant que l'état d'autorisation n'est pas connu |
 | 49 | `DeviceRevoke` | oui | `{1: appareil bstr(16)}` | `{1: casiers uint}` (ADR 0059) |
 
 Détails :
@@ -777,6 +779,10 @@ casiers partagés, sans changer leurs messages :
 Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne
 contient de secret, de clé ni de détail cryptographique.
 
+**Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
+clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
+et les opérations 120 à 122 étendent la version 4 de la même façon.
+
 **Compatibilité** (ADR 0041, 0044 à 0046, 0059) : la clé 9 de l'état d'un casier, la clé 4 de
 l'alerte, la clé 5 de `LockerMembers`, la clé 4 de `ServerJoin`, les opérations 90 à 98,
 l'opération 49 et l'erreur 49 étendent aussi la version 4. Les clés 7 et 8 de `ServerStatus` et 2 à 8 de `LockerMembers`
@@ -794,6 +800,9 @@ aucun autre client de la version 4 n'existe.
 | `serveur confirmer EMPREINTE` | `ServerConfirm` |
 | `serveur etat` | `ServerStatus` |
 | `serveur sync` | `ServerSync` |
+| `serveur nom NOM` | `ProfileSet` (`NOM` vide : retire le nom) |
+| `serveur chercher TEXTE` | `MemberSearch` |
+| `serveur verifier MEMBRE EMPREINTE` | `MemberVerify` |
 | `casier creer NOM` | `SharedLockerCreate` |
 | `casier membres CASIER` | `LockerMembers` |
 | `casier ajouter CASIER MEMBRE ROLE [--empreinte E]` | `RoleGrant` |
@@ -824,7 +833,7 @@ hexadécimaux du début de l'`op_id` ; `APPAREIL`, l'identifiant de l'appareil e
    point 9).
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
 3. ~~Pas d'accords à plusieurs, de décisions de quarantaine~~ (faits : § 15.8, ADR 0044 et
-   0045). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
+   0045 ; noms affichés : § 15.9, ADR 0069). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
    partagés : à spécifier dans une version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
@@ -844,7 +853,7 @@ pour le casier personnel).
 | Code | Nom | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 90 | `QuorumPrepare` | non | `{1: casier, 2: action, 3?: cible, 4?: détail uint}` | état d'une demande |
-| 91 | `QuorumInspect` | non | `{1: demande}` | `{1: casier, 2?: nom tstr, 3: action, 4?: cible, 5?: empreinte de la cible, 6?: détail, 7: initiateur, 8?: empreinte de l'initiateur, 9: peut signer bool}` |
+| 91 | `QuorumInspect` | non | `{1: demande}` | `{1: casier, 2?: nom tstr, 3: action, 4?: cible, 5?: empreinte de la cible, 6?: détail, 7: initiateur, 8?: empreinte de l'initiateur, 9: peut signer bool, 10?: nom affiché de la cible, 11?: nom affiché de l'initiateur}` |
 | 92 | `QuorumApprove` | non | `{1: demande}` | `{1: accord}` |
 | 93 | `QuorumCollect` | non | `{1: accord}` | état d'une demande |
 | 94 | `QuorumApply` | oui | `{1: request_id bstr(16)}` | — |
@@ -889,6 +898,71 @@ Détails :
     `RoleGrant`, `RoleRevoke` (`LockerFrozen`) et les écritures de secrets (`InvalidInput`,
     § 15.4).
 
+
+### 15.9 Noms affichés (opérations 120 à 122)
+
+Décision : ADR 0069. Un membre se donne un **nom affiché**, signé par sa clé de membre et
+inscrit au registre de transparence (`format.md` § 3.7, `transparence.md` § 6.8). Les plages
+120 à 129 (opérations et erreurs) sont réservées au mode Serveur ; aucune erreur nouvelle
+n'est définie.
+
+| Code | Nom | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 120 | `ProfileSet` | oui | `{1: nom tstr (0 à 64 octets)}` | — |
+| 121 | `MemberSearch` | oui | `{1: texte tstr (2 à 64 octets)}` | `{1: [{1: membre, 2: nom affiché, 3: empreinte, 4: empreinte comparée bool}], 2: tronqué bool}`, au plus 32 |
+| 122 | `MemberVerify` | non | `{1: membre, 2: empreinte}` | — |
+
+Détails :
+
+1. **`ProfileSet`** — nom invalide (`format.md` § 3.7) : `InvalidInput`, rien n'est signé.
+   `NotJoined` sans serveur ; `Forbidden` si le poste n'a pas la clé du membre (pas un
+   appareil de certification). Le noyau met le registre à jour, lit le profil courant inscrit
+   pour le membre (rang suivant ; illisible ou invérifiable : `KeyLogRejected`), fait signer
+   le `MemberProfile` par la clé du membre **dans le coffre**, note son empreinte comme
+   attendue (pas d'alerte 8, même après un redémarrage), l'envoie (`PutMemberProfile`) et
+   relit le registre. Nom vide : le membre retire son nom. Nom égal au nom courant : rien
+   n'est inscrit. Au-delà de 256 profils : `ServerRefused` (code 8).
+2. **`MemberSearch`** — texte de moins de 2 ou de plus de 64 octets : `InvalidInput`. Le
+   noyau met le registre à jour, interroge l'annuaire (`FindMembers`), puis **vérifie chaque
+   réponse** (§ 15.9.1) et écarte sans erreur celles qui échouent. « Tronqué » : le serveur
+   a plus de résultats qu'il n'en rend. Le serveur apprend le texte cherché
+   (`sync-protocol.md` § 12).
+3. **`MemberVerify`** — l'utilisateur a comparé hors bande l'empreinte du membre et la donne.
+   Membre inconnu du poste (ni dans un casier tenu ici, ni dans une recherche faite depuis
+   l'ouverture du coffre) : `NotFound`. Empreinte différente de celle de sa clé :
+   `FingerprintMismatch`, rien n'est noté. Sinon le noyau garde dans l'annexe l'empreinte
+   complète de la clé comparée (`format.md` § 15.2, clé 8). Rien n'est envoyé au serveur.
+
+#### 15.9.1 Ce que le noyau vérifie avant de rendre un nom
+
+Un nom n'est rendu (clés « nom affiché » de `ServerIdentity`, `LockerMembers`, `RoleGrant`,
+`QuorumInspect`, `MemberSearch`) que si le noyau a vérifié lui-même toute la chaîne :
+
+1. le profil est le **profil courant** du membre dans le registre local (dernière entrée de
+   type 6) : `SHA-384(CBOR(MemberProfile))` égale son `object` ;
+2. la clé du membre dont le noyau dispose est celle que le registre inscrit (type 1) ;
+3. la signature du profil vérifie avec cette clé ;
+4. son rang dépasse celui du profil que le noyau gardait pour ce membre.
+
+Un échec, un nom retiré ou un profil pas encore lu : la clé est absente, et l'interface
+affiche l'identifiant et l'empreinte. Le noyau ne rend jamais un nom « non vérifié ».
+
+Les noms sont mis à jour à chaque `ServerSync` pour le membre du poste et pour les membres
+des casiers tenus ici, puis gardés dans l'annexe : `LockerMembers`, `ServerIdentity` et
+`QuorumInspect` restent sans réseau.
+
+#### 15.9.2 Un nom ne prouve rien : « empreinte comparée »
+
+Un nom est **déclaré par le membre lui-même**. Deux membres peuvent porter le même nom, ou
+deux noms qui se ressemblent. Le noyau rend donc toujours l'empreinte avec le nom, et un
+drapeau **« empreinte comparée »** : vrai si l'utilisateur a comparé hors bande l'empreinte
+de la clé actuelle de ce membre, par `MemberVerify` ou par un `RoleGrant` avec une empreinte
+attendue ; toujours vrai pour le membre du poste ; faux si la clé a changé depuis.
+
+- L'interface fait comparer l'empreinte une fois avant le premier partage avec un membre
+  dont l'empreinte n'est pas comparée.
+- Le noyau n'en fait pas une condition de `RoleGrant` (ADR 0069, point 4).
+- Aucune opération ne désigne un membre par son nom : `MemberSearch` rend des identifiants.
 
 ## 16. Mode Self (version 5)
 

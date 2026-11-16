@@ -17,7 +17,8 @@ use hirzla_access::control::{verify_device_cert, ControlBody, DeviceRevocation};
 use hirzla_access::keylog::{
     device_cert_object, member_keys_object, revocation_object, KeyLog, KeyLogHead,
 };
-use hirzla_access::Role;
+use hirzla_access::profile::MemberProfile;
+use hirzla_access::{AccessError, Role};
 use hirzla_audit::field::{
     AccountId, AuthFailure, ControlKind, Count, DeviceId, KeyFingerprint, LockerId, MemberId,
     OpClass, OpId as AuditOpId,
@@ -32,8 +33,9 @@ use hirzla_vault::cbor::{self, Value};
 use hirzla_vault::model::{DeviceCert, Id16, MemberKeys, OpId, Operation, CLASS_DATA};
 
 use crate::proto::{
-    self, code, kind, Auth, AuthOk, Hello, HelloAck, LockerCursor, MemberKeysResult, Message, Ops,
-    Pull, PushItem, PushStatus, PutChunk, Receipt, EXPORTER_LEN, MAX_OP, VERSION,
+    self, code, kind, Auth, AuthOk, FoundMember, Hello, HelloAck, LockerCursor, MemberKeysResult,
+    MembersFound, Message, Ops, Pull, PushItem, PushStatus, PutChunk, Receipt, EXPORTER_LEN,
+    MAX_OP, VERSION,
 };
 use crate::store::{Record, SealHeader, Store};
 use crate::view::{refuses, LockerView};
@@ -528,6 +530,11 @@ impl Core {
             } => {
                 self.keylog
                     .append_locker_revoke(locker, member, op_id, logged_ms)
+                    .map_err(|_| ServerError::Storage)?;
+            }
+            Record::Profile { profile, logged_ms } => {
+                self.keylog
+                    .append_profile(&profile, logged_ms)
                     .map_err(|_| ServerError::Storage)?;
             }
             Record::Op {
@@ -1312,6 +1319,45 @@ impl Core {
                     None => err(code::ACCESS),
                 }
             }
+            kind::PUT_MEMBER_PROFILE => {
+                // The display name a member gives itself (ADR 0069): signed by its member
+                // key, inscribed in the key log (kind 6). The server can neither write nor
+                // change one.
+                let bytes = proto::read_blob(&m.body, proto::MAX_PROFILE)?;
+                let Ok(profile) = MemberProfile::decode(&bytes) else {
+                    return err(code::MALFORMED);
+                };
+                if profile.member != member {
+                    return err(code::ACCESS);
+                }
+                match self.keylog.check_profile(&profile) {
+                    Ok(()) => {}
+                    Err(AccessError::InvalidSignature) => return err(code::SIGNATURE),
+                    Err(AccessError::Denied(_)) => return err(code::QUOTA),
+                    Err(_) => return err(code::MALFORMED),
+                }
+                self.store.append(&Record::Profile {
+                    profile: profile.clone(),
+                    logged_ms: now,
+                })?;
+                let index = self
+                    .keylog
+                    .append_profile(&profile, now)
+                    .map_err(|_| ServerError::Storage)?;
+                Ok(vec![Message::new(
+                    kind::MEMBER_PROFILE_RESULT,
+                    req,
+                    proto::index_value(index),
+                )])
+            }
+            kind::FIND_MEMBERS => {
+                let query = proto::read_find_members(&m.body)?;
+                Ok(vec![Message::new(
+                    kind::MEMBERS_FOUND,
+                    req,
+                    self.find_members(&query).to_value(),
+                )])
+            }
             kind::MAILBOX_PUT => {
                 let (to, blob) = proto::read_mailbox_put(&m.body)?;
                 let q = self.mailbox.entry(to).or_default();
@@ -1405,6 +1451,33 @@ impl Core {
             Some((b, _)) => Message::new(kind::MAILBOX_BLOB, req, proto::blob_value(&b)),
             None => Message::error(req, code::ACCESS),
         }])
+    }
+
+    /// The members whose current display name holds `query`, whatever the case (ADR 0069,
+    /// point 3), by name then identifier, at most [`proto::MAX_FOUND`]. Each comes with its
+    /// key and its profile as inscribed: the device checks both against its own key log.
+    fn find_members(&self, query: &str) -> MembersFound {
+        let needle = query.to_lowercase();
+        let mut hits: Vec<(String, &MemberProfile)> = self
+            .keylog
+            .profiles()
+            .filter(|p| !p.name.is_empty())
+            .map(|p| (p.name.to_lowercase(), p))
+            .filter(|(lower, _)| lower.contains(&needle))
+            .collect();
+        hits.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.member.cmp(&b.1.member)));
+        let more = hits.len() > proto::MAX_FOUND;
+        let items = hits
+            .into_iter()
+            .take(proto::MAX_FOUND)
+            .filter_map(|(_, p)| {
+                Some(FoundMember {
+                    keys: self.registered(&p.member)?.clone(),
+                    profile: p.encode().ok()?,
+                })
+            })
+            .collect();
+        MembersFound { items, more }
     }
 
     fn member_keys(&self, member: &Id16, now: u64) -> Option<MemberKeysResult> {
