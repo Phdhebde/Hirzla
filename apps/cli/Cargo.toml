@@ -2,6 +2,7 @@
 name = "hirzla-cli"
 description = "Hirzla command line."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -13,5 +14,22 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+[features]
+# Delivery build (ADR 0043): `mise-a-jour` accepts the compiled publisher keys only; the
+# core's signature is checked before anything is sent to it (ADR 0055).
+livraison = ["hirzla-core/livraison"]
+# System publisher signature instead of the client manifest (ADR 0063 § 1): same choice as
+# the core.
+signature-systeme = ["hirzla-core/signature-systeme"]
+
 [dependencies]
 hirzla-core = { path = "../../crates/hirzla-core" }
+hirzla-crypto = { path = "../../crates/hirzla-crypto" }
+hirzla-keystore = { path = "../../crates/hirzla-keystore" }
+hirzla-vault = { path = "../../crates/hirzla-vault" }
+zeroize = "1.8"
+# ADR 0016: clipboard with history and cloud exclusion. No image support.
+arboard = { version = "3.7.0", default-features = false }
+
+[dev-dependencies]
+tempfile = "3.27.0"

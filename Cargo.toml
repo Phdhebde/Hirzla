@@ -9,7 +9,13 @@ members = [
     "crates/hirzla-audit",
     "crates/hirzla-core",
     "apps/cli",
+    "apps/native-host",
     "apps/server",
+    # Publisher-side signing tool (ADR 0042, 0043): never shipped to workstations.
+    "apps/release-signer",
+    # Tauri 2 shell (ADR 0024): in the workspace so that the four commands of CLAUDE.md,
+    # the single Cargo.lock and cargo-deny cover it. Linux needs webkit2gtk-4.1 to build it.
+    "apps/desktop/src-tauri",
 ]
 # Fuzz targets live outside the workspace (nightly, cargo-fuzz).
 exclude = ["fuzz"]
@@ -19,6 +25,7 @@ version = "0.0.0"
 edition = "2021"
 rust-version = "1.89"
 publish = false
+license = "Apache-2.0"
 
 [workspace.lints.rust]
 # `deny`, not `forbid`: hirzla-keystore allows it block by block (ADR 0014). Every other

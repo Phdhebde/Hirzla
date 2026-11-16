@@ -6,8 +6,16 @@
 //!
 //! Step 5 starts with prototypes, one per system, to learn what really works before the
 //! common `Keystore` trait is written (`docs/keystore-prototypes.md`).
+//!
+//! [`platform`] holds the other system calls that need `unsafe` (ADR 0015): process
+//! hardening, identity of the peer of the core's local channel, the Windows named pipe and
+//! password input without echo.
 
-#[cfg(target_os = "linux")]
+pub mod platform;
+
+// ADR 0052: behind the `tpm2-prototype` feature, off by default, so that tpm2-tss is not
+// linked into the core while the prototype is wired to nothing.
+#[cfg(all(target_os = "linux", feature = "tpm2-prototype"))]
 pub mod tpm2_prototype;
 
 #[cfg(target_os = "macos")]

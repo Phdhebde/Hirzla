@@ -37,6 +37,26 @@ pub enum VaultError {
     /// Cryptographic failure.
     #[error("cryptographic failure")]
     Crypto,
+    /// A KeePass (KDBX) database could not be read for import.
+    #[error("KeePass database refused")]
+    Kdbx(KdbxRefusal),
+}
+
+/// Why a KeePass database was refused by the import (ADR 0025). Says no more than needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum KdbxRefusal {
+    /// Not a KeePass database (no KeePass signature).
+    NotKdbx,
+    /// A KeePass database this reader does not handle (KDBX 3, AES-KDF, Twofish, Salsa20,
+    /// key file, unknown field).
+    Unsupported,
+    /// The password is wrong, or the header was altered (the cause is not given).
+    WrongKey,
+    /// The database is malformed or was altered after its header.
+    Malformed,
+    /// A size exceeds the bounds of this reader.
+    TooLarge,
 }
 
 impl From<rusqlite::Error> for VaultError {

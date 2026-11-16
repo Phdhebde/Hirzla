@@ -212,7 +212,28 @@ pub enum UnlockParams {
     Password(hirzla_crypto::password::PasswordParams),
     /// Opaque hardware keystore object (`hirzla-keystore`, step 5).
     Hardware(Vec<u8>),
+    /// Recovery by a quorum of shares (ADR 0034).
+    Recovery(RecoveryParams),
 }
+
+/// Parameters of the quorum recovery method (`docs/format.md` § 4.2, ADR 0034). Public: the
+/// header is read before any key is available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RecoveryParams {
+    /// Identifier of the recovery kit, repeated in each share file.
+    pub kit_id: Id16,
+    /// Shares needed to recover.
+    pub threshold: u8,
+    /// Shares made.
+    pub count: u8,
+    /// Hybrid verifying key of the device that signed the shares (`SigPublicKey`).
+    pub dealer: Vec<u8>,
+}
+
+/// Fewest shares of a recovery kit (`hirzla_crypto::shamir::MIN_THRESHOLD`).
+pub const RECOVERY_MIN_THRESHOLD: u8 = 2;
+/// Most shares of a recovery kit.
+pub const RECOVERY_MAX_COUNT: u8 = 16;
 
 /// One way to obtain the device key.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -227,6 +248,8 @@ pub struct UnlockMethod {
 
 /// Kind of the password method.
 pub const UNLOCK_PASSWORD: u8 = 1;
+/// Kind of the quorum recovery method (ADR 0034).
+pub const UNLOCK_RECOVERY: u8 = 6;
 
 impl UnlockMethod {
     fn to_value(&self) -> Value {
@@ -239,6 +262,12 @@ impl UnlockMethod {
                 (5, Value::Uint(19)),
             ]),
             UnlockParams::Hardware(blob) => Value::map(vec![(1, Value::bytes(blob))]),
+            UnlockParams::Recovery(r) => Value::map(vec![
+                (1, Value::bytes(&r.kit_id)),
+                (2, Value::Uint(u64::from(r.threshold))),
+                (3, Value::Uint(u64::from(r.count))),
+                (4, Value::bytes(&r.dealer)),
+            ]),
         };
         Value::map(vec![
             (1, Value::Uint(u64::from(self.kind))),
@@ -249,8 +278,22 @@ impl UnlockMethod {
 
     fn from_value(v: &Value) -> Result<Self, CborError> {
         let f = Fields::new(v, &[1, 2, 3])?;
-        let kind = u8::try_from(uint_in(f.req(1)?, 1..=5)?).map_err(|_| CborError::Malformed)?;
-        let params = if kind == UNLOCK_PASSWORD {
+        let kind = u8::try_from(uint_in(f.req(1)?, 1..=6)?).map_err(|_| CborError::Malformed)?;
+        let params = if kind == UNLOCK_RECOVERY {
+            let p = Fields::new(f.req(2)?, &[1, 2, 3, 4])?;
+            let small = |v: &Value, lo: u8| -> Result<u8, CborError> {
+                u8::try_from(uint_in(v, u64::from(lo)..=u64::from(RECOVERY_MAX_COUNT))?)
+                    .map_err(|_| CborError::Malformed)
+            };
+            let threshold = small(p.req(2)?, RECOVERY_MIN_THRESHOLD)?;
+            let count = small(p.req(3)?, threshold)?;
+            UnlockParams::Recovery(RecoveryParams {
+                kit_id: id(p.req(1)?)?,
+                threshold,
+                count,
+                dealer: bytes_exact(p.req(4)?, lens::SIG_PUBLIC)?,
+            })
+        } else if kind == UNLOCK_PASSWORD {
             let p = Fields::new(f.req(2)?, &[1, 2, 3, 4, 5])?;
             uint_in(p.req(5)?, 19..=19)?;
             let as_u32 = |v: &Value| u32::try_from(uint(v)?).map_err(|_| CborError::Malformed);
@@ -339,14 +382,19 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, HeaderError> {
     if methods.is_empty() {
         return Err(HeaderError::Malformed);
     }
+    let unlock: Vec<UnlockMethod> = methods
+        .iter()
+        .map(UnlockMethod::from_value)
+        .collect::<Result<_, _>>()?;
+    // At most one recovery kit at a time (ADR 0034).
+    if unlock.iter().filter(|m| m.kind == UNLOCK_RECOVERY).count() > 1 {
+        return Err(HeaderError::Malformed);
+    }
     Ok(Header {
         vault_id: id(f.req(3)?)?,
         suite_write,
         suites_read,
-        unlock: methods
-            .iter()
-            .map(UnlockMethod::from_value)
-            .collect::<Result<_, _>>()?,
+        unlock,
     })
 }
 
@@ -468,6 +516,9 @@ pub struct MemberPrivate {
     pub mldsa_seed: Zeroizing<[u8; 32]>,
 }
 
+/// Longest server address, in bytes (§ 5.5).
+pub const MAX_SERVER_URL: usize = 2048;
+
 /// Server of a vault in server mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerInfo {
@@ -479,6 +530,33 @@ pub struct ServerInfo {
     pub server_key: Vec<u8>,
     /// Fingerprint checked out of band.
     pub server_key_verified: bool,
+}
+
+impl ServerInfo {
+    /// Canonical value (§ 5.5).
+    #[must_use]
+    pub fn to_value(&self) -> Value {
+        Value::map(vec![
+            (1, Value::text(&self.url)),
+            (2, Value::bytes(&self.server_id)),
+            (3, Value::bytes(&self.server_key)),
+            (4, Value::Bool(self.server_key_verified)),
+        ])
+    }
+
+    /// Strict decoding (§ 5.5).
+    ///
+    /// # Errors
+    /// [`CborError`].
+    pub fn from_value(v: &Value) -> Result<Self, CborError> {
+        let s = Fields::new(v, &[1, 2, 3, 4])?;
+        Ok(ServerInfo {
+            url: text_max(s.req(1)?, MAX_SERVER_URL)?.to_owned(),
+            server_id: id(s.req(2)?)?,
+            server_key: bytes_exact(s.req(3)?, lens::SIG_PUBLIC)?,
+            server_key_verified: boolean(s.req(4)?)?,
+        })
+    }
 }
 
 /// Sealed identity of the device (§ 5.5).
@@ -545,15 +623,7 @@ impl Identity {
             ));
         }
         if let Some(s) = &self.server {
-            entries.push((
-                8,
-                Value::map(vec![
-                    (1, Value::text(&s.url)),
-                    (2, Value::bytes(&s.server_id)),
-                    (3, Value::bytes(&s.server_key)),
-                    (4, Value::Bool(s.server_key_verified)),
-                ]),
-            ));
+            entries.push((8, s.to_value()));
         }
         cbor::encode(&Value::map(entries))
     }
@@ -587,18 +657,7 @@ impl Identity {
             None => None,
         };
         let mode = u8::try_from(uint_in(f.req(7)?, 0..=1)?).map_err(|_| CborError::Malformed)?;
-        let server = match f.opt(8) {
-            Some(s) => {
-                let s = Fields::new(s, &[1, 2, 3, 4])?;
-                Some(ServerInfo {
-                    url: text_max(s.req(1)?, 2048)?.to_owned(),
-                    server_id: id(s.req(2)?)?,
-                    server_key: bytes_exact(s.req(3)?, lens::SIG_PUBLIC)?,
-                    server_key_verified: boolean(s.req(4)?)?,
-                })
-            }
-            None => None,
-        };
+        let server = f.opt(8).map(ServerInfo::from_value).transpose()?;
         if (mode == 1) != server.is_some() {
             return Err(CborError::Malformed);
         }
@@ -626,6 +685,10 @@ pub struct Settings {
     pub auto_lock_s: u64,
     /// Clipboard clearing delay, seconds.
     pub clipboard_clear_s: u64,
+    /// Lock when the system goes to sleep (ADR 0033).
+    pub lock_on_sleep: bool,
+    /// Lock when the user session is locked (ADR 0033).
+    pub lock_on_session_lock: bool,
 }
 
 impl Default for Settings {
@@ -633,6 +696,8 @@ impl Default for Settings {
         Settings {
             auto_lock_s: 300,
             clipboard_clear_s: 30,
+            lock_on_sleep: true,
+            lock_on_session_lock: true,
         }
     }
 }
@@ -643,10 +708,19 @@ impl Settings {
     /// # Errors
     /// [`CborError`].
     pub fn encode(&self) -> Result<Zeroizing<Vec<u8>>, CborError> {
-        cbor::encode(&Value::map(vec![
+        let mut m = vec![
             (1, Value::Uint(self.auto_lock_s)),
             (2, Value::Uint(self.clipboard_clear_s)),
-        ]))
+        ];
+        // Keys 3 and 4 are written only when they differ from their default, `true`: the
+        // settings of a vault that keeps the defaults encode as before (ADR 0033).
+        if !self.lock_on_sleep {
+            m.push((3, Value::Bool(false)));
+        }
+        if !self.lock_on_session_lock {
+            m.push((4, Value::Bool(false)));
+        }
+        cbor::encode(&Value::map(m))
     }
 
     /// Strict decoding; absent keys take their default.
@@ -655,8 +729,16 @@ impl Settings {
     /// [`CborError`].
     pub fn decode(bytes: &[u8]) -> Result<Self, CborError> {
         let v = cbor::decode(bytes)?;
-        let f = Fields::new(&v, &[1, 2])?;
+        let f = Fields::new(&v, &[1, 2, 3, 4])?;
         let d = Settings::default();
+        // A key equal to its default is written by nobody: refusing it keeps one encoding.
+        let flag = |k: u64| -> Result<bool, CborError> {
+            match f.opt(k).map(boolean).transpose()? {
+                None => Ok(true),
+                Some(false) => Ok(false),
+                Some(true) => Err(CborError::Malformed),
+            }
+        };
         Ok(Settings {
             auto_lock_s: f.opt(1).map(uint).transpose()?.unwrap_or(d.auto_lock_s),
             clipboard_clear_s: f
@@ -664,6 +746,8 @@ impl Settings {
                 .map(uint)
                 .transpose()?
                 .unwrap_or(d.clipboard_clear_s),
+            lock_on_sleep: flag(3)?,
+            lock_on_session_lock: flag(4)?,
         })
     }
 }
@@ -802,7 +886,8 @@ pub struct SealedPayload {
     pub deps: Vec<OpId>,
     /// Indicative wall clock, milliseconds.
     pub wall_ms: u64,
-    /// `SecretBody` or `LockerBody`, absent for control operations.
+    /// `SecretBody` or `LockerBody`; for a control operation, absent except the causal past
+    /// carried by a `Compact` (`sync-protocol.md` § 10.3, ADR 0017).
     pub content: Option<Value>,
 }
 
@@ -833,7 +918,10 @@ impl SealedPayload {
         let f = Fields::new(&v, &[1, 2, 3, 4, 5])?;
         let kind = uint_in(f.req(1)?, 0..=2)?;
         let content = f.opt(5).cloned();
-        if content.is_some() != (kind != KIND_CONTROL) {
+        // A data operation always carries its body. A control operation carries none, except
+        // a `Compact`, which carries the causal past of what it prunes (ADR 0017): the control
+        // kind is in the clear body, so `hirzla-sync` enforces that rule.
+        if kind != KIND_CONTROL && content.is_none() {
             return Err(CborError::Malformed);
         }
         Ok(SealedPayload {

@@ -87,7 +87,7 @@ pkg-config --modversion tss2-esys             # doit afficher 4.1.6 (au moins 4.
 sudo usermod -aG tss "$USER"        # accès à /dev/tpmrm0 ; se reconnecter ensuite
 tpm2_getcap properties-variable | grep -E 'ownerAuthSet|lockoutAuthSet|inLockout'
 tpm2_getcap properties-fixed | grep -A1 -E 'TPM2_PT_MANUFACTURER|TPM2_PT_FIRMWARE_VERSION_1'
-cargo test -p hirzla-keystore --test tpm2_prototype -- --ignored --nocapture --test-threads=1
+cargo test -p hirzla-keystore --features tpm2-prototype --test tpm2_prototype -- --ignored --nocapture --test-threads=1
 ```
 
 Attendu : 5 tests réussis. Le test du PIN compte un échec dans le compteur d'attaques par

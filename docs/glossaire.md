@@ -16,6 +16,7 @@ l'anglais dans le code.
 | Attribution | `Grant` | Opération signée qui donne un rôle |
 | Membre | `Member` | Personne ou machine titulaire d'un rôle |
 | Membre machine | `MachineMember` | Agent (Hornn, rotation) membre d'un casier |
+| Autorisation de session | `SessionGrant` | Autorisation signée par Hornn, à usage unique, avant tout descellement par un agent |
 | Appareil | `Device` | Un poste enrôlé d'un membre |
 | Clé du poste | `DeviceKey` | Clé gardée par le matériel, ouvre le coffre local |
 | Clé de casier | `LockerKey` | Clé symétrique d'un casier |
@@ -24,6 +25,7 @@ l'anglais dans le code.
 | Registre de transparence | `KeyLog` | Journal vérifiable des clés publiques |
 | Leurre | `Decoy` | Identifiant factice qui signale un vol |
 | Dépositaire | `Trustee` | Détenteur d'une part de récupération |
+| Kit de recouvrement | `RecoveryKit` | Parts de récupération d'un coffre Self, dont un seuil rouvre le coffre (ADR 0034) |
 | Sceau | `Seal` | Ce qui protège la clé racine du serveur |
 | Version | `Version` | État complet d'un secret écrit par une opération `SecretPut` |
 | Tête | `Head` | Opération ou version qui n'est dans le passé d'aucune autre |
@@ -46,4 +48,7 @@ l'anglais dans le code.
 | Accord | `Approval` | Signature d'un propriétaire jointe à une action à plusieurs |
 | Quorum | `Quorum` | Nombre de propriétaires requis pour retirer un propriétaire plus ancien |
 | Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
+| Clé d'éditeur | `PublisherKey` | Clé hybride de l'éditeur, hors ligne ; signe le manifeste des clients et les paquets de mise à jour (ADR 0042, 0043) |
+| Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |
+| Paquet de mise à jour | `UpdatePackage` | Fichier signé qui porte une nouvelle version, appliqué sans réseau (ADR 0043) |
 | Identifiant de bloc | `BlockId` | Identifiant opaque d'un contenu scellé, lié aux données associées |

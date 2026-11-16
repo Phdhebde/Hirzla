@@ -12,10 +12,10 @@ post-quantique normalisé : il faut casser les deux. Le symétrique est en 256 b
 | --- | --- | --- |
 | Établissement de clé | ECDH P-384 + ML-KEM-1024, combinés par KDF | FIPS 203 |
 | Signature | ECDSA P-384 + ML-DSA-87, les deux doivent vérifier | FIPS 204 |
-| Signature des racines et des versions | SLH-DSA-SHA2-256s | FIPS 205 |
+| Signature des racines et des versions | SLH-DSA-SHA2-256s, **en complément** d'une signature hybride, quand AWS-LC l'exposera ; absent d'`aws-lc-rs` 1.19 et non utilisé aujourd'hui (ADR 0043) | FIPS 205 |
 | Chiffrement authentifié | AES-256-GCM, une clé par version de secret | SP 800-38D |
 | Enveloppe de clés | AES-256-KW avec remplissage | RFC 5649 |
-| Hachage | SHA-384, SHA-512 ; SHA3-256 pour le journal | FIPS 180-4, 202 |
+| Hachage | SHA-384, SHA-512 ; SHA3-256 pour le journal d'audit (`docs/evenements.md`) | FIPS 180-4, 202 |
 | Dérivation | HKDF-SHA-512, contexte et destinataire liés | RFC 5869 |
 | Mot de passe | Argon2id, 64 Mio minimum, calibré par poste | RFC 9106 |
 | Partage de secret | Shamir sur GF(2^8), parts authentifiées | — |
@@ -86,8 +86,10 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 | Rôle | Étiquettes |
 | --- | --- |
 | Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
-| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share` |
-| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt` |
+| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share`, `hirzla/v1/device-audit-checkpoint` |
+| Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt`, `hirzla/v1/audit-checkpoint`, `hirzla/v1/keylog-head` |
+| Plan de contrôle Hornn (vérifiée seulement) | `hirzla/v1/hornn-session-grant` (`integration-hornn.md` § 3.3, ADR 0031) |
+| Éditeur (vérifiée seulement par les postes) | `hirzla/v1/client-manifest`, `hirzla/v1/update-package` (`livraison.md` § 7 et § 8, ADR 0042, 0043) |
 
 - Au chargement d'une clé privée, les deux clés publiques sont recalculées et comparées à la
   clé publique attendue, à temps constant.
@@ -188,6 +190,16 @@ part isolée d'un partage 2 sur `n` est uniforme (test du χ²), parts forgées 
 refusées. Test de temps constant de type dudect (test t de Welch, deux classes de secrets),
 lancé à la demande en mode release : |t| ≤ 2,4 sur trois passes de 50 000 mesures (seuil
 d'alerte 4,5).
+
+### Lecture des bases KeePass (KDBX 4)
+
+Module `kdbx` (ADR 0025), utilisé **uniquement pour l'import**, jamais pour sceller un coffre
+Hirzla. AES-256-CBC, HMAC-SHA-256 et SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de
+`argon2` ; ChaCha20 brut (RFC 8439) de RustCrypto `chacha20` (version figée `=0.10.2`), faute
+d'un ChaCha20 sans authentification dans AWS-LC. Les HMAC d'en-tête et de blocs sont comparés
+en temps constant avant tout déchiffrement. Risque résiduel accepté par le mainteneur
+(2026-11-15) : `chacha20` contient du code SIMD `unsafe` ; c'est la base auditée par NCC Group
+en 2020 avec `chacha20poly1305`.
 
 ## Hiérarchie de clés
 

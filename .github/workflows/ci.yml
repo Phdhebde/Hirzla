@@ -33,15 +33,17 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@v1
       # The Argon2 C reference (argon2-kdf, test-only, not built on Windows) runs bindgen,
-      # which needs libclang. macOS runners have it through Xcode.
-      - name: libclang
+      # which needs libclang. macOS runners have it through Xcode. strace: the test that
+      # hirzlad opens no outbound connection traces the binary (ADR 0028, point 10).
+      # The desktop application (Tauri 2, ADR 0024) needs WebKitGTK 4.1 and GTK 3 on Linux;
+      # Windows (WebView2) and macOS (WKWebView) need nothing more to build it.
+      - name: Linux libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev
-      # tpm2-tss >= 4.1.3 for tss-esapi (ADR 0014): built from its release tarball, pinned by
-      # SHA-256 (Ubuntu ships 4.0.1). Found by pkg-config; nothing is downloaded by cargo.
-      - name: tpm2-tss
-        if: runner.os == 'Linux'
-        run: sudo -E .github/scripts/install-tpm2-tss.sh
+        run: >-
+          sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev strace
+          libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+      # No tpm2-tss here: the TPM prototype is behind the `tpm2-prototype` feature, off by
+      # default (ADR 0052), and built only by the « TPM prototype (swtpm) » job.
       - name: Build tools
         shell: bash
         run: |
@@ -52,7 +54,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        run: cargo test --workspace
+        env:
+          # Linux: the outbound-connection test of hirzlad must run, not skip.
+          HIRZLA_REQUIRE_STRACE: ${{ runner.os == 'Linux' && '1' || '0' }}
+        run: cargo test --workspace --no-fail-fast
 
   # dudect-style timing test of the Shamir arithmetic (ADR 0012). Shared runners are noisy:
   # the result is informative and never blocks a merge.
@@ -69,7 +74,8 @@ jobs:
       - name: dudect
         run: cargo test --release -p hirzla-crypto -- --ignored dudect --nocapture
 
-  # Short fuzzing of the vault decoders (ADR 0013). Informative: never blocks a merge.
+  # Short fuzzing of every decoder exposed to external data (ADR 0013; inventory in
+  # docs/evaluation/interfaces.md). Informative: never blocks a merge.
   fuzz:
     name: fuzz (informative)
     runs-on: ubuntu-latest
@@ -79,15 +85,20 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install nightly --profile minimal
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
       - name: cargo-fuzz
         run: cargo +nightly install cargo-fuzz --locked
       - name: Fuzz each decoder for 60 seconds
         working-directory: fuzz
         run: |
-          for target in decode_secret_body decode_locker_body decode_header; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60
+          status=0
+          for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload \
+            decode_local_request decode_sync_message decode_operation decode_server_annex \
+            decode_release decode_audit_log decode_recovery_share decode_keylog decode_hornn_grant \
+            parse_csv parse_native_json; do
+            cargo +nightly fuzz run "$target" -- -max_total_time=60 || status=1
           done
+          exit $status
 
   # TPM 2.0 prototype (ADR 0014) against swtpm, the software TPM. Real chips are tested by
   # hand (docs/keystore-prototypes.md).
@@ -111,8 +122,93 @@ jobs:
         env:
           HIRZLA_TPM_TCTI: swtpm:port=2321
         run: >-
-          cargo test -p hirzla-keystore --test tpm2_prototype --
+          cargo test -p hirzla-keystore --features tpm2-prototype --test tpm2_prototype --
           --ignored --nocapture --test-threads=1
+
+  # Interface of the desktop application: type check of the JavaScript (no build step, the
+  # checked files are the shipped ones) and fingerprints of the embedded fonts.
+  desktop-ui:
+    name: desktop interface
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install (locked)
+        run: npm ci --ignore-scripts
+      - name: Type check
+        run: npm run check
+      - name: Embedded fonts match their fingerprints
+        working-directory: apps/desktop/ui/fonts
+        run: sha256sum -c SHA256SUMS
+
+  # Browser extension (step 8): unit tests of its decisions, then the real extension in
+  # Chromium (Playwright, new headless mode) against the real native host and core.
+  extension:
+    name: browser extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/extension
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Dependencies (locked)
+        run: npm ci --ignore-scripts
+      - name: Unit tests
+        run: npm test
+      - name: Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Core, command line and native host
+        working-directory: .
+        run: cargo build -p hirzla-core -p hirzla-cli -p hirzla-native-host
+      - name: End-to-end tests
+        run: npm run test:e2e
+
+  # Reproducible build of the Linux executables and their bills of materials (ADR 0056):
+  # two builds of the same commit in two directories must give identical binaries. No tool
+  # beyond the toolchain and Python's standard library; nothing downloaded after the fetch.
+  reproducible:
+    name: reproducible build (Linux)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: Crates of Cargo.lock
+        run: cargo fetch --locked
+      - name: Two builds, compared
+        run: .github/scripts/reproducible-build.sh "$RUNNER_TEMP/repro"
+      - name: Bills of materials (CycloneDX)
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          mkdir -p sbom
+          for p in hirzla-core hirzla-cli hirzla-server hirzla-native-host hirzla-desktop; do
+            .github/scripts/sbom.py "$p" --target x86_64-unknown-linux-gnu --output "sbom/$p.cdx.json"
+          done
+          # npm packages of the desktop interface and of the extension (ADR 0061): read from
+          # package-lock.json alone, nothing installed; regenerated once to check determinism.
+          for a in desktop extension; do
+            .github/scripts/sbom.py --npm "apps/$a" --output "sbom/$a.npm.cdx.json"
+            .github/scripts/sbom.py --npm "apps/$a" | cmp - "sbom/$a.npm.cdx.json"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-linux-x86_64
+          path: sbom/*.cdx.json
+          if-no-files-found: error
 
   deny:
     name: cargo-deny
@@ -120,6 +216,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  # Go SDK of the Hornn agent gateway (step 13): no cryptography, no dependency.
+  go-sdk:
+    name: Go SDK (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    defaults:
+      run:
+        working-directory: sdk/go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24.x"
+          cache: false
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: |
+          go vet ./...
+          GOOS=windows go vet ./...
+      - name: Tests
+        run: go test -race ./...
+      - name: No dependency
+        run: test "$(go list -m all | wc -l)" -eq 1
 
   secrets:
     name: no tracked secrets

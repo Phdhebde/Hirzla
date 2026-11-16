@@ -1,0 +1,32 @@
+[package]
+name = "hirzla-native-host"
+description = "Native messaging host of the Hirzla browser extension: a client of the core that holds no key."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hirzla-native-host"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Delivery build (ADR 0055): the core's signature is checked before anything is sent to it
+# (compiled publisher keys only, as for the core and the command line).
+livraison = ["hirzla-core/livraison"]
+# System publisher signature instead of the client manifest (ADR 0063 § 1): same choice as
+# the core.
+signature-systeme = ["hirzla-core/signature-systeme"]
+
+[dependencies]
+hirzla-core = { path = "../../crates/hirzla-core" }
+hirzla-keystore = { path = "../../crates/hirzla-keystore" }
+hirzla-vault = { path = "../../crates/hirzla-vault" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

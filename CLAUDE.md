@@ -53,11 +53,14 @@ Dans ces cas : propose un ADR (copie `docs/adr/0000-modele.md`), n'implémente p
 | `apps/server` | `hirzlad`, serveur aveugle. |
 | `apps/desktop` | Application Tauri 2. |
 | `apps/extension` | Extension navigateur. |
+| `apps/native-host` | `hirzla-native-host`, hôte de messagerie native de l'extension (client du noyau, profil navigateur). |
+| `apps/release-signer` | `hirzla-signer`, outil de l'éditeur : clé d'éditeur, manifeste des clients, paquets de mise à jour (jamais livré aux postes, ADR 0043). |
 | `sdk/go` | Client pour l'agent gateway Hornn. |
 | `docs/` | Spécifications, ADR, cible de sécurité. |
 | `brand/` | Logo, couleurs, typographies. |
 
-Sens des dépendances : `crypto` ← `vault`, `access`, `audit` ← `sync` ← `core` ← `apps/*`.
+Sens des dépendances : `crypto` ← `vault` ← `access` ← `sync` ← `core` ← `apps/*` ; `crypto` ← `audit` ← `apps/server`
+(`access` réutilise le CBOR canonique et les structures de `vault`, ADR 0020).
 `hirzla-crypto` ne dépend d'aucun autre module du dépôt.
 
 ## Commandes
@@ -80,7 +83,8 @@ Une tâche n'est finie que si ces quatre commandes passent.
   Un message d'erreur ne contient jamais de donnée secrète ni de détail utile à un attaquant.
 - **Tests** : vecteurs officiels (NIST ACVP/KAT) pour toute primitive, tests par propriétés
   pour les formats et la fusion, tests négatifs pour chaque refus attendu.
-- **Temps constant** : toute comparaison de secret passe par `subtle`.
+- **Temps constant** : toute comparaison de secret passe par une fonction à temps constant
+  auditée (`aws_lc_rs::constant_time::verify_slices_are_equal` ou `subtle`), jamais par `==`.
 - **Dépendances** : versions figées dans `Cargo.lock`, toute nouvelle dépendance est justifiée
   dans la description du changement et passe `cargo deny`.
 - **Interface** : suis `brand/README.md`. Vouvoiement, ton factuel, vocabulaire maison

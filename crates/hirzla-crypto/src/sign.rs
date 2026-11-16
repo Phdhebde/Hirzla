@@ -15,8 +15,10 @@
 //! | Key | Domains |
 //! | --- | --- |
 //! | [`MemberSigningKey`] | device certificate, device revocation |
-//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share |
-//! | [`ServerSigningKey`] | server authentication, receipt |
+//! | [`DeviceSigningKey`] | operation, approval, device authentication, exchange file, device enrolment, recovery share, device audit checkpoint |
+//! | [`ServerSigningKey`] | server authentication, receipt, audit checkpoint, key transparency log head |
+//! | [`HornnSigningKey`] | Hornn session grant (`docs/integration-hornn.md`) |
+//! | [`PublisherSigningKey`] | client manifest, update package (ADR 0042, 0043) |
 //!
 //! | Object | Layout | Length |
 //! | --- | --- | --- |
@@ -75,6 +77,18 @@ pub enum Domain {
     DeviceEnrol,
     /// A secret share for recovery (ADR 0012).
     RecoveryShare,
+    /// A signed head of the key transparency log (`docs/transparence.md` § 3.3).
+    KeyLogHead,
+    /// A checkpoint of the server audit log (`docs/evenements.md`, ADR 0021).
+    AuditCheckpoint,
+    /// A checkpoint of a device's local audit log (`docs/evenements.md`, ADR 0021).
+    DeviceAuditCheckpoint,
+    /// A session grant signed by the Hornn control plane (`docs/integration-hornn.md`).
+    HornnSessionGrant,
+    /// The signed manifest of the installed client executables (ADR 0042).
+    ClientManifest,
+    /// An offline update package (ADR 0043).
+    UpdatePackage,
 }
 
 impl Domain {
@@ -92,6 +106,12 @@ impl Domain {
             Domain::ExchangeFile => b"hirzla/v1/exchange-file",
             Domain::DeviceEnrol => b"hirzla/v1/device-enrol",
             Domain::RecoveryShare => b"hirzla/v1/recovery-share",
+            Domain::KeyLogHead => b"hirzla/v1/keylog-head",
+            Domain::AuditCheckpoint => b"hirzla/v1/audit-checkpoint",
+            Domain::DeviceAuditCheckpoint => b"hirzla/v1/device-audit-checkpoint",
+            Domain::HornnSessionGrant => b"hirzla/v1/hornn-session-grant",
+            Domain::ClientManifest => b"hirzla/v1/client-manifest",
+            Domain::UpdatePackage => b"hirzla/v1/update-package",
         }
     }
 
@@ -129,6 +149,8 @@ pub enum DeviceDomain {
     DeviceEnrol,
     /// A recovery share.
     RecoveryShare,
+    /// A checkpoint of the device's local audit log.
+    AuditCheckpoint,
 }
 
 /// Domains a server key may sign.
@@ -138,6 +160,45 @@ pub enum ServerDomain {
     ServerAuth,
     /// A receipt.
     Receipt,
+    /// A key transparency log head.
+    KeyLogHead,
+    /// A checkpoint of the server audit log.
+    AuditCheckpoint,
+}
+
+/// Domains the Hornn control plane key may sign (`docs/integration-hornn.md`). Hirzla only
+/// verifies them; the signing side exists for Hornn's reference and the tests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HornnDomain {
+    /// A session grant.
+    SessionGrant,
+}
+
+/// Domains the publisher key may sign (ADR 0042, 0043). The private key lives on the
+/// publisher's offline signing station only; Hirzla verifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublisherDomain {
+    /// The manifest of the client executables.
+    ClientManifest,
+    /// An update package.
+    UpdatePackage,
+}
+
+impl From<PublisherDomain> for Domain {
+    fn from(d: PublisherDomain) -> Self {
+        match d {
+            PublisherDomain::ClientManifest => Domain::ClientManifest,
+            PublisherDomain::UpdatePackage => Domain::UpdatePackage,
+        }
+    }
+}
+
+impl From<HornnDomain> for Domain {
+    fn from(d: HornnDomain) -> Self {
+        match d {
+            HornnDomain::SessionGrant => Domain::HornnSessionGrant,
+        }
+    }
 }
 
 impl From<MemberDomain> for Domain {
@@ -158,6 +219,7 @@ impl From<DeviceDomain> for Domain {
             DeviceDomain::ExchangeFile => Domain::ExchangeFile,
             DeviceDomain::DeviceEnrol => Domain::DeviceEnrol,
             DeviceDomain::RecoveryShare => Domain::RecoveryShare,
+            DeviceDomain::AuditCheckpoint => Domain::DeviceAuditCheckpoint,
         }
     }
 }
@@ -167,6 +229,8 @@ impl From<ServerDomain> for Domain {
         match d {
             ServerDomain::ServerAuth => Domain::ServerAuth,
             ServerDomain::Receipt => Domain::Receipt,
+            ServerDomain::KeyLogHead => Domain::KeyLogHead,
+            ServerDomain::AuditCheckpoint => Domain::AuditCheckpoint,
         }
     }
 }
@@ -454,9 +518,24 @@ role_key!(
     DeviceDomain
 );
 role_key!(
-    /// The server key: it authenticates the server and signs receipts.
+    /// The server key: it authenticates the server, signs receipts and audit checkpoints.
     ServerSigningKey,
     ServerDomain
+);
+
+role_key!(
+    /// The key of the Hornn control plane: it only signs session grants. Hirzla never holds
+    /// Hornn's private key; this type is the reference of what Hornn signs, used by the tests.
+    HornnSigningKey,
+    HornnDomain
+);
+
+role_key!(
+    /// The publisher key (ADR 0042, 0043): it only signs client manifests and update
+    /// packages. Held by the publisher's offline signing tool (`hirzla-signer`), never by a
+    /// workstation; the core and the command line only verify.
+    PublisherSigningKey,
+    PublisherDomain
 );
 
 impl MemberSigningKey {

@@ -1300,3 +1300,68 @@ fn generate_reference_files() {
     std::fs::write(dir.join("vault.expected.txt"), expected).unwrap();
     std::fs::write(dir.join("unlock.expected.txt"), unlock).unwrap();
 }
+
+/// The settings unsealed at opening are exposed to the core (auto-lock, clipboard delay).
+#[test]
+fn settings_are_read_at_opening() {
+    let (_dir, path, v) = new_vault();
+    assert_eq!(v.settings(), Settings::default());
+    v.close();
+    let v = Vault::open(&path, PASSWORD).unwrap();
+    assert_eq!(v.settings(), Settings::default());
+}
+
+/// ADR 0059: the member key signs the revocation of another device of the member inside
+/// the vault; the signature verifies with the member key over keys 1 to 3 of § 3.6.
+#[test]
+fn device_revocation_is_signed_by_the_member_key() {
+    let (_d, _p, v) = new_vault();
+    assert!(v.holds_member_key());
+    let other: Id16 = [7; 16];
+    let sig = v.sign_device_revocation(&other, 42).unwrap();
+    let body = cbor::encode(&Value::map(vec![
+        (1, Value::bytes(&v.member_id())),
+        (2, Value::bytes(&other)),
+        (3, Value::Uint(42)),
+    ]))
+    .unwrap();
+    let vk = VerifyingKey::from_bytes(&v.member_keys().sig).unwrap();
+    vk.verify(
+        Domain::DeviceRevoke,
+        &body,
+        &Signature::from_bytes(&sig).unwrap(),
+    )
+    .unwrap();
+    // Another time, another body: the signature does not carry over.
+    let later = cbor::encode(&Value::map(vec![
+        (1, Value::bytes(&v.member_id())),
+        (2, Value::bytes(&other)),
+        (3, Value::Uint(43)),
+    ]))
+    .unwrap();
+    assert!(vk
+        .verify(
+            Domain::DeviceRevoke,
+            &later,
+            &Signature::from_bytes(&sig).unwrap()
+        )
+        .is_err());
+}
+
+/// ADR 0059: the device never revokes itself, and a device without the member key (not a
+/// certification device) signs nothing.
+#[test]
+fn device_revocation_refusals() {
+    let (_d, _p, mut v) = new_vault();
+    let me = v.device_cert().device;
+    assert_eq!(
+        v.sign_device_revocation(&me, 1),
+        Err(VaultError::InvalidInput)
+    );
+    v.identity.member_private = None;
+    assert!(!v.holds_member_key());
+    assert_eq!(
+        v.sign_device_revocation(&[7; 16], 1),
+        Err(VaultError::Unsupported)
+    );
+}

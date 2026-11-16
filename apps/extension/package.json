@@ -1,0 +1,18 @@
+{
+  "name": "hirzla-extension",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Extension navigateur Hirzla (Firefox et Chromium), reliée au noyau par messagerie native.",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test \"tests/unit/*.test.js\"",
+    "test:e2e": "node --test --test-concurrency=1 \"tests/e2e/*.test.js\""
+  },
+  "devDependencies": {
+    "playwright": "1.63.0"
+  }
+}

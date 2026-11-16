@@ -1,0 +1,53 @@
+[package]
+name = "hirzla-desktop"
+description = "Hirzla desktop application (Tauri 2): a client of the core, holds no key."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The core accepts this executable by name, next to `hirzla-core` (`DEFAULT_CLIENTS`).
+[[bin]]
+name = "hirzla-desktop"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[features]
+# Delivery build (ADR 0055): the core's signature is checked before anything is sent to it
+# (compiled publisher keys only, as for the core and the command line).
+livraison = ["hirzla-core/livraison"]
+# System publisher signature instead of the client manifest (ADR 0063 § 1): same choice as
+# the core.
+signature-systeme = ["hirzla-core/signature-systeme"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", default-features = false }
+
+[dependencies]
+hirzla-core = { path = "../../../crates/hirzla-core" }
+hirzla-crypto = { path = "../../../crates/hirzla-crypto" }
+hirzla-keystore = { path = "../../../crates/hirzla-keystore" }
+hirzla-vault = { path = "../../../crates/hirzla-vault" }
+# ADR 0024: Tauri 2 shell without the default features we do not use (no devtools, no tray,
+# no updater). The web view calls only this application's commands.
+tauri = { version = "2.12.5", default-features = false, features = ["wry", "custom-protocol", "common-controls-v6", "compression", "x11"] }
+# Native file picker for the import, opened from Rust only (the web view cannot open it).
+# Same crate as the Tauri dialog plugin, without that plugin and its file system plugin.
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3", "common-controls-v6"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+zeroize = { version = "1.8", features = ["serde"] }
+# ADR 0016: same clipboard crate as the command line, with history and cloud exclusion.
+arboard = { version = "3.7.0", default-features = false }
+
+# ADR 0033: sleep and session lock from logind and the screen saver over D-Bus. Already
+# in the graph through Tauri's GTK web view (same version); no new crate.
+[target.'cfg(target_os = "linux")'.dependencies]
+gio = "0.18.4"
+
+[dev-dependencies]
+tempfile = "3.27.0"

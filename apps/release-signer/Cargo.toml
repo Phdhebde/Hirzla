@@ -1,0 +1,23 @@
+[package]
+name = "hirzla-release-signer"
+description = "Publisher-side tool: publisher key, signed client manifest and offline update packages (ADR 0042, 0043). Never shipped to workstations."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "hirzla-signer"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+hirzla-core = { path = "../../crates/hirzla-core" }
+hirzla-crypto = { path = "../../crates/hirzla-crypto" }
+zeroize = "1.8"
+
+[dev-dependencies]
+tempfile = "3.27.0"

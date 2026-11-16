@@ -2,6 +2,7 @@
 name = "hirzla-core"
 description = "The core: the only process that ever holds keys."
 version.workspace = true
+license.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
@@ -9,10 +10,39 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Delivery build (ADR 0042, 0043; docs/livraison.md): client signatures required and not
+# disableable, only the publisher keys compiled in through HIRZLA_PUBLISHER_KEYS accepted.
+livraison = []
+# Release signature checked against the publisher signature of the operating system instead
+# of the client manifest (ADR 0063 § 1): Authenticode on Windows, Apple code signing on macOS.
+# Only for a publisher holding such a certificate; the core and its clients must be built with
+# the same choice. Never chosen at run time. Without it (default), every build checks the
+# client manifest signed by the hybrid publisher key, on every system.
+signature-systeme = []
+# Exposes the decoder of the unsealed server mode annex to the fuzz targets (`fuzz/`).
+# Never enabled in a shipped binary.
+fuzzing = []
+
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
 hirzla-vault = { path = "../hirzla-vault" }
 hirzla-access = { path = "../hirzla-access" }
-hirzla-audit = { path = "../hirzla-audit" }
 hirzla-keystore = { path = "../hirzla-keystore" }
-hirzla-sync = { path = "../hirzla-sync" }
+hirzla-sync = { path = "../hirzla-sync", features = ["net"] }
+thiserror = "2.0"
+# Same parser as the vault index hosts (WHATWG URL Standard), already in the graph.
+url = "2.5.8"
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+# In-memory relay and test identities, for the Hornn control plane simulator (tests only).
+hirzla-sync = { path = "../hirzla-sync", features = ["net", "test-support"] }
+# A second device of the same member for the device revocation test (ADR 0059).
+hirzla-vault = { path = "../hirzla-vault", features = ["test-support"] }
+# Server mode end-to-end test (ADR 0032): a real hirzlad, its test PKI and its TLS types.
+# Same versions and features as apps/server; tests only, never linked into the core.
+hirzla-server = { path = "../../apps/server" }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }

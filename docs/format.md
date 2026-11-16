@@ -142,6 +142,10 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/server-auth` | Signature du serveur à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/device-auth` | Signature de l'appareil à l'ouverture de session | `sync-protocol.md` |
 | `hirzla/v1/receipt` | Signature d'un accusé de réception du serveur | `sync-protocol.md` |
+| `hirzla/v1/keylog-head` | Signature d'une tête du registre de transparence | `transparence.md` |
+| `hirzla/v1/recovery-kit` | AAD, kit de récupération (clé privée du membre) | `roles.md` |
+| `hirzla/v1/recovery-parcel` | Contexte KEM et AAD, colis d'une part de récupération | `roles.md` |
+| `hirzla/v1/server-state` | AAD, fichier annexe du mode Serveur | § 15 |
 
 Une étiquette n'a qu'un seul usage. Toute nouvelle étiquette s'ajoute à ce registre.
 
@@ -244,7 +248,7 @@ l'étiquette. Chaque clé a un rôle et ne signe que ses domaines (ADR 0011) :
 | --- | --- |
 | Clé du membre | `device-cert`, `device-revoke` |
 | Clé d'appareil | `op`, `approval`, `device-auth`, `exchange-file`, `device-enrol` |
-| Clé du serveur | `server-auth`, `receipt` |
+| Clé du serveur | `server-auth`, `receipt`, `keylog-head` |
 
 ### 3.5 Clés privées
 
@@ -326,7 +330,7 @@ l'enveloppe séparément.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello |
+| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034) |
 | 2 | `params` | map | Selon `kind`, ci-dessous |
 | 3 | `wrapped_device_key` | `bstr(40)` | AES-256-KW-pad(`KEK_unlock`, `DeviceKey`) |
 
@@ -349,12 +353,26 @@ Paramètres matériels (`kind` 2 à 5) :
 | --- | --- | --- | --- |
 | 1 | `keystore_blob` | `bstr(≤65536)` | Objet opaque défini par `hirzla-keystore` (étape 5) |
 
+Paramètres du kit de recouvrement (`kind = 6`, ADR 0034), publics, une méthode au plus par
+en-tête :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `kit_id` | `bstr(16)` | Aléa, tiré à chaque nouveau kit ; répété dans chaque fichier de part (§ 4.4) |
+| 2 | `threshold` | `uint` | 2 ≤ t ≤ 16 : parts nécessaires |
+| 3 | `count` | `uint` | t ≤ n ≤ 16 : parts faites |
+| 4 | `dealer` | `bstr` | `SigPublicKey` (§ 3.1) de l'appareil qui a signé les parts ; épinglée à la recombinaison |
+
 Le **secret de méthode** fait 32 octets :
 
 - mot de passe : `Argon2id(mot de passe en UTF-8 normalisé NFC, salt, m, t, p)`, sortie de 32 octets.
   C'est `hirzla-vault` qui normalise : il reçoit le mot de passe comme texte et le passe en NFC
   avant de le confier à `hirzla-crypto`. Un mot de passe vide est refusé ;
-- matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob`.
+- matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob` ;
+- kit de recouvrement : la clé de recouvrement de 32 octets d'aléa, partagée par Shamir
+  authentifié (`hirzla-crypto`, module `shamir`) en `count` parts dont `threshold` suffisent,
+  puis effacée. Elle se reconstitue à partir des parts, dont chaque signature est vérifiée
+  contre `dealer`.
 
 `KEK_unlock = HKDF-SHA-512(ikm = secret de méthode, salt = vault_id,
 info = len ‖ "hirzla/v1/unlock" ‖ len ‖ rang de la méthode (1 octet) ‖ len ‖ kind (1 octet), L = 32)`,
@@ -373,6 +391,24 @@ Ces `info` sont les étiquettes typées de `hirzla-crypto` (module `kdf`) : aucu
 
 La `DeviceKey` ne sert qu'à cette dérivation. `K_dev_wrap` sert de `KEK` à toutes les boîtes
 locales du § 5 et du § 10.
+
+### 4.4 Fichier de part de recouvrement
+
+Décision : ADR 0034. Un fichier `.hirzla-part` par dépositaire, hors du coffre. CBOR canonique
+(§ 2.1), 16 Kio au plus :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `magic` | `tstr` | `"hirzla-part"` |
+| 2 | `version` | `uint` | `1` |
+| 3 | `vault_id` | `bstr(16)` | Le coffre (§ 5.5) |
+| 4 | `kit_id` | `bstr(16)` | Le kit (§ 4.2, `kind = 6`) |
+| 5 | `share` | `bstr` | `SignedShare` de `hirzla-crypto` (module `shamir`) : suite, identifiant de partage, t, n, rang, empreinte du secret, empreinte du signataire, part, signature hybride |
+
+Une part est un secret : elle n'est authentifiée qu'à la recombinaison. Des parts d'un autre
+coffre ou d'un autre kit, en nombre insuffisant ou qui ne se recombinent pas, font refuser
+l'ouverture, sans dire laquelle est en cause. Un nouveau kit remplace l'ancien à la même place
+de l'en-tête : les anciennes parts n'ouvrent plus rien.
 
 ## 5. Conteneur SQLite
 
@@ -564,10 +600,14 @@ Contenu : map à clés `uint`.
 
 | Clé | Nom | Type | Défaut |
 | --- | --- | --- | --- |
-| 1 | `auto_lock_s` | `uint` | 300 |
-| 2 | `clipboard_clear_s` | `uint` | 30 |
+| 1 | `auto_lock_s` | `uint` | 300 ; 0 (défaut) ou 30 à 86 400 |
+| 2 | `clipboard_clear_s` | `uint` | 30 ; 5 à 600 |
+| 3 | `lock_on_sleep` | `bool` | `true` ; écrite seulement quand elle vaut `false` (ADR 0033) |
+| 4 | `lock_on_session_lock` | `bool` | `true` ; écrite seulement quand elle vaut `false` (ADR 0033) |
 
-D'autres réglages s'ajoutent par révision de ce tableau, avec un nouveau numéro de format.
+D'autres réglages s'ajoutent par révision de ce tableau, avec un nouveau numéro de format. Les
+clés 3 et 4 et la méthode `kind = 6` (§ 4.2) ont été ajoutées **sans** changer
+`FORMAT_VERSION`, aucun coffre n'étant encore livré (ADR 0034, point 7, à confirmer).
 
 ### 5.7 Cache des clés de casier
 
@@ -678,7 +718,7 @@ secret.
 | 2 | `lamport` | `uint` | `1 + max(lamport des deps)`, ou 1 sans dépendance |
 | 3 | `deps` | `array<OpId>` | Trié, 1 à 256 éléments, contient `prev` s'il existe. Vide seulement pour `LockerCreate` |
 | 4 | `wall_ms` | `uint` | Heure murale de l'auteur en millisecondes. Indicatif, jamais utilisé pour décider |
-| 5 | `content` | `SecretBody`, `LockerBody`, ou absent | Selon `kind`. Absent si `kind = 0` |
+| 5 | `content` | `SecretBody`, `LockerBody`, `CompactPast`, ou absent | Selon `kind`. Si `kind = 0`, absent, sauf pour une `Compact` qui porte obligatoirement son `CompactPast` (`sync-protocol.md` § 10.2, ADR 0017) |
 
 ### 7.3 Version de secret (`SecretBody`)
 
@@ -1130,3 +1170,138 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     purge ne recopie plus le secret ; élagage, suppression des fichiers joints et entrée d'index
     réduite se font dans la même transaction. **Fraîcheur de l'index** vérifiée à l'ouverture
     contre les en-têtes du journal, avec reconstruction.
+
+## 15. Fichier annexe du mode Serveur (v3)
+
+Version 2 : ADR 0040 (registre de transparence local, passé élagué, souches, compaction
+stable). Version 3 : ADR 0044 (demandes d'accord en cours) et ADR 0045 (surveillance datée :
+révocations retenues, inscriptions, opérations retenues).
+
+Décision : ADR 0032 (accepté). En attendant que le coffre range lui-même les opérations des
+casiers partagés (tables `operations`, `sync_state`, `contacts`, `identity.mode = 1`), le noyau
+garde l'état du mode Serveur dans un fichier **à côté** du coffre : `<chemin du coffre>.serveur`
+(par exemple `coffre.hirzla.serveur`). Ce fichier ne change pas le format du coffre :
+`format_version` reste 1. Sans serveur rattaché, il n'existe pas.
+
+### 15.1 Enveloppe
+
+Le fichier entier est une `SealedBox` (§ 3.2) :
+
+- `KEK` = `K_dev_wrap` (§ 4.3) : le fichier ne s'ouvre qu'avec le coffre déverrouillé ;
+- AAD = `CBOR({1: "hirzla/v1/server-state", 2: vault_id})` : un fichier copié d'un autre coffre
+  ne s'ouvre pas ;
+- contenu = `CBOR(ServerState)` bourré (§ 11).
+
+Écriture atomique : fichier temporaire dans le même répertoire, puis renommage ; mode `0600`
+sous Unix ; chemin sans lien symbolique, comme le coffre (§ 5.3, étape 1).
+
+### 15.2 `ServerState`
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `3` écrit ; `1` et `2` encore lus |
+| 2 | `server` | `ServerInfo` | § 5.5 : adresse, `server_id`, clé épinglée, vérifiée |
+| 3 | `tls_roots` | `bstr` | ≤ 64 Kio, certificats PEM de l'AC qui signe le certificat TLS du serveur |
+| 4 | `lockers` | `array<LockerState>` | ≤ 256, triés par `locker_id`, sans doublon |
+| 5 | `keylog` | `KeyLogState` | Requis en v2 et v3, absent en v1 |
+| 6 | `requests` | `array<PendingRequest>` | v3 : demandes d'accord en cours (ADR 0044), au plus 64, triées par `request_id`, sans doublon |
+| 7 | `watch` | `Watch` | v3 : surveillance datée (ADR 0045) |
+
+Une annexe v1 ou v2 n'a pas les clés 6 et 7 : aucune demande, surveillance vide.
+
+`PendingRequest` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `locker_id` | `ID16` | Un casier de `lockers` |
+| 2 | `request_id` | `ID16` | |
+| 3 | `action` | `uint` | 1, 2 ou 3 (`sync-protocol.md` § 7.7) |
+| 4 | `target` | `ID16?` | Présent si et seulement si `action` vaut 1 ou 2 |
+| 5 | `detail` | `uint?` | Présent si et seulement si `action` vaut 2 ou 3 |
+| 6 | `approvals` | `array<Approval>` | Accords vérifiés à leur ajout, au plus 15, triés par membre, un par membre |
+| 7 | `created_ms` | `uint` | Heure murale de la préparation |
+
+`Watch` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `removals` | `array<{1: op_id, 2: discovered_ms}>` | `Revoke` inscrites au registre (kind 5) pour un casier de `lockers`, pas encore reçues, triées par `op_id` |
+| 2 | `issued` | `array<{1: locker_id, 2: op_id, 3: issued_ms}>` | `Revoke` émises par le poste, pas encore inscrites, triées par `op_id` |
+| 3 | `enrolled_ms` | `uint?` | Première authentification acceptée, tant que le certificat du poste n'est pas inscrit |
+| 4 | `pending` | `array<{1: locker_id, 2: op_id, 3: seen_ms}>` | Opérations en attente d'une dépendance alors que le serveur annonçait `more = false`, triées par `(locker_id, op_id)` |
+
+Chaque liste de `Watch` compte au plus 100 000 éléments.
+`LockerState` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `locker_id` | `ID16` | |
+| 2 | `genesis` | `OpId?` | `LockerCreate` épinglée (`sync-protocol.md` § 7.3), si connue |
+| 3 | `sync` | `bstr` | `CBOR(SyncState)`, `sync-protocol.md` § 11.4 (le curseur du serveur) |
+| 4 | `ops` | `array<bstr>` | Opérations encodées (§ 7.1) que la réplique garde, chacune ≤ 4 Mio |
+| 5 | `unsent` | `array<OpId>` | Opérations locales pas encore accusées par le serveur (statut 4 du § 5.2), triées |
+| 6 | `access` | `bool` | `false` après un refus du serveur (code 4 : membre retiré) |
+| 7 | `pruned` | `array<PrunedPast>` | v2 : passé causal des opérations que le poste a élaguées (`sync-protocol.md` § 10.2), triés par `op_id`, sans doublon |
+| 8 | `stubs` | `array<Stub>` | v2 : souches reçues (`sync-protocol.md` § 11.5), triées par `op_id`, sans doublon |
+| 9 | `stable` | `array<OpId>` | v2 : `Compact` dont la stabilité est acquise (au plus 100 000), triées |
+
+Une annexe v1 n'a que les clés 1 à 6 de `LockerState`.
+
+`KeyLogState` (registre de transparence local, `transparence.md` § 6.1) :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `entries` | `array<bstr>` | `KeyLogEntry` encodées (`transparence.md` § 3.1), dans l'ordre du registre ; au plus 1 000 000, chacune ≤ 4 Kio |
+| 2 | `head` | `KeyLogHead?` | Dernière tête vérifiée (`transparence.md` § 3.3) ; absente si aucune |
+| 3 | `suspect` | `ForkEvidence?` | Preuve d'un registre suspect (`transparence.md` § 6.7) ; absente sinon |
+| 4 | `alerts` | `array<Alert>` | Alertes de surveillance (§ 6.4), au plus 4 096, sans doublon |
+
+`ForkEvidence` = `{1: local (KeyLogHead)?, 2: other (KeyLogHead), 3: reason, 4: index?,
+5: rule?}`. `reason` : 1 racine différente, 2 taille en baisse, 3 entrée contraire aux
+règles, 4 tête d'un autre poste incohérente (§ 6.6), 5 tête d'un autre poste plus grande que ce que sert le serveur, 6 preuve contraire à
+une entrée. Les clés 4 (rang de l'entrée) et 5 (règle : 1 décodage R1, 2 à 5 règles R2 à R5)
+sont présentes si et seulement si `reason = 3`.
+
+`Alert` = `{1: kind, 2: index, 3: device?}`. `kind` : 1 clé de membre étrangère au poste,
+2 appareil du membre inconnu du poste, 3 retrait d'un appareil du membre inconnu du poste ;
+`device` présent si et seulement si `kind` vaut 2 ou 3 ; `index` = rang de l'entrée.
+
+### 15.3 Lecture
+
+À l'ouverture du coffre, le noyau descelle le fichier (échec : le mode Serveur est indisponible
+et signalé, le coffre s'ouvre quand même), décode strictement `ServerState`, puis reconstruit
+chaque réplique en **réingérant** ses opérations : chacune est revalidée (`sync-protocol.md`
+§ 6) comme si elle arrivait du réseau. Les opérations listées dans `unsent` redeviennent
+« à envoyer » ; elles sont tenues pour déjà sorties du poste et ne sont jamais réécrites
+(`sync-protocol.md` § 16, point 28) : une écriture interrompue juste après un envoi ne peut pas
+créer de bifurcation.
+
+Version 2, dans cet ordre :
+
+1. **Registre** : les entrées de `keylog` sont réingérées en entier contre `head` (signature
+   par la clé épinglée, `MTH` des entrées = `head.root`, règles R1 à R5). Un écart rend
+   l'annexe corrompue. `suspect` est remis tel quel : un registre suspect le reste après un
+   redémarrage (`transparence.md` § 12, point 7). Une annexe v1 part d'un registre vide.
+2. **Passé élagué** : les `PrunedPast` de `pruned` sont remis avant les opérations, pour que
+   les opérations qui en dépendent se valident.
+3. **Opérations** (`ops`), puis **souches** (`stubs`), revalidées comme à la réception (une
+   souche exige une `Compact` qui la liste, `sync-protocol.md` § 10.3).
+4. `unsent`, puis `stable`.
+5. Version 3 : `requests` (chaque casier cité doit être dans `lockers`) et `watch`, gardés tels
+   quels ; les accords ne sont pas revérifiés à la lecture, ils le sont de nouveau par le
+   contrôle de `QuorumApply` et par tous les postes à la réception de l'opération.
+
+Le noyau tient aussi `SyncState.quarantine_seen` (`sync-protocol.md` § 11.4, clé 5) : l'heure
+de la première synchronisation qui a vu chaque opération en quarantaine, d'où court le délai de
+rejet automatique (ADR 0045).
+Une réplique reconstruite ainsi, à n'importe quel moment de sa vie, a le même état, les mêmes
+statuts, le même passé élagué et les mêmes opérations à envoyer que celle qui a été écrite.
+
+### 15.4 Limites
+
+- Un retour en arrière du fichier n'est pas détecté localement (§ 14, point 11) : la
+  synchronisation suivante récupère auprès du serveur ce qui manque, y compris les entrées du
+  registre. Un registre suspect perdu ainsi redevient suspect dès que le serveur montre la même
+  incohérence.
+- Le fichier grossit avec les journaux des casiers partagés ; il est réécrit en entier à chaque
+  changement. À remplacer par les tables du coffre (ADR 0032, point 3).
