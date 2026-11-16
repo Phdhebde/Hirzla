@@ -174,6 +174,10 @@ jamais ses manifestes avec la vraie clé d'éditeur.
    « Attach binaries » › **Save draft** (surtout pas *Publish release*). Ne touchez pas au
    texte du brouillon : la dernière ligne, invisible, relie le brouillon à l'étape 1.
    En ligne de commande, équivalent : `gh release upload v1.0.0 hirzla-clients-*.manifest`.
+   **Publiée par erreur ?** Ne la repassez pas en brouillon : GitHub la détache alors de son
+   étiquette et l'étape 2 ne la retrouve plus. Supprimez la version (en gardant l'étiquette),
+   relancez l'étape 1 (*Actions* › exécution de l'étape 1 › *Re-run all jobs*), puis
+   reprenez la signature avec le nouvel artefact : les exécutables ont été recompilés.
 7. **Lancez l'étape 2** : *Actions* › *Livraison* › *Run workflow* › *Use workflow from* :
    onglet *Tags* › `v1.0.0` › *Run workflow*. Elle vérifie vos manifestes (bonne clé, bonne
    version, bons exécutables ; les trois systèmes sont exigés), construit les installeurs
