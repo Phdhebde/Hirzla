@@ -80,8 +80,9 @@ fn cef_is_exact() {
     assert_eq!(
         cef::entry(&e).unwrap(),
         format!(
-            "CEF:0|Hirzla|hirzla|0.0.0|3|authentication_failed|7|rt=1794729600123 externalId=2 \
+            "CEF:0|Hirzla|hirzla|{v}|3|authentication_failed|7|rt=1794729600123 externalId=2 \
              hirzlaLog={l} hirzlaHash={hash} hirzlaDevice={d} src=192.0.2.10 hirzlaReason=revoked",
+            v = env!("CARGO_PKG_VERSION"),
             l = "11".repeat(16),
             d = "66".repeat(16),
         )

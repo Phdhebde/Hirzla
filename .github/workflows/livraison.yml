@@ -1,33 +1,108 @@
 name: Livraison
 
-# Builds the installers of the desktop application (docs/livraison.md): MSI on Windows,
-# disk image on macOS, deb, rpm and AppImage on Linux. Started by hand; signing happens only
-# when the repository secrets named below exist. No secret value is ever written here.
+# Two-stage release flow (ADR 0064, docs/livraison.md § 2.1, docs/guide-signature.md step 7).
+#
+# Stage 1, on a pushed tag vX.Y.Z: checks that the tag equals the workspace version, builds
+# the release executables of each platform once (Cargo feature `livraison`, mode
+# `manifeste`), publishes them as the artifact "hirzla-X.Y.Z-a-signer" for the publisher, and
+# opens a DRAFT release. The publisher signs one client manifest per platform OFFLINE and
+# attaches the files hirzla-clients-<platform>.manifest to the draft. The publisher key never
+# reaches a CI agent.
+#
+# Stage 2, started by hand on the same tag (Actions > Livraison > Run workflow, "Use workflow
+# from: Tags > vX.Y.Z"): verifies each manifest against HIRZLA_PUBLISHER_KEYS and the stage-1
+# executables, builds the installers from those executables unchanged (no rebuild, no strip,
+# no binary patching), checks that every installer holds them byte for byte with the
+# manifest, then attaches installers, archives, extension, bills of materials, SHA256SUMS and
+# Sigstore provenance to the draft. The publisher then signs SHA256SUMS with GPG and publishes.
+#
+# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS is a repository variable
+# holding public keys.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: read
-  # Build provenance (ADR 0063 § 3): keyless Sigstore signature and its attestation.
-  id-token: write
-  attestations: write
+
+concurrency:
+  group: livraison-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Pinned Tauri CLI (docs/livraison.md § 2).
+  TAURI_CLI_VERSION: "2.12.4"
+  CARGO_TERM_COLOR: never
 
 jobs:
-  installers:
-    name: ${{ matrix.os }}
+  # ---------------------------------------------------------------------------------------
+  # Both stages: the tag, the version and the publisher keys.
+  # ---------------------------------------------------------------------------------------
+  version:
+    name: version and publisher keys
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - name: Started on a tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo "::error::Start this workflow on a release tag (Use workflow from: Tags > vX.Y.Z), not on a branch."
+          exit 1
+      - uses: actions/checkout@v4
+      - name: Tag equals the workspace version; HIRZLA_PUBLISHER_KEYS is set
+        id: check
+        env:
+          HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+        run: |
+          version="$(python3 .github/scripts/release-version.py --tag "$GITHUB_REF_NAME" --publisher-keys)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Release $version, tag $GITHUB_REF_NAME, commit $GITHUB_SHA"
+
+  # ---------------------------------------------------------------------------------------
+  # Stage 1: release executables, built once. They are never modified afterwards: the client
+  # manifest signed by the publisher holds their SHA-384.
+  # ---------------------------------------------------------------------------------------
+  executables:
+    name: stage 1, executables (${{ matrix.platform }})
+    if: github.event_name == 'push'
+    needs: version
     runs-on: ${{ matrix.os }}
-    env:
-      # Public publisher keys compiled into the core (ADR 0042, docs/guide-signature.md § 2).
-      # A repository variable, not a secret: these are public keys.
-      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     strategy:
-      fail-fast: false
+      fail-fast: true
       matrix:
-        os: [ubuntu-22.04, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            triple: x86_64-unknown-linux-gnu
+            ext: ""
+          - os: windows-latest
+            platform: windows-x86_64
+            triple: x86_64-pc-windows-msvc
+            ext: ".exe"
+          - os: macos-latest
+            platform: macos-aarch64
+            triple: aarch64-apple-darwin
+            ext: ""
+    env:
+      # Public publisher keys compiled into the core and its clients (ADR 0042, 0043).
+      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
-        run: rustup toolchain install
+        shell: bash
+        run: |
+          rustup toolchain install
+          host="$(rustc -vV | sed -n 's/^host: //p')"
+          if [ "$host" != "${{ matrix.triple }}" ]; then
+            echo "::error::Runner host is $host, expected ${{ matrix.triple }} for ${{ matrix.platform }}."
+            exit 1
+          fi
       - name: CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
@@ -39,66 +114,598 @@ jobs:
         if: runner.os == 'Linux'
         run: >-
           sudo apt-get update && sudo apt-get install -y libssl-dev
-          libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev rpm
+          libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       - name: Tauri CLI (pinned)
-        run: cargo install tauri-cli --version 2.12.4 --locked
-      # The core and the command line are installed next to hirzla-desktop: the core accepts
-      # its clients by path, in its own directory (docs/api-locale.md § 3.1).
-      - name: Core and command line
+        run: cargo install tauri-cli --version ${{ env.TAURI_CLI_VERSION }} --locked
+      - name: Publisher keys present
         shell: bash
         run: |
-          cargo build --release --locked -p hirzla-core -p hirzla-cli
-          triple="$(rustc -vV | sed -n 's/^host: //p')"
-          ext=""; if [ "$RUNNER_OS" = "Windows" ]; then ext=".exe"; fi
+          if [ -z "${HIRZLA_PUBLISHER_KEYS// /}" ]; then
+            echo "::error::HIRZLA_PUBLISHER_KEYS is empty: a release core would refuse to start."
+            exit 1
+          fi
+      # Reproducible settings of docs/livraison.md § 2 (ADR 0056), Linux only.
+      - name: Reproducible build settings (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          {
+            echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)"
+            echo "RUSTFLAGS=--remap-path-prefix=$PWD=/hirzla --remap-path-prefix=$PWD/target=/target --remap-path-prefix=${CARGO_HOME:-$HOME/.cargo}=/cargo --remap-path-prefix=${RUSTUP_HOME:-$HOME/.rustup}=/rustup"
+            echo "CFLAGS=-ffile-prefix-map=$PWD=/hirzla -ffile-prefix-map=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+            echo "CXXFLAGS=-ffile-prefix-map=$PWD=/hirzla -ffile-prefix-map=${CARGO_HOME:-$HOME/.cargo}=/cargo"
+          } >> "$GITHUB_ENV"
+      # Core, command line and native host: feature `livraison`, mode `manifeste` (no
+      # `signature-systeme`). The desktop application below gets the same features: a core
+      # and clients built differently do not recognise each other (ADR 0063 § 1).
+      - name: Core, command line and native host
+        shell: bash
+        run: |
+          cargo build --release --locked -p hirzla-core -p hirzla-cli -p hirzla-native-host \
+            --features hirzla-core/livraison,hirzla-cli/livraison,hirzla-native-host/livraison
           mkdir -p apps/desktop/src-tauri/binaries
-          cp "target/release/hirzla-core$ext" "apps/desktop/src-tauri/binaries/hirzla-core-$triple$ext"
-          cp "target/release/hirzla$ext" "apps/desktop/src-tauri/binaries/hirzla-$triple$ext"
+          for n in hirzla-core hirzla hirzla-native-host; do
+            cp "target/release/$n${{ matrix.ext }}" \
+              "apps/desktop/src-tauri/binaries/$n-${{ matrix.triple }}${{ matrix.ext }}"
+          done
+      # Compiles hirzla-desktop only: installers are built by stage 2 from these files.
+      - name: Desktop application
+        shell: bash
+        working-directory: apps/desktop/src-tauri
+        run: >-
+          cargo tauri build --no-bundle --ci --config tauri.livraison.conf.json
+          --features livraison -- --locked
+      - name: Server and audit verifier (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release --locked -p hirzla-server -p hirzla-audit
+          mkdir -p out/serveur
+          cp target/release/hirzlad target/release/hirzla-audit-verify out/serveur/
+      - name: Collect the executables
+        shell: bash
+        run: |
+          dir="out/${{ matrix.platform }}"
+          mkdir -p "$dir"
+          for n in hirzla hirzla-core hirzla-desktop hirzla-native-host; do
+            cp "target/release/$n${{ matrix.ext }}" "$dir/"
+          done
+      # macOS without an Apple Developer account (docs/livraison.md § 3, ADR 0063 § 5): ad hoc
+      # signature with the hardened runtime, BEFORE the manifest is signed, since any
+      # signature changes the file.
+      - name: Ad hoc signature, hardened runtime (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for f in out/${{ matrix.platform }}/*; do
+            codesign --force --sign - --options runtime "$f"
+          done
+      # Hook: an Authenticode signature (SignPath Foundation, docs/guide-signature.md step 5)
+      # would go here, before the upload, for the same reason.
+      - name: Fingerprints
+        shell: bash
+        run: |
+          cd out
+          if command -v sha256sum > /dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
+          $sum ${{ matrix.platform }}/* | tee "${{ matrix.platform }}.sha256"
+      # Lets the publisher check, before signing, that the executables come from this run.
+      - name: Build provenance of the executables (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/${{ matrix.platform }}/*
+      - name: Build provenance of the server (Sigstore)
+        if: runner.os == 'Linux'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/serveur/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: executables-${{ matrix.platform }}
+          path: |
+            out/${{ matrix.platform }}/
+            out/${{ matrix.platform }}.sha256
+          if-no-files-found: error
+          retention-days: 90
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: serveur-linux-x86_64
+          path: out/serveur/
+          if-no-files-found: error
+          retention-days: 90
+
+  # Stage 1: the publisher's folder and the draft release.
+  draft:
+    name: stage 1, publisher folder and draft release
+    if: github.event_name == 'push'
+    needs: [version, executables]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: executables-*
+          path: dl
+      - name: Publisher folder
+        run: |
+          dir="hirzla-$VERSION-a-signer"
+          mkdir -p "$dir"
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
+            cp -r "dl/executables-$p/$p" "$dir/$p"
+            cat "dl/executables-$p/$p.sha256" >> "$dir/SHA256SUMS"
+          done
+          printf '%s\n' "$VERSION" > "$dir/VERSION"
+          cp .github/scripts/signer-manifestes.sh "$dir/"
+          cat > "$dir/LISEZMOI.txt" <<EOF
+          Hirzla $VERSION : manifestes des clients à signer (étape 1 du flux Livraison).
+          Étiquette $GITHUB_REF_NAME, commit $(git rev-parse HEAD), exécution $GITHUB_RUN_ID.
+          Marche à suivre complète : docs/guide-signature.md, étape 7.
+
+          Sur le poste de signature, réseau débranché, dans ce dossier :
+
+            sh signer-manifestes.sh /media/usb/editeur.cle /media/usb/editeur.pub
+
+          ce qui revient à :
+
+            sha256sum -c SHA256SUMS
+            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
+              --plateforme linux-x86_64 --sortie hirzla-clients-linux-x86_64.manifest \\
+              linux-x86_64/hirzla linux-x86_64/hirzla-core \\
+              linux-x86_64/hirzla-desktop linux-x86_64/hirzla-native-host
+            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
+              --plateforme windows-x86_64 --sortie hirzla-clients-windows-x86_64.manifest \\
+              windows-x86_64/hirzla.exe windows-x86_64/hirzla-core.exe \\
+              windows-x86_64/hirzla-desktop.exe windows-x86_64/hirzla-native-host.exe
+            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
+              --plateforme macos-aarch64 --sortie hirzla-clients-macos-aarch64.manifest \\
+              macos-aarch64/hirzla macos-aarch64/hirzla-core \\
+              macos-aarch64/hirzla-desktop macos-aarch64/hirzla-native-host
+
+          puis, pour chaque plateforme P :
+
+            hirzla-signer verifier --publique /media/usb/editeur.pub --version $VERSION \\
+              --plateforme P --executables P hirzla-clients-P.manifest
+
+          Joignez ensuite les trois fichiers hirzla-clients-*.manifest au brouillon
+          de la version $GITHUB_REF_NAME sur GitHub (Releases > Edit > glisser les fichiers),
+          et lancez la seconde étape : Actions > Livraison > Run workflow, sur l'étiquette
+          $GITHUB_REF_NAME. Ne modifiez aucun exécutable : le manifeste les identifie.
+          EOF
+          cat "$dir/LISEZMOI.txt"
+          echo "FOLDER=$dir" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.FOLDER }}
+          path: ${{ env.FOLDER }}/
+          if-no-files-found: error
+          retention-days: 90
+      # One draft per tag. A new stage 1 replaces the executables, so manifests signed for
+      # an earlier run no longer match: they are removed from the draft.
+      - name: Draft release
+        run: |
+          python3 .github/scripts/release-notes.py --version "$VERSION" --stage 1 \
+            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" --output notes.md
+          if state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$state" != "true" ]; then
+              echo "::error::Release $GITHUB_REF_NAME is already published: a published version is never rebuilt."
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md
+            for a in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'); do
+              echo "Removing stale asset $a"
+              gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes
+            done
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+              --title "Hirzla $VERSION" --notes-file notes.md
+          fi
+          {
+            echo "### Étape 1 terminée"
+            echo
+            echo "1. Téléchargez l'artefact \`$FOLDER\` de cette exécution."
+            echo "2. Sur le poste de signature hors ligne : \`sh signer-manifestes.sh CLE_PRIVEE CLE_PUBLIQUE\` (voir \`LISEZMOI.txt\`)."
+            echo "3. Joignez les fichiers \`hirzla-clients-*.manifest\` au brouillon de la version $GITHUB_REF_NAME."
+            echo "4. Lancez l'étape 2 : Actions › Livraison › Run workflow, sur l'étiquette $GITHUB_REF_NAME."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------------------
+  # Stage 2: verify the signed manifests against the keys and the stage-1 executables.
+  # ---------------------------------------------------------------------------------------
+  manifests:
+    name: stage 2, signed manifests
+    if: github.event_name == 'workflow_dispatch'
+    needs: version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      run_id: ${{ steps.stage1.outputs.run_id }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+      HIRZLA_PUBLISHER_KEYS: ${{ vars.HIRZLA_PUBLISHER_KEYS }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stage-1 run of this tag
+        id: stage1
+        run: |
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::No draft release for $GITHUB_REF_NAME: push the tag first (stage 1)."
+            exit 1
+          fi
+          gh release view "$GITHUB_REF_NAME" --json body --jq .body \
+            | python3 .github/scripts/release-notes.py --read-run-id > stage1.txt
+          . ./stage1.txt
+          commit="$(git rev-parse HEAD)"
+          if [ "$sha" != "$commit" ]; then
+            echo "::error::Stage 1 built commit $sha, the tag now points to $commit."
+            exit 1
+          fi
+          read -r head conclusion < <(gh run view "$run_id" --json headSha,conclusion --jq '"\(.headSha) \(.conclusion)"')
+          if [ "$head" != "$commit" ] || [ "$conclusion" != "success" ]; then
+            echo "::error::Stage-1 run $run_id is not a successful run of $commit ($head, $conclusion)."
+            exit 1
+          fi
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "Stage-1 run: $run_id"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: executables-*
+          path: stage1
+          run-id: ${{ steps.stage1.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Signed files attached to the draft
+        run: |
+          mkdir -p signed
+          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' > assets.txt
+          cat assets.txt
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
+            f="hirzla-clients-$p.manifest"
+            if grep -qxF "$f" assets.txt; then
+              gh release download "$GITHUB_REF_NAME" --pattern "$f" --dir signed
+            fi
+          done
+          if grep -q '\.hirzla-maj$' assets.txt; then
+            gh release download "$GITHUB_REF_NAME" --pattern '*.hirzla-maj' --dir signed
+          fi
+          for p in linux-x86_64 windows-x86_64; do
+            if [ ! -f "signed/hirzla-clients-$p.manifest" ]; then
+              echo "::error::hirzla-clients-$p.manifest is not attached to the draft release (docs/guide-signature.md, step 7)."
+              exit 1
+            fi
+          done
+          if [ ! -f signed/hirzla-clients-macos-aarch64.manifest ]; then
+            echo "::warning::No macOS manifest: macOS is not published in this version (ADR 0065)."
+          fi
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: hirzla-signer
+        run: cargo build --locked -p hirzla-release-signer
+      # Signature (both components, a key of HIRZLA_PUBLISHER_KEYS), version, platform, and
+      # the stage-1 executables named exactly, with the same size and SHA-384.
+      - name: Verify the manifests and update packages
+        run: |
+          signer=target/debug/hirzla-signer
+          for m in signed/hirzla-clients-*.manifest; do
+            p="${m#signed/hirzla-clients-}"; p="${p%.manifest}"
+            "$signer" verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" --version "$VERSION" \
+              --plateforme "$p" --executables "stage1/executables-$p/$p" "$m"
+          done
+          for u in signed/*.hirzla-maj; do
+            [ -e "$u" ] || continue
+            p="${u#signed/hirzla-"$VERSION"-}"; p="${p%.hirzla-maj}"
+            "$signer" verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" --version "$VERSION" \
+              --plateforme "$p" "$u"
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed
+          path: signed/
+          if-no-files-found: error
+
+  # Stage 2: installers from the stage-1 executables, unchanged.
+  installers:
+    name: stage 2, installers (${{ matrix.platform }})
+    needs: [version, manifests]
+    runs-on: ${{ matrix.os }}
+    # macOS does not block the release: the manifest location in Hirzla.app is being decided
+    # (ADR 0065); its disk image stays a workflow artifact, never attached to the release.
+    continue-on-error: ${{ matrix.platform == 'macos-aarch64' }}
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            platform: linux-x86_64
+            triple: x86_64-unknown-linux-gnu
+            ext: ""
+            bundles: deb,rpm,appimage
+            manifest_config: tauri.manifeste.linux.conf.json
+          - os: windows-latest
+            platform: windows-x86_64
+            triple: x86_64-pc-windows-msvc
+            ext: ".exe"
+            bundles: msi
+            manifest_config: tauri.manifeste.windows.conf.json
+          - os: macos-latest
+            platform: macos-aarch64
+            triple: aarch64-apple-darwin
+            ext: ""
+            bundles: dmg
+            manifest_config: ""
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Linux tools
+        if: runner.os == 'Linux'
+        run: >-
+          sudo apt-get update && sudo apt-get install -y
+          libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+          rpm cpio
+      - name: Tauri CLI (pinned)
+        run: cargo install tauri-cli --version ${{ env.TAURI_CLI_VERSION }} --locked
+      - uses: actions/download-artifact@v4
+        with:
+          name: executables-${{ matrix.platform }}
+          path: stage1
+          run-id: ${{ needs.manifests.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed
+          path: signed
+      # The executables go where `tauri bundle` takes them, byte for byte; `expected/` keeps
+      # the reference copy, with the manifest, for the check below.
+      - name: Place the executables and the manifest
+        shell: bash
+        run: |
+          src="stage1/${{ matrix.platform }}"
+          chmod +x "$src"/* || true
+          mkdir -p target/release apps/desktop/src-tauri/binaries expected
+          cp -p "$src/hirzla-desktop${{ matrix.ext }}" "target/release/hirzla-desktop${{ matrix.ext }}"
+          for n in hirzla-core hirzla hirzla-native-host; do
+            cp -p "$src/$n${{ matrix.ext }}" \
+              "apps/desktop/src-tauri/binaries/$n-${{ matrix.triple }}${{ matrix.ext }}"
+          done
+          cp -p "$src"/* expected/
+          m="signed/hirzla-clients-${{ matrix.platform }}.manifest"
+          if [ -f "$m" ]; then
+            cp "$m" apps/desktop/src-tauri/binaries/hirzla-clients.manifest
+            cp "$m" expected/hirzla-clients.manifest
+          fi
+      # --no-binary-patching: Tauri would otherwise rewrite hirzla-desktop to record the
+      # bundle type (used by its updater, which Hirzla does not ship). NO_STRIP: linuxdeploy
+      # must not strip the AppImage executables.
       - name: Installers
+        shell: bash
         working-directory: apps/desktop/src-tauri
         env:
-          # macOS signing and notarisation (docs/livraison.md § 3). Absent: unsigned build.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
-          APPLE_API_KEY_PATH: ${{ secrets.APPLE_API_KEY_PATH }}
-        run: cargo tauri build --config tauri.livraison.conf.json
-      # Bills of materials of the shipped executables (ADR 0056), offline, deterministic.
-      - name: Bills of materials (CycloneDX)
+          NO_STRIP: "true"
+        run: |
+          configs=(--config tauri.livraison.conf.json)
+          if [ -n "${{ matrix.manifest_config }}" ]; then
+            configs+=(--config "${{ matrix.manifest_config }}")
+          fi
+          cargo tauri bundle --ci --no-binary-patching --features livraison \
+            --bundles "${{ matrix.bundles }}" "${configs[@]}"
+      # Every installer must hold the signed executables and their manifest, unchanged, in
+      # one directory. deb, rpm and MSI: a mismatch fails the release. AppImage: linuxdeploy
+      # may rewrite ELF files; a mismatching AppImage is dropped with a warning (ADR 0064).
+      - name: Check the installers (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          b=target/release/bundle
+          x="$RUNNER_TEMP/extract"
+          mkdir -p "$x/deb" "$x/rpm" "$x/appimage"
+          dpkg-deb -x $b/deb/*.deb "$x/deb"
+          .github/scripts/compare-installed.sh deb expected "$x/deb/usr/bin" ""
+          rpm_file="$(realpath $b/rpm/*.rpm)"
+          (cd "$x/rpm" && rpm2cpio "$rpm_file" | cpio -idm --quiet)
+          .github/scripts/compare-installed.sh rpm expected "$x/rpm/usr/bin" ""
+          appimage="$(realpath $b/appimage/*.AppImage)"
+          chmod +x "$appimage"
+          (cd "$x/appimage" && "$appimage" --appimage-extract > /dev/null)
+          if ! .github/scripts/compare-installed.sh AppImage expected \
+              "$x/appimage/squashfs-root/usr/bin" "" warning; then
+            echo "::warning::The AppImage does not hold the signed executables unchanged: it is not published."
+            rm -f "$appimage"
+          fi
+      - name: Extract the MSI (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $msi = Get-ChildItem target/release/bundle/msi/*.msi | Select-Object -First 1
+          $dest = Join-Path $env:RUNNER_TEMP 'msi-extract'
+          $p = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @(
+            '/a', "`"$($msi.FullName)`"", '/qn', "TARGETDIR=`"$dest`"")
+          if ($p.ExitCode -ne 0) { throw "msiexec /a failed: $($p.ExitCode)" }
+      - name: Check the MSI (Windows)
+        if: runner.os == 'Windows'
         shell: bash
         run: |
+          root="$(cygpath -u "$RUNNER_TEMP")/msi-extract"
+          core="$(find "$root" -name hirzla-core.exe | head -n 1)"
+          if [ -z "$core" ]; then
+            echo "::error::hirzla-core.exe not found in the MSI"
+            exit 1
+          fi
+          .github/scripts/compare-installed.sh MSI expected "$(dirname "$core")" .exe
+      # TODO(ADR 0065): macOS. The client manifest cannot sit inside Hirzla.app next to the
+      # core (the bundle seal covers it, docs/livraison.md § 9 point 2). Once ADR 0065 has
+      # chosen the location, build here the .pkg that installs Hirzla.app and the manifest,
+      # check it like the other installers, and let the publication job attach it.
+      - name: "Hook: macOS .pkg with the client manifest (ADR 0065, to do)"
+        if: runner.os == 'macOS'
+        run: |
+          echo "::warning::macOS installer not published: manifest location pending (ADR 0065). The disk image is a workflow artifact only."
+      - uses: actions/download-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: serveur-linux-x86_64
+          path: serveur
+          run-id: ${{ needs.manifests.outputs.run_id }}
+          github-token: ${{ github.token }}
+      - name: Command line and server archives (Linux)
+        if: runner.os == 'Linux'
+        run: |
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
-          triple="$(rustc -vV | sed -n 's/^host: //p')"
-          py=python3; if [ "$RUNNER_OS" = "Windows" ]; then py=python; fi
-          mkdir -p target/release/bundle/sbom
-          for p in hirzla-core hirzla-cli hirzla-desktop; do
-            "$py" .github/scripts/sbom.py "$p" --target "$triple" \
-              --output "target/release/bundle/sbom/$p-$triple.cdx.json"
+          tarball() {  # tarball NAME: deterministic .tar.gz of the folder NAME
+            tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+              --format=gnu -cf - "$1" | gzip -n -9 > "out/$1.tar.gz"
+          }
+          mkdir -p out
+          cli="hirzla-cli-$VERSION-linux-x86_64"
+          mkdir -p "$cli/native-host-manifests"
+          cp expected/hirzla expected/hirzla-core expected/hirzla-native-host \
+            expected/hirzla-clients.manifest LICENSE NOTICE "$cli/"
+          cp apps/extension/native-host-manifests/*.json "$cli/native-host-manifests/"
+          srv="hirzlad-$VERSION-linux-x86_64"
+          mkdir -p "$srv"
+          cp serveur/hirzlad serveur/hirzla-audit-verify LICENSE NOTICE "$srv/"
+          find "$cli" "$srv" -type f -exec chmod 0644 {} +
+          find "$cli" "$srv" -type d -exec chmod 0755 {} +
+          chmod 0755 "$cli/hirzla" "$cli/hirzla-core" "$cli/hirzla-native-host" \
+            "$srv/hirzlad" "$srv/hirzla-audit-verify"
+          tarball "$cli"
+          tarball "$srv"
+      - name: Collect
+        shell: bash
+        run: |
+          mkdir -p out
+          shopt -s nullglob
+          for f in target/release/bundle/deb/*.deb target/release/bundle/rpm/*.rpm \
+            target/release/bundle/appimage/*.AppImage target/release/bundle/msi/*.msi \
+            target/release/bundle/dmg/*.dmg; do
+            cp "$f" out/
           done
-          # npm packages of the desktop interface and of the extension (ADR 0061).
+          ls -l out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+
+  # Stage 2: bills of materials, extension, fingerprints, provenance, upload to the draft.
+  publish:
+    name: stage 2, attach to the draft release
+    needs: [version, manifests, installers]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: Crates of Cargo.lock
+        run: cargo fetch --locked
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: installers-*
+          path: dl
+      - uses: actions/download-artifact@v4
+        with:
+          name: signed
+          path: release
+      # Linux and Windows only: the macOS disk image stays a workflow artifact (ADR 0065).
+      - name: Installers and archives
+        run: |
+          mkdir -p release
+          for p in linux-x86_64 windows-x86_64; do
+            if [ ! -d "dl/installers-$p" ]; then
+              echo "::error::installers of $p missing"
+              exit 1
+            fi
+            cp dl/installers-$p/* release/
+          done
+      - name: Browser extension
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          python3 - "apps/extension/src" "release/hirzla-extension-$VERSION.zip" <<'EOF'
+          # Deterministic zip of the extension: sorted names, fixed time and permissions.
+          import os, sys, time, zipfile
+          src, out = sys.argv[1], sys.argv[2]
+          when = time.gmtime(max(int(os.environ["SOURCE_DATE_EPOCH"]), 315532800))[:6]
+          names = sorted(
+              os.path.relpath(os.path.join(d, f), src).replace(os.sep, "/")
+              for d, _, files in os.walk(src) for f in files
+          )
+          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+              for n in names:
+                  info = zipfile.ZipInfo(n, when)
+                  info.external_attr = 0o644 << 16
+                  info.compress_type = zipfile.ZIP_DEFLATED
+                  with open(os.path.join(src, n), "rb") as f:
+                      z.writestr(info, f.read())
+          print(out, len(names), "files")
+          EOF
+      # Offline, deterministic (ADR 0056, 0061): crates linked into each executable for each
+      # platform whose manifest was signed, and the npm packages of the interface and the
+      # extension.
+      - name: Bills of materials (CycloneDX)
+        run: |
+          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          for m in release/hirzla-clients-*.manifest; do
+            p="${m#release/hirzla-clients-}"; p="${p%.manifest}"
+            case "$p" in
+              linux-x86_64) t=x86_64-unknown-linux-gnu ;;
+              windows-x86_64) t=x86_64-pc-windows-msvc ;;
+              macos-aarch64) t=aarch64-apple-darwin ;;
+              *) echo "::error::unknown platform $p"; exit 1 ;;
+            esac
+            for pkg in hirzla-core hirzla-cli hirzla-native-host hirzla-desktop; do
+              .github/scripts/sbom.py "$pkg" --target "$t" --output "release/$pkg-$p.cdx.json"
+            done
+          done
+          for pkg in hirzla-server hirzla-audit; do
+            .github/scripts/sbom.py "$pkg" --target x86_64-unknown-linux-gnu \
+              --output "release/$pkg-linux-x86_64.cdx.json"
+          done
           for a in desktop extension; do
-            "$py" .github/scripts/sbom.py --npm "apps/$a" \
-              --output "target/release/bundle/sbom/$a.npm.cdx.json"
+            .github/scripts/sbom.py --npm "apps/$a" --output "release/$a.npm.cdx.json"
           done
+      - name: SHA256SUMS
+        run: |
+          cd release
+          rm -f SHA256SUMS
+          find . -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort | xargs sha256sum > ../SHA256SUMS
+          mv ../SHA256SUMS SHA256SUMS
+          cat SHA256SUMS
       - name: Build provenance (Sigstore)
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: |
-            target/release/bundle/sbom/*.cdx.json
-            target/release/bundle/**/*.msi
-            target/release/bundle/**/*.dmg
-            target/release/bundle/**/*.deb
-            target/release/bundle/**/*.rpm
-            target/release/bundle/**/*.AppImage
-      - uses: actions/upload-artifact@v4
-        with:
-          name: hirzla-${{ matrix.os }}
-          path: |
-            target/release/bundle/sbom/*.cdx.json
-            target/release/bundle/**/*.msi
-            target/release/bundle/**/*.dmg
-            target/release/bundle/**/*.deb
-            target/release/bundle/**/*.rpm
-            target/release/bundle/**/*.AppImage
-          if-no-files-found: error
+          subject-path: release/*
+      - name: Attach to the draft release
+        run: |
+          python3 .github/scripts/release-notes.py --version "$VERSION" --stage 2 \
+            --run-id "${{ needs.manifests.outputs.run_id }}" --sha "$(git rev-parse HEAD)" \
+            --output notes.md
+          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
+            echo "::error::Release $GITHUB_REF_NAME is no longer a draft: nothing attached."
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true
+          {
+            echo "### Étape 2 terminée : brouillon complet"
+            echo
+            echo "1. Téléchargez \`SHA256SUMS\` du brouillon $GITHUB_REF_NAME."
+            echo "2. Sur le poste de signature : \`gpg --detach-sign --armor SHA256SUMS\`."
+            echo "3. Joignez \`SHA256SUMS.asc\` au brouillon, relisez les notes, puis publiez."
+          } >> "$GITHUB_STEP_SUMMARY"

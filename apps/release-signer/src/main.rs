@@ -16,8 +16,8 @@ use std::process::ExitCode;
 
 use hirzla_core::release::update::{verify_package, write_package, PackageInput};
 use hirzla_core::release::{
-    current_platform, load_client_manifest, sign, update, Kind, Manifest, PublisherKeys, Version,
-    CLIENT_MANIFEST_FILE, HEADER_LEN, MAGIC,
+    allowed_names, current_platform, load_client_manifest, sign, update, Kind, Manifest,
+    PublisherKeys, Version, CLIENT_MANIFEST_FILE, HEADER_LEN, MAGIC,
 };
 use hirzla_crypto::sign::{PublisherSigningKey, VerifyingKey, SIGNING_KEY_LEN, VERIFYING_KEY_LEN};
 use zeroize::Zeroizing;
@@ -34,8 +34,12 @@ Usage : hirzla-signer COMMANDE [ARGUMENTS]
         Signe le manifeste des clients (empreintes SHA-384 des exécutables installés).
   paquet --cle FICHIER --version X.Y.Z [--plateforme P] --sortie FICHIER FICHIER…
         Construit et signe un paquet de mise à jour hors ligne.
-  verifier --publique FICHIER FICHIER
-        Vérifie un manifeste des clients ou un paquet de mise à jour.
+  verifier (--publique FICHIER | --cles-hex HEX[,HEX…]) [--version X.Y.Z] [--plateforme P]
+           [--executables DOSSIER] FICHIER
+        Vérifie un manifeste des clients ou un paquet de mise à jour. --cles-hex prend la
+        valeur de HIRZLA_PUBLISHER_KEYS (une clé suffit). --version et --plateforme exigent
+        ces valeurs. --executables (manifeste seulement) exige que le dossier et le manifeste
+        nomment les mêmes exécutables, de même taille et de même empreinte.
 
 Plateforme par défaut : celle de cet outil (par exemple linux-x86_64).";
 
@@ -121,7 +125,16 @@ fn run(args: Vec<OsString>) -> Result<(), String> {
             rest,
             &["--cle", "--version", "--plateforme", "--sortie"],
         )?),
-        Some("verifier") => verify(&Parsed::new(rest, &["--publique"])?),
+        Some("verifier") => verify(&Parsed::new(
+            rest,
+            &[
+                "--publique",
+                "--cles-hex",
+                "--version",
+                "--plateforme",
+                "--executables",
+            ],
+        )?),
         Some("-h" | "--help" | "aide") => Err(USAGE.to_owned()),
         _ => Err(format!("commande inconnue.\n\n{USAGE}")),
     }
@@ -290,8 +303,51 @@ fn package(p: &Parsed) -> Result<(), String> {
     }
 }
 
+fn verify_keys(p: &Parsed) -> Result<PublisherKeys, String> {
+    match (p.opt("--publique"), p.text("--cles-hex")?) {
+        (Some(path), None) => Ok(PublisherKeys::new(vec![read_public(path)?])),
+        (None, Some(hex)) => {
+            let list: Vec<&str> = hex.split(',').map(str::trim).collect();
+            let keys = PublisherKeys::from_hex_list(&list.join(","))
+                .map_err(|_| "--cles-hex : clé publique invalide.".to_owned())?;
+            if keys.is_empty() {
+                return Err("--cles-hex : aucune clé.".to_owned());
+            }
+            Ok(keys)
+        }
+        _ => Err(format!(
+            "donnez --publique ou --cles-hex, l'un des deux.\n\n{USAGE}"
+        )),
+    }
+}
+
+/// Checks that `dir` and the client manifest `m` name the same executables, with the same
+/// sizes and SHA-384. The digests are public (they are published in the manifest), so a plain
+/// comparison is enough here.
+fn check_executables(m: &Manifest, dir: &Path) -> Result<(), String> {
+    for f in &m.files {
+        let path = dir.join(&f.name);
+        let found = update::entry_for(&f.name, &path, true)
+            .map_err(|_| format!("{} : absent du dossier ou illisible.", f.name))?;
+        if found.size != f.size || found.sha384 != f.sha384 {
+            return Err(format!(
+                "{} : le fichier du dossier diffère du manifeste.",
+                f.name
+            ));
+        }
+    }
+    for name in allowed_names(Kind::ClientManifest, &m.platform) {
+        if dir.join(&name).is_file() && m.file(&name).is_none() {
+            return Err(format!(
+                "{name} : présent dans le dossier, absent du manifeste."
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn verify(p: &Parsed) -> Result<(), String> {
-    let keys = PublisherKeys::new(vec![read_public(p.req("--publique")?)?]);
+    let keys = verify_keys(p)?;
     let [file] = p.positional.as_slice() else {
         return Err(format!("indiquez un FICHIER.\n\n{USAGE}"));
     };
@@ -299,18 +355,46 @@ fn verify(p: &Parsed) -> Result<(), String> {
     File::open(file)
         .and_then(|mut f| f.read_exact(&mut head))
         .map_err(|_| "fichier illisible ou trop court.".to_owned())?;
-    let (what, m) = if head[..6] == MAGIC[..] && head[6] == b'C' {
+    let is_manifest = head[..6] == MAGIC[..] && head[6] == b'C';
+    let (what, m) = if is_manifest {
         ("Manifeste des clients", load_client_manifest(file, &keys))
     } else {
         ("Paquet de mise à jour", verify_package(file, &keys))
     };
     let m = m.map_err(|e| format!("refusé : {e}."))?;
+    if let Some(expected) = p.text("--version")? {
+        let expected =
+            Version::parse(&expected).ok_or_else(|| "--version attend X.Y.Z.".to_owned())?;
+        if m.version != expected {
+            return Err(format!(
+                "refusé : version {} au lieu de {expected}.",
+                m.version
+            ));
+        }
+    }
+    if let Some(expected) = p.text("--plateforme")? {
+        if m.platform != expected {
+            return Err(format!(
+                "refusé : plateforme {} au lieu de {expected}.",
+                m.platform
+            ));
+        }
+    }
+    if let Some(dir) = p.opt("--executables") {
+        if !is_manifest {
+            return Err("--executables ne s'applique qu'à un manifeste des clients.".to_owned());
+        }
+        check_executables(&m, dir).map_err(|e| format!("refusé : {e}"))?;
+    }
     say(&format!(
         "{what} {} pour {} : authentique.",
         m.version, m.platform
     ));
     for f in &m.files {
         say(&format!("  {}  {} octets", f.name, f.size));
+    }
+    if p.opt("--executables").is_some() {
+        say("Les exécutables du dossier sont ceux du manifeste.");
     }
     Ok(())
 }
