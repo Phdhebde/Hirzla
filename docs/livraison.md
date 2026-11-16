@@ -15,14 +15,19 @@ ici par leur seul nom.
 | Fedora, RHEL, openSUSE | Paquet rpm | `rpm/Hirzla-<version>-1.x86_64.rpm` |
 | Autres Linux | AppImage | `appimage/Hirzla_<version>_amd64.AppImage` |
 
-Chaque installeur dépose **trois exécutables dans le même répertoire** : `hirzla-desktop`
-(l'application), `hirzla-core` (le noyau) et `hirzla` (la ligne de commande). C'est une
-exigence de sécurité : le noyau n'accepte que les clients de sa liste d'autorisation, par
-défaut les exécutables Hirzla placés à côté de lui (`docs/api-locale.md` § 3.1), et chaque
-client vérifie qu'il parle au `hirzla-core` voisin. Tauri les place ainsi grâce à
-`bundle.externalBin` (`apps/desktop/src-tauri/tauri.livraison.conf.json`) : dans le dossier
-d'installation sous Windows, dans `Hirzla.app/Contents/MacOS/` sous macOS, dans `/usr/bin/`
-pour deb et rpm, dans `usr/bin/` de l'AppImage.
+Chaque installeur dépose **quatre exécutables et le manifeste des clients dans le même
+répertoire** : `hirzla-desktop` (l'application), `hirzla-core` (le noyau), `hirzla` (la ligne
+de commande), `hirzla-native-host` (l'hôte de messagerie native de l'extension) et
+`hirzla-clients.manifest` (§ 7). C'est une exigence de sécurité : le noyau n'accepte que les
+clients de sa liste d'autorisation, par défaut les exécutables Hirzla placés à côté de lui
+(`docs/api-locale.md` § 3.1), vérifiés par le manifeste, et chaque client vérifie qu'il parle
+au `hirzla-core` voisin. Tauri place les exécutables grâce à `bundle.externalBin`
+(`apps/desktop/src-tauri/tauri.livraison.conf.json`) : dans le dossier d'installation sous
+Windows, dans `Hirzla.app/Contents/MacOS/` sous macOS, dans `/usr/bin/` pour deb et rpm, dans
+`usr/bin/` de l'AppImage. Le manifeste est ajouté par le flux de livraison (§ 2.1) :
+`tauri.manifeste.linux.conf.json` (`/usr/bin/hirzla-clients.manifest` des trois paquets
+Linux) et `tauri.manifeste.windows.conf.json` (racine du répertoire d'installation) ; sous
+macOS, son emplacement dépend de l'ADR 0065 (§ 9, point 2).
 
 Aucun installeur ne télécharge quoi que ce soit :
 
@@ -51,19 +56,30 @@ prototype TPM est hors des binaires livrés, ADR 0052).
 ```sh
 # 0. La clé publique d'éditeur (§ 7), compilée dans le noyau et la ligne de commande.
 export HIRZLA_PUBLISHER_KEYS="$(hirzla-signer cle-hex --publique editeur.pub)"
-# 1. Le noyau et la ligne de commande, en version de livraison (signature des clients
-#    exigée, clés d'éditeur compilées seules admises : ADR 0042, 0043).
-cargo build --release --locked -p hirzla-core -p hirzla-cli \
-  --features hirzla-core/livraison,hirzla-cli/livraison
+# 1. Le noyau, la ligne de commande et l'hôte natif, en version de livraison (signature
+#    des clients exigée, clés d'éditeur compilées seules admises : ADR 0042, 0043).
+cargo build --release --locked -p hirzla-core -p hirzla-cli -p hirzla-native-host \
+  --features hirzla-core/livraison,hirzla-cli/livraison,hirzla-native-host/livraison
 # 2. Copiés sous le nom attendu par Tauri : <nom>-<triplet de la cible>[.exe].
 triple="$(rustc -vV | sed -n 's/^host: //p')"
 mkdir -p apps/desktop/src-tauri/binaries
-cp target/release/hirzla-core "apps/desktop/src-tauri/binaries/hirzla-core-$triple"
-cp target/release/hirzla      "apps/desktop/src-tauri/binaries/hirzla-$triple"
-# 3. Les installeurs du système courant.
+for n in hirzla-core hirzla hirzla-native-host; do
+  cp "target/release/$n" "apps/desktop/src-tauri/binaries/$n-$triple"
+done
+# 3. L'application, sans empaqueter : les exécutables sont maintenant définitifs.
 cd apps/desktop/src-tauri
-cargo tauri build --config tauri.livraison.conf.json --features livraison
+cargo tauri build --no-bundle --config tauri.livraison.conf.json --features livraison
+# 4. Manifeste des clients signé hors ligne pour ces exécutables (§ 7), copié en
+#    binaries/hirzla-clients.manifest, puis les installeurs, sans toucher aux exécutables
+#    (sous Windows : tauri.manifeste.windows.conf.json).
+cargo tauri bundle --no-binary-patching --features livraison \
+  --config tauri.livraison.conf.json --config tauri.manifeste.linux.conf.json
 ```
+
+Les étapes 3 et 4 sont séparées parce que le manifeste porte sur les exécutables définitifs :
+`cargo tauri build` en une passe réécrirait `hirzla-desktop` pendant l'empaquetage
+(*binary patching*, désactivé par `--no-binary-patching`), et la signature ne peut avoir
+lieu qu'entre les deux, hors ligne. Le flux de livraison du § 2.1 fait exactement cela.
 
 La fonctionnalité `livraison` de l'application, de la ligne de commande et de l'hôte natif
 fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : empreinte
@@ -81,12 +97,75 @@ du manifeste des clients (§ 7), sur les trois systèmes.
   Le contrôle devient « même éditeur au sens du système » (§ 3, § 4) ; refusé sous Linux.
   Un noyau et des clients compilés dans des modes différents ne se reconnaissent pas.
 
-Le flux `.github/workflows/livraison.yml` (lancé à la main) fait ces étapes sur les trois
-systèmes et publie les installeurs comme artefacts. La compilation Cargo elle-même ne
-télécharge rien d'autre que les crates de `Cargo.lock` : pas de dépendance git, pas de script
-de construction qui télécharge.
+Le flux `.github/workflows/livraison.yml` fait ces étapes sur les trois systèmes (§ 2.1). La
+compilation Cargo elle-même ne télécharge rien d'autre que les crates de `Cargo.lock` : pas de
+dépendance git, pas de script de construction qui télécharge.
 
 Chaque livraison publie aussi un fichier `SHA256SUMS` des installeurs, signé (§ 5).
+
+### 2.1 Flux de livraison en deux temps (ADR 0064)
+
+Un seul flux GitHub Actions, « Livraison » (`.github/workflows/livraison.yml`), qui remplace
+l'ancien flux manuel. Il ne publie jamais lui-même : il prépare un **brouillon** de version
+que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md`, étape 7.
+
+| Moment | Déclencheur | Ce qui se passe |
+| --- | --- | --- |
+| Étape 1 | pose de l'étiquette `vX.Y.Z` | contrôles de version et de `HIRZLA_PUBLISHER_KEYS` ; compilation unique des quatre exécutables par système (`livraison`, mode `manifeste`) ; artefact `hirzla-X.Y.Z-a-signer` ; brouillon de version |
+| Signature | l'éditeur, hors ligne | `signer-manifestes.sh` : un manifeste par plateforme, joint au brouillon |
+| Étape 2 | *Run workflow* sur l'étiquette | vérification des manifestes ; installeurs à partir des exécutables de l'étape 1 ; contrôle de chaque installeur ; archives, extension, SBOM, `SHA256SUMS`, provenance ; envoi au brouillon |
+| Publication | l'éditeur | `SHA256SUMS.asc` (GPG) joint, relecture, *Publish release* |
+
+**Contrôles qui arrêtent la livraison**
+
+- L'étiquette diffère de la version de l'espace de travail, ou une des versions de
+  `Cargo.lock`, `tauri.conf.json`, des `package.json`, des `package-lock.json` ou du
+  manifeste de l'extension diffère (`.github/scripts/release-version.py`).
+- `HIRZLA_PUBLISHER_KEYS` est vide ou mal formée (un noyau de livraison sans clé ne démarre
+  pas).
+- Étape 2 lancée sur une branche, sans brouillon, ou sur un commit qui n'est pas celui de
+  l'étape 1.
+- Manifeste Linux ou Windows absent du brouillon ; manifeste qui ne vérifie avec aucune clé de
+  `HIRZLA_PUBLISHER_KEYS`, d'une autre version ou plateforme, ou qui ne nomme pas exactement
+  les quatre exécutables de l'étape 1 avec leurs tailles et empreintes
+  (`hirzla-signer verifier --executables`).
+- Un deb, un rpm ou un MSI dont les exécutables ou le manifeste diffèrent, octet pour octet,
+  des fichiers vérifiés (`.github/scripts/compare-installed.sh`, après extraction). Une
+  AppImage qui diffère est écartée de la version avec un avertissement.
+
+**Ce que l'étape 2 joint au brouillon**
+
+| Fichier | Contenu |
+| --- | --- |
+| `Hirzla_X.Y.Z_x64_fr-FR.msi` | Windows |
+| `Hirzla_X.Y.Z_amd64.deb`, `Hirzla-X.Y.Z-1.x86_64.rpm`, `Hirzla_X.Y.Z_amd64.AppImage` | Linux (AppImage si conforme) |
+| `hirzla-cli-X.Y.Z-linux-x86_64.tar.gz` | `hirzla`, `hirzla-core`, `hirzla-native-host`, manifeste, modèles de manifeste de messagerie native |
+| `hirzlad-X.Y.Z-linux-x86_64.tar.gz` | `hirzlad`, `hirzla-audit-verify` (pas d'unité systemd fournie : voir `docs/evaluation/guide-agd.md`) |
+| `hirzla-extension-X.Y.Z.zip` | l'extension (`apps/extension/src`), pour Firefox et Chromium |
+| `hirzla-clients-<plateforme>.manifest` | manifestes signés, tels que joints par l'éditeur |
+| `*.cdx.json` | nomenclatures CycloneDX : exécutables par plateforme, `hirzlad`, paquets npm |
+| `SHA256SUMS` | empreintes de tous les fichiers ci-dessus, à signer en GPG (§ 5) |
+
+Chaque fichier porte une attestation de provenance Sigstore (`gh attestation verify`). Les
+exécutables de l'étape 1 en portent une aussi : l'éditeur peut vérifier, avant de signer,
+qu'ils viennent du flux.
+
+**Règles qui rendent le manifeste valable**
+
+- Les exécutables sont compilés **une fois**, à l'étape 1, et ne sont plus modifiés : pas de
+  `strip`, pas de recompilation à l'étape 2 (`cargo tauri bundle`, pas `build`),
+  `--no-binary-patching`, `NO_STRIP=true` pour linuxdeploy. Sous macOS, la signature ad hoc
+  (§ 3) est faite à l'étape 1, avant la signature du manifeste ; une signature Authenticode
+  (§ 4) se placerait au même endroit.
+- Le noyau, la ligne de commande, l'hôte natif et l'application ont les mêmes
+  fonctionnalités : `livraison`, sans `signature-systeme`.
+- Les artefacts de l'étape 1 sont gardés 90 jours ; passé ce délai, ou si l'étape 1 est
+  relancée, les manifestes sont à signer de nouveau (une nouvelle étape 1 retire du brouillon
+  les manifestes devenus faux).
+
+**macOS** : l'étape 2 construit l'image disque comme simple artefact de l'exécution, sans
+manifeste, et ne la joint pas à la version ; le job macOS ne bloque pas les autres. Une
+étape `TODO(ADR 0065)` du flux accueillera le paquet `.pkg` qui posera le manifeste.
 
 ### Compilation reproductible et nomenclature (ADR 0056)
 
@@ -205,6 +284,8 @@ exécutables.
       « Traçage interdit : appliqué ».
 - [ ] L'application démarre sans réseau (câble débranché, pare-feu sortant fermé).
 - [ ] `SHA256SUMS` publié et signé.
+- [ ] Le flux « Livraison » est vert sur les deux étapes ; s'il a écarté l'AppImage, les notes
+      de version le disent.
 
 ## 7. Clé d'éditeur et manifeste des clients (ADR 0042)
 
@@ -331,5 +412,6 @@ paquets. La version de l'espace de travail Cargo doit être relevée à chaque l
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
 4. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
    (ADR 0043, § 8) en plus des outils de déploiement du parc et des dépôts de paquets.
-   Reste : brancher la production du manifeste et du paquet dans `livraison.yml` une fois la
-   clé d'éditeur créée et `HIRZLA_PUBLISHER_KEYS` renseignée.
+   Le manifeste est branché dans `livraison.yml` (§ 2.1, ADR 0064) ; un paquet de mise à jour
+   joint au brouillon par l'éditeur est vérifié et publié avec le reste. Reste : rien pour la
+   première version (un paquet `1.0.0` ne s'applique sur aucune installation).

@@ -34,6 +34,8 @@ Seul sur un poste, ou relié à un serveur qui ne peut rien lire.
 | [Feuille de route](docs/feuille-de-route.md) | Phases et critères de sortie |
 | [Plan de tests V1](docs/evaluation/plan-de-tests-v1.md) | Essais manuels avant la version 1 |
 | [Décisions](docs/adr/) | ADR, une décision par fichier |
+| [Notes de version](CHANGELOG.md) | Évolutions de chaque version |
+| [Livraison](docs/livraison.md) | Installeurs, signature, flux de publication |
 | [Glossaire](docs/glossaire.md) | Vocabulaire fixé |
 
 ## Construire depuis les sources
