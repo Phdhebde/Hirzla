@@ -119,14 +119,21 @@ pas.
 Option `--client-signatures required|off` : `off` par défaut en développement ; `required`
 imposé et non désactivable dans une version de livraison. En développement,
 `--publisher-key FICHIER` et `--client-manifest FICHIER` désignent la clé publique d'éditeur et
-le manifeste ; une version de livraison n'admet que ses clés compilées et, sous macOS, refuse
-`--client-manifest` : elle lit le manifeste à l'emplacement fixe
+le manifeste ; une version de livraison n'admet que ses clés compilées et refuse
+`--client-manifest` **sur les trois systèmes** : elle lit le manifeste à son emplacement par
+défaut seulement, celui que les clients lisent aussi, pour que celui qui lance le noyau ne
+puisse pas en choisir un autre (un manifeste authentique plus ancien, par exemple). Cet
+emplacement est `hirzla-clients.manifest` à côté du noyau sous Windows et Linux ; sous macOS,
 `/Library/Application Support/Hirzla/hirzla-clients.manifest`, hors de `Hirzla.app` dont le
-sceau ne peut pas le couvrir, et seulement si ce fichier et chaque répertoire au-dessus
+sceau ne peut pas le couvrir, lu seulement si ce fichier et chaque répertoire au-dessus
 appartiennent à root sans être inscriptibles par un groupe ni par les autres, vérifié sur le
-fichier ouvert (ADR 0065 ; les clients appliquent le même contrôle). En mode `required`, un
-noyau qui ne peut vérifier le manifeste (mode `manifeste` : absent, altéré, d'une autre
-plateforme, sans clé, non protégé par root en livraison macOS) ou établir sa propre signature (mode `systeme`) **refuse de démarrer**.
+fichier ouvert (ADR 0065 ; les clients appliquent le même contrôle). Le manifeste doit porter
+**la version du noyau** (`Version::current`, version de l'espace de travail) : un manifeste
+authentique d'une version plus ancienne ou plus récente est refusé par le noyau comme par les
+clients (`SetupError::ManifestVersion`), dans toute version. En mode `required`, un noyau qui
+ne peut vérifier le manifeste (mode `manifeste` : absent, altéré, d'une autre plateforme ou
+d'une autre version, sans clé, non protégé par root en livraison macOS) ou établir sa propre
+signature (mode `systeme`) **refuse de démarrer**.
 Le journal du noyau porte le mode au démarrage (`event=client_signatures required=1
 kind=manifeste`). Un client refusé pour sa signature reçoit `Unauthorized` comme les autres,
 motif journalisé `signature_not_accepted`.

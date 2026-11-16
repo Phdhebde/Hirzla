@@ -366,8 +366,12 @@ Un manifeste est produit **pour chaque plateforme livrée**, **après** la derni
 transformation des exécutables (aucun `strip` ni signature de système ensuite), et installé à
 côté de `hirzla-core` sous Windows et Linux. Sous macOS, une version de livraison le lit à
 l'emplacement fixe `/Library/Application Support/Hirzla/hirzla-clients.manifest`, posé par le
-paquet d'installation et vérifié comme appartenant à root (§ 3, ADR 0065) ; l'option
-`--client-manifest` y est refusée. Les noms sont ceux des fichiers installés, avec `.exe` sous
+paquet d'installation et vérifié comme appartenant à root (§ 3, ADR 0065). Une version de
+livraison refuse l'option `--client-manifest` sur les trois systèmes : le noyau lit le
+manifeste à cet emplacement par défaut seulement, comme ses clients. Le manifeste porte la
+version de la livraison (`--version`), qui doit être celle du noyau : le noyau et ses clients
+refusent un manifeste authentique d'une autre version, plus ancienne comme plus récente
+(`SetupError::ManifestVersion`). Les noms sont ceux des fichiers installés, avec `.exe` sous
 Windows ; sous macOS, les exécutables hachés sont ceux de `Hirzla.app/Contents/MacOS/` après
 la signature finale du paquet d'application :
 
@@ -381,9 +385,9 @@ hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme m
   --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
 ```
 
-Le noyau refuse un manifeste d'une autre plateforme que la sienne et, sous macOS en version de
-livraison, un manifeste ou un répertoire parent qui n'appartient pas à root ou qu'un groupe ou
-les autres peuvent modifier (`SetupError::ManifestNotProtected`). Sous Linux, il hache
+Le noyau refuse un manifeste d'une autre plateforme ou d'une autre version que la sienne et,
+sous macOS en version de livraison, un manifeste ou un répertoire parent qui n'appartient pas
+à root ou qu'un groupe ou les autres peuvent modifier (`SetupError::ManifestNotProtected`). Sous Linux, il hache
 l'image réellement lancée par le client (`/proc/<pid>/exe`) ; sous Windows et macOS, le
 fichier au chemin que le système donne pour le processus (`QueryFullProcessImageNameW`,
 `proc_pidpath`), d'où un risque résiduel de remplacement du fichier entre lancement et
