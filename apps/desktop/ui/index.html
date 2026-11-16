@@ -15,6 +15,33 @@
   <!-- Announcements for screen readers and short confirmations. -->
   <div id="annonces" class="annonces" role="status" aria-live="polite"></div>
 
+  <!-- Icons: one sprite, referenced by <use>; no image file, no inline style. -->
+  <svg class="visuellement-cache" aria-hidden="true" focusable="false">
+    <symbol id="i-tous" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M9 14h6"/></symbol>
+    <symbol id="i-favori" viewBox="0 0 24 24"><path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5L12 16.6 7.1 19.2 8 13.7 4 9.8 9.5 9z"/></symbol>
+    <symbol id="i-identifiant" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/></symbol>
+    <symbol id="i-cle" viewBox="0 0 24 24"><path d="M21 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM14 11l-9 9M8 17l2 2M5 20l1.5 1.5"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM9 10h7M9 14h7M9 18h4"/></symbol>
+    <symbol id="i-fichier" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM15 3v4h4"/></symbol>
+    <symbol id="i-totp" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2"/></symbol>
+    <symbol id="i-secret" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-casier" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></symbol>
+    <symbol id="i-generateur" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></symbol>
+    <symbol id="i-serveur" viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4zM7.5 7h.01M7.5 17h.01"/></symbol>
+    <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
+    <symbol id="i-corbeille" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></symbol>
+    <symbol id="i-copier" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM5 15V4h11"/></symbol>
+    <symbol id="i-oeil" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></symbol>
+    <symbol id="i-oeil-barre" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM4 4l16 16"/></symbol>
+    <symbol id="i-verrou" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-recherche" viewBox="0 0 24 24"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l4.5 4.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
+    <symbol id="i-historique" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4h4M12 8v4l3 2"/></symbol>
+    <symbol id="i-membres" viewBox="0 0 24 24"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 6.5M18.5 14.8c1.7.8 2.7 2.6 3 5.2"/></symbol>
+  </svg>
+  <template id="gabarit-icone"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-secret"/></svg></template>
+
   <!-- Loading, and a core that cannot be reached. -->
   <main id="ecran-attente" class="ecran ecran-centre" data-ecran="attente">
     <div class="carte carte-etroite">
@@ -74,9 +101,14 @@
       <h1 class="titre-ecran" tabindex="-1">Ouvrir le coffre</h1>
       <label class="champ">
         <span class="champ-libelle">Mot de passe maître</span>
-        <input id="deverrouillage-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
-               spellcheck="false" required maxlength="1024">
+        <span class="saisie-groupe">
+          <input id="deverrouillage-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
+                 spellcheck="false" required maxlength="1024" aria-describedby="deverrouillage-majuscules">
+          <button id="deverrouillage-voir" class="bouton bouton-icone" type="button" aria-pressed="false"
+                  aria-label="Afficher le mot de passe maître" aria-controls="deverrouillage-mdp"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-oeil"/></svg></button>
+        </span>
       </label>
+      <p id="deverrouillage-majuscules" class="avertissement" hidden><span class="forme forme-triangle" aria-hidden="true"></span>Verrouillage des majuscules activé.</p>
       <div id="deverrouillage-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -95,14 +127,16 @@
       </div>
       <div class="recherche" role="search">
         <label for="recherche" class="visuellement-cache">Rechercher un secret</label>
-        <input id="recherche" class="saisie" type="search" placeholder="Rechercher (Ctrl+F)" autocomplete="off"
+        <svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-recherche"/></svg>
+        <input id="recherche" class="saisie" type="search" placeholder="Filtrer la liste" autocomplete="off"
                spellcheck="false" maxlength="256">
+        <button id="bouton-palette" class="touche" type="button" title="Aller à un secret ou à une action (Ctrl+K)">Ctrl K</button>
       </div>
-      <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span>Coffre ouvert</p>
+      <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span><span id="etat-coffre-texte">Coffre ouvert</span></p>
       <button id="etat-serveur" class="etat etat-neutre etat-bouton" type="button" hidden
               title="Voir l'état de la connexion au serveur"></button>
       <button id="bouton-synchroniser" class="bouton bouton-secondaire" type="button" hidden>Synchroniser</button>
-      <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)">Verrouiller</button>
+      <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-verrou"/></svg>Verrouiller</button>
     </header>
 
     <!-- Server mode alerts: suspect key log, alerts about your keys, lost access, unconfirmed
@@ -117,20 +151,27 @@
     </div>
 
     <nav class="navigation" aria-label="Sections">
-      <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)">Nouveau secret</button>
+      <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Nouveau secret</button>
+      <h2 class="nav-titre">Coffre</h2>
       <ul class="nav-liste">
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="tous" aria-current="page">Tous les secrets</button></li>
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="favoris">Favoris</button></li>
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="corbeille">Corbeille</button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="tous" aria-current="page"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-tous"/></svg><span class="nav-nom">Tous les secrets</span><span class="compte" id="compte-tous" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="favoris"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-favori"/></svg><span class="nav-nom">Favoris</span><span class="compte" id="compte-favoris" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="corbeille"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span class="nav-nom">Corbeille</span></button></li>
+      </ul>
+      <h2 class="nav-titre" id="titre-types">Types</h2>
+      <ul class="nav-liste" aria-labelledby="titre-types">
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:password"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-identifiant"/></svg><span class="nav-nom">Mots de passe</span><span class="compte" id="compte-password" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:ssh_key"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-cle"/></svg><span class="nav-nom">Clés SSH</span><span class="compte" id="compte-ssh_key" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:note"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-note"/></svg><span class="nav-nom">Notes</span><span class="compte" id="compte-note" aria-hidden="true"></span></button></li>
       </ul>
       <h2 class="nav-titre" id="titre-casiers">Casiers</h2>
       <ul id="liste-casiers" class="nav-liste" aria-labelledby="titre-casiers"></ul>
-      <button id="bouton-casier-partage" class="nav-lien nav-action" type="button" hidden>Nouveau casier partagé…</button>
+      <button id="bouton-casier-partage" class="nav-lien nav-action" type="button" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg><span class="nav-nom">Nouveau casier partagé…</span></button>
       <h2 class="nav-titre">Outils</h2>
       <ul class="nav-liste">
-        <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)">Générateur</button></li>
-        <li><button class="nav-lien" type="button" data-vue="serveur">Serveur</button></li>
-        <li><button class="nav-lien" type="button" data-vue="reglages">Réglages</button></li>
+        <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-generateur"/></svg><span class="nav-nom">Générateur</span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="serveur"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-serveur"/></svg><span class="nav-nom">Serveur</span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="reglages"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-reglages"/></svg><span class="nav-nom">Réglages</span></button></li>
       </ul>
     </nav>
 
@@ -139,11 +180,11 @@
       <section class="colonne-liste" aria-labelledby="liste-titre">
         <div class="entete-liste">
           <h1 id="liste-titre" class="titre-section" tabindex="-1">Tous les secrets</h1>
-          <span id="liste-compte" class="texte-secondaire"></span>
+          <span id="liste-compte" class="compte-liste"></span>
         </div>
         <div id="liste-casier-partage" class="entete-casier" hidden>
           <p id="liste-casier-role" class="texte-secondaire"></p>
-          <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button">Membres et rôles</button>
+          <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-membres"/></svg>Membres et rôles</button>
         </div>
         <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
         <p id="liste-vide" class="vide" hidden></p>
@@ -155,18 +196,25 @@
         </div>
         <article id="fiche-contenu" hidden>
           <header class="fiche-entete">
-            <div>
+            <span id="fiche-icone" class="vignette vignette-grande" aria-hidden="true"></span>
+            <div class="fiche-identite">
               <p id="fiche-type" class="surtitre"></p>
               <h2 id="fiche-titre" class="titre-fiche" tabindex="-1"></h2>
             </div>
             <div class="fiche-actions">
-              <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false">Favori</button>
+              <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false" aria-label="Favori"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-favori"/></svg></button>
               <button id="fiche-modifier" class="bouton bouton-secondaire" type="button">Modifier</button>
-              <button id="fiche-historique" class="bouton bouton-secondaire" type="button">Historique</button>
-              <button id="fiche-restaurer" class="bouton bouton-secondaire" type="button" hidden>Restaurer</button>
-              <button id="fiche-supprimer" class="bouton bouton-secondaire bouton-danger" type="button">Mettre à la corbeille</button>
+              <button id="fiche-restaurer" class="bouton bouton-principal" type="button" hidden>Restaurer</button>
+              <details id="fiche-menu" class="menu">
+                <summary class="bouton bouton-icone" aria-label="Autres actions"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg></summary>
+                <div class="menu-liste">
+                  <button id="fiche-historique" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-historique"/></svg>Historique</button>
+                  <button id="fiche-supprimer" class="menu-action menu-danger" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span id="fiche-supprimer-texte">Mettre à la corbeille</span></button>
+                </div>
+              </details>
             </div>
           </header>
+          <div id="fiche-principales" class="fiche-principales"></div>
           <dl id="fiche-champs" class="champs-fiche"></dl>
         </article>
       </section>
@@ -825,6 +873,21 @@
         <button id="recouvrement-ouvrir" class="bouton bouton-principal" type="submit" disabled>Ouvrir le coffre</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Quick access (Ctrl+K): secrets and actions, from the keyboard. -->
+  <dialog id="dialogue-palette" class="dialogue palette" aria-label="Aller à un secret ou à une action">
+    <div class="palette-saisie">
+      <svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-recherche"/></svg>
+      <label for="palette-recherche" class="visuellement-cache">Rechercher un secret ou une action</label>
+      <input id="palette-recherche" type="text" role="combobox" aria-expanded="true" aria-controls="palette-liste"
+             aria-autocomplete="list" autocomplete="off" spellcheck="false" maxlength="256"
+             placeholder="Rechercher un secret ou une action">
+      <span class="touche" aria-hidden="true">Échap</span>
+    </div>
+    <ul id="palette-liste" class="palette-liste" role="listbox" aria-label="Résultats"></ul>
+    <p id="palette-vide" class="vide" hidden>Aucun secret ni action ne correspond.</p>
+    <p class="palette-aide"><span class="touche">Entrée</span> ouvrir <span class="touche">Ctrl Entrée</span> copier le mot de passe <span class="touche">↑ ↓</span> choisir</p>
   </dialog>
 </body>
 </html>

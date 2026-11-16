@@ -124,6 +124,15 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("ArrowDown");
   await shot(p, "05-recherche", theme);
   await p.fill("#recherche", "");
+
+  // Command palette: secrets and actions from the keyboard.
+  await p.keyboard.press("Control+k");
+  await p.waitForSelector("#dialogue-palette[open]");
+  await p.keyboard.type("ma");
+  await p.waitForSelector("#palette-liste li");
+  await shot(p, "05b-palette", theme);
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("#dialogue-palette:not([open])", { state: "attached" });
   await p.dispatchEvent("#recherche", "input");
 
   // New secret.
@@ -190,6 +199,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   // History of a secret, then the trash.
   await p.click("[data-vue='secrets'][data-filtre='tous']");
   await p.click("#liste-secrets li");
+  await p.click("#fiche-menu summary");
   await p.click("#fiche-historique");
   await p.waitForSelector("#dialogue-historique[open] #historique-liste li");
   await p.click("#historique-liste li:nth-child(2) button");
