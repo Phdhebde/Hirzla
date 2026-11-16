@@ -220,6 +220,9 @@ Marche à suivre :
 2. Sur GitHub, *Settings* › *Secrets and variables* › *Actions* › *Variables* : créer
    `HIRZLA_PUBLISHER_KEYS_ESSAI` avec la valeur affichée (clé publique : variable, pas
    secret).
+   À défaut de variable, le flux prend la clé publique d'essai versionnée dans
+   `.github/release/cle-essai.hex` (remplacer ce fichier revient au même) ; la variable,
+   si elle existe, a la priorité. Cette clé n'est compilée que dans les versions d'essai.
 3. Poser et pousser l'étiquette d'essai sur le commit à essayer :
 
    ```sh

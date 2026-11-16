@@ -46,6 +46,10 @@ TAG = re.compile(r"^v([0-9][0-9.]*?)(?:-essai\.([1-9][0-9]*))?$")
 
 REAL_KEYS = "HIRZLA_PUBLISHER_KEYS"
 TEST_KEYS = "HIRZLA_PUBLISHER_KEYS_ESSAI"
+# Throwaway public key of the dry runs, versioned so that a dry run needs no repository
+# variable; HIRZLA_PUBLISHER_KEYS_ESSAI, when set, takes precedence. Only ever compiled into
+# dry-run builds, which stay drafts (docs/livraison.md, § 2.1).
+TEST_KEYS_FILE = os.path.join(".github", "release", "cle-essai.hex")
 
 
 def parse_tag(tag):
@@ -162,9 +166,13 @@ def main():
     essai = parsed is not None and parsed[1] is not None
     keys = None
     if args.publisher_keys:
-        key_errors, keys = check_mode_keys(
-            essai, os.environ.get(REAL_KEYS), os.environ.get(TEST_KEYS)
-        )
+        test = os.environ.get(TEST_KEYS)
+        if essai and not (test or "").strip():
+            path = os.path.join(args.root, TEST_KEYS_FILE)
+            if os.path.exists(path):
+                with open(path, encoding="ascii") as f:
+                    test = f.read().strip()
+        key_errors, keys = check_mode_keys(essai, os.environ.get(REAL_KEYS), test)
         errors += key_errors
     if errors:
         for e in errors:
