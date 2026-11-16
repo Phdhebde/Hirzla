@@ -99,7 +99,8 @@ est fondu), en deux étapes reliées par un **brouillon de version** GitHub.
 5. **macOS ne bloque pas** : le job macOS de l'étape 2 est en `continue-on-error`, son image
    disque reste un artefact de l'exécution et n'est jamais jointe à la version ; une étape
    marquée `TODO(ADR 0065)` attend le paquet `.pkg` qui posera le manifeste à l'emplacement
-   que cet ADR retiendra.
+   que cet ADR retiendra. *Remplacé depuis par l'ADR 0065* : le `.pkg` est construit par le
+   flux et macOS est exigé comme les autres systèmes (`livraison.md` § 2.1).
 6. **Versions** : la version de l'espace de travail, de `tauri.conf.json`, des `package.json`
    et du manifeste de l'extension sont égales et relevées ensemble à chaque version ; les
    tests de mise à jour hors ligne ne supposent plus une version `0.x` (ils construisent un

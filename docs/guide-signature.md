@@ -156,9 +156,13 @@ publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
    signer-manifestes.sh …`. Ne modifiez, ne renommez et ne signez aucun exécutable : le
    manifeste porte leurs empreintes exactes.
 
-   **macOS** (ADR 0065) : les exécutables signés sont ceux de `Hirzla.app/Contents/MacOS/`
-   de l'application **déjà signée ad hoc** par le flux. Le manifeste ne va pas dans
-   `Hirzla.app` : le paquet `.pkg` le pose dans `/Library/Application Support/Hirzla/`.
+   **macOS** (ADR 0065) : le dossier contient l'application entière,
+   `macos-aarch64/Hirzla.app.zip`, **déjà signée ad hoc** par le flux. Le script la
+   décompresse dans `macos-aarch64/app` (avec `ditto`, `unzip` ou Python) et signe le
+   manifeste des exécutables de `Hirzla.app/Contents/MacOS/` tels qu'ils sont dans ce paquet
+   signé. Ne rouvrez pas et ne modifiez pas `Hirzla.app`. Le manifeste ne va pas dans
+   `Hirzla.app` : l'étape 2 construit un paquet d'installation `.pkg` qui pose l'application
+   dans `/Applications` et le manifeste dans `/Library/Application Support/Hirzla/`.
 6. **Démontez la clé d'éditeur.** Copiez les trois fichiers `hirzla-clients-*.manifest` sur
    la clé de transfert (ils sont publics), puis, sur la machine connectée : *Releases* ›
    brouillon « Hirzla 1.0.0 » › crayon (*Edit*) › faites glisser les trois fichiers dans
@@ -167,9 +171,10 @@ publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
    En ligne de commande, équivalent : `gh release upload v1.0.0 hirzla-clients-*.manifest`.
 7. **Lancez l'étape 2** : *Actions* › *Livraison* › *Run workflow* › *Use workflow from* :
    onglet *Tags* › `v1.0.0` › *Run workflow*. Elle vérifie vos manifestes (bonne clé, bonne
-   version, bons exécutables), construit les installeurs, vérifie qu'ils contiennent
-   exactement les exécutables signés, et joint au brouillon les installeurs, les archives,
-   l'extension, les SBOM et `SHA256SUMS`. Si elle refuse un manifeste, le message dit
+   version, bons exécutables ; les trois systèmes sont exigés), construit les installeurs
+   (MSI, deb, rpm, AppImage, et le `.pkg` macOS), vérifie qu'ils contiennent exactement les
+   exécutables signés, et joint au brouillon les installeurs, les archives, l'extension, les
+   SBOM et `SHA256SUMS`. Si elle refuse un manifeste, le message dit
    lequel et pourquoi : supprimez-le du brouillon, recommencez au point 5.
 8. **Signez les empreintes** : téléchargez `SHA256SUMS` depuis le brouillon, puis, sur le
    poste de signature (la clé GPG y vit, étape 3) :
@@ -180,9 +185,9 @@ publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
    ```
 
 9. **Publiez** : joignez `SHA256SUMS.asc` au brouillon, relisez les notes (elles viennent de
-   `CHANGELOG.md`), vérifiez la liste des fichiers (`livraison.md` § 2.1 ; macOS n'y est pas
-   tant que l'ADR 0065 n'est pas mis en œuvre), puis **Publish release**. Démontez les clés
-   USB et rangez-les.
+   `CHANGELOG.md`), vérifiez la liste des fichiers (`livraison.md` § 2.1 : macOS y figure
+   en `Hirzla_1.0.0_aarch64.pkg`, sans image disque), puis **Publish release**. Démontez
+   les clés USB et rangez-les.
 
 Une version publiée n'est jamais reconstruite : pour corriger, on publie `1.0.1`. Si
 l'étape 2 n'a pas été lancée dans les 90 jours qui suivent l'étape 1 (durée de conservation

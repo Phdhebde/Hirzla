@@ -133,8 +133,10 @@ paquet d'application, à un emplacement fixe réservé à root**, par un **paque
   fichier absent, fichier d'un compte ordinaire ou sous un répertoire inscriptible refusés ; un
   fichier système de root accepté là où il existe), `manifest_location_per_build`,
   `parses_the_client_signature_options`.
-- `.github/scripts/macos-pkg.sh` ; le flux `livraison.yml` l'appelle (hors de cette demande de
-  fusion).
+- `.github/scripts/macos-pkg.sh` ; le flux `livraison.yml` l'appelle : l'étape 1 construit et
+  signe ad hoc `Hirzla.app` (`--bundles app`) et la remet zippée à l'éditeur, l'étape 2
+  vérifie le manifeste contre `Contents/MacOS`, construit et contrôle le `.pkg`
+  (`livraison.md` § 2.1). macOS y est exigé ; aucune image disque n'est livrée.
 
 ## Alternatives écartées
 

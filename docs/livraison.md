@@ -27,7 +27,7 @@ Windows, dans `Hirzla.app/Contents/MacOS/` sous macOS, dans `/usr/bin/` pour deb
 `usr/bin/` de l'AppImage. Le manifeste est ajouté par le flux de livraison (§ 2.1) :
 `tauri.manifeste.linux.conf.json` (`/usr/bin/hirzla-clients.manifest` des trois paquets
 Linux) et `tauri.manifeste.windows.conf.json` (racine du répertoire d'installation) ; sous
-macOS, son emplacement dépend de l'ADR 0065 (§ 9, point 2).
+macOS, le paquet `.pkg` le pose hors de `Hirzla.app` (ci-dessous, § 3, ADR 0065).
 
 Sous macOS, une livraison est un paquet d'installation `.pkg`, pas une image disque
 (ADR 0065) : il pose `Hirzla.app` dans `/Applications` (propriété de root) et le manifeste des
@@ -118,9 +118,9 @@ que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md
 
 | Moment | Déclencheur | Ce qui se passe |
 | --- | --- | --- |
-| Étape 1 | pose de l'étiquette `vX.Y.Z` | contrôles de version et de `HIRZLA_PUBLISHER_KEYS` ; compilation unique des quatre exécutables par système (`livraison`, mode `manifeste`) ; artefact `hirzla-X.Y.Z-a-signer` ; brouillon de version |
+| Étape 1 | pose de l'étiquette `vX.Y.Z` | contrôles de version et de `HIRZLA_PUBLISHER_KEYS` ; compilation unique des quatre exécutables par système (`livraison`, mode `manifeste`) ; sous macOS, `Hirzla.app` entière, signée ad hoc ; artefact `hirzla-X.Y.Z-a-signer` ; brouillon de version |
 | Signature | l'éditeur, hors ligne | `signer-manifestes.sh` : un manifeste par plateforme, joint au brouillon |
-| Étape 2 | *Run workflow* sur l'étiquette | vérification des manifestes ; installeurs à partir des exécutables de l'étape 1 ; contrôle de chaque installeur ; archives, extension, SBOM, `SHA256SUMS`, provenance ; envoi au brouillon |
+| Étape 2 | *Run workflow* sur l'étiquette | vérification des manifestes ; installeurs à partir des exécutables de l'étape 1 (sous macOS, `.pkg` de la `Hirzla.app` de l'étape 1) ; contrôle de chaque installeur ; archives, extension, SBOM, `SHA256SUMS`, provenance ; envoi au brouillon |
 | Publication | l'éditeur | `SHA256SUMS.asc` (GPG) joint, relecture, *Publish release* |
 
 **Contrôles qui arrêtent la livraison**
@@ -132,19 +132,23 @@ que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md
   pas).
 - Étape 2 lancée sur une branche, sans brouillon, ou sur un commit qui n'est pas celui de
   l'étape 1.
-- Manifeste Linux ou Windows absent du brouillon ; manifeste qui ne vérifie avec aucune clé de
-  `HIRZLA_PUBLISHER_KEYS`, d'une autre version ou plateforme, ou qui ne nomme pas exactement
-  les quatre exécutables de l'étape 1 avec leurs tailles et empreintes
-  (`hirzla-signer verifier --executables`).
-- Un deb, un rpm ou un MSI dont les exécutables ou le manifeste diffèrent, octet pour octet,
-  des fichiers vérifiés (`.github/scripts/compare-installed.sh`, après extraction). Une
-  AppImage qui diffère est écartée de la version avec un avertissement.
+- Manifeste Linux, Windows ou macOS absent du brouillon ; manifeste qui ne vérifie avec
+  aucune clé de `HIRZLA_PUBLISHER_KEYS`, d'une autre version ou plateforme, ou qui ne nomme
+  pas exactement les quatre exécutables de l'étape 1 avec leurs tailles et empreintes
+  (`hirzla-signer verifier --executables` ; sous macOS, ceux de
+  `Hirzla.app/Contents/MacOS`).
+- Un deb, un rpm, un MSI ou un `.pkg` dont les exécutables ou le manifeste diffèrent, octet
+  pour octet, des fichiers vérifiés (`.github/scripts/compare-installed.sh`, après extraction
+  par `pkgutil --expand-full` pour le `.pkg`) ; une `Hirzla.app` dont la signature ne tient
+  plus (`codesign --verify --strict`), ou que `macos-pkg.sh` refuse. Une AppImage qui diffère
+  est écartée de la version avec un avertissement.
 
 **Ce que l'étape 2 joint au brouillon**
 
 | Fichier | Contenu |
 | --- | --- |
 | `Hirzla_X.Y.Z_x64_fr-FR.msi` | Windows |
+| `Hirzla_X.Y.Z_aarch64.pkg` | macOS (Apple Silicon), paquet d'installation non signé (§ 3) |
 | `Hirzla_X.Y.Z_amd64.deb`, `Hirzla-X.Y.Z-1.x86_64.rpm`, `Hirzla_X.Y.Z_amd64.AppImage` | Linux (AppImage si conforme) |
 | `hirzla-cli-X.Y.Z-linux-x86_64.tar.gz` | `hirzla`, `hirzla-core`, `hirzla-native-host`, manifeste, modèles de manifeste de messagerie native |
 | `hirzlad-X.Y.Z-linux-x86_64.tar.gz` | `hirzlad`, `hirzla-audit-verify` (pas d'unité systemd fournie : voir `docs/evaluation/guide-agd.md`) |
@@ -161,18 +165,25 @@ qu'ils viennent du flux.
 
 - Les exécutables sont compilés **une fois**, à l'étape 1, et ne sont plus modifiés : pas de
   `strip`, pas de recompilation à l'étape 2 (`cargo tauri bundle`, pas `build`),
-  `--no-binary-patching`, `NO_STRIP=true` pour linuxdeploy. Sous macOS, la signature ad hoc
-  (§ 3) est faite à l'étape 1, avant la signature du manifeste ; une signature Authenticode
-  (§ 4) se placerait au même endroit.
+  `--no-binary-patching`, `NO_STRIP=true` pour linuxdeploy. Sous macOS, l'étape 1 construit
+  `Hirzla.app` (`cargo tauri build --bundles app`) et la signe ad hoc avec le runtime renforcé
+  (§ 3 : exécutables imbriqués d'abord, puis le paquet), avant la signature du manifeste ;
+  l'éditeur reçoit `macos-aarch64/Hirzla.app.zip` (`ditto -c -k --norsrc --keepParent`) et le
+  manifeste porte sur `Hirzla.app/Contents/MacOS/*` tels que signés ; l'étape 2 met cette
+  même `Hirzla.app` dans le `.pkg`. Une signature Authenticode (§ 4) se placerait au même
+  endroit que la signature ad hoc.
 - Le noyau, la ligne de commande, l'hôte natif et l'application ont les mêmes
   fonctionnalités : `livraison`, sans `signature-systeme`.
 - Les artefacts de l'étape 1 sont gardés 90 jours ; passé ce délai, ou si l'étape 1 est
   relancée, les manifestes sont à signer de nouveau (une nouvelle étape 1 retire du brouillon
   les manifestes devenus faux).
 
-**macOS** : l'étape 2 construit l'image disque comme simple artefact de l'exécution, sans
-manifeste, et ne la joint pas à la version ; le job macOS ne bloque pas les autres. Une
-étape `TODO(ADR 0065)` du flux accueillera le paquet `.pkg` qui posera le manifeste.
+**macOS** (ADR 0065) : livré en paquet d'installation `.pkg`, jamais en image disque.
+L'étape 2 décompresse la `Hirzla.app` de l'étape 1, vérifie sa signature et le manifeste
+macOS contre `Contents/MacOS` (mêmes options de `hirzla-signer verifier` que les autres
+systèmes), construit le `.pkg` par `.github/scripts/macos-pkg.sh`, puis l'ouvre
+(`pkgutil --expand-full`) pour comparer exécutables et manifeste aux fichiers vérifiés.
+macOS est exigé comme Linux et Windows : un échec arrête la livraison.
 
 ### Compilation reproductible et nomenclature (ADR 0056)
 
@@ -453,9 +464,9 @@ paquets. La version de l'espace de travail Cargo doit être relevée à chaque l
    `/Library/Application Support/Hirzla/hirzla-clients.manifest` (root, `0644`), par un
    paquet d'installation `.pkg` (`.github/scripts/macos-pkg.sh`, § 3) qui remplace l'image
    disque pour les livraisons ; le noyau et ses clients d'une version de livraison macOS le
-   lisent là et refusent de démarrer s'il n'appartient pas à root. Reste : l'essai d'une
-   installation par Installer sur un poste réel (comportement de `pkgbuild`, propriété des
-   fichiers posés), et le branchement de `macos-pkg.sh` dans `livraison.yml`.
+   lisent là et refusent de démarrer s'il n'appartient pas à root. Le flux de livraison
+   construit et contrôle ce `.pkg` (§ 2.1). Reste : l'essai d'une installation par Installer
+   sur un poste réel (comportement de `pkgbuild`, propriété des fichiers posés).
 3. Identifiant d'application `app.hirzla.desktop` et éditeur « Hirzla » : à remplacer par le
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
 4. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
