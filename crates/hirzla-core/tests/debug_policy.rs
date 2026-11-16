@@ -61,6 +61,16 @@ const REVIEWED: &[(&str, &str, &str)] = &[
         "recipient_key",
         "recipient's public key identifier",
     ),
+    (
+        "ConnectionOptions",
+        "key",
+        "title of an SSH key of the vault, typed on the command line",
+    ),
+    (
+        "ConnectionOptions",
+        "host_key",
+        "public fingerprint of the host key (ADR 0067)",
+    ),
 ];
 
 /// Words that make a field name secret-looking.

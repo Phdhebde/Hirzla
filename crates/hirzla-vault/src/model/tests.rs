@@ -5,6 +5,7 @@ use super::*;
 
 fn header() -> Header {
     Header {
+        format_version: crate::FORMAT_VERSION,
         vault_id: [5; 16],
         suite_write: 1,
         suites_read: vec![1],

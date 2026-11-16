@@ -582,3 +582,218 @@ fn self_mode_v5_commands() {
         assert!(!log.contains(leak), "{leak} in the log");
     }
 }
+
+/// Connections from the command line (`docs/api-locale.md` § 17.5): an SSH key, a bastion,
+/// a server behind it, an RDP workstation; the card, the `ssh` command, an update, and the
+/// password read with `get` like any secret.
+#[test]
+fn connections_from_the_command_line() {
+    const PRIVATE_BODY: &str = "b3BlbnNzaC1rZXktdjEAAAAA-contenu-prive-e2e";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+
+    // An existing key file, with its public key next to it.
+    let key = dir.path().join("id_ed25519");
+    std::fs::write(
+        &key,
+        format!(
+            "-----BEGIN OPENSSH PRIVATE KEY-----\n{PRIVATE_BODY}\n-----END OPENSSH PRIVATE KEY-----\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.path().join("id_ed25519.pub"),
+        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFictive deploy@e2e\n",
+    )
+    .unwrap();
+    let key = key.to_str().unwrap();
+    let out = ok(&hirzla(
+        &sock,
+        &["cle-ssh", "ajouter", "Clé e2e", key],
+        None,
+    ));
+    assert!(out.contains("avec sa clé publique"), "{out}");
+    // Not an OpenSSH private key: refused.
+    let other = dir.path().join("autre");
+    std::fs::write(&other, "-----BEGIN RSA PRIVATE KEY-----\nxx\n").unwrap();
+    let refused = fails(&hirzla(
+        &sock,
+        &["cle-ssh", "ajouter", "Autre", other.to_str().unwrap()],
+        None,
+    ));
+    assert!(refused.contains("OpenSSH"), "{refused}");
+
+    ok(&hirzla(
+        &sock,
+        &[
+            "connexion",
+            "ssh",
+            "Bastion e2e",
+            "--hote",
+            "bastion.exemple.test",
+            "--port",
+            "2222",
+            "--identifiant",
+            "max",
+        ],
+        None,
+    ));
+    ok(&hirzla(
+        &sock,
+        &[
+            "connexion",
+            "ssh",
+            "Serveur e2e",
+            "--hote",
+            "Web-01.exemple.test",
+            "--identifiant",
+            "admin",
+            "--cle",
+            "clé e2e",
+            "--rebond",
+            "Bastion e2e",
+            "--empreinte",
+            "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            "--mot-de-passe",
+            "--tag",
+            "prod",
+        ],
+        Some(SECRET),
+    ));
+    // Refusals: an option injected as a host, a key that is not one, a jump that is absent.
+    for bad in [
+        &["connexion", "ssh", "x", "--hote", "a b"][..],
+        &[
+            "connexion",
+            "ssh",
+            "x",
+            "--hote",
+            "h",
+            "--cle",
+            "Bastion e2e",
+        ],
+        &["connexion", "ssh", "x", "--hote", "h", "--rebond", "Absent"],
+        &[
+            "connexion",
+            "ssh",
+            "x",
+            "--hote",
+            "h",
+            "--empreinte",
+            "MD5:00",
+        ],
+    ] {
+        fails(&hirzla(&sock, bad, None));
+    }
+
+    let card = ok(&hirzla(&sock, &["connexion", "voir", "serveur e2e"], None));
+    assert!(card.contains("connexion SSH"), "{card}");
+    assert!(
+        card.contains("Web-01.exemple.test  port 22 (par défaut)"),
+        "{card}"
+    );
+    assert!(card.contains("Clé e2e"), "{card}");
+    assert!(card.contains("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFictive deploy@e2e"));
+    assert!(
+        card.contains("Bastion e2e  (bastion.exemple.test, port 2222)"),
+        "{card}"
+    );
+    assert!(
+        card.contains("ssh -J max@bastion.exemple.test:2222 admin@Web-01.exemple.test"),
+        "{card}"
+    );
+    assert!(card.contains("prod") && card.contains("SHA256:"));
+    assert!(!card.contains(SECRET) && !card.contains(PRIVATE_BODY));
+
+    // The password leaves by `get`, the private key by nothing.
+    assert_eq!(
+        ok(&hirzla(&sock, &["get", "Serveur e2e"], None)),
+        format!("{SECRET}\n")
+    );
+    // Found by its host, listed under its type.
+    let ls = ok(&hirzla(&sock, &["ls", "web-01"], None));
+    assert!(
+        ls.contains("connexion SSH") && ls.contains("Serveur e2e"),
+        "{ls}"
+    );
+    assert!(ok(&hirzla(&sock, &["ls"], None)).contains("clé SSH"));
+
+    // Update: a new port, the jump host and the password removed.
+    ok(&hirzla(
+        &sock,
+        &[
+            "connexion",
+            "modifier",
+            "Serveur e2e",
+            "--port",
+            "2200",
+            "--effacer",
+            "rebond",
+            "--effacer",
+            "mot-de-passe",
+        ],
+        None,
+    ));
+    let card = ok(&hirzla(&sock, &["connexion", "voir", "Serveur e2e"], None));
+    assert!(
+        card.contains("port 2200") && !card.contains("Rebond"),
+        "{card}"
+    );
+    assert!(
+        card.contains("ssh -p 2200 admin@Web-01.exemple.test"),
+        "{card}"
+    );
+    assert!(card.contains("aucun"), "{card}");
+    fails(&hirzla(&sock, &["get", "Serveur e2e"], None));
+    let history = ok(&hirzla(&sock, &["history", "Serveur e2e"], None));
+    assert!(
+        history.contains("port") && history.contains("rebond"),
+        "{history}"
+    );
+
+    // RDP: a domain, a Windows account with a space, the default port, no `ssh` command.
+    ok(&hirzla(
+        &sock,
+        &[
+            "connexion",
+            "rdp",
+            "Poste e2e",
+            "--hote",
+            "10.0.0.12",
+            "--domaine",
+            "EXEMPLE",
+            "--identifiant",
+            "Max Dupont",
+            "--rebond",
+            "Bastion e2e",
+        ],
+        None,
+    ));
+    let card = ok(&hirzla(&sock, &["connexion", "voir", "Poste e2e"], None));
+    assert!(card.contains("connexion RDP") && card.contains("port 3389 (par défaut)"));
+    assert!(
+        card.contains("EXEMPLE") && card.contains("Max Dupont"),
+        "{card}"
+    );
+    assert!(
+        card.contains("Bastion e2e") && !card.contains("Commande"),
+        "{card}"
+    );
+    // A password is not a connection.
+    ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));
+    assert!(fails(&hirzla(&sock, &["connexion", "voir", "Banque"], None)).contains("connexion"));
+    // The trash shows in the card of whoever jumps through it.
+    ok(&hirzla(&sock, &["rm", "Bastion e2e"], None));
+    let card = ok(&hirzla(&sock, &["connexion", "voir", "Poste e2e"], None));
+    assert!(card.contains("à la corbeille"), "{card}");
+
+    // Nothing secret in the log of the core.
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap_or_default();
+    for secret in [MASTER, SECRET, PRIVATE_BODY, "exemple.test"] {
+        assert!(!log.contains(secret));
+    }
+}

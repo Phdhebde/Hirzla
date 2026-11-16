@@ -336,18 +336,18 @@ impl Core {
     }
 
     /// The server mode, if a vault is open and its annex loaded.
-    fn server(&mut self) -> Option<&mut ServerMode> {
+    pub(crate) fn server(&mut self) -> Option<&mut ServerMode> {
         self.load_server();
         self.server.as_mut()?.as_mut().ok()
     }
 
     /// Whether `locker` is a shared locker of the server mode.
-    fn is_shared(&mut self, locker: &Id16) -> bool {
+    pub(crate) fn is_shared(&mut self, locker: &Id16) -> bool {
         self.server().is_some_and(|s| s.holds(locker))
     }
 
     /// Writes a secret of a shared locker (`docs/api-locale.md` § 15.4).
-    fn write_shared(
+    pub(crate) fn write_shared(
         &mut self,
         locker: &Id16,
         secret: Option<Id16>,

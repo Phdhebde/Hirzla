@@ -143,6 +143,12 @@ fn field_label(n: u64) -> &'static str {
         20 => "clé privée SSH",
         21 => "clé publique SSH",
         22 => "phrase de passe SSH",
+        50 => "hôte",
+        51 => "port",
+        52 => "domaine",
+        53 => "clé SSH liée",
+        54 => "rebond",
+        55 => "empreinte de l'hôte",
         _ => "autre champ",
     }
 }

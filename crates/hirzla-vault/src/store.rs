@@ -188,7 +188,7 @@ pub fn open(path: &Path) -> Result<Connection, VaultError> {
     if get("application_id")? != APPLICATION_ID {
         return Err(VaultError::NotAVault);
     }
-    if get("user_version")? != i64::from(crate::FORMAT_VERSION) {
+    if !u64::try_from(get("user_version")?).is_ok_and(crate::reads_format_version) {
         return Err(VaultError::UnsupportedVersion);
     }
     if get("page_size")? != 4096 || get("auto_vacuum")? != 1 {

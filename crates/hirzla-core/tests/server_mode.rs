@@ -11,6 +11,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
+use hirzla_core::connections::proto::{
+    ConnectionCard, ConnectionFields, ConnectionReply, ConnectionRequest, LinkState,
+};
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
 use hirzla_core::server_mode::proto::{
@@ -30,7 +33,7 @@ use hirzla_sync::text::{ApprovalOffer, ApprovalToken, Invitation};
 use hirzla_sync::wire::OpItem;
 use hirzla_sync::{AccessAuthorizer, LocalDevice, Replica};
 use hirzla_vault::model::{Id16, MemberKeys};
-use hirzla_vault::secret::{Field, FieldValue, SecretType};
+use hirzla_vault::secret::{Field, FieldValue, SecretLink, SecretType};
 use hirzla_vault::Vault;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
@@ -1833,5 +1836,180 @@ fn an_own_revocation_read_after_a_restart_raises_no_alert() {
     assert_eq!(
         alice.server(ServerRequest::DeviceRevoke { device: p }),
         Err(ServerCode::AlreadyRevoked)
+    );
+}
+
+// -----------------------------------------------------------------------------------------
+// Connections in a shared locker (ADR 0067 § 5)
+// -----------------------------------------------------------------------------------------
+
+fn connection(
+    m: &mut Member,
+    locker: Option<Id16>,
+    secret_type: SecretType,
+    fields: ConnectionFields,
+) -> Result<SecretLink, ErrorCode> {
+    match m.core.handle_connection(ConnectionRequest::Create {
+        locker,
+        secret_type,
+        fields,
+        tags: Vec::new(),
+    })? {
+        ConnectionReply::Created { locker, id } => Ok(SecretLink { locker, secret: id }),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn connection_card(m: &mut Member, l: SecretLink) -> ConnectionCard {
+    match m
+        .core
+        .handle_connection(ConnectionRequest::Read {
+            locker: l.locker,
+            id: l.secret,
+        })
+        .unwrap()
+    {
+        ConnectionReply::Card(card) => *card,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Alice stores a bastion and a server in a shared locker; the server jumps through the
+/// bastion and uses a key kept in her personal locker. Bob, a reader, sees the connection
+/// and its jump, reads its password, and sees the key link as broken: a link gives no right.
+#[test]
+fn connections_are_shared_and_a_link_gives_no_right() {
+    let tmp = tempdir();
+    let (_server, mut members, locker) = joined(tmp.path(), &["alice", "bob"]);
+    let mut bob = members.pop().unwrap();
+    let mut alice = members.pop().unwrap();
+
+    let ConnectionReply::Created {
+        locker: personal,
+        id: key_id,
+    } = alice
+        .core
+        .handle_connection(ConnectionRequest::SshKeyCreate {
+            locker: None,
+            title: z("Clé de déploiement"),
+            private_key: Zeroizing::new(
+                b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+                    .to_vec(),
+            ),
+            public_key: Some(z("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFictive deploy")),
+            passphrase: None,
+            username: None,
+            tags: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("created expected");
+    };
+    assert_ne!(personal, locker);
+    let key = SecretLink {
+        locker: personal,
+        secret: key_id,
+    };
+
+    let bastion = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::SshConnection,
+        ConnectionFields {
+            title: Some(z("Bastion Hornn")),
+            host: Some(z("bastion.exemple.test")),
+            port: Some(2222),
+            username: Some(z("max")),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+    let web = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::SshConnection,
+        ConnectionFields {
+            title: Some(z("Serveur web")),
+            host: Some(z("web-01.exemple.test")),
+            username: Some(z("admin")),
+            password: Some(z("mot-de-passe-du-serveur")),
+            ssh_key: Some(key),
+            jump: Some(bastion),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+    // An RDP connection goes through the same bastion.
+    let rdp = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::RdpConnection,
+        ConnectionFields {
+            title: Some(z("Poste d'administration")),
+            host: Some(z("10.0.0.12")),
+            domain: Some(z("EXEMPLE")),
+            username: Some(z("Max Dupont")),
+            jump: Some(bastion),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+
+    // The writer sees every link resolved.
+    let card = connection_card(&mut alice, web);
+    assert_eq!(card.ssh_key.as_ref().unwrap().state, LinkState::Valid);
+    assert_eq!(card.jumps.len(), 1);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+
+    let bob_fp = bob.fingerprint.clone();
+    grant(&mut alice, locker, bob.id, Role::Reader, Some(&bob_fp)).unwrap();
+    assert!(alice.sync().iter().all(|r| r.refused == 0));
+    assert!(bob.sync().iter().all(|r| r.refused == 0));
+
+    let card = connection_card(&mut bob, web);
+    assert_eq!(card.secret_type, SecretType::SshConnection);
+    assert_eq!(
+        card.fields.host.as_ref().unwrap().as_str(),
+        "web-01.exemple.test"
+    );
+    assert_eq!(card.effective_port, 22);
+    assert!(card.has_password);
+    assert_eq!(card.jumps.len(), 1);
+    assert_eq!(card.jumps[0].link, bastion);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+    assert_eq!(card.jumps[0].port, Some(2222));
+    assert_eq!(
+        card.jumps[0].host.as_ref().unwrap().as_str(),
+        "bastion.exemple.test"
+    );
+    // The key is in a locker Bob does not hold: the link is kept and shown as broken.
+    let shown = card.ssh_key.as_ref().unwrap();
+    assert_eq!(shown.link, key);
+    assert_eq!(shown.state, LinkState::Broken);
+    assert!(shown.title.is_none() && shown.public_key.is_none());
+    assert_eq!(
+        bob.password(locker, web.secret).unwrap(),
+        "mot-de-passe-du-serveur"
+    );
+
+    let card = connection_card(&mut bob, rdp);
+    assert_eq!(card.secret_type, SecretType::RdpConnection);
+    assert_eq!(card.effective_port, 3389);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+
+    // A reader writes nothing, a connection no more than a password (same code as `Update`).
+    assert_eq!(
+        bob.core
+            .handle_connection(ConnectionRequest::Update {
+                locker,
+                id: web.secret,
+                set: ConnectionFields {
+                    port: Some(2200),
+                    ..ConnectionFields::default()
+                },
+                clear: Vec::new(),
+            })
+            .unwrap_err(),
+        ErrorCode::InvalidInput
     );
 }
