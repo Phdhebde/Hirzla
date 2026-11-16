@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v5
+# API locale du noyau — spécification v7
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -8,7 +8,8 @@ journal, durcissement du processus. Les choix de dépendances et l'emplacement d
 sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'ADR 0016
 (proposé) ; le profil « navigateur » et les opérations liées à une origine (version 2) par
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
-l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034.
+l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
+le générateur complet (version 7, § 6.2) par l'ADR 0068.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -89,7 +90,7 @@ noyau d'après son exécutable, jamais d'après un message :
 | Profil | Exécutables | Opérations permises |
 | --- | --- | --- |
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
-| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
+| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
 **Signature du client** (ADR 0042, 0063). En plus du chemin, le noyau peut exiger que
 l'exécutable du client soit signé. Ce qui est vérifié est **fixé à la compilation**, jamais
@@ -249,6 +250,7 @@ secret non purgé (corbeille comprise).
 | 11 | `Shutdown` | non | — | — (le noyau verrouille, répond, puis s'arrête) |
 | 12 | `Match` (v2) | ouvert | `{1: origine}` | `{1: [entrée]}` |
 | 13 | `Fill` (v2) | ouvert | `{1: casier, 2: secret, 3: origine}` | `{1?: identifiant, 2: mot de passe}` |
+| 14 | `GenerateWith` (v7) | non | réglages du générateur (§ 6.2) | `{1: valeur, 2: entropie en millibits, 3?: taille de l'ensemble}` |
 
 Détails :
 
@@ -268,7 +270,7 @@ Détails :
    Argon2id ; il est perdu si le noyau redémarre.
 4. **Verrouillage automatique** — le noyau verrouille le coffre après `auto_lock_s` secondes sans
    opération sur le coffre (`List`, `Read`, `Create`, `Update`, `Delete`, `Unlock`, `Init`).
-   `Status` et `Generate` ne prolongent pas l'ouverture : une interface qui sonde l'état ne
+   `Status`, `Generate` et `GenerateWith` ne prolongent pas l'ouverture : une interface qui sonde l'état ne
    garde pas le coffre ouvert. Le délai vient des réglages du coffre (`format.md` § 5.6) ; une
    valeur 0 est remplacée par le défaut (300 s). `--auto-lock S` le remplace (1 à 86 400 s).
    Vérification toutes les 250 ms.
@@ -286,7 +288,8 @@ Détails :
 10. **`Generate`** — classes en masque : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles
     (`!#$%&()*+,-./:;<=>?@[]^_{|}~`, sans espace, guillemets, barre oblique inverse ni accent
     grave). Chaque caractère est tiré uniformément par rejet sur l'aléa du système (AWS-LC) ;
-    un tirage qui manque une classe demandée est refait en entier.
+    un tirage qui manque une classe demandée est refait en entier. Cas particulier de
+    `GenerateWith` (§ 6.2) : minimum de 1 par famille demandée, aucune règle.
 
 11. **`Match`** (v2) — les secrets **actifs** de type mot de passe dont les `hosts` de l'index
     (`format.md` § 10, règle des `hosts`) contiennent **exactement** l'hôte de l'origine. Même
@@ -300,6 +303,69 @@ Détails :
     exactement dans ses `hosts`. Sinon `NotFound`, sans dire lequel de ces points manque (un
     client ne peut pas apprendre par `Fill` qu'un secret existe hors de son origine). Pas de
     mot de passe : `NotFound`.
+
+### 6.2 Générateur complet (v7)
+
+Décisions : ADR 0068. `GenerateWith` (14) ne lit ni ne modifie le coffre, et ne prolonge pas
+son ouverture. Les réglages ne sont pas secrets ; la valeur renvoyée l'est.
+
+**Arguments.** La clé 1 donne le mode ; les autres clés dépendent du mode. Une clé qui
+n'appartient pas au mode est refusée (`Malformed`), une valeur hors bornes aussi
+(`InvalidInput`). Une clé facultative absente vaut son défaut ; un client n'écrit pas une
+valeur par défaut.
+
+| Clé | Nom | Type | Modes | Valeur |
+| --- | --- | --- | --- | --- |
+| 1 | mode | `uint` | tous | 1 caractères, 2 phrase de passe, 3 prononçable, 4 code PIN, 5 modèle |
+| 2 | taille | `uint` | 1, 2, 3, 4 | caractères 8..256, mots 3..32, syllabes 4..128, chiffres 4..12 |
+| 3 | familles | `uint` | 1 | masque de `Generate` : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles |
+| 4 | minimums | `[uint; 4]` | 1 | minimum de minuscules, majuscules, chiffres, symboles, chacun 0..9 ; 0 pour une famille non demandée |
+| 5? | symboles | `text` | 1, 5 | symboles autorisés à la place de la liste par défaut : ponctuation ASCII, chacun une fois, au moins un. En mode 1, seulement si la famille des symboles est demandée |
+| 6? | exclusions | `text` | 1, 5 | caractères ASCII imprimables retirés de toutes les familles, chacun une fois |
+| 7? | règles | `uint` | 1, 3, 4, 5 | masque ci-dessous ; défaut 0 |
+| 8 | séparateur | `text` | 2 | un caractère ASCII qui n'est ni une lettre ni un chiffre (espace admise) |
+| 9? | majuscule | `bool` | 2, 3 | majuscule initiale de chaque mot (2) ou de la valeur (3) |
+| 10? | chiffres | `uint` | 2, 3 | 0..4 : nombre placé au hasard parmi les mots (2), bloc final (3) |
+| 11 | modèle | `text` | 5 | 256 octets au plus : `a` minuscule, `A` majuscule, `9` chiffre, `#` symbole, `*` l'une des quatre familles ; ponctuation et espace recopiées ; `\x` recopie `x` ; toute autre lettre ou chiffre est refusé ; au moins une position tirée |
+
+**Règles** (clé 7), en masque :
+
+| Bit | Règle | Modes | Effet |
+| --- | --- | --- | --- |
+| 1 | sans ambigus | 1, 3, 5 | retire `0 O o 1 l I` |
+| 2 | mêmes touches AZERTY et QWERTY | 1, 5 | ne garde que les lettres autres que `a q z w m` ; tous les chiffres et symboles sont retirés |
+| 4 | sans répétition | 1, 4, 5 | aucun caractère deux fois de suite |
+| 8 | lettre en tête | 1 | le premier caractère est une lettre |
+| 16 | sans suite | 4 | pas trois chiffres consécutifs croissants ou décroissants |
+
+Une règle hors de son mode : `InvalidInput`.
+
+**Tirage.** Chaque unité est tirée uniformément par rejet sur l'aléa du système. Les règles 1
+et 2 et les exclusions réduisent les ensembles avant le tirage ; les minimums et les règles 4,
+8 et 16 filtrent : un candidat qui les enfreint est jeté et retiré en entier. Le résultat est
+uniforme sur les candidats conformes.
+
+**Refus** (`InvalidInput`) : famille demandée vidée par les exclusions ou les règles (par
+exemple des chiffres avec « mêmes touches ») ; minimum pour une famille non demandée ; somme
+des minimums supérieure à la longueur ; « lettre en tête » sans famille de lettres ; modèle
+sans position tirée ; réglages dont les règles laisseraient passer moins d'un candidat sur
+1 024. Le noyau n'ajuste jamais un réglage de lui-même.
+
+**Résultat.**
+
+- 1 : la valeur. Phrase de passe : mots de la liste française embarquée (2 048 mots, sans
+  accents), séparés par le séparateur. Prononçable : syllabes consonne-voyelle par blocs de
+  trois séparés par `-`, puis `-` et les chiffres. PIN : les chiffres seuls, sans espace.
+- 2 : l'entropie de la valeur **après filtrage**, en millièmes de bit, arrondie par défaut :
+  log₂ du nombre de candidats conformes. L'interface affiche cette valeur face à une recherche
+  classique et sa moitié face à une recherche quantique.
+- 3 : la taille de l'ensemble où chaque unité est tirée, après filtrage : caractères du mode
+  1, 2 048 mots, syllabes possibles, 10 chiffres. Absente pour un modèle, dont les positions
+  diffèrent.
+
+**Profils.** Les profils intégrés (`defaut`, `longue-duree`, `site-capricieux`, `wifi`,
+`compte-de-service`, ADR 0068 § 5) sont une table de réglages de `hirzla-core`
+(`generator::Profile`), pas un message : le client y lit des réglages complets et les envoie.
 
 ### 6.1 Origine (v2)
 
@@ -408,7 +474,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **2** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15) et Self (version 5, § 16) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **7** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15) et Self (version 5, § 16) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
   qu'avant, portant `v = 1`. Un client envoie chaque requête avec **la plus petite version qui
@@ -432,7 +499,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `get NOM \| --id ID [--champ C] [--stdout]` | `List` (résolution), `Read`, `Status` |
 | `set NOM [--identifiant U] [--url U]… [--tag T]… [--note] [--generer [N]]` | `List`, (`Generate`), `Create` ou `Update` |
 | `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
-| `gen [N] [--sans-symboles] [--sans-chiffres] [--sans-majuscules] [--stdout]` | `Generate`, `Status` |
+| `gen [TAILLE] [--mode M \| --profil P] [réglages] [--stdout]` | `GenerateWith`, `Status` |
 | `status`, `stop` | `Status` ; `Shutdown` |
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
@@ -450,6 +517,15 @@ import KeePass, mot de passe, réglages, recouvrement) au § 16.5.
   synchronisation, et effacée après `clipboard_clear_s` secondes (30 par défaut) si le
   presse-papiers la contient encore. Sans presse-papiers disponible, la commande échoue et
   invite à utiliser `--stdout`.
+- **`gen`** — modes `caracteres` (défaut : 24 caractères, quatre familles, une de chaque au
+  moins), `phrase` (6 mots), `prononcable` (9 syllabes), `pin` (6 chiffres), `modele`
+  (`--modele MODELE`). Réglages : `--sans-minuscules`, `--sans-majuscules`, `--sans-chiffres`,
+  `--sans-symboles`, `--min MIN,MAJ,CHIFFRES,SYMBOLES`, `--symboles LISTE`, `--exclure LISTE`,
+  `--sans-ambigus`, `--memes-touches`, `--sans-repetition`, `--lettre-en-tete`, `--sans-suite`,
+  `--separateur C`, `--majuscule`, `--chiffres N`. `--profil` prend un profil intégré et
+  exclut tout autre réglage. Une option hors de son mode est une erreur d'usage. L'entropie
+  s'écrit sur la **sortie d'erreur** (`Entropie : 145,1 bits (72,5 face à une recherche
+  quantique).`), pour que la sortie standard ne porte que la valeur.
 - `init`, `unlock` et `gen` **démarrent le noyau** s'il ne tourne pas (`hirzla-core` à côté de
   `hirzla`, détaché du terminal). Les autres commandes ne le démarrent pas.
 - `--id` attend au moins 4 chiffres hexadécimaux du début de l'identifiant affiché par `ls`.

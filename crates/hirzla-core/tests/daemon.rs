@@ -322,6 +322,24 @@ fn browser_profile_is_enforced_by_the_core() {
         Reply::Generated(p) => assert_eq!(p.chars().count(), 24),
         _ => panic!(),
     }
+    // The full generator (version 7) is open to the browser profile too.
+    match c
+        .call(&Request::GenerateWith {
+            spec: hirzla_core::generator::Spec::Passphrase {
+                words: 6,
+                separator: '-',
+                capitalize: false,
+                digits: 0,
+            },
+        })
+        .unwrap()
+    {
+        Reply::GeneratedWith(g) => {
+            assert_eq!(g.value.split('-').count(), 6);
+            assert_eq!(g.estimate.entropy_millibits, 66_000);
+        }
+        _ => panic!(),
+    }
     // Allowed, but there is no vault yet.
     let m = Request::Match {
         origin: "https://bank.example".into(),
