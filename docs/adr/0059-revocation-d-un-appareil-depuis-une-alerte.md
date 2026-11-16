@@ -130,13 +130,19 @@ articulation avec la révocation définitive et monotone du § 9.7.
   de porteur, et la demande est refusée (`Unsupported`) sans rien signer. L'appareil n'a alors
   aucune clé de casier ; mais un `Grant` ultérieur l'enveloppera, puisque `GetMemberKeys` le
   liste. Publier la révocation dans le casier personnel sur le serveur, ou directement au
-  registre, reste à spécifier.
+  registre, reste à spécifier : options examinées dans l'ADR 0066 (proposé).
 - **Casier gelé** : laissé de côté plutôt que différé (une révocation différée demanderait de
   la garder dans l'annexe, donc un changement de format).
-- **Redémarrage avant l'envoi.** L'attente déclarée au registre local n'est pas gardée dans
+- ~~**Redémarrage avant l'envoi.** L'attente déclarée au registre local n'est pas gardée dans
   l'annexe : si le noyau redémarre entre l'émission et l'inscription (connexion perdue), la
   révocation part à la synchronisation suivante et son inscription lève l'alerte 3 sur ce
-  poste. L'alerte désigne alors une révocation faite par le membre lui-même.
+  poste. L'alerte désigne alors une révocation faite par le membre lui-même.~~
+  Corrigé (2026-11-16), sans changement de format : la `DeviceRemove` émise est déjà gardée
+  dans l'annexe avec les opérations du casier ; à la relecture (`format.md` § 15.3, point 6),
+  le noyau déclare de nouveau attendue chaque révocation portée par une `DeviceRemove`
+  appliquée dont l'auteur est l'appareil du poste (`Replica::own_device_revocations`). Une
+  révocation émise par un autre appareil de certification du membre reste une alerte 3, comme
+  le veut `transparence.md` § 6.4. Test : `an_own_revocation_read_after_a_restart_raises_no_alert`.
 - **Second appareil dans les tests.** L'enrôlement d'un second appareil n'est pas spécifié
   (`api-locale.md` § 15.7) : le test de bout en bout certifie un appareil par
   `Vault::certify_device_for_tests`, derrière la fonctionnalité `test-support` de
