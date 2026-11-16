@@ -10,7 +10,7 @@ ici par leur seul nom.
 | Système | Format | Fichier produit (`target/release/bundle/`) |
 | --- | --- | --- |
 | Windows 10 et 11 (x64) | MSI (WiX) | `msi/Hirzla_<version>_x64_fr-FR.msi` |
-| macOS 11 et suivants | Image disque | `dmg/Hirzla_<version>_<arch>.dmg` |
+| macOS 11 et suivants | Paquet d'installation (ADR 0065) | `Hirzla_<version>_<arch>.pkg`, construit par `.github/scripts/macos-pkg.sh` à partir de `macos/Hirzla.app` |
 | Debian, Ubuntu | Paquet deb | `deb/Hirzla_<version>_amd64.deb` |
 | Fedora, RHEL, openSUSE | Paquet rpm | `rpm/Hirzla-<version>-1.x86_64.rpm` |
 | Autres Linux | AppImage | `appimage/Hirzla_<version>_amd64.AppImage` |
@@ -23,6 +23,13 @@ client vérifie qu'il parle au `hirzla-core` voisin. Tauri les place ainsi grâc
 `bundle.externalBin` (`apps/desktop/src-tauri/tauri.livraison.conf.json`) : dans le dossier
 d'installation sous Windows, dans `Hirzla.app/Contents/MacOS/` sous macOS, dans `/usr/bin/`
 pour deb et rpm, dans `usr/bin/` de l'AppImage.
+
+Sous macOS, une livraison est un paquet d'installation `.pkg`, pas une image disque
+(ADR 0065) : il pose `Hirzla.app` dans `/Applications` (propriété de root) et le manifeste des
+clients (§ 7) dans `/Library/Application Support/Hirzla/`, hors du paquet d'application.
+L'image disque (cible `dmg`) ne sert plus qu'aux versions de développement : une version de
+livraison installée par glisser-déposer ne trouverait pas son manifeste et refuserait de
+démarrer.
 
 Aucun installeur ne télécharge quoi que ce soit :
 
@@ -130,6 +137,36 @@ ouverture, le produit fonctionne : le noyau et ses clients se vérifient par le 
 clients est produit après elle (§ 7). Les étapes 1, 3 et 4 supposent un compte Apple
 Developer ; le mode `systeme` (§ 2) n'a de sens qu'avec lui.
 
+**Paquet d'installation** (ADR 0065). Le sceau de `Hirzla.app` couvre tout fichier de
+`Contents/` et la signature de `hirzla-desktop` dépend de ce sceau : le manifeste des clients
+ne peut donc pas être dans le paquet d'application. Une version de livraison macOS le lit à un
+emplacement fixe, `/Library/Application Support/Hirzla/hirzla-clients.manifest`, et le noyau
+comme ses clients refusent de démarrer si ce fichier, ou un répertoire au-dessus, n'appartient
+pas à root ou est inscriptible par un groupe ou par les autres. Ordre de production :
+
+1. `cargo tauri build --config tauri.livraison.conf.json --features livraison --bundles app`
+   produit `target/release/bundle/macos/Hirzla.app` ;
+2. signature finale du paquet d'application (ad hoc, ou Developer ID aux étapes ci-dessous) :
+   plus rien ne le modifie ensuite ;
+3. sur le poste de signature, manifeste des clients des exécutables **tels qu'ils sont dans le
+   paquet signé** (`Hirzla.app/Contents/MacOS/*`, § 7) ;
+4. paquet d'installation, sur un poste ou un agent macOS (aucun secret nécessaire) :
+
+   ```sh
+   .github/scripts/macos-pkg.sh Hirzla.app hirzla-clients.manifest 1.4.0
+   # → Hirzla_1.4.0_aarch64.pkg ; signé si HIRZLA_PKG_SIGN_IDENTITY nomme un
+   #   certificat « Developer ID Installer », sinon non signé.
+   ```
+
+   Le script vérifie que la signature de `Hirzla.app` tient, que le manifeste contient
+   l'empreinte de chaque exécutable du paquet, puis que le manifeste du `.pkg` est à root en
+   `0644`. Le `.pkg` installe `Hirzla.app` dans `/Applications` (non relogeable) et le manifeste
+   dans `/Library/Application Support/Hirzla/` (répertoire `0755`), sur le volume système
+   seulement.
+
+Sans certificat « Developer ID Installer », Gatekeeper avertit à l'ouverture du `.pkg` : clic
+droit › *Ouvrir*, ou `sudo installer -pkg Hirzla_<version>_<arch>.pkg -target /`.
+
 1. **Certificat** « Developer ID Application » du compte Apple Developer de l'éditeur, exporté
    en `.p12`. En CI : secrets `APPLE_CERTIFICATE` (le `.p12` en base64),
    `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY` (« Developer ID Application : … »).
@@ -141,17 +178,21 @@ Developer ; le mode `systeme` (§ 2) n'a de sens qu'avec lui.
 3. **Notarisation** par `notarytool`, que la CLI Tauri appelle quand ces variables existent :
    `APPLE_API_ISSUER`, `APPLE_API_KEY` et `APPLE_API_KEY_PATH` (clé d'API App Store Connect,
    rôle « Developer »), ou à défaut `APPLE_ID`, `APPLE_PASSWORD` (mot de passe d'application)
-   et `APPLE_TEAM_ID`. Le ticket est agrafé à l'image disque.
+   et `APPLE_TEAM_ID`. Le ticket est agrafé au paquet d'installation
+   (`xcrun stapler staple Hirzla_<version>_<arch>.pkg`), ce qui ne modifie pas les
+   exécutables.
 4. **Vérifier** sur un poste propre :
 
    ```sh
    codesign --verify --deep --strict --verbose=2 /Applications/Hirzla.app
    codesign -d --entitlements - /Applications/Hirzla.app/Contents/MacOS/hirzla-core
    spctl --assess --type execute --verbose /Applications/Hirzla.app
-   xcrun stapler validate Hirzla_<version>_<arch>.dmg
+   xcrun stapler validate Hirzla_<version>_<arch>.pkg
+   ls -le "/Library/Application Support/Hirzla/hirzla-clients.manifest"
    ```
 
-   La deuxième commande ne doit afficher aucun `get-task-allow`.
+   La deuxième commande ne doit afficher aucun `get-task-allow` ; la dernière, un fichier
+   `root wheel` en `-rw-r--r--`.
 
 ## 4. Windows : signature Authenticode
 
@@ -198,7 +239,8 @@ exécutables.
 - [ ] Le journal du noyau installé montre `event=client_signatures required=1
       kind=manifeste` (`kind=systeme` seulement pour une version compilée en mode `systeme`).
 - [ ] Sur **chaque** système, `hirzla-clients.manifest` de la bonne plateforme est installé
-      à côté du noyau et `hirzla-signer verifier` l'accepte ; ses empreintes sont celles des
+      à côté du noyau (sous macOS : dans `/Library/Application Support/Hirzla/`, à root en
+      `0644`, ADR 0065) et `hirzla-signer verifier` l'accepte ; ses empreintes sont celles des
       exécutables **installés** (après toute signature de système).
 - [ ] Signatures vérifiées sur un poste propre de chaque système (§ 3, § 4, § 5).
 - [ ] Sous macOS, aucun droit `get-task-allow` ; sous Linux, `hirzla status` montre
@@ -230,7 +272,12 @@ Windows et la signature Apple sous macOS (§ 3 et § 4 : le noyau et ses clients
 
 Un manifeste est produit **pour chaque plateforme livrée**, **après** la dernière
 transformation des exécutables (aucun `strip` ni signature de système ensuite), et installé à
-côté de `hirzla-core`. Les noms sont ceux des fichiers installés, avec `.exe` sous Windows :
+côté de `hirzla-core` sous Windows et Linux. Sous macOS, une version de livraison le lit à
+l'emplacement fixe `/Library/Application Support/Hirzla/hirzla-clients.manifest`, posé par le
+paquet d'installation et vérifié comme appartenant à root (§ 3, ADR 0065) ; l'option
+`--client-manifest` y est refusée. Les noms sont ceux des fichiers installés, avec `.exe` sous
+Windows ; sous macOS, les exécutables hachés sont ceux de `Hirzla.app/Contents/MacOS/` après
+la signature finale du paquet d'application :
 
 ```sh
 hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme linux-x86_64 \
@@ -242,7 +289,9 @@ hirzla-signer manifeste-clients --cle editeur.cle --version 1.4.0 --plateforme m
   --sortie hirzla-clients.manifest hirzla hirzla-core hirzla-desktop hirzla-native-host
 ```
 
-Le noyau refuse un manifeste d'une autre plateforme que la sienne. Sous Linux, il hache
+Le noyau refuse un manifeste d'une autre plateforme que la sienne et, sous macOS en version de
+livraison, un manifeste ou un répertoire parent qui n'appartient pas à root ou qu'un groupe ou
+les autres peuvent modifier (`SetupError::ManifestNotProtected`). Sous Linux, il hache
 l'image réellement lancée par le client (`/proc/<pid>/exe`) ; sous Windows et macOS, le
 fichier au chemin que le système donne pour le processus (`QueryFullProcessImageNameW`,
 `proc_pidpath`), d'où un risque résiduel de remplacement du fichier entre lancement et
@@ -307,7 +356,8 @@ Règles de vérification :
   place par renommage quand tous le sont ; un échec avant ne modifie rien.
 
 Limites : sous macOS, l'application dans un `.app` est refusée (le sceau du paquet couvre les
-exécutables) : passez par l'image disque notarisée. Pour deb et rpm, préférez le dépôt de
+exécutables) : passez par le paquet d'installation `.pkg` de la nouvelle version (§ 3), qui
+remplace aussi le manifeste. Pour deb et rpm, préférez le dépôt de
 paquets : écraser des fichiers suivis par `dpkg` ou `rpm` désynchronise le gestionnaire de
 paquets. La version de l'espace de travail Cargo doit être relevée à chaque livraison.
 
@@ -317,16 +367,14 @@ paquets. La version de l'espace de travail Cargo doit être relevée à chaque l
    clients vérifiée par le noyau (ADR 0042, § 7), du noyau par ses clients (ADR 0055), par le
    manifeste sur les trois systèmes (ADR 0063 § 1). Reste : l'essai sur des postes installés
    sous Windows et macOS (les tests de CI tournent sur les trois systèmes, hors installeur).
-2. **macOS, manifeste dans `Hirzla.app`** : le sceau du paquet d'application couvre tout
-   fichier de `Contents/`, et la signature de l'exécutable principal (`hirzla-desktop`)
-   contient l'empreinte de ce sceau. Un manifeste posé à côté du noyau
-   (`Contents/MacOS/`) devrait donc contenir l'empreinte d'un `hirzla-desktop` dont la
-   signature dépend du manifeste : impossible. `hirzla-core`, `hirzla` et
-   `hirzla-native-host`, signés chacun avant le paquet, ne sont pas touchés. À trancher par
-   un ADR avant la première livraison macOS : manifeste installé hors du paquet (paquet
-   d'installation `.pkg` qui le pose dans un répertoire réservé à l'administrateur, chemin
-   lu par le noyau sous macOS), ou autre emplacement. D'ici là, une livraison macOS ne peut
-   pas faire vérifier `hirzla-desktop` par le noyau.
+2. ~~**macOS, manifeste dans `Hirzla.app`**~~ : tranché par l'ADR 0065. Le manifeste est
+   installé hors du paquet d'application, à
+   `/Library/Application Support/Hirzla/hirzla-clients.manifest` (root, `0644`), par un
+   paquet d'installation `.pkg` (`.github/scripts/macos-pkg.sh`, § 3) qui remplace l'image
+   disque pour les livraisons ; le noyau et ses clients d'une version de livraison macOS le
+   lisent là et refusent de démarrer s'il n'appartient pas à root. Reste : l'essai d'une
+   installation par Installer sur un poste réel (comportement de `pkgbuild`, propriété des
+   fichiers posés), et le branchement de `macos-pkg.sh` dans `livraison.yml`.
 3. Identifiant d'application `app.hirzla.desktop` et éditeur « Hirzla » : à remplacer par le
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
 4. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés

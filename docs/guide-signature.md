@@ -142,10 +142,19 @@ avertissement, il faut un compte Apple Developer (99 USD par an), puis suivre
    système (SignPath sous Windows, signature ad hoc sous macOS) : une signature modifie le
    fichier, et un manifeste fait avant ne correspondrait plus.
 
+   **macOS** (ADR 0065) : prenez les exécutables dans `Hirzla.app/Contents/MacOS/` de
+   l'application **déjà signée** fournie par le flux (`hirzla`, `hirzla-core`,
+   `hirzla-desktop`, et `hirzla-native-host` s'il y est). Le manifeste ne va pas dans
+   `Hirzla.app` : il est posé dans `/Library/Application Support/Hirzla/` par le paquet
+   d'installation `.pkg`, que construit `.github/scripts/macos-pkg.sh` sur un Mac ou un agent
+   macOS à partir de l'application signée, du manifeste et du numéro de version (aucune clé
+   n'est nécessaire à cette étape : le manifeste est déjà signé). On publie le `.pkg`, pas
+   d'image disque.
+
 4. Calculez et signez les empreintes :
 
    ```sh
-   sha256sum Hirzla_* *.cdx.json */hirzla-clients.manifest > SHA256SUMS
+   sha256sum Hirzla_* *.cdx.json */hirzla-clients.manifest > SHA256SUMS   # dont le .pkg
    gpg --detach-sign --armor SHA256SUMS        # produit SHA256SUMS.asc
    ```
 

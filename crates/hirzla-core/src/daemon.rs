@@ -67,7 +67,8 @@ pub struct Options {
     /// Publisher key file for the client manifest (development builds only); the keys
     /// compiled into the core when absent.
     pub publisher_key: Option<PathBuf>,
-    /// Client manifest (Linux); `hirzla-clients.manifest` next to the core when absent.
+    /// Client manifest; `hirzla-clients.manifest` next to the core when absent, or the fixed
+    /// path of a macOS delivery build, which refuses this option (ADR 0065).
     pub client_manifest: Option<PathBuf>,
 }
 
@@ -171,6 +172,13 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             }
             Some("--publisher-key") => {
                 publisher_key = Some(PathBuf::from(value("--publisher-key")?));
+            }
+            Some("--client-manifest") if codesign::FIXED_MANIFEST_PATH => {
+                return Err(
+                    "--client-manifest : refusé dans une version de livraison pour macOS \
+                     (manifeste à emplacement fixe)."
+                        .to_owned(),
+                )
             }
             Some("--client-manifest") => {
                 client_manifest = Some(PathBuf::from(value("--client-manifest")?));
@@ -467,6 +475,11 @@ fn client_signatures(
         }
         codesign::SetupError::Manifest(_) => {
             "signature des clients exigée, mais le manifeste des clients est absent ou refusé."
+                .to_owned()
+        }
+        codesign::SetupError::ManifestNotProtected => {
+            "signature des clients exigée, mais le manifeste des clients n'est pas protégé \
+             (propriétaire root exigé, modifiable par root seul)."
                 .to_owned()
         }
         codesign::SetupError::Unsupported => {
@@ -799,10 +812,15 @@ mod tests {
             "required",
             "--client-manifest",
             "m",
-        ]))
-        .unwrap();
-        assert_eq!(o.client_signatures, SignatureMode::Required);
-        assert_eq!(o.client_manifest, Some(PathBuf::from("m")));
+        ]));
+        if codesign::FIXED_MANIFEST_PATH {
+            // macOS delivery build: the manifest is read at its fixed path only (ADR 0065).
+            assert!(o.is_err());
+        } else {
+            let o = o.unwrap();
+            assert_eq!(o.client_signatures, SignatureMode::Required);
+            assert_eq!(o.client_manifest, Some(PathBuf::from("m")));
+        }
         assert!(parse_args(args(&["--vault", "v", "--client-signatures", "maybe"])).is_err());
         let off = parse_args(args(&["--vault", "v", "--client-signatures", "off"]));
         let key = parse_args(args(&["--vault", "v", "--publisher-key", "k"]));

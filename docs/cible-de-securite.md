@@ -141,7 +141,7 @@ Propriétés distinctives :
 | --- | --- |
 | Plateforme du poste et du serveur | `À COMPLÉTER (Max)` (recommandation ADR 0050 : Linux x86-64, Debian 12 ou Ubuntu 24.04 LTS) |
 | Binaires | Version de livraison : `hirzla-core` et `hirzla` compilés avec la fonctionnalité `livraison` et sans `signature-systeme` (signature des clients exigée, contrôlée par le manifeste des clients, clés d'éditeur compilées seules admises : ADR 0063 § 1) |
-| Installation | Les trois exécutables dans le même répertoire, posé par root (`/usr/bin` pour deb et rpm), manifeste des clients signé à côté du noyau (`livraison.md` § 1 et § 7) |
+| Installation | Les trois exécutables dans le même répertoire, posé par root (`/usr/bin` pour deb et rpm), manifeste des clients signé à côté du noyau ; sous macOS, `Hirzla.app` dans `/Applications` et manifeste dans `/Library/Application Support/Hirzla/`, posés à root par le paquet `.pkg` (`livraison.md` § 1, § 3 et § 7, ADR 0065) |
 | Suite cryptographique | Suite V1 (`SuiteId 0x0001`) seule |
 | TLS | TLS 1.3, groupe `X25519MLKEM768` seul (**écart** au dossier cryptographique, qui vise `SecP384r1MLKEM1024` : ADR 0028 option A, ADR 0050 point 4) |
 | Déverrouillage | Mot de passe maître (Argon2id, 64 Mio minimum) ; kit de recouvrement à quorum autorisé |
@@ -390,14 +390,18 @@ nomenclature logicielle CycloneDX publiée avec chaque livraison (ADR 0056).
   `altered_package_changes_nothing`, `embedded_client_manifest_must_match_the_package`) ;
   `matches_entry_refuses_a_modified_file`, `manifest_check_end_to_end`,
   `client_checks_the_core_against_the_manifest`, `signature_kind_is_fixed_at_compile_time`,
-  `core_signature_off_accepts_without_looking` (`codesign.rs`, sur les trois systèmes) ;
+  `core_signature_off_accepts_without_looking`, `manifest_location_per_build`,
+  `root_protection_rule` (`codesign.rs`, sur les trois systèmes) ;
+  `open_root_protected_fails_closed` (`codesign.rs`, Linux et macOS : manifeste macOS à
+  emplacement fixe protégé par root, ADR 0065) ;
   `signed_client_manifest_is_enforced`, `client_checks_the_running_core_against_the_manifest`
   (`apps/cli/tests/e2e.rs`, sur les trois systèmes) ; job de CI « reproducible build (Linux) »
   (`.github/scripts/reproducible-build.sh`, `.github/scripts/sbom.py`) ; `required_signatures_fail_closed` (`daemon.rs`) ;
   `verifies_applies_and_refuses_rollback` (`apps/cli/tests/update.rs`) ;
   `signs_and_verifies_manifests_and_packages` (`apps/release-signer/tests/signer.rs`).
 - **Écarts** : manifeste des clients sous Windows et macOS essayé en CI seulement, pas sur
-  des postes installés ; signature de système (mode `systeme`) non essayée sur postes réels
+  des postes installés ; paquet d'installation macOS (`.pkg`, ADR 0065) non essayé sur un
+  poste réel ; signature de système (mode `systeme`) non essayée sur postes réels
   signés ; sous Linux, le client vérifie le noyau
   installé, pas le processus que le système lui cache (ADR 0055, hypothèse H13) ;
   reproductibilité vérifiée pour les exécutables Linux seulement, pas pour les paquets
@@ -614,7 +618,19 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
   Atténuations : Windows refuse d'écrire dans l'image d'un processus en cours ou de la
   supprimer ; il permet en revanche, comme macOS, de la renommer et de poser un autre
   fichier sous le même nom, ce qui exige d'écrire dans le répertoire d'installation, réservé
-  à l'administrateur (H13).
+  à l'administrateur (H13). Sous macOS, H13 suppose l'installation par le paquet `.pkg`
+  (`Hirzla.app` à root dans `/Applications`, manifeste à root hors du paquet d'application,
+  refusé par le noyau et les clients s'il n'est pas protégé : ADR 0065). Risque résiduel :
+  le manifeste étant hors du paquet d'application, il vaut pour toute copie authentique de
+  `Hirzla.app` de la même version ; une copie placée par l'utilisateur dans un répertoire
+  qu'il peut écrire (dossier personnel) démarre donc, et la substitution d'un client entre
+  son lancement et sa vérification redevient possible pour un logiciel malveillant du compte
+  dans cette copie seulement. Et `/Applications` lui-même est inscriptible par le groupe
+  `admin` sous macOS : un logiciel malveillant d'un compte administrateur, sans élévation,
+  peut y renommer `Hirzla.app` et poser un autre répertoire sous ce nom ; il lui faut encore
+  réussir la substitution entre lancement et vérification, les fichiers n'étant acceptés
+  que s'ils portent les empreintes du manifeste, que ce compte ne peut pas modifier
+  (`/Library/Application Support` n'est pas inscriptible par `admin`).
 - **Métadonnées connues du serveur** : identifiants de casiers et de membres, tailles
   bourrées, heures de connexion, graphe des opérations (en-têtes en clair), qui a accusé quelle
   compaction, dernière authentification de chaque appareil à la journée près (ADR 0040).
