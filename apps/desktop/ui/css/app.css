@@ -565,3 +565,22 @@ button.lien:hover { color: var(--hz-texte); }
 .champ-en-ligne { flex-direction: row; align-items: center; gap: 8px; margin-left: auto; }
 .champ-en-ligne .saisie { width: auto; min-height: 36px; padding: 6px 10px; }
 .tableau input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--hz-braise-foncee); margin: 0; }
+
+/* Shared locker: display names, received requests (ADR 0069, ADR 0070). */
+.sous-titre { font-size: 14px; font-weight: 600; margin: 8px 0 0; }
+.nav-lien .compte-alerte { background: var(--hz-alerte-fond); color: var(--hz-alerte); border-radius: 10px; padding: 0 7px; font-weight: 600; }
+.demandes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.demandes:empty { display: none; }
+.demande { border: 1px solid var(--hz-bordure); border-radius: var(--hz-rayon); padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.demande p { margin: 0; }
+.demande-titre { font-weight: 600; }
+.demande-sous { font-size: 13px; color: var(--hz-texte-secondaire); overflow-wrap: anywhere; }
+.demande-ligne { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.demande-ligne .demande-qui { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rappel { border-left: 3px solid var(--hz-braise-foncee); padding: 2px 0 2px 10px; font-size: 13.5px; }
+.repli > summary { cursor: pointer; font-size: 13.5px; color: var(--hz-texte-secondaire); padding: 4px 0; }
+.repli[open] > summary { margin-bottom: 10px; }
+.repli { display: flex; flex-direction: column; gap: 10px; }
+.empreinte-grande { font-size: 20px; letter-spacing: 0.04em; text-align: center; padding: 12px; border: 1px solid var(--hz-bordure); border-radius: var(--hz-rayon); margin: 0; overflow-wrap: anywhere; }
+.nom-membre { font-weight: 600; display: block; }
+.tableau .etat { font-size: 12px; padding: 2px 8px; margin-top: 4px; }

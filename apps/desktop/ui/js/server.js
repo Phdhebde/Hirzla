@@ -3,7 +3,9 @@
 // or by its three parts, ADR 0046), confirming its fingerprint, synchronising (also in the
 // background, ADR 0048), shared lockers, members and roles, approvals between owners
 // (ADR 0044), quarantine and frozen lockers (ADR 0045), the state of the key transparency
-// log, and the revocation of an unknown device from its alert (ADR 0059). The core does every network exchange; this page only shows what it
+// log, and the revocation of an unknown device from its alert (ADR 0059). Members carry a
+// display name next to their fingerprint (ADR 0069), and approval requests travel through the
+// server (ADR 0070). The core does every network exchange; this page only shows what it
 // answers and sends what the user typed.
 
 import { api } from "./api.js";
@@ -20,6 +22,8 @@ import { confirmDialog } from "./vault.js";
 /** @typedef {import("./api.js").QuorumRequest} QuorumRequest */
 /** @typedef {import("./api.js").QuorumActionName} QuorumActionName */
 /** @typedef {import("./api.js").QuarantinedOp} QuarantinedOp */
+/** @typedef {import("./api.js").ReceivedRequest} ReceivedRequest */
+/** @typedef {import("./api.js").FoundMember} FoundMember */
 /** @typedef {import("./prefs.js").Prefs} Prefs */
 
 /** Role names, in the order of `roles.md`. */
@@ -102,6 +106,12 @@ function alertText(a) {
       `Un retrait que vous avez publié${locker} n'est pas inscrit au registre des clés depuis plus d'une heure.`,
     ];
   }
+  if (a.kind === "unknown_profile") {
+    return [
+      "Nom affiché inconnu inscrit à votre nom",
+      `Un nom affiché que vous n'avez pas choisi est inscrit à votre nom (entrée ${a.index}). Vérifiez votre nom dans Votre identité et prévenez votre administrateur de sécurité.`,
+    ];
+  }
   if (a.kind === "withheld_inscription") {
     return ["Poste non inscrit au registre", "Le certificat de ce poste n'est pas inscrit au registre des clés depuis plus d'une heure."];
   }
@@ -111,12 +121,57 @@ function alertText(a) {
   ];
 }
 
-/** @param {QuorumActionName} action @param {string | null} target @param {RoleName | null} role @param {number | null} quorum */
-function actionText(action, target, role, quorum) {
-  const who = target ? `${target.slice(0, 8)}…` : "";
+/**
+ * How a member is called: its display name when the core verified one, else the start of its
+ * identifier. The fingerprint, shown next to it, stays the proof.
+ * @param {string | null | undefined} name @param {string | null | undefined} member
+ */
+function memberLabel(name, member) {
+  return name || (member ? `${member.slice(0, 8)}…` : "membre inconnu");
+}
+
+/**
+ * @param {QuorumActionName} action @param {string} who  The member targeted, as {@link memberLabel} calls it.
+ * @param {RoleName | null} role @param {number | null} quorum
+ */
+function actionText(action, who, role, quorum) {
   if (action === "owner_removal") return `Retirer le propriétaire ${who}`;
   if (action === "owner_role_change") return `Donner au propriétaire ${who} le rôle ${role ? ROLE_NAMES[role].toLowerCase() : "?"}`;
   return `Porter le quorum de propriétaires à ${quorum ?? "?"}`;
+}
+
+/**
+ * The state of a member key: compared out of band by the user, or not yet.
+ * @param {boolean} verified
+ */
+function keyState(verified) {
+  return verified
+    ? h("span", { class: "etat etat-scelle" }, [h("span", { class: "forme forme-carre", "aria-hidden": "true" }), "Clé vérifiée"])
+    : h("span", { class: "etat etat-alerte" }, [h("span", { class: "forme forme-triangle", "aria-hidden": "true" }), "Clé à vérifier"]);
+}
+
+/**
+ * Asks the user to compare the fingerprint of a member out of band, and records the
+ * comparison in the core (ADR 0069).
+ * @param {string} member @param {string} label @param {string} fingerprint
+ * @returns {Promise<boolean>} True once the core recorded it. A refusal is thrown.
+ */
+async function compareFingerprint(member, label, fingerprint) {
+  const dialog = /** @type {HTMLDialogElement} */ (byId("dialogue-empreinte"));
+  byId("empreinte-titre").textContent = `Comparer l'empreinte de ${label}`;
+  byId("empreinte-texte").textContent =
+    `Appelez ${label} ou voyez cette personne, et demandez-lui de lire l'empreinte de sa clé, affichée chez elle dans Serveur, Votre identité. ` +
+    "Comparez-la à celle-ci, caractère par caractère.";
+  byId("empreinte-valeur").textContent = grouped(fingerprint);
+  dialog.returnValue = "";
+  dialog.showModal();
+  const same = await new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue === "oui"), { once: true });
+  });
+  if (!same) return false;
+  await api.memberVerify(member, fingerprint);
+  announce(`Empreinte de ${label} comparée : sa clé est vérifiée sur ce poste.`, 6000);
+  return true;
 }
 
 /**
@@ -229,6 +284,10 @@ export class ServerView {
       byId(id).addEventListener("click", () => this.hooks.onShow());
     }
     byId("identite-exporter").addEventListener("click", () => void this.exportIdentity());
+    byId("form-nom").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.saveName();
+    });
     for (const id of ["casiers-nouveau", "bouton-casier-partage"]) {
       byId(id).addEventListener("click", () => this.lockerDialog.open());
     }
@@ -266,10 +325,10 @@ export class ServerView {
     for (const id of ["identite-membre", "identite-empreinte", "identite-poste", "identite-code", "rejoindre-ac-nom"]) {
       byId(id).textContent = "";
     }
-    for (const id of ["rejoindre-adresse", "rejoindre-empreinte", "confirmer-saisie"]) {
+    for (const id of ["rejoindre-adresse", "rejoindre-empreinte", "confirmer-saisie", "identite-nom"]) {
       /** @type {HTMLInputElement} */ (byId(id)).value = "";
     }
-    for (const id of ["rejoindre-erreur", "confirmer-erreur", "connexion-erreur"]) showError(byId(id), null);
+    for (const id of ["rejoindre-erreur", "confirmer-erreur", "connexion-erreur", "identite-nom-erreur"]) showError(byId(id), null);
     byId("connexion-resultat").hidden = true;
     for (const id of ["casiers-lignes", "registre-alertes", "confirmer-empreinte", "confirmer-adresse"]) {
       byId(id).replaceChildren();
@@ -323,9 +382,31 @@ export class ServerView {
       byId("identite-empreinte").textContent = grouped(id.fingerprint);
       byId("identite-poste").textContent = id.device;
       byId("identite-code").textContent = grouped(id.control_code);
+      /** @type {HTMLInputElement} */ (byId("identite-nom")).value = id.name ?? "";
     } catch (e) {
       const err = /** @type {ApiError} */ (e);
       if (!this.hooks.onError(err)) announce(err.message, 6000);
+    }
+  }
+
+  /** Inscribes the display name typed, or withdraws it when empty (ADR 0069). */
+  async saveName() {
+    const input = /** @type {HTMLInputElement} */ (byId("identite-nom"));
+    const error = byId("identite-nom-erreur");
+    showError(error, null);
+    try {
+      await api.profileSet(input.value);
+      announce(input.value.trim() ? "Nom affiché inscrit au registre des clés." : "Nom affiché retiré.", 6000);
+      await this.loadIdentity();
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (this.hooks.onError(err)) return;
+      showError(
+        error,
+        err.code === "invalid"
+          ? "Nom refusé : 64 octets au plus, sans caractère de contrôle ni espace en début ou en fin."
+          : err.message,
+      );
     }
   }
 
@@ -333,6 +414,7 @@ export class ServerView {
     const s = this.status;
     const joined = !!s?.joined;
     const verified = joined && !!s?.verified;
+    byId("form-nom").hidden = !verified;
     byId("serveur-rejoindre").hidden = !s || joined;
     byId("serveur-confirmer").hidden = !joined || verified;
     for (const id of ["serveur-connexion", "serveur-registre", "serveur-casiers", "serveur-accords"]) byId(id).hidden = !verified;
@@ -721,7 +803,16 @@ class MembersDialog {
     this.busy = false;
     /** @type {(locker: string, action: QuorumActionName, target: Member | null) => void} */
     this.onPrepare = () => {};
+    /** @type {FoundMember | null} Member chosen among the results of a search. */
+    this.chosen = null;
     byId("ajout-envoyer").addEventListener("click", () => void this.add());
+    byId("ajout-chercher").addEventListener("click", () => void this.search());
+    byId("ajout-recherche").addEventListener("keydown", (e) => {
+      // Enter searches; it must not close the dialog (its form has method="dialog").
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      void this.search();
+    });
     byId("membres-quorum-changer").addEventListener("click", () => {
       if (!this.locker) return;
       const locker = this.locker;
@@ -733,8 +824,11 @@ class MembersDialog {
 
   wipe() {
     this.locker = null;
+    this.chosen = null;
     byId("membres-lignes").replaceChildren();
-    for (const id of ["ajout-membre", "ajout-empreinte"]) /** @type {HTMLInputElement} */ (byId(id)).value = "";
+    byId("ajout-resultats").replaceChildren();
+    byId("ajout-resultats-note").textContent = "";
+    for (const id of ["ajout-membre", "ajout-empreinte", "ajout-recherche"]) /** @type {HTMLInputElement} */ (byId(id)).value = "";
     showError(byId("membres-erreur"), null);
   }
 
@@ -789,8 +883,8 @@ class MembersDialog {
       help.textContent = REFUSALS.grant[m.grant_refusal];
     } else {
       help.textContent =
-        "Le noyau vérifie que la clé du membre est inscrite au registre de transparence ; l'empreinte, obtenue du " +
-        "membre lui-même par un autre canal, ajoute une comparaison hors bande." +
+        "Le nom est celui que le membre a inscrit au registre avec sa clé. Avant le premier partage, vous comparez son " +
+        "empreinte une fois, de vive voix ; le noyau vérifie aussi que sa clé est inscrite au registre." +
         (m.grantable.includes("owner") ? "" : " Seul un propriétaire nomme un propriétaire ou un gestionnaire.");
     }
     return true;
@@ -798,10 +892,10 @@ class MembersDialog {
 
   /** @param {Member} x */
   row(x) {
-    const id = h("span", { class: "mono", text: `${x.member.slice(0, 16)}…`, title: x.member });
+    const label = x.me ? "vous-même" : memberLabel(x.name, x.member);
     const who = h("td", {}, [
-      id,
-      x.me ? h("span", { class: "vous", text: " (vous)" }) : null,
+      h("span", { class: "nom-membre", text: `${x.name ?? "Sans nom affiché"}${x.me ? " (vous)" : ""}` }),
+      h("span", { class: "refus mono", text: `${x.member.slice(0, 16)}…`, title: x.member }),
       h("span", { class: "refus", text: count(x.devices, "poste", "postes") }),
     ]);
 
@@ -814,7 +908,7 @@ class MembersDialog {
           ...x.change_to.map((r) => h("option", { value: r, text: ROLE_NAMES[r] })),
         ])
       );
-      select.setAttribute("aria-label", `Rôle de ${x.me ? "vous-même" : x.member.slice(0, 8)}`);
+      select.setAttribute("aria-label", `Rôle de ${label}`);
       select.addEventListener("change", () => void this.change(x, /** @type {RoleName} */ (select.value), select));
       const readerLimit = ["owner", "manager", "editor", "reader"].includes(x.role)
         ? h("span", { class: "refus", text: "Pour lui ôter la lecture : retirez-le, puis ajoutez-le de nouveau." })
@@ -827,9 +921,18 @@ class MembersDialog {
       ]);
     }
 
+    /** @type {HTMLButtonElement | null} */
+    let compare = null;
+    if (!x.me && !x.verified) {
+      compare = /** @type {HTMLButtonElement} */ (h("button", { class: "lien", type: "button", text: "Comparer l'empreinte…" }));
+      compare.setAttribute("aria-label", `Comparer l'empreinte de ${label}`);
+      compare.addEventListener("click", () => void this.run(async () => void (await compareFingerprint(x.member, label, x.fingerprint))));
+    }
     const fp = h("td", {}, [
       h("span", { class: "mono", text: grouped(x.fingerprint) }),
+      x.me ? null : keyState(x.verified),
       x.proven ? null : h("span", { class: "preuve-absente", text: "Sans preuve d'inscription au registre" }),
+      compare,
     ]);
 
     const remove = /** @type {HTMLButtonElement} */ (
@@ -870,7 +973,7 @@ class MembersDialog {
   async change(x, to, select) {
     const ok = await confirmDialog(
       `Donner le rôle ${ROLE_NAMES[to].toLowerCase()} ?`,
-      `${x.me ? "Vous passerez" : `Le membre ${x.member.slice(0, 8)}… passera`} de ${ROLE_NAMES[x.role].toLowerCase()} à ${ROLE_NAMES[to].toLowerCase()}. ` +
+      `${x.me ? "Vous passerez" : `${memberLabel(x.name, x.member)} passera`} de ${ROLE_NAMES[x.role].toLowerCase()} à ${ROLE_NAMES[to].toLowerCase()}. ` +
         "L'attribution est signée par ce poste et envoyée au serveur tout de suite.",
       "Changer le rôle",
     );
@@ -891,7 +994,7 @@ class MembersDialog {
       x.me ? `Quitter « ${this.name} » ?` : "Retirer ce membre ?",
       (x.me
         ? "Vous ne pourrez plus lire ce casier. Un propriétaire devra vous ajouter de nouveau."
-        : `Le membre ${x.member.slice(0, 8)}… ne pourra plus lire les versions écrites désormais. `) +
+        : `${memberLabel(x.name, x.member)} ne pourra plus lire les versions écrites désormais. `) +
         (x.me ? "" : "Ce qu'il a déjà pu lire, il a pu le copier : changez les mots de passe sensibles sur leurs cibles."),
       x.me ? "Quitter" : "Retirer",
     );
@@ -903,13 +1006,84 @@ class MembersDialog {
     });
   }
 
+  /** Searches the members of the server by display name (ADR 0069). */
+  async search() {
+    const input = /** @type {HTMLInputElement} */ (byId("ajout-recherche"));
+    const note = byId("ajout-resultats-note");
+    const list = byId("ajout-resultats");
+    showError(byId("membres-erreur"), null);
+    this.chosen = null;
+    if (input.value.trim().length < 2) {
+      list.replaceChildren();
+      note.textContent = "Saisissez au moins deux caractères du nom recherché.";
+      input.focus();
+      return;
+    }
+    /** @type {import("./api.js").MemberSearch} */
+    let found;
+    try {
+      found = await api.memberSearch(input.value);
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (this.hooks.onError(err)) this.dialog.close();
+      else showError(byId("membres-erreur"), err.message);
+      return;
+    }
+    note.textContent =
+      found.members.length === 0
+        ? "Aucun membre du serveur ne porte ce nom. Un membre n'apparaît qu'après avoir inscrit son nom affiché."
+        : found.more
+          ? "D'autres membres correspondent : précisez le nom."
+          : "";
+    list.replaceChildren(
+      ...found.members.map((m) => {
+        const radio = /** @type {HTMLInputElement} */ (h("input", { type: "radio", name: "ajout-choix", value: m.member }));
+        radio.addEventListener("change", () => {
+          this.chosen = m;
+        });
+        return h("li", { class: "demande" }, [
+          h("label", { class: "demande-ligne" }, [
+            radio,
+            h("span", { class: "demande-qui" }, [
+              h("span", { class: "demande-titre", text: m.name }),
+              h("span", { class: "demande-sous mono", text: `Empreinte ${grouped(m.fingerprint)}` }),
+            ]),
+            keyState(m.verified),
+          ]),
+        ]);
+      }),
+    );
+    if (found.members.length === 1) {
+      const only = /** @type {HTMLInputElement | null} */ (list.querySelector("input"));
+      if (only) only.checked = true;
+      this.chosen = found.members[0];
+    }
+  }
+
   async add() {
     const member = /** @type {HTMLInputElement} */ (byId("ajout-membre"));
     const fp = /** @type {HTMLInputElement} */ (byId("ajout-empreinte"));
     const role = /** @type {RoleName} */ (/** @type {HTMLSelectElement} */ (byId("ajout-role")).value);
+    const chosen = this.chosen;
+    if (chosen) {
+      await this.run(async () => {
+        if (!this.locker) return;
+        // A name proves nothing: before a first sharing, the fingerprint is compared once.
+        if (!chosen.verified && !(await compareFingerprint(chosen.member, chosen.name, chosen.fingerprint))) {
+          showError(byId("membres-erreur"), `${chosen.name} n'a pas été ajouté : son empreinte n'a pas été comparée.`);
+          return;
+        }
+        await api.grantRole(this.locker, chosen.member, role, chosen.fingerprint);
+        this.chosen = null;
+        byId("ajout-resultats").replaceChildren();
+        /** @type {HTMLInputElement} */ (byId("ajout-recherche")).value = "";
+        announce(`${chosen.name} ajouté comme ${ROLE_NAMES[role].toLowerCase()}.`, 6000);
+      });
+      return;
+    }
     if (!member.value.trim()) {
-      showError(byId("membres-erreur"), "Saisissez l'identifiant du membre : 32 chiffres hexadécimaux, que le membre lit dans Serveur, Votre identité.");
-      member.focus();
+      showError(byId("membres-erreur"), "Recherchez un membre par son nom et choisissez-le dans les résultats, ou saisissez son identifiant.");
+      byId("ajout-recherche").focus();
       return;
     }
     await this.run(async () => {
@@ -986,7 +1160,7 @@ class PrepareDialog {
   open(locker, action, target) {
     this.wipe();
     this.what = { locker, action, target };
-    const who = target ? `${target.member.slice(0, 16)}… (empreinte ${grouped(target.fingerprint)})` : "";
+    const who = target ? `${memberLabel(target.name, target.member)} (empreinte ${grouped(target.fingerprint)})` : "";
     byId("preparer-action").textContent =
       action === "owner_removal"
         ? `Retirer le propriétaire ${who}. Il est plus ancien que vous : d'autres propriétaires doivent agréer ce retrait.`
@@ -1007,7 +1181,20 @@ class PrepareDialog {
     try {
       const q = await api.quorumPrepare(locker, action, target?.member ?? null, role, quorum);
       /** @type {HTMLTextAreaElement} */ (byId("preparer-demande")).value = q.offer;
-      byId("preparer-compte").textContent = `Demande ${q.request.slice(0, 8)} : ${q.counted.length} accord sur ${q.required} (le vôtre).`;
+      // The request leaves through the server at once; the copy route stays open below.
+      let sent = "Elle n'a pas pu partir par le serveur : transmettez-la par copie, ou envoyez-la plus tard depuis Serveur, Vos demandes.";
+      try {
+        const state = await api.quorumSend(q.request);
+        sent = state.queued > 0
+          ? "Le serveur n'est pas joignable : elle partira à la prochaine synchronisation."
+          : "Elle est envoyée aux autres propriétaires par le serveur.";
+      } catch (e) {
+        if (this.hooks.onError(/** @type {ApiError} */ (e))) {
+          this.dialog.close();
+          return;
+        }
+      }
+      byId("preparer-compte").textContent = `Demande préparée : ${q.counted.length} accord sur ${q.required} (le vôtre). ${sent}`;
       byId("preparer-resultat").hidden = false;
       byId("preparer-copier").hidden = false;
       byId("preparer-envoyer").hidden = true;
@@ -1068,10 +1255,10 @@ class SignDialog {
     try {
       const d = await api.quorumInspect(this.input.value);
       byId("signer-casier").textContent = `${d.name ?? "Casier sans nom lisible"} (${d.locker.slice(0, 8)})`;
-      byId("signer-action").textContent = actionText(d.action, d.target, d.role, d.quorum);
-      byId("signer-demandeur").textContent = `${d.issuer.slice(0, 16)}… · empreinte ${d.issuer_fingerprint ? grouped(d.issuer_fingerprint) : "inconnue ici"}`;
+      byId("signer-action").textContent = actionText(d.action, memberLabel(d.target_name, d.target), d.role, d.quorum);
+      byId("signer-demandeur").textContent = `${memberLabel(d.issuer_name, d.issuer)} · empreinte ${d.issuer_fingerprint ? grouped(d.issuer_fingerprint) : "inconnue ici"}`;
       byId("signer-cible").textContent = d.target
-        ? `${d.target.slice(0, 16)}… · empreinte ${d.target_fingerprint ? grouped(d.target_fingerprint) : "inconnue ici"}`
+        ? `${memberLabel(d.target_name, d.target)} · empreinte ${d.target_fingerprint ? grouped(d.target_fingerprint) : "inconnue ici"}`
         : "Aucun";
       byId("signer-detail").hidden = false;
       /** @type {HTMLButtonElement} */ (byId("signer-envoyer")).disabled = !d.can_sign;
@@ -1118,6 +1305,10 @@ class ApprovalsCard {
     this.sign = new SignDialog(hooks);
     /** @type {QuorumRequest[]} */
     this.list = [];
+    /** @type {ReceivedRequest[]} Requests received through the server, to examine. */
+    this.inbox = [];
+    /** @type {Map<string, string>} Display names of the members of the lockers concerned. */
+    this.names = new Map();
     byId("accords-signer").addEventListener("click", () => this.sign.open());
     byId("form-accord-ajout").addEventListener("submit", (e) => {
       e.preventDefault();
@@ -1127,7 +1318,11 @@ class ApprovalsCard {
 
   wipe() {
     this.list = [];
+    this.inbox = [];
+    this.names = new Map();
     byId("accords-lignes").replaceChildren();
+    byId("recues-lignes").replaceChildren();
+    this.renderCount();
     /** @type {HTMLTextAreaElement} */ (byId("accord-ajout-saisie")).value = "";
     showError(byId("accord-ajout-erreur"), null);
   }
@@ -1135,13 +1330,137 @@ class ApprovalsCard {
   async load() {
     try {
       this.list = await api.quorumList(null);
+      this.inbox = await api.quorumInbox();
     } catch (e) {
       const err = /** @type {ApiError} */ (e);
       if (!this.hooks.onError(err)) announce(err.message, 6000);
       return;
     }
+    // Names of the members the pending requests speak of: one reading per locker concerned.
+    const names = new Map();
+    for (const locker of new Set(this.list.map((q) => q.locker))) {
+      try {
+        for (const m of (await api.lockerMembers(locker)).members) if (m.name) names.set(m.member, m.name);
+      } catch {
+        // Without the members, a request shows identifiers: nothing else is lost.
+      }
+    }
+    this.names = names;
     byId("accords-vide").hidden = this.list.length > 0;
     byId("accords-lignes").replaceChildren(...this.list.map((q) => this.row(q)));
+    byId("recues-vide").hidden = this.inbox.length > 0;
+    byId("recues-lignes").replaceChildren(...this.inbox.map((r) => this.received(r)));
+    this.renderCount();
+  }
+
+  /** The number of requests to examine, next to « Serveur » in the navigation. */
+  renderCount() {
+    const badge = byId("compte-serveur");
+    const n = this.inbox.length;
+    badge.hidden = n === 0;
+    badge.textContent = n === 0 ? "" : String(n);
+    if (n === 0) badge.removeAttribute("aria-label");
+    else badge.setAttribute("aria-label", count(n, "demande à examiner", "demandes à examiner"));
+  }
+
+  /** @param {string | null} member */
+  who(member) {
+    return memberLabel(member ? this.names.get(member) : null, member);
+  }
+
+  /**
+   * A request received through the server (ADR 0070). The approver knows the quorum required,
+   * never how many approvals the initiator already holds.
+   * @param {ReceivedRequest} r
+   */
+  received(r) {
+    const issuer = memberLabel(r.issuer_name, r.issuer);
+    const what = actionText(r.action, memberLabel(r.target_name, r.target), r.role, r.quorum);
+    const locker = r.name ?? `casier ${r.locker.slice(0, 8)}`;
+    const sign = /** @type {HTMLButtonElement} */ (h("button", { class: "bouton bouton-principal", type: "button", text: "Examiner et signer" }));
+    sign.disabled = !r.can_sign;
+    sign.addEventListener("click", () => void this.respond(r, true));
+    const decline = /** @type {HTMLButtonElement} */ (h("button", { class: "bouton bouton-secondaire", type: "button", text: "Refuser" }));
+    decline.addEventListener("click", () => void this.respond(r, false));
+    const copy = /** @type {HTMLButtonElement} */ (h("button", { class: "lien", type: "button", text: "Copier la demande" }));
+    const area = /** @type {HTMLTextAreaElement} */ (h("textarea", { class: "visuellement-cache", readonly: true, tabindex: "-1" }));
+    area.value = r.offer;
+    copy.addEventListener("click", () => void copyText(area));
+    return h("li", { class: "demande" }, [
+      h("div", { class: "demande-ligne" }, [
+        h("span", { class: "demande-qui" }, [
+          h("span", { class: "demande-titre", text: `${what} · ${locker}` }),
+          h("span", {
+            class: "demande-sous",
+            text: `Demandée par ${issuer} · empreinte ${r.issuer_fingerprint ? grouped(r.issuer_fingerprint) : "inconnue ici"} · reçue ${when(r.received_ms)}`,
+          }),
+          r.target
+            ? h("span", {
+                class: "demande-sous",
+                text: `Membre visé : ${memberLabel(r.target_name, r.target)} · empreinte ${r.target_fingerprint ? grouped(r.target_fingerprint) : "inconnue ici"}`,
+              })
+            : null,
+        ]),
+        keyState(r.issuer_verified),
+      ]),
+      h("p", {
+        class: "demande-sous",
+        text: `${count(r.required, "accord requis", "accords requis")}, celui du demandeur compris. Seul le demandeur sait combien il en a déjà recueilli.`,
+      }),
+      h("p", { class: "rappel", text: `Avant de signer, vérifiez de vive voix auprès de ${issuer} que la demande vient bien de cette personne.` }),
+      r.can_sign
+        ? null
+        : h("p", { class: "demande-sous", text: "Vous ne pouvez pas signer cette demande : vous êtes le membre visé, ou vous n'êtes plus propriétaire de ce casier." }),
+      h("div", { class: "ligne-actions" }, [sign, decline, copy, area]),
+    ]);
+  }
+
+  /**
+   * Signs or declines a received request; the answer goes back through the server.
+   * @param {ReceivedRequest} r
+   * @param {boolean} accept
+   */
+  async respond(r, accept) {
+    const issuer = memberLabel(r.issuer_name, r.issuer);
+    const what = actionText(r.action, memberLabel(r.target_name, r.target), r.role, r.quorum);
+    const ok = accept
+      ? await confirmDialog(
+          `${what} ?`,
+          `Demande de ${issuer}, empreinte ${r.issuer_fingerprint ? grouped(r.issuer_fingerprint) : "inconnue ici"}` +
+            `${r.issuer_verified ? "" : " (clé pas encore vérifiée sur ce poste)"}. ` +
+            `Avant de signer, vérifiez de vive voix auprès de ${issuer} que la demande vient bien de cette personne. ` +
+            "Votre accord est signé par la clé de ce poste et ne vaut que pour cette demande.",
+          "Signer",
+        )
+      : await confirmDialog("Refuser cette demande ?", `${issuer} sera prévenu de votre refus par le serveur.`, "Refuser");
+    if (!ok) return;
+    try {
+      await api.quorumRespond(r.locker, r.request, accept);
+      announce(accept ? `Accord signé et renvoyé à ${issuer} par le serveur.` : `Demande refusée. ${issuer} en sera prévenu.`, 6000);
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (this.hooks.onError(err)) return;
+      announce(err.message, 8000);
+    }
+    await this.load();
+  }
+
+  /** Sends one of this device's requests to the other owners through the server. @param {QuorumRequest} q */
+  async send(q) {
+    try {
+      const state = await api.quorumSend(q.request);
+      announce(
+        state.queued > 0
+          ? "Serveur injoignable : la demande partira à la prochaine synchronisation."
+          : "Demande envoyée aux autres propriétaires par le serveur.",
+        6000,
+      );
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (this.hooks.onError(err)) return;
+      announce(err.message, 8000);
+    }
+    await this.load();
   }
 
   /** @param {QuorumRequest} q */
@@ -1158,16 +1477,28 @@ class ApprovalsCard {
     apply.addEventListener("click", () => void this.apply(q));
     const cancel = button("Abandonner", "bouton-secondaire bouton-danger");
     cancel.addEventListener("click", () => void this.cancel(q));
+    const send = button(q.sent_ms ? "Renvoyer" : "Envoyer", "bouton-secondaire");
+    send.addEventListener("click", () => void this.send(q));
+    const journey =
+      q.queued > 0
+        ? "En attente d'envoi : le serveur n'est pas joignable"
+        : q.sent_ms
+          ? `Envoyée ${when(q.sent_ms)}`
+          : "Pas encore envoyée par le serveur";
     return h("tr", {}, [
       h("td", {}, [
-        h("span", { text: actionText(q.action, q.target, q.role, q.quorum) }),
+        h("span", { text: actionText(q.action, this.who(q.target), q.role, q.quorum) }),
+        h("span", { class: "refus", text: journey }),
         h("span", { class: "refus mono", text: `Demande ${q.request.slice(0, 8)} · casier ${q.locker.slice(0, 8)}` }),
       ]),
       h("td", {}, [
         h("span", { text: `${q.counted.length} sur ${q.required}` }),
-        h("span", { class: "refus", text: met ? "Quorum atteint" : `Il manque ${q.required - q.counted.length} accord(s)` }),
+        h("span", { class: "refus", text: met ? "Quorum atteint" : `Il manque ${count(q.required - q.counted.length, "accord", "accords")}` }),
+        q.declined.length
+          ? h("span", { class: "preuve-absente", text: `Refusée par ${q.declined.map((m) => this.who(m)).join(", ")}` })
+          : null,
       ]),
-      h("td", {}, [copy, " ", apply, " ", cancel, area]),
+      h("td", {}, [met ? null : send, met ? null : " ", copy, " ", apply, " ", cancel, area]),
     ]);
   }
 
@@ -1199,7 +1530,7 @@ class ApprovalsCard {
   /** @param {QuorumRequest} q */
   async apply(q) {
     const ok = await confirmDialog(
-      `${actionText(q.action, q.target, q.role, q.quorum)} ?`,
+      `${actionText(q.action, this.who(q.target), q.role, q.quorum)} ?`,
       "L'opération est signée par ce poste avec les accords recueillis, puis envoyée au serveur tout de suite.",
       "Appliquer",
     );

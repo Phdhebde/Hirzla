@@ -18,11 +18,18 @@ propriétaire. À la création d'un secret, choisissez ce casier dans le champ �
 
 ## Ajouter un membre
 
-1. Ouvrez les **membres** du casier.
-2. Dans « Ajouter un membre », saisissez l'**identifiant du membre**, choisissez son **rôle**,
-   et saisissez l'**empreinte de sa clé**, obtenue du membre lui-même par un autre canal.
-3. Validez. Votre poste chiffre la clé du casier pour les appareils de ce membre. Le casier
+1. Dans **Serveur**, « Votre identité », chaque membre inscrit son **nom affiché** : c'est grâce à
+   lui que les autres le trouvent.
+2. Ouvrez les **membres** du casier. Dans « Ajouter un membre », recherchez la personne par son
+   nom, choisissez-la dans les résultats et choisissez son **rôle**.
+3. La première fois, Hirzla vous fait **comparer l'empreinte** de sa clé : appelez la personne
+   et demandez-lui de lire celle qu'affiche son poste. Un nom se choisit librement, seule
+   l'empreinte prouve à qui appartient la clé. Les membres déjà comparés portent la mention
+   « Clé vérifiée ».
+4. Validez. Votre poste chiffre la clé du casier pour les appareils de ce membre. Le casier
    apparaît chez lui à sa prochaine synchronisation.
+
+L'ajout par identifiant de membre reste possible, sous « Ajouter par identifiant de membre ».
 
 ![Membres d'un casier partagé et leurs rôles dans Hirzla](../assets/captures/membres-proprietaire-clair.webp){ .capture .clair width="1600" height="1030" loading="lazy" }
 ![Membres d'un casier partagé et leurs rôles dans Hirzla](../assets/captures/membres-proprietaire-sombre.webp){ .capture .sombre width="1600" height="1030" loading="lazy" }
@@ -56,9 +63,15 @@ Un propriétaire retire seul un propriétaire nommé après lui. Retirer ou rét
 propriétaire **plus ancien**, ou changer le quorum, demande l'**accord** de plusieurs
 propriétaires : 2 par défaut, réglable par casier.
 
-1. Le demandeur prépare la demande et la transmet aux autres propriétaires.
-2. Chacun l'examine et la signe.
-3. Quand le quorum est atteint, le demandeur applique la décision.
+1. Le demandeur prépare la demande depuis les membres du casier. Elle part scellée par le
+   serveur, qui ne peut ni la lire ni la signer.
+2. Chaque propriétaire la trouve dans **Serveur**, « Demandes à examiner ». Avant de signer, il
+   vérifie de vive voix auprès du demandeur que la demande vient bien de lui. Il peut aussi
+   la refuser.
+3. Les accords reviennent au demandeur à la synchronisation. Quand le quorum est atteint, il
+   applique la décision depuis « Vos demandes ».
+
+Sans serveur joignable, la demande et l'accord s'échangent aussi par copie.
 
 ## Quarantaine
 

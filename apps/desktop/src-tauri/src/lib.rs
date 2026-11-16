@@ -124,6 +124,12 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::quorum_cancel,
             servermode::quarantine_list,
             servermode::quarantine_decide,
+            servermode::profile_set,
+            servermode::member_search,
+            servermode::member_verify,
+            servermode::quorum_send,
+            servermode::quorum_inbox,
+            servermode::quorum_respond,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

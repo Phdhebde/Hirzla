@@ -52,6 +52,17 @@
     [others.karim]: "R2HV7KQB4XZT6NMW3JDC",
     [others.claire]: "W5ZTD3KN7QXR2HVB6MJC",
   };
+  // Display names (ADR 0069) and the fingerprints this user compared out of band.
+  const NAMES = {
+    [ME]: "Marie Durand",
+    [others.paul]: "Paul Renaud",
+    [others.lea]: "Léa Fontaine",
+    [others.claire]: "Claire Martin",
+  };
+  const DIRECTORY = { "5e7a9c1b3d5f7a9c1b3d5f7a9c1b3d5f": ["Inès Leroy", "D7KQ2XZB5TVW3RMH6NJC"], "6f8b0d2c4e6a8c0e2a4c6e8a0c2e4a6c": ["Inès Lemaire", "H4RWQ6ZK2NXB7TMD5VCJ"] };
+  for (const [m, [name, fp]] of Object.entries(DIRECTORY)) { NAMES[m] = name; FPS[m] = fp; }
+  const compared = new Set([others.paul, others.claire]);
+  let myName = "Marie Durand";
   const fpOf = (m) => FPS[m] || "N3KQ7XZB2TVW5RMH4DJC";
   const roster = {
     [W]: [
@@ -66,11 +77,26 @@
       { member: others.paul, role: "editor", devices: 1, proven: true },
     ],
   };
+  // Requests received through the server (ADR 0070), when the capture asks for mail.
+  if (S.mail) {
+    S.inbox = [{
+      request: "7c2e9a4b1d6f3a8c5e0b2d4f6a8c0e1b", locker: C, name: "Comptabilité", action: "owner_removal",
+      target: others.paul, target_fingerprint: fpOf(others.paul), target_name: NAMES[others.paul], target_verified: true,
+      role: null, quorum: null, issuer: others.claire, issuer_fingerprint: fpOf(others.claire), issuer_name: NAMES[others.claire],
+      issuer_verified: true, can_sign: true, required: 2, received_ms: Date.UTC(2026, 10, 16, 13, 5),
+      offer: "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQAx7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX",
+    }];
+    S.requests = [{
+      request: "b83d5f1a9c7e2b4d6f8a0c2e4b6d8f0a", locker: W, action: "owner_role_change", target: others.claire, role: "manager", quorum: null,
+      counted: [ME], required: 2, offer: "hirzla-demande:pGEBYQKCUHs9XyFanH4rTdbwoMLuS2AFy7Lq3nZq0UgS3xWcO5dIeM9tK7hZlF2vR1pB6jY",
+      created_ms: Date.UTC(2026, 10, 15, 16, 28), sent_ms: Date.UTC(2026, 10, 15, 16, 30), declined: [], queued: 0,
+    }];
+  }
   const READERS = ["owner", "manager", "editor", "reader"];
   const ROLES = ["owner", "manager", "editor", "reader", "blind_user", "auditor"];
   const norm = (f) => (f || "").replace(/[\s-]/g, "").toUpperCase();
   // Governance (ADR 0044 to 0046): a senior owner in "Atelier", requests, quarantine.
-  if (S.senior) roster[W].unshift({ member: others.claire, role: "owner", devices: 1, proven: true });
+  if (S.senior || S.mail) roster[W].unshift({ member: others.claire, role: "owner", devices: 1, proven: true });
   const OFFER = "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQ" + "Ax7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX".repeat(3);
   const TOKEN = "hirzla-accord:pGEBYQJQah8MLpuNTxejxeAtIvqMFFBk" + "Vt3Hq9ZpL2xR7wNcB6mJ4dK8sY1gE5uA0oQ".repeat(4);
   const quarantined = () => (S.quarantine
@@ -120,7 +146,7 @@
           change_refusal = "role";
           remove_refusal = self ? null : "role";
         }
-        return { member: m.member, me: self, role: m.role, devices: m.devices, fingerprint: fpOf(m.member), proven: m.proven, change_to, change_refusal, remove_refusal };
+        return { member: m.member, me: self, role: m.role, devices: m.devices, fingerprint: fpOf(m.member), proven: m.proven, change_to, change_refusal, remove_refusal, name: self ? myName || null : NAMES[m.member] || null, verified: self || compared.has(m.member) };
       }),
     };
   };
@@ -337,7 +363,7 @@
           : [],
       };
     },
-    server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB" }),
+    server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB", name: myName || null }),
     export_server_identity: () => "hirzla-membre-4be19c07.hirzla-membre",
     choose_server_ca: () => {
       S.ca = true;
@@ -411,6 +437,9 @@
         required: 2,
         offer: OFFER,
         created_ms: Date.UTC(2026, 10, 15, 14, 3),
+        sent_ms: null,
+        declined: [],
+        queued: 0,
       };
       S.requests = [q];
       return q;
@@ -418,7 +447,7 @@
     quorum_list: () => S.requests,
     quorum_inspect: (a) => {
       if (!(a.offer || "").startsWith("hirzla-demande:")) return refuse("approval_invalid", SERVER_MSG.approval_invalid);
-      return { locker: W, name: "Atelier", action: "owner_removal", target: others.karim, target_fingerprint: fpOf(others.karim), role: null, quorum: null, issuer: others.paul, issuer_fingerprint: fpOf(others.paul), can_sign: true };
+      return { locker: W, name: "Atelier", action: "owner_removal", target: others.karim, target_fingerprint: fpOf(others.karim), role: null, quorum: null, issuer: others.paul, issuer_fingerprint: fpOf(others.paul), can_sign: true, target_name: NAMES[others.karim] || null, issuer_name: NAMES[others.paul] };
     },
     quorum_approve: () => TOKEN,
     quorum_collect: (a) => {
@@ -426,6 +455,32 @@
       const q = S.requests[0];
       if (!q.counted.includes(others.lea)) q.counted.push(others.lea);
       return q;
+    },
+    profile_set: (a) => { myName = (a.name || "").trim(); },
+    member_search: (a) => {
+      const q = (a.text || "").trim().toLowerCase();
+      if (q.length < 2) return refuse("invalid", "Saisissez au moins deux caractères du nom recherché.");
+      if (S.unreachable) return refuse("server_unreachable", SERVER_MSG.server_unreachable);
+      const members = Object.entries(NAMES)
+        .filter(([m, name]) => m !== ME && name.toLowerCase().includes(q))
+        .map(([member, name]) => ({ member, name, fingerprint: fpOf(member), verified: compared.has(member) }));
+      return { members, more: false };
+    },
+    member_verify: (a) => {
+      if (norm(a.fingerprint) !== fpOf(a.member)) return refuse("fingerprint_mismatch", SERVER_MSG.fingerprint_mismatch);
+      compared.add(a.member);
+    },
+    quorum_send: (a) => {
+      const q = S.requests.find((x) => x.request === a.request);
+      if (!q) return refuse("not_found", "Demande introuvable sur ce poste.");
+      if (S.unreachable) q.queued = 1;
+      else { q.sent_ms = Date.UTC(2026, 10, 15, 14, 4); q.queued = 0; }
+      return q;
+    },
+    quorum_inbox: () => S.inbox || [],
+    quorum_respond: (a) => {
+      S.inbox = (S.inbox || []).filter((r) => r.request !== a.request);
+      return a.accept ? TOKEN : null;
     },
     quorum_apply: () => { S.requests = []; },
     quorum_cancel: () => { S.requests = []; },
