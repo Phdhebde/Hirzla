@@ -1,5 +1,5 @@
 {
   "bundle": {
-    "externalBin": ["binaries/hirzla-core", "binaries/hirzla"]
+    "externalBin": ["binaries/hirzla-core", "binaries/hirzla", "binaries/hirzla-native-host"]
   }
 }
