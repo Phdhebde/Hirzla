@@ -79,8 +79,9 @@ gpg --armor --export-secret-keys <EMPREINTE> > sauvegarde-gpg.asc   # sur les cl
 
 ## 4. Provenance Sigstore : rien à faire
 
-Le flux GitHub `Livraison` publie automatiquement, pour chaque installeur et chaque
-nomenclature (SBOM), une attestation signée sans clé par Sigstore. Pour vérifier un fichier
+Le flux GitHub `Livraison` produit automatiquement, pour chaque fichier joint à la version
+(installeurs, archives, nomenclatures) et pour les exécutables à signer, une attestation
+signée sans clé par Sigstore. Pour vérifier un fichier
 téléchargé :
 
 ```sh
@@ -113,41 +114,77 @@ avertissement, il faut un compte Apple Developer (99 USD par an), puis suivre
 
 ## 7. Publier une version
 
-1. Je prépare la version sur `dev`, puis vous fusionnez vers `main` et posez l'étiquette
-   (`v1.0.0`).
-2. Sur GitHub › *Actions* › *Livraison* › *Run workflow*, sur l'étiquette. Téléchargez les
-   artefacts (installeurs, SBOM, attestations).
-3. Sur le poste de signature, réseau débranché, signez **un manifeste des clients par
-   système livré** et, si besoin, le paquet de mise à jour hors ligne (`livraison.md` § 7 et
-   § 8). Le noyau vérifie ses clients par ce manifeste sous Linux, Windows et macOS : sans
-   lui, il ne démarre pas. Placez les exécutables de chaque système dans un dossier à part
-   (sous Windows, ils portent `.exe`), puis, dans chaque dossier :
+Le flux GitHub « Livraison » travaille en deux temps autour d'un **brouillon** de version
+(ADR 0064, `livraison.md` § 2.1) : il compile, vous signez hors ligne, il empaquette, vous
+publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
+`HIRZLA_PUBLISHER_KEYS` (étape 2) et l'outil `hirzla-signer` d'une version au moins égale
+à 1.0.0 sur le poste de signature (étape 1, point 3).
+
+1. **Je prépare la version sur `dev`** : versions relevées partout (Cargo, application,
+   extension), `CHANGELOG.md` complété. Vous fusionnez vers `main`.
+2. **Posez l'étiquette** sur le commit fusionné de `main`, puis poussez-la :
 
    ```sh
-   # Linux
-   hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
-     --plateforme linux-x86_64 --sortie hirzla-clients.manifest \
-     hirzla hirzla-core hirzla-desktop hirzla-native-host
-   # Windows
-   hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
-     --plateforme windows-x86_64 --sortie hirzla-clients.manifest \
-     hirzla.exe hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe
-   # macOS (Apple Silicon)
-   hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version 1.0.0 \
-     --plateforme macos-aarch64 --sortie hirzla-clients.manifest \
-     hirzla hirzla-core hirzla-desktop hirzla-native-host
+   git checkout main && git pull
+   git tag -a v1.0.0 -m "Hirzla 1.0.0"
+   git push origin v1.0.0
    ```
 
-   Les exécutables doivent être ceux qui seront installés, **après** toute signature de
-   système (SignPath sous Windows, signature ad hoc sous macOS) : une signature modifie le
-   fichier, et un manifeste fait avant ne correspondrait plus.
-
-4. Calculez et signez les empreintes :
+   Ne créez pas la version vous-même depuis la page *Releases* : le flux crée le brouillon à
+   partir de l'étiquette poussée.
+3. **Attendez l'étape 1** : *Actions* › *Livraison*, l'exécution de l'étiquette (environ une
+   demi-heure). Si elle échoue sur « version and publisher keys », le message dit quoi
+   corriger (étiquette différente de la version, variable `HIRZLA_PUBLISHER_KEYS` vide).
+   À la fin, un brouillon « Hirzla 1.0.0 » apparaît dans *Releases*.
+4. **Téléchargez l'artefact** `hirzla-1.0.0-a-signer` en bas de la page de l'exécution
+   (fichier zip). Facultatif, sur la machine connectée : vérifiez qu'un exécutable vient bien
+   du flux, `gh attestation verify linux-x86_64/hirzla-core --repo Phdhebde/Hirzla`.
+   Copiez le dossier décompressé sur une clé USB **non chiffrée de transfert** (les
+   exécutables sont publics).
+5. **Sur le poste de signature, réseau débranché**, montez la clé USB de la clé d'éditeur et
+   la clé de transfert, puis, dans le dossier `hirzla-1.0.0-a-signer` :
 
    ```sh
-   sha256sum Hirzla_* *.cdx.json */hirzla-clients.manifest > SHA256SUMS
+   sh signer-manifestes.sh /media/usb/editeur.cle /media/usb/editeur.pub
+   ```
+
+   Le script contrôle d'abord le transfert (`sha256sum -c SHA256SUMS`), puis signe et vérifie
+   un manifeste par système : `hirzla-clients-linux-x86_64.manifest`,
+   `hirzla-clients-windows-x86_64.manifest`, `hirzla-clients-macos-aarch64.manifest`. Les
+   commandes exactes qu'il exécute sont dans `LISEZMOI.txt`, si vous préférez les taper. Si
+   `hirzla-signer` n'est pas dans le `PATH` : `HIRZLA_SIGNER=/chemin/hirzla-signer sh
+   signer-manifestes.sh …`. Ne modifiez, ne renommez et ne signez aucun exécutable : le
+   manifeste porte leurs empreintes exactes.
+6. **Démontez la clé d'éditeur.** Copiez les trois fichiers `hirzla-clients-*.manifest` sur
+   la clé de transfert (ils sont publics), puis, sur la machine connectée : *Releases* ›
+   brouillon « Hirzla 1.0.0 » › crayon (*Edit*) › faites glisser les trois fichiers dans
+   « Attach binaries » › **Save draft** (surtout pas *Publish release*). Ne touchez pas au
+   texte du brouillon : la dernière ligne, invisible, relie le brouillon à l'étape 1.
+   En ligne de commande, équivalent : `gh release upload v1.0.0 hirzla-clients-*.manifest`.
+7. **Lancez l'étape 2** : *Actions* › *Livraison* › *Run workflow* › *Use workflow from* :
+   onglet *Tags* › `v1.0.0` › *Run workflow*. Elle vérifie vos manifestes (bonne clé, bonne
+   version, bons exécutables), construit les installeurs, vérifie qu'ils contiennent
+   exactement les exécutables signés, et joint au brouillon les installeurs, les archives,
+   l'extension, les SBOM et `SHA256SUMS`. Si elle refuse un manifeste, le message dit
+   lequel et pourquoi : supprimez-le du brouillon, recommencez au point 5.
+8. **Signez les empreintes** : téléchargez `SHA256SUMS` depuis le brouillon, puis, sur le
+   poste de signature (la clé GPG y vit, étape 3) :
+
+   ```sh
    gpg --detach-sign --armor SHA256SUMS        # produit SHA256SUMS.asc
+   gpg --verify SHA256SUMS.asc SHA256SUMS      # « Bonne signature »
    ```
 
-5. Publiez sur la page de la version : installeurs, `SHA256SUMS`, `SHA256SUMS.asc`, SBOM,
-   manifeste des clients. Démontez les clés USB et rangez-les.
+9. **Publiez** : joignez `SHA256SUMS.asc` au brouillon, relisez les notes (elles viennent de
+   `CHANGELOG.md`), vérifiez la liste des fichiers (`livraison.md` § 2.1 ; macOS n'y est pas
+   tant que l'ADR 0065 n'est pas mis en œuvre), puis **Publish release**. Démontez les clés
+   USB et rangez-les.
+
+Une version publiée n'est jamais reconstruite : pour corriger, on publie `1.0.1`. Si
+l'étape 2 n'a pas été lancée dans les 90 jours qui suivent l'étape 1 (durée de conservation
+des artefacts), supprimez l'étiquette distante et reposez-la : l'étape 1 recompile, remet le
+brouillon à zéro, et il faut signer de nouveau.
+
+Plus tard, pour une version suivante, vous pourrez joindre aussi au brouillon, au point 6,
+des paquets de mise à jour hors ligne `hirzla-X.Y.Z-<plateforme>.hirzla-maj`
+(`livraison.md` § 8) : l'étape 2 les vérifie et les publie avec le reste.

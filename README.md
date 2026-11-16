@@ -31,6 +31,8 @@ Seul sur un poste, ou relié à un serveur qui ne peut rien lire.
 | [Cible de sécurité](docs/cible-de-securite.md) | Périmètre d'évaluation CSPN |
 | [Feuille de route](docs/feuille-de-route.md) | Phases et critères de sortie |
 | [Décisions](docs/adr/) | ADR, une décision par fichier |
+| [Notes de version](CHANGELOG.md) | Évolutions de chaque version |
+| [Livraison](docs/livraison.md) | Installeurs, signature, flux de publication |
 | [Glossaire](docs/glossaire.md) | Vocabulaire fixé |
 
 ## Construire

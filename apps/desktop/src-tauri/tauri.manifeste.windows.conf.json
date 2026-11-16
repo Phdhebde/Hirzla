@@ -1,0 +1,5 @@
+{
+  "bundle": {
+    "resources": { "binaries/hirzla-clients.manifest": "hirzla-clients.manifest" }
+  }
+}
