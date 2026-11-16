@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
+use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
@@ -237,6 +238,42 @@ impl CoreLink {
                     return Err(DesktopError::from_self(code, retry_after_s));
                 }
                 Err(ClientError::Io(_)) if !retried && is_idempotent_self(request.op()) => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one connection request (`docs/api-locale.md` § 17, version 6). Only the read is
+    /// sent again on a new connection.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::connections::refusal`].
+    pub fn call_connection(
+        &mut self,
+        request: &ConnectionRequest,
+    ) -> Result<ConnectionReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_connection(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::connections::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, ConnectionRequest::Read { .. }) =>
+                {
                     retried = true;
                 }
                 Err(e) => return Err(e.into()),

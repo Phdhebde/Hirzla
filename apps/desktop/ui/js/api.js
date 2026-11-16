@@ -106,6 +106,21 @@ export function toApiError(e) {
  * @typedef {{ values: string[], strength: { entropy_millibits: number, pool: number } }} GeneratedBatch
  */
 
+/**
+ * SSH and RDP connections (local API version 6, ADR 0067).
+ * @typedef {"valid" | "broken" | "trashed" | "wrong_type" | "loop"} LinkState
+ * @typedef {{ locker: string, id: string, state: LinkState, title: string | null, host: string | null,
+ *   port: number | null, username: string | null, public_key: string | null }} ResolvedLink
+ * @typedef {{ kind: "ssh" | "rdp", trashed: boolean, title: string | null, host: string | null,
+ *   port: number | null, effective_port: number, username: string | null, domain: string | null,
+ *   host_key: string | null, favorite: boolean, has_password: boolean, has_notes: boolean, tags: string[],
+ *   ssh_key: ResolvedLink | null, jumps: ResolvedLink[] }} ConnectionCard
+ * @typedef {{ title?: string, host?: string, port?: number, username?: string, domain?: string,
+ *   password?: string, ssh_key?: SecretRef, jump?: SecretRef, host_key?: string, notes?: string,
+ *   favorite?: boolean }} ConnectionFields
+ * @typedef {"port" | "username" | "domain" | "password" | "ssh_key" | "jump" | "host_key" | "notes"} ConnectionClear
+ */
+
 export const api = {
   /** @returns {Promise<Status>} */
   status: () => call("app_status"),
@@ -139,6 +154,24 @@ export const api = {
   copyGeneratedAt: (index) => call("copy_generated_at", { index }),
   /** @returns {Promise<ImportReport>} */
   importCsv: () => call("import_csv"),
+
+  // Connections (local API version 6).
+  /**
+   * @param {{ kind: "ssh" | "rdp", locker: string | null, fields: ConnectionFields, tags: string[] }} connection
+   * @returns {Promise<SecretRef>}
+   */
+  createConnection: (connection) => call("create_connection", { connection }),
+  /** @param {SecretRef} target @returns {Promise<ConnectionCard>} */
+  connectionCard: (target) => call("connection_card", { target }),
+  /** @param {SecretRef} target @param {ConnectionFields} set @param {ConnectionClear[]} clear @returns {Promise<void>} */
+  updateConnection: (target, set, clear) => call("update_connection", { target, set, clear }),
+  /** @returns {Promise<string>} Name of the chosen file. */
+  chooseSshKeyFile: () => call("choose_ssh_key_file"),
+  /**
+   * @param {{ locker: string | null, title: string, passphrase?: string, username?: string, tags: string[] }} key
+   * @returns {Promise<SecretRef>}
+   */
+  createSshKey: (key) => call("create_ssh_key", { key }),
 
   // Self mode (local API version 5).
   /** @returns {Promise<VaultSettings>} */

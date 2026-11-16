@@ -19,11 +19,30 @@ description: Utiliser Hirzla au quotidien - créer un mot de passe ou une note, 
 ## Créer un secret
 
 1. Cliquez sur **Nouveau secret**.
-2. Choisissez le type : **Mot de passe** ou **Note**.
+2. Choisissez le type : **Mot de passe**, **Note**, **Connexion SSH**, **Connexion RDP** ou
+   **Clé SSH**.
 3. Renseignez le titre, l'identifiant et le mot de passe, ou cliquez sur **Générer**.
 4. Dans « Adresses web », indiquez l'adresse du site, une par ligne. L'extension ne remplira
    l'identifiant que sur ces sites.
 5. Ajoutez si besoin des étiquettes et des notes, cochez **Favori**, puis **Enregistrer**.
+
+## Connexions SSH et RDP
+
+Une connexion range ce qu'il faut pour joindre une machine : hôte, port, identifiant, mot de
+passe, et pour le RDP le domaine. Hirzla la conserve et l'affiche ; il n'ouvre pas encore la
+session lui-même.
+
+- **Clé SSH** : choisissez le fichier de votre clé privée (format OpenSSH). Elle est rangée
+  scellée, avec sa clé publique si le fichier « .pub » est à côté, et sa phrase de passe si
+  vous la donnez. Aucune commande ne rend la clé privée : conservez votre fichier.
+- **Connexion SSH** : vous pouvez lui attacher une clé SSH du coffre et un **rebond**, c'est-à-dire
+  une autre connexion SSH par laquelle passer. La fiche montre toute la chaîne des rebonds.
+- **Connexion RDP** : identifiant, domaine et mot de passe, avec un rebond SSH si besoin.
+- **Empreinte de l'hôte** : facultative, sous la forme « SHA256:… », pour la comparer à celle que
+  votre client affiche.
+
+Si la clé ou le rebond d'une connexion part à la corbeille ou disparaît, la fiche le signale.
+Le filtre **Connexions** du volet de gauche les réunit.
 
 ## Générer un mot de passe
 
