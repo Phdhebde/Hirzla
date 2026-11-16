@@ -42,7 +42,8 @@ Sur la fiche d'un secret, la valeur reste scellée tant que vous ne la demandez 
 
 ## Retrouver un secret
 
-- Le champ **Rechercher** (++ctrl+f++) filtre la liste.
+- Le champ **Filtrer la liste** (++ctrl+f++) filtre la liste.
+- La palette (++ctrl+k++) mène à un secret ou à une action depuis le clavier ; ++ctrl+enter++ y copie le mot de passe.
 - **Favoris** regroupe les secrets marqués d'une étoile.
 - Les casiers, à gauche, filtrent par casier.
 
