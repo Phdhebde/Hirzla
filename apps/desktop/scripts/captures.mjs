@@ -180,10 +180,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.waitForFunction(() => document.querySelector("#reglage-auto").value === "300");
   await p.evaluate(() => document.querySelector("#reglages-coffre").scrollIntoView({ block: "start" }));
   await shot(p, "12-reglages-du-coffre", theme);
-  await p.fill("#reglage-auto", "5");
-  await p.click("#form-reglages-coffre button[type=submit]");
-  await p.waitForSelector("#reglages-coffre-erreur:not([hidden])");
-  await p.fill("#reglage-auto", "600");
+  await p.selectOption("#reglage-auto", "600");
   await p.click("#form-reglages-coffre button[type=submit]");
   await p.waitForSelector("#reglages-coffre-erreur", { state: "hidden" });
   await p.fill("#recouvrement-parts", "5");
