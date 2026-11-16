@@ -31,6 +31,8 @@ pub struct AppState {
     link: Mutex<Result<CoreLink, DesktopError>>,
     pub(crate) clipboard: SecretClipboard,
     generated: Mutex<Option<Zeroizing<String>>>,
+    /// Values of the last batch of the generator screen ([`crate::generator`]).
+    pub(crate) generated_batch: Mutex<Vec<Zeroizing<String>>>,
     /// KeePass database chosen with the file picker, waiting for its password.
     pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
@@ -52,6 +54,7 @@ impl AppState {
             link: Mutex::new(link),
             clipboard: SecretClipboard::default(),
             generated: Mutex::new(None),
+            generated_batch: Mutex::new(Vec::new()),
             pending_kdbx: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
@@ -78,6 +81,7 @@ impl AppState {
     pub(crate) fn forget(&self) {
         self.clipboard.clear_now();
         *guard(&self.generated) = None;
+        guard(&self.generated_batch).clear();
     }
 
     /// On exit: lock the vault and clear the clipboard. Errors are ignored: the core locks

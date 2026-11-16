@@ -8,6 +8,8 @@
 //! - [`link`]: the connection to the core, hardening of this process after it is accepted;
 //! - [`commands`]: what the web view may ask, checked strictly;
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
+//! - [`generator`]: settings, profiles and strength of the generator screen (local API
+//!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
@@ -23,6 +25,7 @@ pub mod csv;
 pub mod error;
 #[cfg(target_os = "linux")]
 pub mod events;
+pub mod generator;
 pub mod import;
 pub mod link;
 pub mod selfmode;
@@ -72,6 +75,9 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::delete_secret,
             commands::generate_password,
             commands::copy_generated,
+            generator::generator_profiles,
+            generator::generate_with,
+            generator::copy_generated_at,
             commands::import_csv,
             selfmode::get_settings,
             selfmode::set_settings,

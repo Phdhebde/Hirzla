@@ -150,6 +150,11 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("Control+g");
   await p.waitForFunction(() => document.querySelector("#generateur-resultat").textContent.length > 0);
   await shot(p, "07-generateur", theme);
+  await p.click("#generateur-modes [data-mode='passphrase']");
+  await p.waitForFunction(() => document.querySelector("#generateur-resultat").textContent.includes("-"));
+  await p.click("#generateur-lot");
+  await p.waitForSelector("#generateur-lot-liste li");
+  await shot(p, "07b-generateur-phrase-de-passe", theme);
 
   // Settings, then an import.
   await p.click("[data-vue='reglages']");
@@ -204,6 +209,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "14-historique", theme);
   await p.keyboard.press("Escape");
   await p.click("[data-filtre='corbeille']");
+  await p.waitForFunction(() => document.querySelector("#liste-titre").textContent === "Corbeille");
   await p.click("#liste-secrets li");
   await p.waitForSelector("#fiche-restaurer:not([hidden])");
   await shot(p, "15-corbeille", theme);

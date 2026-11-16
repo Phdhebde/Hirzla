@@ -92,6 +92,20 @@ export function toApiError(e) {
   return { code: "internal", message: "Erreur inattendue de l'application.", retry_after_s: null };
 }
 
+/**
+ * Settings of the generator (ADR 0068), one shape per mode.
+ * @typedef {{ mode: "characters", length: number, lower: boolean, upper: boolean, digits: boolean, symbols: boolean,
+ *             minimums: [number, number, number, number], symbol_set: string | null, excluded: string,
+ *             no_ambiguous: boolean, same_keys: boolean, no_repeat: boolean, start_letter: boolean }
+ *   | { mode: "passphrase", words: number, separator: string, capitalize: boolean, digits: number }
+ *   | { mode: "pronounceable", syllables: number, capitalize: boolean, digits: number, no_ambiguous: boolean }
+ *   | { mode: "pin", length: number, no_repeat: boolean, no_sequence: boolean }
+ *   | { mode: "template", template: string, symbol_set: string | null, excluded: string,
+ *       no_ambiguous: boolean, same_keys: boolean, no_repeat: boolean }} GeneratorSpec
+ * @typedef {{ id: string, target_bits: number, spec: GeneratorSpec }} GeneratorProfile
+ * @typedef {{ values: string[], strength: { entropy_millibits: number, pool: number } }} GeneratedBatch
+ */
+
 export const api = {
   /** @returns {Promise<Status>} */
   status: () => call("app_status"),
@@ -117,6 +131,12 @@ export const api = {
   generate: (options) => call("generate_password", { options }),
   /** @returns {Promise<number>} */
   copyGenerated: () => call("copy_generated"),
+  /** @returns {Promise<GeneratorProfile[]>} */
+  generatorProfiles: () => call("generator_profiles"),
+  /** @param {GeneratorSpec} spec @param {number} count @returns {Promise<GeneratedBatch>} */
+  generateWith: (spec, count) => call("generate_with", { spec, count }),
+  /** @param {number} index @returns {Promise<number>} */
+  copyGeneratedAt: (index) => call("copy_generated_at", { index }),
   /** @returns {Promise<ImportReport>} */
   importCsv: () => call("import_csv"),
 
