@@ -9,6 +9,7 @@
 mod args;
 mod clipboard;
 mod connections;
+mod folders;
 mod selfmode;
 mod server;
 mod term;
@@ -593,6 +594,12 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Recovery(what) => selfmode::recovery(&session, what),
         Command::Connection(command) => connections::run(&session, command),
         Command::SshKeyAdd(command) => connections::add_ssh_key(&session, command),
+        Command::Folder(command) => folders::run(&session, command),
+        Command::Mv {
+            name,
+            id,
+            destination,
+        } => folders::move_secret(&session, name.as_deref(), id.as_deref(), destination),
         Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }

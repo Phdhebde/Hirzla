@@ -50,10 +50,11 @@ clé 4 des champs communs). L'arbre affiché est une fonction déterministe de l
 
 | Clé | Où | Nom | Valeur | Fusion | Sensible |
 | --- | --- | --- | --- | --- | --- |
-| 4 | `fields` | `folder` | `ID16` | R | Non |
+| 4 | `fields` | `folder` | `ID16` ou `null` | R | Non |
 
-Champ absent : le secret est à la racine du casier. Déplacer un secret, c'est écrire une
-version qui pose ou efface ce champ.
+Champ absent ou `null` : le secret est à la racine du casier. Déplacer un secret, c'est écrire
+une version qui pose ce champ ; le retour à la racine écrit `null`, jamais un effacement, car
+un champ effacé perdrait contre une version concurrente qui garde l'ancienne valeur.
 
 Un casier sans dossier ne porte pas la clé 3 : son `LockerBody` est octet pour octet celui de
 la version 2. Un secret sans dossier ne porte pas le champ 4.
