@@ -62,6 +62,7 @@ const MESSAGES = {
   core_error: 'La connexion au noyau Hirzla a échoué.',
   no_vault: "Aucun coffre. Créez-le avec l'application ou « hirzla init ».",
   locked: "Le coffre est verrouillé. Ouvrez-le avec l'application ou « hirzla unlock », puis rouvrez Hirzla.",
+  no_app: 'Ouvrez Hirzla sur ce poste.',
   not_found: 'Aucun identifiant enregistré pour ce site exact.',
   unauthorized: "Opération refusée par le noyau pour l'extension.",
   invalid_origin: "L'adresse de la page n'est pas une origine https valide.",

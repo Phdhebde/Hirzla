@@ -69,6 +69,8 @@
     "allow-member-verify",
     "allow-quorum-send",
     "allow-quorum-inbox",
-    "allow-quorum-respond"
+    "allow-quorum-respond",
+    "allow-get-preferences",
+    "allow-set-preferences"
   ]
 }

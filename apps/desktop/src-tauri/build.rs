@@ -68,6 +68,8 @@ const COMMANDS: &[&str] = &[
     "quorum_send",
     "quorum_inbox",
     "quorum_respond",
+    "get_preferences",
+    "set_preferences",
 ];
 
 fn main() {

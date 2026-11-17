@@ -41,6 +41,8 @@ pub struct AppState {
     pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
     /// Site CA chosen with the file picker, waiting for the address of the server.
     pub(crate) pending_ca: Mutex<Option<crate::servermode::PendingCa>>,
+    /// Local preferences ([`crate::prefs`]), loaded at start.
+    pub(crate) prefs: Mutex<crate::prefs::PrefsStore>,
 }
 
 pub(crate) fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -61,6 +63,7 @@ impl AppState {
             pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
+            prefs: Mutex::new(crate::prefs::PrefsStore::default()),
         }
     }
 
@@ -85,6 +88,18 @@ impl AppState {
         self.clipboard.clear_now();
         *guard(&self.generated) = None;
         guard(&self.generated_batch).clear();
+    }
+
+    /// Asks the core whether the window was called for (`AppPoll`, ADR 0071), and takes the
+    /// call.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn app_poll(&self) -> Result<bool, DesktopError> {
+        match self.call(&Request::AppPoll)? {
+            Reply::Flag(called) => Ok(called),
+            _ => Err(DesktopError::Protocol),
+        }
     }
 
     /// On exit: lock the vault and clear the clipboard. Errors are ignored: the core locks
@@ -224,6 +239,12 @@ pub struct StatusDto {
 }
 
 impl StatusDto {
+    /// `absent`, `locked` or `unlocked`.
+    #[must_use]
+    pub fn state(&self) -> &'static str {
+        self.state
+    }
+
     fn new(s: StatusInfo, app: Option<HardeningReport>) -> StatusDto {
         StatusDto {
             state: match s.state {

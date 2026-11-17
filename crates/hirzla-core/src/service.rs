@@ -67,6 +67,51 @@ pub struct Core {
     last_tick: Option<(Instant, SystemTime)>,
     /// Wall clock of the server mode, replaced by tests that need days to pass (ADR 0045).
     server_clock: Option<fn() -> u64>,
+    /// The call for the desktop application's window (ADR 0071).
+    app_window: AppWindow,
+}
+
+/// How long after its last `AppPoll` the desktop application counts as listening.
+const APP_LISTENING: Duration = Duration::from_secs(10);
+/// Shortest time between two accepted `ShowApp`.
+const SHOW_APP_INTERVAL: Duration = Duration::from_secs(1);
+
+/// The call for the desktop application's window (`docs/api-locale.md` § 18, ADR 0071): a
+/// volatile flag, set by `ShowApp` and taken by `AppPoll`. It carries no data.
+#[derive(Default)]
+struct AppWindow {
+    /// The window was called for and the application has not asked yet.
+    wanted: bool,
+    /// Last `AppPoll`.
+    polled: Option<Instant>,
+    /// Last accepted `ShowApp`.
+    shown: Option<Instant>,
+}
+
+impl AppWindow {
+    /// `ShowApp` at `now`: whether an application is listening. `Throttled` under one second
+    /// after the previous call.
+    fn show(&mut self, now: Instant) -> Result<bool, ErrorCode> {
+        if self
+            .shown
+            .is_some_and(|t| now.saturating_duration_since(t) < SHOW_APP_INTERVAL)
+        {
+            return Err(ErrorCode::Throttled);
+        }
+        self.shown = Some(now);
+        let listening = self
+            .polled
+            .is_some_and(|t| now.saturating_duration_since(t) < APP_LISTENING);
+        // Without a listener the call is dropped: a window must not appear minutes later.
+        self.wanted = listening;
+        Ok(listening)
+    }
+
+    /// `AppPoll` at `now`: takes the call.
+    fn poll(&mut self, now: Instant) -> bool {
+        self.polled = Some(now);
+        std::mem::take(&mut self.wanted)
+    }
 }
 
 pub(crate) fn vault_error(e: VaultError) -> ErrorReply {
@@ -156,6 +201,7 @@ impl Core {
             log,
             last_tick: None,
             server_clock: None,
+            app_window: AppWindow::default(),
         }
     }
 
@@ -391,6 +437,13 @@ impl Core {
             Request::GenerateWith { spec } => {
                 Ok(Reply::GeneratedWith(generator::generate_with(&spec)?))
             }
+            // Neither touches the vault nor counts as activity (ADR 0071).
+            Request::ShowApp => self
+                .app_window
+                .show(Instant::now())
+                .map(Reply::Flag)
+                .map_err(ErrorReply::new),
+            Request::AppPoll => Ok(Reply::Flag(self.app_window.poll(Instant::now()))),
             Request::Init { password, kdf } => self.init(&password, kdf),
             Request::Unlock { password } => self.unlock(&password),
             Request::Lock => {

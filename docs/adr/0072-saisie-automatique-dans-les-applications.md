@@ -86,8 +86,8 @@ aucune opération (ADR 0067).
 ### 6. Journal
 
 La lecture du champ est journalisée par `Read` comme aujourd'hui. L'application ajoute un
-événement `auto_type` par une opération `Note` de l'API locale (version 8, code 131, plage de
-l'ADR 0071) qui porte l'identifiant du secret, le champ et le nom de l'exécutable cible,
+événement `auto_type` par une opération `Note` de l'API locale (version 8, code 132, plage de
+l'ADR 0071 ; 130 et 131 sont pris par `ShowApp` et `AppPoll`) qui porte l'identifiant du secret, le champ et le nom de l'exécutable cible,
 jamais la valeur.
 
 ### 7. Hors périmètre

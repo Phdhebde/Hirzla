@@ -57,7 +57,7 @@ test('a login is not saved twice for the same user name', () => {
 });
 
 test('every error has a French message, unknown codes a generic one', () => {
-  for (const code of ['locked', 'not_found', 'hidden', 'frame', 'origin', 'host_unavailable']) {
+  for (const code of ['locked', 'no_app', 'not_found', 'hidden', 'frame', 'origin', 'host_unavailable']) {
     assert.ok(messageFor(code).length > 10, code);
   }
   assert.equal(messageFor('__proto__'), 'Opération impossible.');

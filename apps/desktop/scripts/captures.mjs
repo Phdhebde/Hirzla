@@ -192,6 +192,8 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.click("[data-vue='reglages']");
   await p.waitForSelector("#reglage-durcissement tr");
   await shot(p, "08-reglages", theme);
+  await p.evaluate(() => document.querySelector("#reglages-poste").scrollIntoView({ block: "start" }));
+  await shot(p, "08b-reglages-sur-ce-poste", theme);
   await p.click("#import-csv");
   await p.waitForSelector("#import-resultat:not([hidden])");
   await p.evaluate(() => document.querySelector("#import-resultat").scrollIntoView({ block: "end" }));

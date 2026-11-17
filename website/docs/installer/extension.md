@@ -93,4 +93,6 @@ adresse, puis cliquez sur l'icône Hirzla.
 | --- | --- |
 | « L'hôte Hirzla n'est pas installé » | Le fichier `hirzla.native_host.json` n'est pas trouvé, ou l'identifiant de l'extension ne correspond pas |
 | « Le noyau n'est pas démarré » | Ouvrez le coffre |
+| « Le coffre est verrouillé » | Cliquez sur **Ouvrir Hirzla** : la fenêtre de l'application vient au premier plan pour le déverrouiller |
+| « Ouvrez Hirzla sur ce poste. » | L'application n'est pas démarrée : l'extension ne la lance pas elle-même |
 | « Accès refusé » | `hirzla-native-host` n'est pas à côté du noyau |

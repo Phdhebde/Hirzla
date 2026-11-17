@@ -629,6 +629,20 @@
           </select>
         </label>
       </section>
+      <section class="carte" aria-labelledby="reglages-poste">
+        <h2 id="reglages-poste" class="titre-carte">Sur ce poste</h2>
+        <label class="case"><input type="checkbox" id="reglage-zone" aria-describedby="reglage-zone-aide"> Garder
+          Hirzla dans la zone de notification</label>
+        <p id="reglage-zone-aide" class="aide">Fermer la fenêtre la masque sans verrouiller le coffre : il reste ouvert
+          jusqu'au délai d'inactivité, à la veille, au verrouillage de votre session ou à « Verrouiller ». Décochez
+          pour que fermer la fenêtre verrouille le coffre et arrête Hirzla.</p>
+        <p id="reglage-zone-absente" class="aide" hidden>Ce bureau n'a pas de zone de notification : fermer la fenêtre
+          verrouille le coffre et arrête Hirzla.</p>
+        <div id="reglages-poste-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+      </section>
       <section class="carte" aria-labelledby="reglages-coffre">
         <h2 id="reglages-coffre" class="titre-carte">Coffre</h2>
         <form id="form-reglages-coffre" novalidate>
@@ -675,8 +689,8 @@
           <dt>Version du noyau</dt><dd id="reglage-version" class="mono"></dd>
           <dt>Version de l'application</dt><dd id="reglage-version-app" class="mono"></dd>
         </dl>
-        <p class="aide">Ces réglages sont enregistrés dans le coffre. Le coffre est aussi verrouillé à la fermeture de
-          l'application.</p>
+        <p class="aide">Ces réglages sont enregistrés dans le coffre. Le coffre est aussi verrouillé quand vous
+          quittez Hirzla.</p>
       </section>
       <section class="carte" aria-labelledby="reglages-mdp">
         <h2 id="reglages-mdp" class="titre-carte">Mot de passe maître</h2>

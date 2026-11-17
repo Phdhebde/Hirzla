@@ -544,3 +544,45 @@ fn origin_operations_are_exact() {
     c.handle(Request::Lock).unwrap();
     assert_eq!(code(fill(&mut c, bank, origin)), ErrorCode::Locked);
 }
+
+/// ADR 0071: the call for the window reaches a listening application once, is dropped
+/// without one, is bounded to one a second, and never counts as activity.
+#[test]
+fn window_call_reaches_a_listening_application_once() {
+    let t0 = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = AppWindow::default();
+    // Nobody listens: dropped, and not delivered to an application that starts later.
+    assert_eq!(w.show(t0), Ok(false));
+    assert!(!w.poll(t0 + s(2)));
+    // A listener takes the call exactly once.
+    assert_eq!(w.show(t0 + s(3)), Ok(true));
+    assert!(w.poll(t0 + s(4)));
+    assert!(!w.poll(t0 + s(5)));
+    // Bounded to one call a second.
+    assert_eq!(w.show(t0 + s(6)), Ok(true));
+    assert_eq!(
+        w.show(t0 + s(6) + Duration::from_millis(500)),
+        Err(ErrorCode::Throttled)
+    );
+    assert!(w.poll(t0 + s(7)));
+    // The application stopped polling: it no longer counts as listening.
+    assert_eq!(w.show(t0 + s(7) + APP_LISTENING), Ok(false));
+    assert!(!w.poll(t0 + s(60)));
+}
+
+#[test]
+fn window_call_works_locked_and_is_not_activity() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), None);
+    // No vault at all: both operations answer.
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(false)));
+    assert!(c.handle(Request::ShowApp) == Ok(Reply::Flag(true)));
+    assert_eq!(code(c.handle(Request::ShowApp)), ErrorCode::Throttled);
+    let before = c.last_activity;
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(true)));
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(false)));
+    assert_eq!(c.last_activity, before);
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("op=show_app"), "{log}");
+}

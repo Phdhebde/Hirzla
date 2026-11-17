@@ -39,12 +39,14 @@ geste explicite. Aucun facteur de déverrouillage n'est affaibli.**
   « Quitter ». **Aucun titre de secret, aucun nom de casier, aucun compteur** n'apparaît dans
   le menu ni dans l'infobulle : le menu est dessiné par le système, hors de la vue web, et
   reste lisible session verrouillée sur certains bureaux.
-- L'icône a deux états, verrouillé et ouvert, pris dans `brand/`.
+- L'icône a deux états : l'icône de l'application (`brand/`) coffre ouvert, la même en
+  niveaux de gris sinon. L'infobulle est l'un de trois textes fixes.
 
 ### 2. Fermeture de la fenêtre
 
-- Fermer la fenêtre la masque. Avant de la masquer, l'application remplace dans la page toute
-  valeur révélée et ferme les dialogues ouverts, comme à l'expiration de la révélation.
+- Fermer la fenêtre la masque. L'application recharge alors la page : valeurs révélées,
+  dialogues ouverts et formulaires en cours disparaissent avec l'ancienne page, et sa copie
+  du presse-papiers est effacée.
 - Le coffre **reste ouvert** jusqu'au premier de ces événements : délai d'inactivité
   `auto_lock_s`, veille ou verrouillage de session (ADR 0033), « Verrouiller », « Quitter ».
   Une fenêtre masquée ne produit aucune activité : le délai court.
@@ -58,8 +60,9 @@ geste explicite. Aucun facteur de déverrouillage n'est affaibli.**
 ### 3. Fenêtre de déverrouillage
 
 - C'est **la même fenêtre et la même vue web**, ramenée au premier plan sur l'écran de
-  déverrouillage existant, en taille réduite tant que le coffre est verrouillé. Pas de
-  deuxième vue web : la surface évaluée ne grandit pas.
+  déverrouillage existant, en taille réduite tant que le coffre est verrouillé (la taille
+  réduite n'est pas dans le premier lot de code). Pas de deuxième vue web : la surface
+  évaluée ne grandit pas.
 - « Rapide » décrit le geste, pas le facteur : le déverrouillage reste celui du coffre (mot de
   passe maître, et clé matérielle si elle est configurée, ADR 0006 et 0014). **Pas de code
   court, pas de biométrie seule, pas de mot de passe gardé en mémoire.**
@@ -68,13 +71,18 @@ geste explicite. Aucun facteur de déverrouillage n'est affaibli.**
 
 - Nouvelle opération de l'API locale, `ShowApp` (version 8, code 130 ; la plage 130–139 est
   réservée à cet ADR et à l'ADR 0072). Elle ne porte aucun argument et ne rend aucun secret.
-- Le noyau garde un drapeau volatil. Il le rend au seul client `hirzla-desktop` dans la
-  réponse `Status`, que l'application lit déjà toutes les trois secondes, puis l'efface.
-  L'application ramène alors sa fenêtre au premier plan. Délai perçu : trois secondes au plus ;
-  l'application peut resserrer la sonde à une seconde quand la fenêtre est masquée.
-- Profils autorisés : navigateur (hôte natif) et ligne de commande. `ShowApp` est acceptée
-  coffre verrouillé, bornée à une demande par seconde, et journalisée (`event=show_app`).
-- Si aucune application n'est connectée, le noyau répond `no_app` et l'extension affiche
+- Le noyau garde un drapeau volatil. L'application le prend par une seconde opération,
+  `AppPoll` (code 131), toutes les deux secondes, depuis son processus Rust (les minuteries
+  d'une vue web masquée sont ralenties), puis ramène sa fenêtre au premier plan. *Précision
+  apportée au codage (2026-11-17)* : la proposition rendait le drapeau dans `Status` ; une
+  opération à part laisse l'encodage de `Status` inchangé pour tous les clients. Le noyau ne
+  connaît que deux profils : `AppPoll` est réservée au profil complet, pas au seul
+  `hirzla-desktop`.
+- Profils autorisés pour `ShowApp` : navigateur (hôte natif) et complet. Elle est acceptée
+  coffre verrouillé, bornée à une demande par seconde, et journalisée comme toute requête
+  (`event=request op=show_app`).
+- Si aucune application n'a pris d'appel depuis dix secondes, le noyau répond « personne
+  n'écoute » et abandonne l'appel ; l'hôte natif répond `no_app` et l'extension affiche
   « Ouvrez Hirzla sur ce poste. ». **L'hôte natif ne lance aucun exécutable.**
 - Une deuxième instance de `hirzla-desktop` envoie `ShowApp` puis s'arrête : c'est ce qui
   tient lieu d'instance unique, sans le greffon `single-instance`.
