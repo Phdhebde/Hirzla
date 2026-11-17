@@ -252,14 +252,21 @@ fn self_mode_from_the_command_line() {
     // Usage errors.
     assert_eq!(hirzla(&sock, &["frobnicate"], None).status.code(), Some(2));
 
-    // Stop: the core locks and exits.
+    // Stop: the core locks and exits. While it exits, a `status` can reach the socket and
+    // lose the connection before the handshake ends: that is retried, not a failure.
     ok(&hirzla(&sock, &["stop"], None));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let s = ok(&hirzla(&sock, &["status"], None));
-        if s.contains("arrêté") {
+        let out = hirzla(&sock, &["status"], None);
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("arrêté") {
             break;
         }
+        assert!(
+            out.status.success()
+                || String::from_utf8_lossy(&out.stderr).contains("la connexion au noyau a échoué"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(Instant::now() < deadline, "the core did not stop");
         std::thread::sleep(Duration::from_millis(100));
     }
