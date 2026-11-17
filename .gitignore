@@ -17,3 +17,5 @@ target-*/
 # Public site built by Zensical (website/).
 /website/site
 /website/.venv
+# Python bytecode (scripts of .github/scripts).
+__pycache__/
