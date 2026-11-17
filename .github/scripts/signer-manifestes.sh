@@ -1,10 +1,16 @@
 #!/bin/sh
-# Signs the client manifests of a release on the publisher's offline signing station
-# (ADR 0064, docs/guide-signature.md step 7). Copied by the first stage of the Livraison
-# workflow into the "hirzla-X.Y.Z-a-signer" artifact, next to:
+# Signs the client manifests of a release by hand, on an offline signing station: fallback
+# of ADR 0073. The Livraison workflow now signs the manifests itself in its "manifests" job,
+# with the same commands, and does not consume manifests signed by this script: building
+# installers from them is then manual (docs/livraison.md § 2). Kept for that case, e.g. when
+# the CI secret has been revoked, and as the reference of the commands.
+#
+# Expects, next to this script, a folder assembled from the artifacts executables-<platform>
+# of a Livraison run (executables-windows-x86_64-signes when SignPath signed them):
 #   VERSION                 the version to sign (X.Y.Z)
 #   ESSAI                   present only in a dry run of the flow (tag vX.Y.Z-essai.N)
-#   SHA256SUMS              SHA-256 of the transferred files, to check the transfer
+#   SHA256SUMS              SHA-256 of the transferred files (the <platform>.sha256 files of
+#                           the artifacts, concatenated), to check the transfer
 #   linux-x86_64/ windows-x86_64/   the executables of each platform
 #   macos-aarch64/Hirzla.app.zip    the signed macOS application, whole (ADR 0065): its
 #                           manifest names the executables of Hirzla.app/Contents/MacOS as
@@ -102,5 +108,5 @@ if [ "$signed" -eq 0 ]; then
   exit 1
 fi
 echo
-echo "$signed manifeste(s) signé(s). Joignez les fichiers hirzla-clients-*.manifest au"
-echo "brouillon de la version sur GitHub, puis lancez la seconde étape du flux Livraison."
+echo "$signed manifeste(s) signé(s) : hirzla-clients-*.manifest. Construisez les installeurs"
+echo "à partir de ces exécutables inchangés (docs/livraison.md, § 2)."

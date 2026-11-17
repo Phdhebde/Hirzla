@@ -69,3 +69,11 @@ go vet ./... && go test -race ./...
 
 Les tests utilisent un faux noyau sur une socket Unix et partagent leurs vecteurs CBOR avec les
 tests Rust (`TestEncoderMatchesTheCore`, `TestRequestEncodingMatchesTheCore`).
+
+## Licence
+
+Le SDK suit la licence du dépôt : GNU AGPL 3.0 ou ultérieure (`LICENSE` à la racine), ou
+licence commerciale accordée par l'auteur (`LICENSING.md`). Un programme qui intègre ce SDK
+et qui est distribué, ou proposé comme service en réseau après modification du SDK, est
+soumis aux conditions de l'AGPL ; sinon, demandez une licence commerciale. Une exception de
+liaison pour le SDK est à l'étude (ADR 0074, point ouvert).

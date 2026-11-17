@@ -107,23 +107,33 @@ pour Linux, extension Firefox et Chromium.
 
 ### Livraison et chaîne d'approvisionnement
 
-- Clé d'éditeur hybride hors ligne (`hirzla-signer`) : manifeste des clients signé, vérifié
+- Clé d'éditeur hybride (`hirzla-signer`) : manifeste des clients signé, vérifié
   par le noyau et par chaque client sur les trois systèmes (ADR 0042, 0055, 0063).
 - Mises à jour hors ligne signées, sans retour en arrière (ADR 0043).
 - Compilation reproductible des exécutables Linux et nomenclatures CycloneDX des crates et
   des paquets npm (ADR 0056, 0061).
 - Provenance de compilation Sigstore, empreintes `SHA256SUMS` signées en GPG ; flux de
-  livraison en deux temps, la clé d'éditeur ne quittant jamais le poste de signature
-  (ADR 0063, 0064).
+  livraison en une exécution sur l'étiquette, manifestes des clients signés dans la CI après
+  approbation de l'éditeur, clé d'éditeur en secret d'environnement protégé (ADR 0063, 0064,
+  0073, risque accepté) ; signature Authenticode SignPath facultative.
 - Aucun appel réseau sortant non configuré : ni télémétrie, ni vérification en ligne.
 
 ### Limites connues
 
-- Pas de signature Authenticode ni Apple : avertissements SmartScreen et Gatekeeper à
-  l'installation (ADR 0063).
+- Pas de signature Apple : avertissement Gatekeeper à l'installation ; pas de signature
+  Authenticode tant que la SignPath Foundation n'a pas admis le projet : avertissement
+  SmartScreen (ADR 0063).
 - macOS : paquet `.pkg` seulement, pas d'image disque ; il pose le manifeste des clients
   dans `/Library/Application Support/Hirzla/`, hors de `Hirzla.app` (ADR 0065).
 - Prototypes de déverrouillage matériel hors des binaires livrés (ADR 0052).
 - Produit ni certifié ni qualifié à ce jour ; dossier CSPN en préparation.
+
+### Licence
+
+- Double licence : GNU AGPL 3.0 ou ultérieure (`AGPL-3.0-or-later`), ou licence commerciale
+  accordée par l'auteur (`LICENSING.md`, ADR 0074, qui remplace l'ADR 0062). Les commits
+  publiés auparavant sous Apache 2.0 le restent pour qui les a obtenus.
+- Contributions reçues après signature de l'accord de contribution (`CLA.md`) et avec une
+  ligne `Signed-off-by` (`CONTRIBUTING.md`).
 
 [1.0.0]: https://github.com/Phdhebde/Hirzla/releases/tag/v1.0.0

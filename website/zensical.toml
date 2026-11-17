@@ -8,7 +8,7 @@ site_name = "Hirzla"
 site_url = "https://phdhebde.github.io/Hirzla/"
 site_description = "Hirzla est un coffre-fort de mots de passe gratuit et open source, à chiffrement post-quantique hybride, pour Windows, macOS et Linux. Seul sur un poste, ou relié à un serveur qui ne peut rien lire."
 site_author = "Projet Hirzla"
-copyright = "Hirzla est un logiciel libre sous licence Apache 2.0. Conçu selon les recommandations de l'ANSSI ; ni certifié ni qualifié à ce jour."
+copyright = "Hirzla est un logiciel libre sous licence AGPL-3.0, également proposé sous licence commerciale. Conçu selon les recommandations de l'ANSSI ; ni certifié ni qualifié à ce jour."
 
 repo_url = "https://github.com/Phdhebde/Hirzla"
 repo_name = "Phdhebde/Hirzla"

@@ -1,6 +1,7 @@
 # ADR 0064 — Flux de livraison en deux temps
 
-- Statut : accepté (2026-11-16, décision du mainteneur)
+- Statut : accepté (2026-11-16, décision du mainteneur) ; partiellement remplacé par
+  l'ADR 0073 (manifestes signés dans la CI, une seule exécution sur l'étiquette)
 - Date : 2026-11-16
 
 ## Contexte

@@ -10,7 +10,8 @@ dépendance git, aucun script de construction qui télécharge (`livraison.md` �
 Licences admises (`deny.toml`) : MIT, Apache-2.0, BSD-3-Clause, ISC, Unicode-3.0, Zlib, plus
 exceptions nommées (BSL-1.0 pour `clipboard-win` et `error-code`, MPL-2.0 pour les crates CSS de
 Servo et `option-ext`, Apache-2.0 avec exception LLVM pour `target-lexicon`). Licence du
-produit lui-même : `À COMPLÉTER (Max)`.
+produit lui-même : AGPL-3.0-or-later, ou licence commerciale de l'auteur (ADR 0074) ; toutes
+les licences admises ci-dessus sont compatibles avec l'AGPL 3.0.
 
 Colonnes : **rôle de sécurité** = ce qui casse si la dépendance est fautive ; **`unsafe` / natif**
 = code non vérifié par le compilateur Rust qu'elle apporte ; **audit** = rapport public connu
