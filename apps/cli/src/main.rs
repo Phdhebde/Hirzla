@@ -8,6 +8,7 @@
 
 mod args;
 mod clipboard;
+mod connections;
 mod selfmode;
 mod server;
 mod term;
@@ -48,6 +49,10 @@ fn main() -> ExitCode {
     };
     if let Command::ClipboardHelper { seconds } = args.command {
         return clipboard::helper(seconds);
+    }
+    if args.command == Command::Version {
+        say(&format!("hirzla {}", env!("CARGO_PKG_VERSION")));
+        return ExitCode::SUCCESS;
     }
     match run(&args) {
         Ok(()) => ExitCode::SUCCESS,
@@ -125,6 +130,8 @@ fn type_name(t: u64) -> &'static str {
         4 => "clé d'accès",
         5 => "note",
         6 => "fichier",
+        7 => "connexion SSH",
+        8 => "connexion RDP",
         _ => "?",
     }
 }
@@ -274,7 +281,7 @@ fn print_entries(entries: &[ListEntry]) {
         let trash = if e.state == 1 { "  (corbeille)" } else { "" };
         let _ = writeln!(
             out,
-            "{}  {:<12}  {}  {}{}",
+            "{}  {:<13}  {}  {}{}",
             hex(&e.id[..4]),
             type_name(e.secret_type),
             e.title.as_str(),
@@ -512,24 +519,32 @@ fn run(args: &Args) -> Result<(), String> {
             let clear_s = status(&mut c)?.clipboard_clear_s;
             deliver(&value, *stdout, clear_s)
         }
-        Command::Gen {
-            length,
-            classes,
-            stdout,
-        } => {
+        Command::Gen { spec, stdout } => {
             let mut c = session.connect(true)?;
-            let password = match call(
-                &mut c,
-                &Request::Generate {
-                    length: *length,
-                    classes: *classes,
-                },
-            )? {
-                Reply::Generated(p) => p,
-                _ => return Err("réponse non valide du noyau.".into()),
+            let generated = match c.call(&Request::GenerateWith { spec: spec.clone() }) {
+                Ok(Reply::GeneratedWith(g)) => g,
+                Ok(_) => return Err("réponse non valide du noyau.".into()),
+                Err(ClientError::Refused(e)) if e.code == ErrorCode::InvalidInput => {
+                    return Err("réglages refusés : hors bornes, contradictoires, ou si \
+                                contraints que les règles écarteraient presque tous les \
+                                tirages."
+                        .into())
+                }
+                Err(e) => return Err(client_message(&e)),
             };
             let clear_s = status(&mut c)?.clipboard_clear_s;
-            deliver(&password, *stdout, clear_s)
+            deliver(&generated.value, *stdout, clear_s)?;
+            // On the error stream: the standard output may carry the value alone.
+            let bits = generated.estimate.entropy_millibits / 100;
+            let _ = writeln!(
+                std::io::stderr(),
+                "Entropie : {},{} bits ({},{} face à une recherche quantique).",
+                bits / 10,
+                bits % 10,
+                bits / 20,
+                bits / 2 % 10
+            );
+            Ok(())
         }
         Command::Rm { name, id, purge } => {
             let mut c = session.connect(false)?;
@@ -576,7 +591,9 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Passwd => selfmode::change_password(&session),
         Command::Settings(change) => selfmode::settings(&session, change),
         Command::Recovery(what) => selfmode::recovery(&session, what),
-        Command::ClipboardHelper { .. } | Command::Update(_) => Ok(()),
+        Command::Connection(command) => connections::run(&session, command),
+        Command::SshKeyAdd(command) => connections::add_ssh_key(&session, command),
+        Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }
 

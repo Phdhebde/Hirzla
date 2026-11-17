@@ -328,7 +328,9 @@ membre ou d'un appareil) crée `E2`.
 
 Certaines opérations exigent l'accord de plusieurs `Owner` (§ 9.2). Les accords sont des
 signatures **jointes** à l'opération, recueillies avant sa publication. Un `Owner` visé par un
-retrait ne voit donc rien venir avant que le retrait soit publié.
+retrait ne voit donc rien venir avant que le retrait soit publié : ni dans le journal, ni par
+le serveur, qui ne peut pas désigner la cible du courrier scellé (§ 11.12, ADR 0070). Un
+client modifié de la cible apprend seulement qu'une demande la concerne peut-être.
 
 `Approval` :
 
@@ -356,13 +358,15 @@ Règles :
 - L'appareil signataire a un certificat valide dans `S(past(op))`, non révoqué.
 - Un membre ne compte qu'une fois. L'initiateur compte pour un, sans accord joint.
 - Un `request_id` ne sert qu'une fois par casier. Une seconde opération qui le reprend est rejetée.
-- La demande circule par tout canal : boîte aux lettres du serveur, réseau local, fichier.
-  Elle ne contient aucun secret. L'appareil de l'approbateur affiche ce qu'il signe.
+- La demande circule par tout canal : courrier scellé du serveur (§ 11.12), réseau local,
+  fichier, copier-coller. Elle ne contient aucun secret. L'appareil de l'approbateur affiche
+  ce qu'il signe.
 
 ### 7.8 Demande et accord en texte (ADR 0044)
 
 Pour circuler hors bande (copier-coller, fichier, messagerie), une demande et un accord sont
-des objets texte dans l'enveloppe du § 11.10. Ils ne passent pas par le serveur.
+des objets texte dans l'enveloppe du § 11.10. Ils ne passent par le serveur que scellés dans
+le courrier du § 11.12 (ADR 0070), jamais en clair.
 
 **Demande** (`ApprovalOffer`), préfixe `hirzla-demande:` :
 
@@ -795,7 +799,9 @@ appareil. `PeerVector` = `{1: device, 2: vector (array<VectorEntry>)}`. Tableaux
 | 31 | `MemberKeysResult` | S → P | `{1: keys (MemberKeys), 2: devices (array<DeviceCert>), 3: revoked (array<DeviceRevocation>), 4: keylog_proof (bstr)?}` |
 | 32 | `MailboxPut` | P → S | `{1: device (destinataire), 2: blob (bstr(≤ 64 Kio))}`. Conservé 10 minutes (§ 7.7, § 14) |
 | 33 | `MailboxGet` | P → S | `{1: device}` → réponse `MailboxBlob` (34) `{1: blob}` |
+| 35 à 38 | Courrier des accords | | § 11.12 (ADR 0070) |
 | 40 | `Error` | S → P | `{1: code (uint)}` |
+| 50 à 53 | Profils de membre | | § 11.11 (ADR 0069) |
 | 60 à 67 | Registre de transparence | | `transparence.md` § 4 |
 | 41 | `Ping` / 42 `Pong` | Les deux | `{}` |
 | 43 | `Bye` | Les deux | `{}` |
@@ -949,6 +955,87 @@ empreinte : il compare la clé reçue dans `HelloAck` à l'empreinte avant d'env
 (§ 11.3). `hirzlad invitation` produit le lien à partir de l'en-tête en clair de son
 répertoire de données.
 
+### 11.11 Profils de membre et annuaire (ADR 0069)
+
+| Type | Nom | Sens | Contenu |
+| --- | --- | --- | --- |
+| 50 | `PutMemberProfile` | P → S | `{1: profile (bstr)}` : `CBOR(MemberProfile)` (`format.md` § 3.7), ≤ 8 Kio |
+| 51 | `MemberProfileResult` | S → P | `{1: index (uint)}` : rang de l'entrée kind 6 inscrite |
+| 52 | `FindMembers` | P → S | `{1: query (tstr, 2 à 64 octets)}` |
+| 53 | `MembersFound` | S → P | `{1: items (array<{1: keys (MemberKeys), 2: profile (bstr)}>), 2: more (bool)}` |
+
+**`PutMemberProfile`** — le serveur inscrit le profil (entrée kind 6, `transparence.md`
+§ 5.1) si : `member` est le membre de la session (sinon code 4) ; la signature vérifie avec
+la clé inscrite du membre (sinon code 7) ; le nom est valide et `seq` dépasse celui du profil
+courant (sinon code 1) ; le membre a moins de 256 profils (sinon code 8). Un profil déjà
+inscrit est refusé (R7). Le serveur garde le profil complet pour `GetKeyLogObject`.
+
+**`FindMembers`** — au plus 32 membres dont le **nom courant** (non vide) contient `query`,
+casse ignorée (minuscules Unicode), triés par nom puis identifiant ; `more` vaut `true` s'il y
+en a davantage. Chaque élément porte la `MemberKeys` inscrite et le profil courant encodé. Le
+poste n'en croit rien : il applique à chaque élément les contrôles de `transparence.md` § 6.8
+et écarte ceux qui échouent. Le serveur peut cacher un membre, pas en inventer un ni lui
+prêter un nom.
+
+### 11.12 Courrier scellé des demandes d'accord (ADR 0070)
+
+Un **courrier** durable, distinct de la boîte aux lettres d'enrôlement, porte les demandes et
+les accords d'un quorum (§ 7.7, § 7.8) entre propriétaires d'un même casier partagé.
+
+| Type | Nom | Sens | Contenu |
+| --- | --- | --- | --- |
+| 35 | `MailPut` | P → S | `{1: mails (array<bstr>)}` : 1 à 64 `ApprovalMail` de 32 Kio au plus |
+| 36 | `MailPutResult` | S → P | `{1: statuses (array<uint>)}`, dans l'ordre : 0 gardé (ou déjà gardé), sinon un code du § 11.7 |
+| 37 | `MailGet` | P → S | `{1: ack (array<bstr(16)>, ≤ 256), 2: limit (1 à 64)}` |
+| 38 | `MailItems` | S → P | `{1: items (array<{1: mail_id bstr(16), 2: received_ms uint, 3: mail bstr}>), 2: more (bool)}` |
+
+**`ApprovalMail`** — `CBOR({1: v (= 1), 2: from_member, 3: from_device, 4: to_member,
+5: to_device, 6: mail_id bstr(16), 7: key (KeyEnvelopeEntry), 8: box (bstr), 9: sig (bstr)})`,
+sur le modèle du fichier d'échange (§ 13.1) :
+
+- `mail_id` est tiré au hasard par l'expéditeur ;
+- `key` enveloppe (KEM hybride, `format.md` § 2.4) une clé de paquet tirée au hasard pour
+  l'appareil `to_device`, contexte `ctx = CBOR({1: "hirzla/v1/quorum-mail", 2: from_member,
+  3: from_device, 4: mail_id, 5: to_member, 6: to_device})` ;
+- `box` scelle sous cette clé (AEAD, AAD `ctx`) un `MailContent` complété à **8 192 octets**
+  exactement ;
+- `sig` est la signature hybride de l'appareil expéditeur, domaine `hirzla/v1/quorum-mail`
+  (`format.md` § 3.4), sur `CBOR` des clés 1 à 8.
+
+`MailContent` = `{1: kind uint, 2?: locker bstr(16), 3?: request bstr(16), 4?: text tstr
+(≤ 7 680 octets), 5: sent_ms uint, 6: pad bstr (zéros)}`. Types : 0 **leurre** (sans 2, 3,
+4), 1 **demande** (texte `hirzla-demande:…`), 2 **accord** (texte `hirzla-accord:…`),
+3 **refus**, 4 **retrait** (demande appliquée ou annulée ; 3 et 4 sans texte). Le bourrage
+`pad` porte la longueur à 8 192 octets ; un contenu d'une autre longueur, au bourrage non nul
+ou aux champs qui ne vont pas avec son type est refusé.
+
+**`MailPut`** — le serveur lit l'en-tête en clair (clés 1 à 6) et garde le paquet si :
+`from_member` et `from_device` sont ceux de la session (sinon code 4) ; `to_device` n'est pas
+révoqué au registre, et l'expéditeur et le destinataire sont tous deux `Owner`, avec un
+appareil actif, d'un même casier non personnel qu'il sert (sinon code 4) ; l'appareil
+destinataire a moins de **256** paquets en attente (sinon code 8). Un paquet déjà gardé
+(même `to_device`, même `mail_id`) est accepté sans être doublé ; un paquet illisible reçoit
+le code 1. Le serveur garde chaque paquet sur disque (enregistrement « courrier » de son
+répertoire de données, version 5) jusqu'à son accusé, **30 jours** au plus.
+
+**`MailGet`** — le serveur efface d'abord les paquets de `ack` adressés à l'appareil de la
+session (enregistrement « courrier remis »), puis rend au plus `limit` paquets en attente pour
+cet appareil, du plus ancien au plus récent. Aucun autre appareil ne lit ni n'accuse ces
+paquets.
+
+**Côté poste** — le noyau ouvre chaque paquet reçu et n'agit qu'après avoir vérifié la
+signature avec le certificat de `from_device` **actif dans sa propre réplique** du casier
+nommé par le contenu, où l'expéditeur doit être `Owner`. Une demande doit venir de
+l'initiateur et de l'appareil qu'elle nomme, un accord de l'approbateur qu'il nomme. Un
+paquet qui ne tient pas, un leurre, un paquet rejoué sont jetés et accusés sans rien montrer.
+Le noyau accuse un lot une fois son effet enregistré dans l'annexe (`format.md` § 15.2) : un
+paquet relu après un arrêt est sans effet.
+
+**Leurre** — pour un retrait ou un changement de rôle d'un `Owner`, l'initiateur envoie la
+demande à chaque appareil actif de chaque autre `Owner`, et un leurre de même taille à chaque
+appareil de la cible ; le retrait (annulation ou application) suit le même envoi. Le serveur
+voit partir un paquet vers chaque autre propriétaire et ne peut pas désigner la cible.
+
 ## 12. Ce que le serveur apprend malgré le chiffrement
 
 | Il apprend | D'où | Pourquoi c'est nécessaire | Réduction |
@@ -961,8 +1048,10 @@ répertoire de données.
 | Nombre et taille arrondie des fichiers joints, heure d'accès | `PutChunk`, `GetChunk` | Stocker | Morceaux de taille fixe |
 | Qui tire quel casier, et quand | `Pull` | Distribuer | Un poste tire tout le casier, jamais un secret isolé |
 | Opérations en quarantaine (`late`) | Son propre filtrage | Limiter la diffusion | — |
-| Qu'une action à plusieurs a eu lieu, et qui l'a approuvée | Accords joints en clair | Vérifier le quorum | Les accords ne circulent pas avant publication (§ 7.7) |
+| Qu'une action à plusieurs a eu lieu, et qui l'a approuvée | Accords joints en clair | Vérifier le quorum | Les accords ne circulent pas en clair avant publication (§ 7.7) |
+| Qu'un propriétaire écrit à tous les autres propriétaires d'un casier qu'ils partagent, quand, et que certains lui répondent | `MailPut`, `MailGet` (§ 11.12, ADR 0070) | Porter les demandes d'accord sans copier-coller | Paquets scellés pour un appareil, signés, de taille fixe (8 192 octets de contenu) ; leurre pour la cible : ni l'action, ni la cible, ni le casier s'ils en partagent plusieurs |
 | Destinataire, taille et heure des paquets de la boîte aux lettres ; identifiant et adresse IP d'un appareil en cours d'enrôlement | `MailboxPut`, `MailboxGet` (§ 11.9) | Acheminer l'enrôlement et les accords | Paquets chiffrés pour le destinataire, gardés 10 minutes, en mémoire seulement |
+| Le nom affiché que chaque membre s'est donné, ses changements, et les textes cherchés dans l'annuaire | `PutMemberProfile`, `FindMembers` (§ 11.11, ADR 0069) | Trouver un membre avant de partager avec lui | Nom facultatif et libre (pseudonyme possible) ; le serveur n'apprend pas quelles empreintes ont été comparées |
 | Quels appareils ont accusé quelle `Compact` ; jour de la dernière authentification de chaque appareil | `Ack`, session (§ 10.2, ADR 0040) | Décider de la stabilité, écarter les appareils inactifs | Le `CompactPast` reste scellé ; dernière authentification gardée au jour près |
 
 Il n'apprend **pas** : les titres, adresses, noms d'utilisateur, valeurs, notes, noms de

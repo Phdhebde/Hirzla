@@ -2,7 +2,7 @@
 // The open vault: lockers, list of secrets, search and the record of one secret.
 
 import { api } from "./api.js";
-import { announce, byId, h, mask } from "./dom.js";
+import { announce, byId, h, icon, mask } from "./dom.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
 /** @typedef {import("./api.js").Locker} Locker */
@@ -12,10 +12,41 @@ const TYPE_NAMES = /** @type {Record<string, string>} */ ({
   password: "Mot de passe",
   note: "Note",
   ssh_key: "Clé SSH",
+  ssh_connection: "Connexion SSH",
+  rdp_connection: "Connexion RDP",
   totp: "Code TOTP",
   passkey: "Clé d'accès",
   file: "Fichier",
   unknown: "Secret",
+});
+
+/** Icon of each type of secret (sprite of index.html). */
+const TYPE_ICONS = /** @type {Record<string, string>} */ ({
+  password: "identifiant",
+  note: "note",
+  ssh_key: "cle",
+  ssh_connection: "terminal",
+  rdp_connection: "ecran",
+  totp: "totp",
+  passkey: "cle",
+  file: "fichier",
+  unknown: "secret",
+});
+
+/** Types that have their own filter in the navigation, with the kinds each one gathers. */
+const TYPE_FILTERS = /** @type {Record<string, string[]>} */ ({
+  password: ["password"],
+  ssh_key: ["ssh_key"],
+  connexion: ["ssh_connection", "rdp_connection"],
+  note: ["note"],
+});
+
+/** What a link of a connection says when its target is not usable. */
+const LINK_STATES = /** @type {Record<string, string>} */ ({
+  broken: "Lien rompu : la cible est absente de ce poste",
+  trashed: "Cible à la corbeille",
+  wrong_type: "Lien refusé : la cible n'est pas du type attendu",
+  loop: "Chaîne de rebonds trop longue ou qui boucle",
 });
 
 const FIELD_LABELS = /** @type {Record<string, string>} */ ({
@@ -45,6 +76,8 @@ const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
  * @property {() => number} revealSeconds  How long a revealed value stays visible.
  * @property {(entry: Entry) => void} onEdit  Opens the form on this secret.
  * @property {(locker: string, name: string) => void} onMembers  Opens the members of a shared locker.
+ * @property {(filter: string) => void} onFilter  The view changed its filter by itself.
+ * @property {import("./autotype.js").AutoType} autoType  Typing into another application.
  */
 
 /**
@@ -71,6 +104,8 @@ export class VaultView {
     /** @type {Set<() => void>} Clears revealed values and their timers. */
     this.hiders = new Set();
     this.searchTimer = 0;
+    /** Number of the record being drawn: a record read from the core is dropped when it is no longer the one shown. */
+    this.recordToken = 0;
 
     this.list = byId("liste-secrets");
     this.list.addEventListener("keydown", (e) => this.onListKey(e));
@@ -108,6 +143,21 @@ export class VaultView {
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
     byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
     byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    // The menu of the record closes once an action is chosen, or on Escape.
+    const menu = /** @type {HTMLDetailsElement} */ (byId("fiche-menu"));
+    menu.addEventListener("click", (e) => {
+      if (/** @type {HTMLElement} */ (e.target).closest(".menu-action")) menu.open = false;
+    });
+    menu.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && menu.open) {
+        e.stopPropagation();
+        menu.open = false;
+        menu.querySelector("summary")?.focus();
+      }
+    });
+    document.addEventListener("click", (e) => {
+      if (menu.open && !menu.contains(/** @type {Node} */ (e.target))) menu.open = false;
+    });
     byId("liste-membres").addEventListener("click", () => {
       const id = this.lockerFilter();
       const locker = this.lockers.find((l) => l.id === id);
@@ -141,6 +191,28 @@ export class VaultView {
     }
   }
 
+  /** Icon name of a type of secret. @param {string} kind @returns {string} */
+  static iconOf(kind) {
+    return TYPE_ICONS[kind] ?? TYPE_ICONS.unknown;
+  }
+
+  /**
+   * Shows the record of a secret from anywhere (quick access): back to the whole vault, no
+   * search, this secret selected.
+   * @param {Entry} entry
+   */
+  async reveal(entry) {
+    this.filter = "tous";
+    this.query = "";
+    /** @type {HTMLInputElement} */ (byId("recherche")).value = "";
+    this.selectedId = null;
+    await this.refresh();
+    if (this.shown.some((e) => e.id === entry.id)) {
+      this.select(entry.id, true);
+      byId("fiche-titre").focus();
+    }
+  }
+
   /** @param {string} filter */
   setFilter(filter) {
     this.filter = filter;
@@ -162,6 +234,11 @@ export class VaultView {
     byId("liste-casiers").replaceChildren();
     byId("liste-casier-partage").hidden = true;
     byId("fiche-champs").replaceChildren();
+    byId("fiche-principales").replaceChildren();
+    byId("fiche-icone").replaceChildren();
+    for (const id of ["compte-tous", "compte-favoris", ...Object.keys(TYPE_FILTERS).map((t) => `compte-${t}`)]) {
+      byId(id).textContent = "";
+    }
     byId("fiche-titre").textContent = "";
     byId("fiche-contenu").hidden = true;
     byId("fiche-vide").hidden = false;
@@ -182,7 +259,19 @@ export class VaultView {
       return;
     }
     this.renderLockers();
+    this.renderCounts();
     this.renderList();
+  }
+
+  /** Counts of the navigation: only when the whole vault is listed (no search, no trash). */
+  renderCounts() {
+    if (this.query || this.filter === "corbeille") return;
+    const live = this.entries.filter((e) => !e.trash);
+    byId("compte-tous").textContent = String(live.length);
+    byId("compte-favoris").textContent = String(live.filter((e) => e.favorite).length);
+    for (const [t, kinds] of Object.entries(TYPE_FILTERS)) {
+      byId(`compte-${t}`).textContent = String(live.filter((e) => kinds.includes(e.kind)).length);
+    }
   }
 
   renderLockers() {
@@ -195,8 +284,8 @@ export class VaultView {
           "button",
           { class: "nav-lien", type: "button", "data-vue": "secrets", "data-filtre": `casier:${l.id}` },
           [
-            h("span", { class: "nom-casier", text: l.name }),
-            l.personal ? null : h("span", { class: "marque-partage", text: "Partagé", "aria-hidden": "true" }),
+            l.personal ? icon("casier") : icon("membres", "marque-partage"),
+            h("span", { class: "nav-nom nom-casier", text: l.name }),
             shared && !shared.access ? h("span", { class: "forme forme-triangle", "aria-hidden": "true" }) : null,
             h("span", { class: "compte", text: String(count), "aria-hidden": "true" }),
           ],
@@ -231,6 +320,10 @@ export class VaultView {
   filterTitle() {
     if (this.filter === "favoris") return "Favoris";
     if (this.filter === "corbeille") return "Corbeille";
+    if (this.filter === "type:password") return "Mots de passe";
+    if (this.filter === "type:ssh_key") return "Clés SSH";
+    if (this.filter === "type:connexion") return "Connexions";
+    if (this.filter === "type:note") return "Notes";
     if (this.filter.startsWith("casier:")) {
       const id = this.filter.slice("casier:".length);
       return this.lockers.find((l) => l.id === id)?.name ?? "Casier";
@@ -244,13 +337,16 @@ export class VaultView {
       if (f === "corbeille") return e.trash;
       if (e.trash) return false;
       if (f === "favoris") return e.favorite;
+      if (f.startsWith("type:")) return (TYPE_FILTERS[f.slice("type:".length)] ?? []).includes(e.kind);
       if (f.startsWith("casier:")) return e.locker === f.slice("casier:".length);
       return true;
     });
     byId("liste-titre").textContent = this.filterTitle();
     this.renderLockerHeader();
     const n = this.shown.length;
-    byId("liste-compte").textContent = n === 0 ? "" : n === 1 ? "1 secret" : `${n} secrets`;
+    const count = byId("liste-compte");
+    count.textContent = n === 0 ? "" : String(n);
+    count.setAttribute("aria-label", n === 1 ? "1 secret" : `${n} secrets`);
     const empty = byId("liste-vide");
     if (n === 0) {
       empty.textContent = this.query
@@ -269,9 +365,11 @@ export class VaultView {
           "li",
           { id: `opt-${e.id}`, class: "element", role: "option", "aria-selected": e.id === this.selectedId ? "true" : "false" },
           [
-            h("span", { class: "element-pastille", "aria-hidden": "true", text: initial(e.title) }),
+            h("span", { class: "vignette", "aria-hidden": "true" }, [icon(TYPE_ICONS[e.kind] ?? TYPE_ICONS.unknown)]),
             h("span", { class: "element-titre", text: e.title }),
-            e.favorite ? h("span", { class: "element-favori", text: "★", title: "Favori" }) : h("span"),
+            e.favorite
+              ? h("span", { class: "element-favori", title: "Favori" }, [icon("favori", "icone-pleine")])
+              : h("span"),
             h("span", { class: "element-sous", text: subtitle(e) }),
           ],
         ),
@@ -331,6 +429,7 @@ export class VaultView {
   }
 
   renderRecord() {
+    this.recordToken += 1;
     this.hideAll();
     const entry = this.selected();
     byId("fiche-vide").hidden = !!entry;
@@ -338,17 +437,62 @@ export class VaultView {
     const fields = byId("fiche-champs");
     fields.replaceChildren();
     if (!entry) return;
-    byId("fiche-type").textContent = TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown;
+    const locker = this.lockers.find((l) => l.id === entry.locker);
+    byId("fiche-type").textContent =
+      (TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown) +
+      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "");
+    byId("fiche-icone").replaceChildren(icon(TYPE_ICONS[entry.kind] ?? TYPE_ICONS.unknown));
     byId("fiche-titre").textContent = entry.title;
+    /** @type {HTMLDetailsElement} */ (byId("fiche-menu")).open = false;
     const fav = byId("fiche-favori");
     fav.setAttribute("aria-pressed", entry.favorite ? "true" : "false");
-    fav.textContent = entry.favorite ? "Favori" : "Ajouter aux favoris";
+    fav.setAttribute("aria-label", entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris");
+    fav.title = entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris";
     fav.hidden = entry.trash;
-    byId("fiche-modifier").hidden = entry.trash || !["password", "note"].includes(entry.kind);
-    byId("fiche-supprimer").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
+    byId("fiche-modifier").hidden =
+      entry.trash || !["password", "note", "ssh_connection", "rdp_connection"].includes(entry.kind);
+    byId("fiche-supprimer-texte").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
     byId("fiche-restaurer").hidden = !entry.trash;
 
     const ref = { locker: entry.locker, id: entry.id };
+    // The most frequent action of each type comes first, above the fields.
+    const main = byId("fiche-principales");
+    main.replaceChildren();
+    const quick = /** @type {Record<string, [FieldName, string]>} */ ({
+      password: ["password", "Mot de passe"],
+      note: ["notes", "Contenu"],
+      ssh_key: ["ssh_public_key", "Clé publique"],
+    })[entry.kind];
+    if (quick && !entry.trash) {
+      const [field, label] = quick;
+      const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
+        icon("copier"),
+        `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
+      ]);
+      b.addEventListener("click", () => void this.copy(ref, field, label));
+      main.append(b);
+      if (entry.kind === "password" && entry.username) {
+        const u = h("button", { class: "bouton bouton-secondaire", type: "button" }, [icon("copier"), "Copier l'identifiant"]);
+        u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
+        main.append(u);
+      }
+    }
+    if (!entry.trash && entry.kind !== "ssh_connection" && entry.kind !== "rdp_connection") {
+      /** @type {import("./api.js").TypedWhat[]} */
+      const offered =
+        entry.kind === "password"
+          ? entry.username
+            ? ["username_password", "password", "username", "notes"]
+            : ["password", "notes"]
+          : entry.kind === "note"
+            ? ["notes"]
+            : entry.kind === "ssh_key"
+              ? ["ssh_passphrase"]
+              : [];
+      const type = this.hooks.autoType.button(ref, entry.title, offered);
+      if (type) main.append(type);
+    }
+    main.hidden = main.childElementCount === 0;
     if (entry.trash) {
       fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
     }
@@ -362,11 +506,136 @@ export class VaultView {
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
       fields.append(this.secretField("Contenu", ref, "notes"));
     } else if (entry.kind === "ssh_key") {
+      if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
       fields.append(this.secretField("Clé publique", ref, "ssh_public_key"));
       fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
+      if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
+    } else if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
+      void this.renderConnection(entry, this.recordToken);
     } else {
       fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
     }
+  }
+
+  /**
+   * The record of a connection: read from the core, which resolves the links to the SSH key
+   * and to the jump hosts. The password and the notes are not in the card; they are revealed
+   * and copied one by one, like any secret field.
+   * @param {Entry} entry
+   * @param {number} token  Drawing this record belongs to; a later one cancels it.
+   */
+  async renderConnection(entry, token) {
+    const ref = { locker: entry.locker, id: entry.id };
+    const fields = byId("fiche-champs");
+    const main = byId("fiche-principales");
+    /** @type {import("./api.js").ConnectionCard} */
+    let card;
+    try {
+      card = await api.connectionCard(ref);
+    } catch (e) {
+      if (token !== this.recordToken) return;
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "not_found") fields.append(info("Connexion", "Cette connexion n'est plus dans le coffre."));
+      else this.hooks.onError(err);
+      return;
+    }
+    if (token !== this.recordToken) return;
+    if (!entry.trash) {
+      if (card.has_password) {
+        const b = h("button", { class: "bouton bouton-principal", type: "button" }, [icon("copier"), "Copier le mot de passe"]);
+        b.addEventListener("click", () => void this.copy(ref, "password", "Mot de passe"));
+        main.append(b);
+      }
+      if (card.username) {
+        const u = h("button", { class: `bouton ${card.has_password ? "bouton-secondaire" : "bouton-principal"}`, type: "button" }, [
+          icon("copier"),
+          "Copier l'identifiant",
+        ]);
+        u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
+        main.append(u);
+      }
+      /** @type {import("./api.js").TypedWhat[]} */
+      const offered = [];
+      if (card.username && card.has_password) offered.push("username_password");
+      if (card.has_password) offered.push("password");
+      if (card.username) offered.push("username");
+      const type = this.hooks.autoType.button(ref, entry.title, offered);
+      if (type) main.append(type);
+      main.hidden = main.childElementCount === 0;
+    }
+    const custom = card.port !== null && card.port !== (card.kind === "rdp" ? 3389 : 22);
+    fields.append(
+      h("div", { class: "champ-fiche" }, [
+        h("dt", { text: "Hôte" }),
+        h("dd", {}, [
+          h("span", { class: "valeur-secrete", text: card.host ?? "" }),
+          h("span", { class: "maillon-sous", text: ` · port ${card.effective_port}${custom ? "" : " (par défaut)"}` }),
+        ]),
+      ]),
+    );
+    if (card.username) fields.append(this.plainField("Identifiant", card.username, ref, "username"));
+    if (card.domain) fields.append(info("Domaine", card.domain));
+    if (card.has_password) fields.append(this.secretField("Mot de passe", ref, "password"));
+    if (card.ssh_key) {
+      fields.append(
+        h("div", { class: "champ-fiche" }, [h("dt", { text: "Clé SSH" }), h("dd", {}, [h("ul", { class: "chaine" }, [this.linkItem(card.ssh_key, "cle")])])]),
+      );
+    }
+    if (card.jumps.length) {
+      fields.append(
+        h("div", { class: "champ-fiche" }, [
+          h("dt", { text: card.jumps.length > 1 ? "Rebonds" : "Rebond" }),
+          h("dd", {}, [h("ol", { class: "chaine" }, card.jumps.map((j) => this.linkItem(j, "terminal")))]),
+        ]),
+      );
+    }
+    if (card.host_key) {
+      fields.append(
+        h("div", { class: "champ-fiche" }, [h("dt", { text: "Empreinte de l'hôte" }), h("dd", { class: "valeur-secrete", text: card.host_key })]),
+      );
+    }
+    if (card.tags.length) fields.append(listField("Étiquettes", card.tags, "etiquette"));
+    if (card.has_notes) fields.append(this.secretField("Notes", ref, "notes"));
+  }
+
+  /**
+   * One link of a connection: the title of its target, which opens its record, and what the
+   * core says of it when it is not usable.
+   * @param {import("./api.js").ResolvedLink} link
+   * @param {string} iconName
+   */
+  linkItem(link, iconName) {
+    const where = link.host ? `${link.username ? `${link.username}@` : ""}${link.host}${link.port ? `:${link.port}` : ""}` : "";
+    const known = this.entries.some((e) => e.id === link.id && !e.trash);
+    /** @type {HTMLElement} */
+    let name;
+    if (link.title && known) {
+      name = h("button", { class: "lien", type: "button", text: link.title });
+      name.addEventListener("click", () => this.showSecret(link.id));
+    } else {
+      name = h("span", { text: link.title ?? "Cible inconnue" });
+    }
+    return h("li", { class: "maillon" }, [
+      icon(iconName),
+      name,
+      where ? h("span", { class: "maillon-sous mono", text: where }) : null,
+      link.state === "valid"
+        ? null
+        : h("span", { class: "etat etat-alerte" }, [h("span", { class: "forme forme-triangle", "aria-hidden": "true" }), LINK_STATES[link.state] ?? LINK_STATES.broken]),
+    ]);
+  }
+
+  /**
+   * Shows the record of a secret of the vault, leaving a filter that would hide it.
+   * @param {string} id
+   */
+  showSecret(id) {
+    if (!this.shown.some((e) => e.id === id)) {
+      this.filter = "tous";
+      this.hooks.onFilter("tous");
+      this.renderList();
+    }
+    this.select(id, false);
   }
 
   /**
@@ -377,8 +646,7 @@ export class VaultView {
    * @param {FieldName} field
    */
   plainField(label, value, ref, field) {
-    const copy = h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Copier" });
-    copy.setAttribute("aria-label", `Copier : ${label.toLowerCase()}`);
+    const copy = iconButton("copier", `Copier : ${label.toLowerCase()}`);
     copy.addEventListener("click", () => void this.copy(ref, field, label));
     return h("div", { class: "champ-fiche" }, [
       h("dt", { text: label }),
@@ -401,14 +669,11 @@ export class VaultView {
       h("span", { class: "forme forme-carre", "aria-hidden": "true" }),
       "Scellé",
     ]);
-    const reveal = /** @type {HTMLButtonElement} */ (
-      h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Révéler", "aria-pressed": "false" })
-    );
-    reveal.setAttribute("aria-label", `Révéler : ${label.toLowerCase()}`);
-    const copy = /** @type {HTMLButtonElement} */ (
-      h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Copier" })
-    );
-    copy.setAttribute("aria-label", `Copier : ${label.toLowerCase()}`);
+    const revealLabel = `Révéler : ${label.toLowerCase()}`;
+    const hideLabel = `Masquer : ${label.toLowerCase()}`;
+    const reveal = iconButton("oeil", revealLabel);
+    reveal.setAttribute("aria-pressed", "false");
+    const copy = iconButton("copier", `Copier : ${label.toLowerCase()}`);
 
     let timer = 0;
     let left = 0;
@@ -418,7 +683,7 @@ export class VaultView {
       value.textContent = mask();
       value.classList.add("valeur-masquee");
       countdown.textContent = "";
-      reveal.textContent = "Révéler";
+      setIconButton(reveal, "oeil", revealLabel);
       reveal.setAttribute("aria-pressed", "false");
       shape.className = "etat etat-scelle";
       shape.replaceChildren(h("span", { class: "forme forme-carre", "aria-hidden": "true" }), "Scellé");
@@ -447,7 +712,7 @@ export class VaultView {
       value.textContent = text;
       text = "";
       value.classList.remove("valeur-masquee");
-      reveal.textContent = "Masquer";
+      setIconButton(reveal, "oeil-barre", hideLabel);
       reveal.setAttribute("aria-pressed", "true");
       shape.className = "etat etat-ouvert";
       shape.replaceChildren(h("span", { class: "forme forme-rond", "aria-hidden": "true" }), "Descellé");
@@ -462,8 +727,8 @@ export class VaultView {
     });
     copy.addEventListener("click", () => void this.copy(ref, field, label));
     return h("div", { class: "champ-fiche" }, [
-      h("dt", {}, [h("span", { class: "libelle-champ", text: label }), shape]),
-      h("dd", {}, [value, countdown]),
+      h("dt", { text: label }),
+      h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, countdown]), shape]),
       h("dd", { class: "actions-champ" }, [reveal, copy]),
     ]);
   }
@@ -662,15 +927,36 @@ export class VaultView {
   }
 }
 
-/** @param {string} title */
-function initial(title) {
-  const c = title.trim().charAt(0);
-  return c ? c.toLocaleUpperCase("fr") : "?";
+/**
+ * A button that shows only an icon; its name is its `aria-label` and its tooltip.
+ * @param {string} name  Icon.
+ * @param {string} label
+ * @returns {HTMLButtonElement}
+ */
+function iconButton(name, label) {
+  const b = /** @type {HTMLButtonElement} */ (h("button", { class: "bouton bouton-icone bouton-discret", type: "button" }));
+  setIconButton(b, name, label);
+  return b;
+}
+
+/**
+ * @param {HTMLButtonElement} b
+ * @param {string} name
+ * @param {string} label
+ */
+function setIconButton(b, name, label) {
+  b.replaceChildren(icon(name));
+  b.setAttribute("aria-label", label);
+  b.title = label;
 }
 
 /** @param {Entry} e */
 function subtitle(e) {
   if (e.kind === "password") return e.username || e.hosts[0] || TYPE_NAMES.password;
+  if (e.kind === "ssh_connection" || e.kind === "rdp_connection") {
+    const where = `${e.username ? `${e.username}@` : ""}${e.hosts[0] ?? ""}`;
+    return where ? `${e.kind === "rdp_connection" ? "RDP" : "SSH"} · ${where}` : TYPE_NAMES[e.kind];
+  }
   return TYPE_NAMES[e.kind] ?? TYPE_NAMES.unknown;
 }
 

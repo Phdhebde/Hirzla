@@ -31,9 +31,9 @@ hirzla-core = { path = "../../../crates/hirzla-core" }
 hirzla-crypto = { path = "../../../crates/hirzla-crypto" }
 hirzla-keystore = { path = "../../../crates/hirzla-keystore" }
 hirzla-vault = { path = "../../../crates/hirzla-vault" }
-# ADR 0024: Tauri 2 shell without the default features we do not use (no devtools, no tray,
-# no updater). The web view calls only this application's commands.
-tauri = { version = "2.12.5", default-features = false, features = ["wry", "custom-protocol", "common-controls-v6", "compression", "x11"] }
+# ADR 0024: Tauri 2 shell without the default features we do not use (no devtools, no
+# updater). ADR 0071: `tray-icon`, the notification area icon. The web view calls only this application's commands.
+tauri = { version = "2.12.5", default-features = false, features = ["wry", "custom-protocol", "common-controls-v6", "compression", "x11", "tray-icon"] }
 # Native file picker for the import, opened from Rust only (the web view cannot open it).
 # Same crate as the Tauri dialog plugin, without that plugin and its file system plugin.
 rfd = { version = "0.17.2", default-features = false, features = ["gtk3", "common-controls-v6"] }
@@ -51,3 +51,7 @@ gio = "0.18.4"
 
 [dev-dependencies]
 tempfile = "3.27.0"
+
+# ADR 0072: the end-to-end test gives the keyboard to a terminal on a display of its own.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { version = "0.13.2", default-features = false }

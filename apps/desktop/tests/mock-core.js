@@ -15,6 +15,10 @@
     { locker: L, id: id(4), kind: "password", title: "Impots.gouv.fr", username: "1 23 45 678 901 234", hosts: ["impots.gouv.fr"], tags: ["administration"], favorite: false, trash: false },
     { locker: L, id: id(5), kind: "password", title: "Routeur de la maison", username: "admin", hosts: ["192.168.1.1"], tags: ["réseau"], favorite: false, trash: false },
     { locker: W, id: id(6), kind: "ssh_key", title: "Serveur de sauvegarde", username: null, hosts: [], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(24), kind: "ssh_key", title: "Clé d'administration", username: "marie", hosts: [], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(21), kind: "ssh_connection", title: "Bastion de l'atelier", username: "marie", hosts: ["bastion.atelier-durand.fr"], tags: ["infra"], favorite: false, trash: false },
+    { locker: L, id: id(22), kind: "ssh_connection", title: "Serveur de sauvegarde", username: "sauvegarde", hosts: ["10.20.0.14"], tags: ["infra"], favorite: true, trash: false },
+    { locker: L, id: id(23), kind: "rdp_connection", title: "Poste de comptabilité", username: "m.durand", hosts: ["compta-01.atelier.lan"], tags: [], favorite: false, trash: false },
     { locker: L, id: id(7), kind: "password", title: "Wi-Fi maison", username: null, hosts: [], tags: [], favorite: false, trash: false },
     { locker: L, id: id(8), kind: "password", title: "Ancien forum", username: "mdurand", hosts: ["forum.example"], tags: [], favorite: false, trash: true },
     { locker: W, id: id(9), kind: "password", title: "Console du NAS", username: "atelier", hosts: ["nas.atelier.lan"], tags: ["infra"], favorite: false, trash: false },
@@ -48,6 +52,17 @@
     [others.karim]: "R2HV7KQB4XZT6NMW3JDC",
     [others.claire]: "W5ZTD3KN7QXR2HVB6MJC",
   };
+  // Display names (ADR 0069) and the fingerprints this user compared out of band.
+  const NAMES = {
+    [ME]: "Marie Durand",
+    [others.paul]: "Paul Renaud",
+    [others.lea]: "Léa Fontaine",
+    [others.claire]: "Claire Martin",
+  };
+  const DIRECTORY = { "5e7a9c1b3d5f7a9c1b3d5f7a9c1b3d5f": ["Inès Leroy", "D7KQ2XZB5TVW3RMH6NJC"], "6f8b0d2c4e6a8c0e2a4c6e8a0c2e4a6c": ["Inès Lemaire", "H4RWQ6ZK2NXB7TMD5VCJ"] };
+  for (const [m, [name, fp]] of Object.entries(DIRECTORY)) { NAMES[m] = name; FPS[m] = fp; }
+  const compared = new Set([others.paul, others.claire]);
+  let myName = "Marie Durand";
   const fpOf = (m) => FPS[m] || "N3KQ7XZB2TVW5RMH4DJC";
   const roster = {
     [W]: [
@@ -62,11 +77,26 @@
       { member: others.paul, role: "editor", devices: 1, proven: true },
     ],
   };
+  // Requests received through the server (ADR 0070), when the capture asks for mail.
+  if (S.mail) {
+    S.inbox = [{
+      request: "7c2e9a4b1d6f3a8c5e0b2d4f6a8c0e1b", locker: C, name: "Comptabilité", action: "owner_removal",
+      target: others.paul, target_fingerprint: fpOf(others.paul), target_name: NAMES[others.paul], target_verified: true,
+      role: null, quorum: null, issuer: others.claire, issuer_fingerprint: fpOf(others.claire), issuer_name: NAMES[others.claire],
+      issuer_verified: true, can_sign: true, required: 2, received_ms: Date.UTC(2026, 10, 16, 13, 5),
+      offer: "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQAx7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX",
+    }];
+    S.requests = [{
+      request: "b83d5f1a9c7e2b4d6f8a0c2e4b6d8f0a", locker: W, action: "owner_role_change", target: others.claire, role: "manager", quorum: null,
+      counted: [ME], required: 2, offer: "hirzla-demande:pGEBYQKCUHs9XyFanH4rTdbwoMLuS2AFy7Lq3nZq0UgS3xWcO5dIeM9tK7hZlF2vR1pB6jY",
+      created_ms: Date.UTC(2026, 10, 15, 16, 28), sent_ms: Date.UTC(2026, 10, 15, 16, 30), declined: [], queued: 0,
+    }];
+  }
   const READERS = ["owner", "manager", "editor", "reader"];
   const ROLES = ["owner", "manager", "editor", "reader", "blind_user", "auditor"];
   const norm = (f) => (f || "").replace(/[\s-]/g, "").toUpperCase();
   // Governance (ADR 0044 to 0046): a senior owner in "Atelier", requests, quarantine.
-  if (S.senior) roster[W].unshift({ member: others.claire, role: "owner", devices: 1, proven: true });
+  if (S.senior || S.mail) roster[W].unshift({ member: others.claire, role: "owner", devices: 1, proven: true });
   const OFFER = "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQ" + "Ax7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX".repeat(3);
   const TOKEN = "hirzla-accord:pGEBYQJQah8MLpuNTxejxeAtIvqMFFBk" + "Vt3Hq9ZpL2xR7wNcB6mJ4dK8sY1gE5uA0oQ".repeat(4);
   const quarantined = () => (S.quarantine
@@ -116,7 +146,7 @@
           change_refusal = "role";
           remove_refusal = self ? null : "role";
         }
-        return { member: m.member, me: self, role: m.role, devices: m.devices, fingerprint: fpOf(m.member), proven: m.proven, change_to, change_refusal, remove_refusal };
+        return { member: m.member, me: self, role: m.role, devices: m.devices, fingerprint: fpOf(m.member), proven: m.proven, change_to, change_refusal, remove_refusal, name: self ? myName || null : NAMES[m.member] || null, verified: self || compared.has(m.member) };
       }),
     };
   };
@@ -145,6 +175,9 @@
     app_hardening: { memory_locked: "not_attempted", dumps_disabled: "applied", tracing_blocked: "applied" },
     app_version: "0.0.0",
   });
+  let local = { keep_in_tray: true, tray_available: true };
+  /** @type {string[]} */
+  let trusted = ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"];
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
   const v = (n) => n.toString(16).padStart(96, "0");
@@ -153,6 +186,14 @@
     { version: v(2), wall_ms: Date.UTC(2026, 3, 18, 17, 2), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["notes"], custom: 0 },
     { version: v(1), wall_ms: Date.UTC(2025, 11, 4, 10, 40), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "username", "password"], changed: ["title", "username", "password"], custom: 0 },
   ];
+  // Cards of the connections (local API version 6): what the list does not carry.
+  const jumpBastion = { locker: L, id: id(21), state: "valid", title: "Bastion de l'atelier", host: "bastion.atelier-durand.fr", port: 2222, username: "marie", public_key: null };
+  const keyLink = { locker: L, id: id(24), state: "valid", title: "Clé d'administration", host: null, port: null, username: null, public_key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJ8mVh0kq2 sauvegarde@atelier" };
+  const cards = {
+    [id(21)]: { kind: "ssh", port: 2222, effective_port: 2222, domain: null, host_key: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", has_password: false, has_notes: true, ssh_key: keyLink, jumps: [] },
+    [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
+    [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
+  };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
   const handlers = {
@@ -190,9 +231,113 @@
       const i = entries.findIndex((x) => x.id === a.target.id);
       if (i >= 0) { if (a.purge) entries.splice(i, 1); else entries[i].trash = true; }
     },
+    connection_card: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e || !cards[e.id]) return refuse("not_found", "Secret ou champ introuvable.");
+      return { ...cards[e.id], trashed: e.trash, title: e.title, host: e.hosts[0], username: e.username, favorite: e.favorite, tags: e.tags };
+    },
+    create_connection: (a) => {
+      const f = a.connection.fields;
+      const kind = a.connection.kind;
+      const e = { locker: a.connection.locker || L, id: id(entries.length + 40), kind: `${kind}_connection`, title: f.title, username: f.username || null, hosts: [f.host], tags: a.connection.tags || [], favorite: !!f.favorite, trash: false };
+      entries.push(e);
+      const target = (ref) => entries.find((x) => ref && x.id === ref.id);
+      const key = target(f.ssh_key);
+      const jump = target(f.jump);
+      cards[e.id] = {
+        kind, port: f.port ?? null, effective_port: f.port ?? (kind === "rdp" ? 3389 : 22), domain: f.domain || null,
+        host_key: f.host_key || null, has_password: !!f.password, has_notes: !!f.notes,
+        ssh_key: key ? { locker: key.locker, id: key.id, state: "valid", title: key.title, host: null, port: null, username: null, public_key: null } : null,
+        jumps: jump ? [{ locker: jump.locker, id: jump.id, state: "valid", title: jump.title, host: jump.hosts[0], port: cards[jump.id]?.effective_port ?? 22, username: jump.username, public_key: null }, ...(cards[jump.id]?.jumps ?? [])] : [],
+      };
+      return { locker: e.locker, id: e.id };
+    },
+    update_connection: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      const c = e && cards[e.id];
+      if (!e || !c) return refuse("not_found", "Secret ou champ introuvable.");
+      if (a.set.title) e.title = a.set.title;
+      if (a.set.host) e.hosts = [a.set.host];
+      if (a.set.username) e.username = a.set.username;
+      if ("favorite" in a.set) e.favorite = a.set.favorite;
+      if (a.set.port) { c.port = a.set.port; c.effective_port = a.set.port; }
+      if (a.set.host_key) c.host_key = a.set.host_key;
+      if (a.set.password) c.has_password = true;
+      for (const k of a.clear) {
+        if (k === "port") { c.port = null; c.effective_port = c.kind === "rdp" ? 3389 : 22; }
+        if (k === "username") e.username = null;
+        if (k === "host_key") c.host_key = null;
+        if (k === "ssh_key") c.ssh_key = null;
+        if (k === "jump") c.jumps = [];
+      }
+    },
+    choose_ssh_key_file: () => "id_ed25519",
+    create_ssh_key: (a) => {
+      const e = { locker: a.key.locker || L, id: id(entries.length + 40), kind: "ssh_key", title: a.key.title, username: a.key.username || null, hosts: [], tags: a.key.tags || [], favorite: false, trash: false };
+      entries.push(e);
+      return { locker: e.locker, id: e.id };
+    },
     generate_password: () => "Vn4%tB8qZ!e2Lr6#Wm9sKd3x",
     copy_generated: () => 30,
+    generator_profiles: () => {
+      const base = { mode: "characters", lower: true, upper: true, digits: true, symbols: true, excluded: "",
+        no_ambiguous: false, same_keys: false, no_repeat: false, start_letter: false };
+      return [
+        { id: "defaut", target_bits: 128, spec: { ...base, length: 24, minimums: [2, 2, 2, 2], symbol_set: "!#$%&*+-=?@^_", no_ambiguous: true, no_repeat: true, start_letter: true } },
+        { id: "longue-duree", target_bits: 256, spec: { ...base, length: 40, minimums: [1, 1, 1, 1], symbol_set: null } },
+        { id: "site-capricieux", target_bits: 80, spec: { ...base, length: 16, minimums: [1, 1, 1, 1], symbol_set: "-_!", no_repeat: true, start_letter: true } },
+        { id: "wifi", target_bits: 80, spec: { ...base, length: 20, symbols: false, minimums: [1, 1, 1, 0], symbol_set: null, no_ambiguous: true } },
+        { id: "compte-de-service", target_bits: 128, spec: { ...base, length: 32, minimums: [1, 1, 1, 1], symbol_set: "-_.+=^~", no_repeat: true } },
+      ];
+    },
+    generate_with: (a) => {
+      const samples = {
+        characters: ["v7#Kq2m!Rz9@Lp4&Xt6$Wn8%", "Hb3?tN8=wQ5@yC2!mV7#zK4+", "r9^Gd2&Lx6!Ps3@Fj8$Tn5*W", "Mq4!vB7#cZ2@hK9$xD5&gR3=",
+          "t6@Yw3!Nf8#Lc2$Hp7&Jm4^Q", "Xz5#kG2!bV9@nT4$rW7&dS3?", "j8$Pm3@Qx6!Fc2#Lh9&Tv4=B", "Dn7!wK4#zR2@gY9$cM5&xH3+",
+          "p3@Vt8!Lq6#Bn2$Fz7&Kd4^W", "Gh9#rC2!mX5@jT8$wN4&Pv3="],
+        passphrase: ["cuivre-lanterne-9-orage-velours-matin"],
+        pronounceable: ["Tovirudak-menlosiba-kunefalo-37"],
+        pin: ["804157"],
+        template: ["Kd-4821-mqz-TR"],
+      };
+      const bits = { characters: a.spec.length * 6.13, passphrase: 81.4, pronounceable: 66.2, pin: 19.6, template: 64.1 };
+      const pool = { characters: 70, passphrase: 7776, pronounceable: 80, pin: 10, template: 0 };
+      if (a.spec.mode === "characters" && !(a.spec.lower || a.spec.upper || a.spec.digits || a.spec.symbols)) {
+        return refuse("invalid", "Ces réglages sont refusés : ils sont hors limites, se contredisent, ou leurs règles écartent presque tous les tirages.");
+      }
+      const list = samples[a.spec.mode];
+      return {
+        values: Array.from({ length: a.count }, (_, i) => list[i % list.length]),
+        strength: { entropy_millibits: Math.floor(bits[a.spec.mode] * 1000), pool: pool[a.spec.mode] },
+      };
+    },
+    copy_generated_at: () => 30,
     import_csv: () => ({ imported: 42, empty: 1, refused_lines: [17], totp_skipped: 2 }),
+    auto_type_available: () => true,
+    auto_type_prepare: () => ({
+      typed: false,
+      target: {
+        name: "mstsc.exe",
+        path: "C:\\Windows\\System32\\mstsc.exe",
+        title: "Connexion Bureau à distance",
+        terminal: false,
+        can_remember: true,
+      },
+    }),
+    auto_type_confirm: (a) => {
+      if (a.remember && !trusted.includes("C:\\Windows\\System32\\mstsc.exe")) trusted.push("C:\\Windows\\System32\\mstsc.exe");
+    },
+    auto_type_cancel: () => {},
+    auto_type_trusted: () => [...trusted],
+    auto_type_forget: (a) => {
+      trusted = a.path === null ? [] : trusted.filter((p) => p !== a.path);
+      return [...trusted];
+    },
+    get_preferences: () => ({ ...local }),
+    set_preferences: (a) => {
+      local = { ...local, keep_in_tray: a.keep_in_tray };
+      return { ...local };
+    },
     get_settings: () => ({ ...settings }),
     set_settings: (a) => {
       const s = a.settings;
@@ -246,7 +391,7 @@
           : [],
       };
     },
-    server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB" }),
+    server_identity: () => ({ member: ME, fingerprint: fpOf(ME), device: "9f3e1d7b5a2c4e6f8a0b1c2d3e4f5a6b", control_code: "K2PVQ7XN4MZ8R3TJ6WAB", name: myName || null }),
     export_server_identity: () => "hirzla-membre-4be19c07.hirzla-membre",
     choose_server_ca: () => {
       S.ca = true;
@@ -320,6 +465,9 @@
         required: 2,
         offer: OFFER,
         created_ms: Date.UTC(2026, 10, 15, 14, 3),
+        sent_ms: null,
+        declined: [],
+        queued: 0,
       };
       S.requests = [q];
       return q;
@@ -327,7 +475,7 @@
     quorum_list: () => S.requests,
     quorum_inspect: (a) => {
       if (!(a.offer || "").startsWith("hirzla-demande:")) return refuse("approval_invalid", SERVER_MSG.approval_invalid);
-      return { locker: W, name: "Atelier", action: "owner_removal", target: others.karim, target_fingerprint: fpOf(others.karim), role: null, quorum: null, issuer: others.paul, issuer_fingerprint: fpOf(others.paul), can_sign: true };
+      return { locker: W, name: "Atelier", action: "owner_removal", target: others.karim, target_fingerprint: fpOf(others.karim), role: null, quorum: null, issuer: others.paul, issuer_fingerprint: fpOf(others.paul), can_sign: true, target_name: NAMES[others.karim] || null, issuer_name: NAMES[others.paul] };
     },
     quorum_approve: () => TOKEN,
     quorum_collect: (a) => {
@@ -335,6 +483,32 @@
       const q = S.requests[0];
       if (!q.counted.includes(others.lea)) q.counted.push(others.lea);
       return q;
+    },
+    profile_set: (a) => { myName = (a.name || "").trim(); },
+    member_search: (a) => {
+      const q = (a.text || "").trim().toLowerCase();
+      if (q.length < 2) return refuse("invalid", "Saisissez au moins deux caractères du nom recherché.");
+      if (S.unreachable) return refuse("server_unreachable", SERVER_MSG.server_unreachable);
+      const members = Object.entries(NAMES)
+        .filter(([m, name]) => m !== ME && name.toLowerCase().includes(q))
+        .map(([member, name]) => ({ member, name, fingerprint: fpOf(member), verified: compared.has(member) }));
+      return { members, more: false };
+    },
+    member_verify: (a) => {
+      if (norm(a.fingerprint) !== fpOf(a.member)) return refuse("fingerprint_mismatch", SERVER_MSG.fingerprint_mismatch);
+      compared.add(a.member);
+    },
+    quorum_send: (a) => {
+      const q = S.requests.find((x) => x.request === a.request);
+      if (!q) return refuse("not_found", "Demande introuvable sur ce poste.");
+      if (S.unreachable) q.queued = 1;
+      else { q.sent_ms = Date.UTC(2026, 10, 15, 14, 4); q.queued = 0; }
+      return q;
+    },
+    quorum_inbox: () => S.inbox || [],
+    quorum_respond: (a) => {
+      S.inbox = (S.inbox || []).filter((r) => r.request !== a.request);
+      return a.accept ? TOKEN : null;
     },
     quorum_apply: () => { S.requests = []; },
     quorum_cancel: () => { S.requests = []; },

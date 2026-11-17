@@ -28,6 +28,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use hirzla_access::profile::MemberProfile;
 use hirzla_crypto::sign::{ServerSigningKey, VerifyingKey};
 use hirzla_crypto::sym::{self, SealedBox, SymmetricKey};
 use hirzla_sync::control::DeviceRevocation;
@@ -41,8 +42,9 @@ use crate::ServerError;
 const HEADER_FILE: &str = "hirzlad.seal";
 const RECORDS_FILE: &str = "records.log";
 const REWRITE_FILE: &str = "records.log.tmp";
-/// Version of the data directory written (ADR 0040). Version 1 is opened and upgraded.
-pub const STORE_VERSION: u64 = 3;
+/// Version of the data directory written (ADR 0040, 0047, 0069). Older versions are opened
+/// and upgraded when the first record of a later version is written.
+pub const STORE_VERSION: u64 = 5;
 /// Largest record (an operation of 4 MiB plus its framing).
 const MAX_RECORD: usize = 8 * 1024 * 1024;
 
@@ -61,7 +63,7 @@ pub struct SealHeader {
     pub server_key: VerifyingKey,
     /// Server signing key, sealed under the storage key.
     pub sealed_server_key: Vec<u8>,
-    /// Version of the directory: 1 (ADR 0028) or 2 (ADR 0040).
+    /// Version of the directory: 1 (ADR 0028), 2 (ADR 0040), 3 (ADR 0047) or 4 (ADR 0069).
     pub version: u64,
 }
 
@@ -244,6 +246,33 @@ pub enum Record {
         /// When it was received (or when the directory was upgraded, for an older one).
         at_ms: u64,
     },
+    /// A member profile inscribed in the key log (kind 6, ADR 0069): the display name a
+    /// member gave itself, signed by its member key. Public in the organisation.
+    Profile {
+        /// The profile.
+        profile: MemberProfile,
+        /// Inscription time.
+        logged_ms: u64,
+    },
+    /// A sealed approval mail held for a device (ADR 0070): kept until acknowledged or for
+    /// [`crate::core::MAIL_RETENTION_MS`]. The server cannot read it.
+    Mail {
+        /// Recipient device.
+        to: Id16,
+        /// Mail identifier chosen by the sender.
+        mail_id: Id16,
+        /// Reception time.
+        received_ms: u64,
+        /// The sealed mail, as received.
+        mail: Vec<u8>,
+    },
+    /// A mail acknowledged by its recipient device (ADR 0070).
+    MailDone {
+        /// Recipient device.
+        to: Id16,
+        /// Mail identifier.
+        mail_id: Id16,
+    },
     /// A sealed chunk of an attachment.
     Chunk {
         /// Locker.
@@ -366,6 +395,28 @@ impl Record {
                 (3, Value::bytes(op_id)),
                 (4, Value::Uint(*at_ms)),
             ]),
+            Record::Profile { profile, logged_ms } => Value::map(vec![
+                (1, Value::Uint(12)),
+                (2, profile.to_value()),
+                (3, Value::Uint(*logged_ms)),
+            ]),
+            Record::Mail {
+                to,
+                mail_id,
+                received_ms,
+                mail,
+            } => Value::map(vec![
+                (1, Value::Uint(13)),
+                (2, Value::bytes(to)),
+                (3, Value::bytes(mail_id)),
+                (4, Value::Uint(*received_ms)),
+                (5, Value::bytes(mail)),
+            ]),
+            Record::MailDone { to, mail_id } => Value::map(vec![
+                (1, Value::Uint(14)),
+                (2, Value::bytes(to)),
+                (3, Value::bytes(mail_id)),
+            ]),
         }
     }
 
@@ -377,6 +428,8 @@ impl Record {
             | Record::Pruned { .. }
             | Record::Seen { .. } => 2,
             Record::LateSeen { .. } => 3,
+            Record::Profile { .. } => 4,
+            Record::Mail { .. } | Record::MailDone { .. } => 5,
             _ => 1,
         }
     }
@@ -481,6 +534,29 @@ impl Record {
                     locker: fixed::<16>(f.req(2)?)?,
                     op_id: fixed::<48>(f.req(3)?)?,
                     at_ms: uint(f.req(4)?)?,
+                }
+            }
+            12 => {
+                let f = Fields::new(v, &[1, 2, 3])?;
+                Record::Profile {
+                    profile: MemberProfile::from_value(f.req(2)?)?,
+                    logged_ms: uint(f.req(3)?)?,
+                }
+            }
+            13 => {
+                let f = Fields::new(v, &[1, 2, 3, 4, 5])?;
+                Record::Mail {
+                    to: fixed::<16>(f.req(2)?)?,
+                    mail_id: fixed::<16>(f.req(3)?)?,
+                    received_ms: uint(f.req(4)?)?,
+                    mail: bytes_max(f.req(5)?, hirzla_sync::mail::MAX_MAIL_LEN)?.to_vec(),
+                }
+            }
+            14 => {
+                let f = Fields::new(v, &[1, 2, 3])?;
+                Record::MailDone {
+                    to: fixed::<16>(f.req(2)?)?,
+                    mail_id: fixed::<16>(f.req(3)?)?,
                 }
             }
             _ => return Err(ServerError::Malformed),

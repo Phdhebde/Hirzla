@@ -61,6 +61,16 @@ const REVIEWED: &[(&str, &str, &str)] = &[
         "recipient_key",
         "recipient's public key identifier",
     ),
+    (
+        "ConnectionOptions",
+        "key",
+        "title of an SSH key of the vault, typed on the command line",
+    ),
+    (
+        "ConnectionOptions",
+        "host_key",
+        "public fingerprint of the host key (ADR 0067)",
+    ),
 ];
 
 /// Words that make a field name secret-looking.
@@ -439,6 +449,19 @@ fn local_api_requests_and_replies_print_no_secret() {
         (
             "Reply::Generated",
             format!("{:?}", Reply::Generated(z(SENTINEL))),
+        ),
+        (
+            "Reply::GeneratedWith",
+            format!(
+                "{:?}",
+                Reply::GeneratedWith(hirzla_core::generator::Generated {
+                    value: z(SENTINEL),
+                    estimate: hirzla_core::generator::Estimate {
+                        entropy_millibits: 0,
+                        pool: 0
+                    }
+                })
+            ),
         ),
         (
             "Reply::Filled",

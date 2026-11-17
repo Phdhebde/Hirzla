@@ -1,6 +1,6 @@
 //! The directory a key log describes, and the rules of a valid log (`transparence.md` § 5.2).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hirzla_vault::model::{Id16, OpId};
 
@@ -19,6 +19,8 @@ pub enum RuleViolation {
     DeviceHistory,
     /// R5: a second removal entry for the same operation.
     DuplicateRemoval,
+    /// R7: a profile inscribed a second time (ADR 0069).
+    DuplicateProfile,
 }
 
 /// State of one device in the log.
@@ -36,10 +38,15 @@ pub struct Directory {
     members: BTreeMap<Id16, [u8; 48]>,
     devices: BTreeMap<(Id16, Id16), DeviceRecord>,
     removals: BTreeMap<OpId, (Id16, Id16)>,
+    /// Hash of the current profile of each member: its last entry of kind 6.
+    profiles: BTreeMap<Id16, [u8; 48]>,
+    /// Every profile ever inscribed (R7), with the number of profiles of each member.
+    profile_objects: BTreeSet<[u8; 48]>,
+    profile_counts: BTreeMap<Id16, u64>,
 }
 
 impl Directory {
-    /// Checks rules R2 to R5 for the next entry.
+    /// Checks rules R2 to R5 and R7 for the next entry.
     ///
     /// # Errors
     /// The rule broken.
@@ -71,6 +78,14 @@ impl Directory {
                     return Err(RuleViolation::DuplicateRemoval);
                 }
             }
+            EntryKind::MemberProfile => {
+                if !self.members.contains_key(&e.member) {
+                    return Err(RuleViolation::UnknownMember);
+                }
+                if self.profile_objects.contains(&e.object) {
+                    return Err(RuleViolation::DuplicateProfile);
+                }
+            }
         }
         Ok(())
     }
@@ -98,6 +113,11 @@ impl Directory {
             (EntryKind::LockerRevoke, _, Some(l)) => {
                 self.removals.insert(e.object, (l, e.member));
             }
+            (EntryKind::MemberProfile, _, _) => {
+                self.profiles.insert(e.member, e.object);
+                self.profile_objects.insert(e.object);
+                *self.profile_counts.entry(e.member).or_default() += 1;
+            }
             _ => {}
         }
     }
@@ -106,6 +126,18 @@ impl Directory {
     #[must_use]
     pub fn member_key(&self, member: &Id16) -> Option<[u8; 48]> {
         self.members.get(member).copied()
+    }
+
+    /// Hash of the current profile of a member: its last entry of kind 6 (ADR 0069).
+    #[must_use]
+    pub fn profile(&self, member: &Id16) -> Option<[u8; 48]> {
+        self.profiles.get(member).copied()
+    }
+
+    /// Number of profiles inscribed for a member.
+    #[must_use]
+    pub fn profile_count(&self, member: &Id16) -> u64 {
+        self.profile_counts.get(member).copied().unwrap_or(0)
     }
 
     /// Record of a device.

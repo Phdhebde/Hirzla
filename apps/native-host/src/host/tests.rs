@@ -133,6 +133,29 @@ fn status_and_lock() {
     assert!(matches!(fake.seen[..], [Request::Status, Request::Lock]));
 }
 
+/// ADR 0071: the host passes the call on and starts nothing; without a listening
+/// application it says so.
+#[test]
+fn show_asks_the_core_for_the_application_window() {
+    for (flag, want) in [
+        (true, r#"{"ok":true}"#),
+        (false, r#"{"ok":false,"error":"no_app"}"#),
+    ] {
+        let mut fake = Fake {
+            reply: Some(Ok(Reply::Flag(flag))),
+            ..Fake::default()
+        };
+        assert_eq!(run(&mut fake, r#"{"type":"show"}"#), want);
+        assert!(matches!(fake.seen[..], [Request::ShowApp]));
+    }
+    // It carries nothing.
+    assert!(run(
+        &mut Fake::default(),
+        r#"{"type":"show","origin":"https://a.example"}"#
+    )
+    .contains("bad_request"));
+}
+
 #[test]
 fn match_lists_index_data_only() {
     let mut fake = Fake {

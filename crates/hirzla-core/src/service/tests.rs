@@ -11,6 +11,7 @@ use hirzla_vault::secret::SecretType;
 use zeroize::Zeroizing;
 
 use super::*;
+use crate::generator::{Profile, Spec};
 use crate::proto::classes;
 
 const PASSWORD: &str = "maître-mot-de-passe-de-test";
@@ -257,6 +258,25 @@ fn life_cycle_and_log_hygiene() {
             classes: classes::ALL
         })
         .is_ok());
+    // Full settings need no vault either, and report the entropy after filtering.
+    match c.handle(Request::GenerateWith {
+        spec: Profile::LongTerm.spec(),
+    }) {
+        Ok(Reply::GeneratedWith(g)) => {
+            assert_eq!(g.value.len(), 40);
+            assert!(g.estimate.entropy_millibits >= 256_000);
+        }
+        _ => panic!("refused"),
+    }
+    assert_eq!(
+        code(c.handle(Request::GenerateWith {
+            spec: Spec::Pin {
+                length: 3,
+                rules: 0
+            }
+        })),
+        ErrorCode::InvalidInput
+    );
     c.handle(Request::Unlock {
         password: z(PASSWORD),
     })
@@ -523,4 +543,64 @@ fn origin_operations_are_exact() {
     }
     c.handle(Request::Lock).unwrap();
     assert_eq!(code(fill(&mut c, bank, origin)), ErrorCode::Locked);
+}
+
+/// ADR 0071: the call for the window reaches a listening application once, is dropped
+/// without one, is bounded to one a second, and never counts as activity.
+#[test]
+fn window_call_reaches_a_listening_application_once() {
+    let t0 = Instant::now();
+    let s = Duration::from_secs;
+    let mut w = AppWindow::default();
+    // Nobody listens: dropped, and not delivered to an application that starts later.
+    assert_eq!(w.show(t0), Ok(false));
+    assert!(!w.poll(t0 + s(2)));
+    // A listener takes the call exactly once.
+    assert_eq!(w.show(t0 + s(3)), Ok(true));
+    assert!(w.poll(t0 + s(4)));
+    assert!(!w.poll(t0 + s(5)));
+    // Bounded to one call a second.
+    assert_eq!(w.show(t0 + s(6)), Ok(true));
+    assert_eq!(
+        w.show(t0 + s(6) + Duration::from_millis(500)),
+        Err(ErrorCode::Throttled)
+    );
+    assert!(w.poll(t0 + s(7)));
+    // The application stopped polling: it no longer counts as listening.
+    assert_eq!(w.show(t0 + s(7) + APP_LISTENING), Ok(false));
+    assert!(!w.poll(t0 + s(60)));
+}
+
+#[test]
+fn window_call_works_locked_and_is_not_activity() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), None);
+    // No vault at all: both operations answer.
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(false)));
+    assert!(c.handle(Request::ShowApp) == Ok(Reply::Flag(true)));
+    assert_eq!(code(c.handle(Request::ShowApp)), ErrorCode::Throttled);
+    let before = c.last_activity;
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(true)));
+    assert!(c.handle(Request::AppPoll) == Ok(Reply::Flag(false)));
+    assert_eq!(c.last_activity, before);
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("op=show_app"), "{log}");
+}
+
+/// ADR 0072: the application reports a typing; the log names what and the kind of target.
+#[test]
+fn auto_typed_is_one_log_line_of_fixed_words() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), None);
+    assert!(
+        c.handle(Request::AutoTyped {
+            what: crate::proto::Typed::Password,
+            terminal: true
+        }) == Ok(Reply::Done)
+    );
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("event=auto_type what=password target=terminal"),
+        "{log}"
+    );
 }

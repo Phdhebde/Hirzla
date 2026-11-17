@@ -15,6 +15,36 @@
   <!-- Announcements for screen readers and short confirmations. -->
   <div id="annonces" class="annonces" role="status" aria-live="polite"></div>
 
+  <!-- Icons: one sprite, referenced by <use>; no image file, no inline style. -->
+  <svg class="visuellement-cache" aria-hidden="true" focusable="false">
+    <symbol id="i-tous" viewBox="0 0 24 24"><path d="M4 5h16v14H4zM4 10h16M9 14h6"/></symbol>
+    <symbol id="i-favori" viewBox="0 0 24 24"><path d="M12 4l2.5 5 5.5.8-4 3.9.9 5.5L12 16.6 7.1 19.2 8 13.7 4 9.8 9.5 9z"/></symbol>
+    <symbol id="i-identifiant" viewBox="0 0 24 24"><path d="M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9z"/></symbol>
+    <symbol id="i-cle" viewBox="0 0 24 24"><path d="M21 8a4 4 0 1 1-8 0 4 4 0 0 1 8 0zM14 11l-9 9M8 17l2 2M5 20l1.5 1.5"/></symbol>
+    <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M3 5h18v14H3zM7 10l3 2.5L7 15M12.5 15H17"/></symbol>
+    <symbol id="i-ecran" viewBox="0 0 24 24"><path d="M3 4h18v12H3zM9 20h6M12 16v4"/></symbol>
+    <symbol id="i-note" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM9 10h7M9 14h7M9 18h4"/></symbol>
+    <symbol id="i-fichier" viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM15 3v4h4"/></symbol>
+    <symbol id="i-totp" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2"/></symbol>
+    <symbol id="i-secret" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-casier" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></symbol>
+    <symbol id="i-generateur" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></symbol>
+    <symbol id="i-serveur" viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4zM7.5 7h.01M7.5 17h.01"/></symbol>
+    <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
+    <symbol id="i-corbeille" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></symbol>
+    <symbol id="i-clavier" viewBox="0 0 24 24"><path d="M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
+    <symbol id="i-copier" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM5 15V4h11"/></symbol>
+    <symbol id="i-oeil" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></symbol>
+    <symbol id="i-oeil-barre" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM4 4l16 16"/></symbol>
+    <symbol id="i-verrou" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
+    <symbol id="i-recherche" viewBox="0 0 24 24"><path d="M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM16 16l4.5 4.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-menu" viewBox="0 0 24 24"><path d="M5 12h.01M12 12h.01M19 12h.01"/></symbol>
+    <symbol id="i-historique" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.6-5.9M4 4v4h4M12 8v4l3 2"/></symbol>
+    <symbol id="i-membres" viewBox="0 0 24 24"><path d="M9 11a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7zM2.5 20c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 6.5M18.5 14.8c1.7.8 2.7 2.6 3 5.2"/></symbol>
+  </svg>
+  <template id="gabarit-icone"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-secret"/></svg></template>
+
   <!-- Loading, and a core that cannot be reached. -->
   <main id="ecran-attente" class="ecran ecran-centre" data-ecran="attente">
     <div class="carte carte-etroite">
@@ -74,9 +104,14 @@
       <h1 class="titre-ecran" tabindex="-1">Ouvrir le coffre</h1>
       <label class="champ">
         <span class="champ-libelle">Mot de passe maître</span>
-        <input id="deverrouillage-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
-               spellcheck="false" required maxlength="1024">
+        <span class="saisie-groupe">
+          <input id="deverrouillage-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
+                 spellcheck="false" required maxlength="1024" aria-describedby="deverrouillage-majuscules">
+          <button id="deverrouillage-voir" class="bouton bouton-icone" type="button" aria-pressed="false"
+                  aria-label="Afficher le mot de passe maître" aria-controls="deverrouillage-mdp"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-oeil"/></svg></button>
+        </span>
       </label>
+      <p id="deverrouillage-majuscules" class="avertissement" hidden><span class="forme forme-triangle" aria-hidden="true"></span>Verrouillage des majuscules activé.</p>
       <div id="deverrouillage-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -95,14 +130,16 @@
       </div>
       <div class="recherche" role="search">
         <label for="recherche" class="visuellement-cache">Rechercher un secret</label>
-        <input id="recherche" class="saisie" type="search" placeholder="Rechercher (Ctrl+F)" autocomplete="off"
+        <svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-recherche"/></svg>
+        <input id="recherche" class="saisie" type="search" placeholder="Filtrer la liste" autocomplete="off"
                spellcheck="false" maxlength="256">
+        <button id="bouton-palette" class="touche" type="button" title="Aller à un secret ou à une action (Ctrl+K)">Ctrl K</button>
       </div>
-      <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span>Coffre ouvert</p>
+      <p class="etat etat-ouvert" id="etat-coffre"><span class="forme forme-rond" aria-hidden="true"></span><span id="etat-coffre-texte">Coffre ouvert</span></p>
       <button id="etat-serveur" class="etat etat-neutre etat-bouton" type="button" hidden
               title="Voir l'état de la connexion au serveur"></button>
       <button id="bouton-synchroniser" class="bouton bouton-secondaire" type="button" hidden>Synchroniser</button>
-      <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)">Verrouiller</button>
+      <button id="bouton-verrouiller" class="bouton bouton-secondaire" type="button" title="Verrouiller (Ctrl+L)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-verrou"/></svg>Verrouiller</button>
     </header>
 
     <!-- Server mode alerts: suspect key log, alerts about your keys, lost access, unconfirmed
@@ -117,20 +154,28 @@
     </div>
 
     <nav class="navigation" aria-label="Sections">
-      <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)">Nouveau secret</button>
+      <button id="bouton-nouveau" class="bouton bouton-principal bouton-large" type="button" title="Nouveau secret (Ctrl+N)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Nouveau secret</button>
+      <h2 class="nav-titre">Coffre</h2>
       <ul class="nav-liste">
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="tous" aria-current="page">Tous les secrets</button></li>
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="favoris">Favoris</button></li>
-        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="corbeille">Corbeille</button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="tous" aria-current="page"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-tous"/></svg><span class="nav-nom">Tous les secrets</span><span class="compte" id="compte-tous" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="favoris"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-favori"/></svg><span class="nav-nom">Favoris</span><span class="compte" id="compte-favoris" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="corbeille"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span class="nav-nom">Corbeille</span></button></li>
+      </ul>
+      <h2 class="nav-titre" id="titre-types">Types</h2>
+      <ul class="nav-liste" aria-labelledby="titre-types">
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:password"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-identifiant"/></svg><span class="nav-nom">Mots de passe</span><span class="compte" id="compte-password" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:ssh_key"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-cle"/></svg><span class="nav-nom">Clés SSH</span><span class="compte" id="compte-ssh_key" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:connexion"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-terminal"/></svg><span class="nav-nom">Connexions</span><span class="compte" id="compte-connexion" aria-hidden="true"></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="secrets" data-filtre="type:note"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-note"/></svg><span class="nav-nom">Notes</span><span class="compte" id="compte-note" aria-hidden="true"></span></button></li>
       </ul>
       <h2 class="nav-titre" id="titre-casiers">Casiers</h2>
       <ul id="liste-casiers" class="nav-liste" aria-labelledby="titre-casiers"></ul>
-      <button id="bouton-casier-partage" class="nav-lien nav-action" type="button" hidden>Nouveau casier partagé…</button>
+      <button id="bouton-casier-partage" class="nav-lien nav-action" type="button" hidden><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg><span class="nav-nom">Nouveau casier partagé…</span></button>
       <h2 class="nav-titre">Outils</h2>
       <ul class="nav-liste">
-        <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)">Générateur</button></li>
-        <li><button class="nav-lien" type="button" data-vue="serveur">Serveur</button></li>
-        <li><button class="nav-lien" type="button" data-vue="reglages">Réglages</button></li>
+        <li><button class="nav-lien" type="button" data-vue="generateur" title="Générateur (Ctrl+G)"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-generateur"/></svg><span class="nav-nom">Générateur</span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="serveur"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-serveur"/></svg><span class="nav-nom">Serveur</span><span class="compte compte-alerte" id="compte-serveur" hidden></span></button></li>
+        <li><button class="nav-lien" type="button" data-vue="reglages"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-reglages"/></svg><span class="nav-nom">Réglages</span></button></li>
       </ul>
     </nav>
 
@@ -139,11 +184,11 @@
       <section class="colonne-liste" aria-labelledby="liste-titre">
         <div class="entete-liste">
           <h1 id="liste-titre" class="titre-section" tabindex="-1">Tous les secrets</h1>
-          <span id="liste-compte" class="texte-secondaire"></span>
+          <span id="liste-compte" class="compte-liste"></span>
         </div>
         <div id="liste-casier-partage" class="entete-casier" hidden>
           <p id="liste-casier-role" class="texte-secondaire"></p>
-          <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button">Membres et rôles</button>
+          <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-membres"/></svg>Membres et rôles</button>
         </div>
         <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
         <p id="liste-vide" class="vide" hidden></p>
@@ -155,49 +200,199 @@
         </div>
         <article id="fiche-contenu" hidden>
           <header class="fiche-entete">
-            <div>
+            <span id="fiche-icone" class="vignette vignette-grande" aria-hidden="true"></span>
+            <div class="fiche-identite">
               <p id="fiche-type" class="surtitre"></p>
               <h2 id="fiche-titre" class="titre-fiche" tabindex="-1"></h2>
             </div>
             <div class="fiche-actions">
-              <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false">Favori</button>
+              <button id="fiche-favori" class="bouton bouton-icone" type="button" aria-pressed="false" aria-label="Favori"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-favori"/></svg></button>
               <button id="fiche-modifier" class="bouton bouton-secondaire" type="button">Modifier</button>
-              <button id="fiche-historique" class="bouton bouton-secondaire" type="button">Historique</button>
-              <button id="fiche-restaurer" class="bouton bouton-secondaire" type="button" hidden>Restaurer</button>
-              <button id="fiche-supprimer" class="bouton bouton-secondaire bouton-danger" type="button">Mettre à la corbeille</button>
+              <button id="fiche-restaurer" class="bouton bouton-principal" type="button" hidden>Restaurer</button>
+              <details id="fiche-menu" class="menu">
+                <summary class="bouton bouton-icone" aria-label="Autres actions"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg></summary>
+                <div class="menu-liste">
+                  <button id="fiche-historique" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-historique"/></svg>Historique</button>
+                  <button id="fiche-supprimer" class="menu-action menu-danger" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span id="fiche-supprimer-texte">Mettre à la corbeille</span></button>
+                </div>
+              </details>
             </div>
           </header>
+          <div id="fiche-principales" class="fiche-principales"></div>
           <dl id="fiche-champs" class="champs-fiche"></dl>
         </article>
       </section>
     </main>
 
     <!-- Generator. -->
-    <main id="vue-generateur" class="vue vue-page" data-vue="generateur" hidden>
-      <h1 class="titre-section" tabindex="-1">Générateur de mots de passe</h1>
-      <p class="texte-secondaire">Le noyau tire chaque caractère uniformément sur l'aléa du système.</p>
-      <form id="form-generateur" class="carte" novalidate>
-        <div class="resultat-generateur">
-          <output id="generateur-resultat" class="valeur-secrete valeur-grande" aria-live="polite" for="generateur-longueur"></output>
+    <main id="vue-generateur" class="vue vue-page vue-large" data-vue="generateur" hidden>
+      <div class="entete-generateur">
+        <h1 class="titre-section" tabindex="-1">Générateur</h1>
+        <div id="generateur-modes" class="segments" role="group" aria-label="Mode de génération">
+          <button class="segment" type="button" data-mode="characters" aria-pressed="true">Caractères</button>
+          <button class="segment" type="button" data-mode="passphrase" aria-pressed="false">Phrase de passe</button>
+          <button class="segment" type="button" data-mode="pronounceable" aria-pressed="false">Prononçable</button>
+          <button class="segment" type="button" data-mode="pin" aria-pressed="false">Code PIN</button>
+          <button class="segment" type="button" data-mode="template" aria-pressed="false">Modèle</button>
         </div>
-        <div class="ligne-actions">
-          <button id="generateur-generer" class="bouton bouton-principal" type="submit">Générer</button>
-          <button id="generateur-copier" class="bouton bouton-secondaire" type="button" disabled>Copier</button>
+      </div>
+      <form id="form-generateur" class="colonnes-generateur" novalidate>
+        <div class="colonne">
+          <section class="carte" aria-label="Valeur générée">
+            <div class="resultat-generateur">
+              <output id="generateur-resultat" class="valeur-secrete valeur-grande" aria-live="polite"></output>
+            </div>
+            <p class="legende-generateur aide"><span>Lettres</span> <span class="car-chiffre">Chiffres</span> <span class="car-symbole">Symboles</span></p>
+            <div class="ligne-actions">
+              <button id="generateur-generer" class="bouton bouton-principal" type="submit">
+                <svg class="icone" aria-hidden="true"><use href="#i-generateur"></use></svg> Générer</button>
+              <button id="generateur-copier" class="bouton bouton-secondaire" type="button" disabled>Copier</button>
+              <button id="generateur-creer" class="bouton bouton-secondaire" type="button" disabled>Créer un secret avec</button>
+              <button id="generateur-lot" class="bouton bouton-secondaire" type="button">Générer un lot de 10</button>
+            </div>
+            <ol id="generateur-lot-liste" class="lot-generateur" aria-label="Lot de valeurs générées" hidden></ol>
+            <div id="generateur-erreur" class="alerte" role="alert" hidden>
+              <span class="forme forme-triangle" aria-hidden="true"></span>
+              <p></p>
+            </div>
+          </section>
+          <section class="carte" aria-labelledby="generateur-robustesse-titre">
+            <div class="ligne-titre">
+              <h2 id="generateur-robustesse-titre" class="titre-carte">Robustesse</h2>
+              <span id="generateur-bits" class="mono bits-generateur"></span>
+            </div>
+            <div class="jauge">
+              <progress id="generateur-jauge" class="jauge-barre" max="256" value="0" aria-labelledby="generateur-robustesse-titre"></progress>
+              <span id="generateur-cible" class="jauge-cible" aria-hidden="true"></span>
+            </div>
+            <p class="jauge-echelle aide"><span>0</span><strong id="generateur-cible-texte"></strong><span>256 bits</span></p>
+            <dl class="tableau-etat tableau-robustesse">
+              <dt>Tirages possibles</dt><dd id="generateur-tirage" class="mono"></dd>
+              <dt>Face à une recherche classique</dt><dd id="generateur-classique"></dd>
+              <dt>Face à une recherche quantique (Grover)</dt><dd id="generateur-quantique"></dd>
+            </dl>
+            <p class="aide">Un calculateur quantique divise par deux l'entropie utile d'un secret tiré au hasard. Le profil
+              « Longue durée » vise 256 bits pour en garder 128 dans ce cas.</p>
+          </section>
         </div>
-        <label class="champ">
-          <span class="champ-libelle">Longueur : <strong id="generateur-longueur-valeur">24</strong> caractères</span>
-          <input id="generateur-longueur" type="range" min="8" max="128" value="24" class="curseur">
-        </label>
-        <fieldset class="cases">
-          <legend class="champ-libelle">Familles de caractères</legend>
-          <label class="case"><input type="checkbox" id="generateur-minuscules" checked> Minuscules (a–z)</label>
-          <label class="case"><input type="checkbox" id="generateur-majuscules" checked> Majuscules (A–Z)</label>
-          <label class="case"><input type="checkbox" id="generateur-chiffres" checked> Chiffres (0–9)</label>
-          <label class="case"><input type="checkbox" id="generateur-symboles" checked> Symboles (!#$%…)</label>
-        </fieldset>
-        <div id="generateur-erreur" class="alerte" role="alert" hidden>
-          <span class="forme forme-triangle" aria-hidden="true"></span>
-          <p></p>
+        <div class="colonne">
+          <section class="carte" aria-labelledby="generateur-profil-titre">
+            <h2 id="generateur-profil-titre" class="titre-carte">Profil</h2>
+            <div id="generateur-profils" class="pastilles" role="group" aria-labelledby="generateur-profil-titre"></div>
+            <p class="aide">Un profil remplit les réglages ci-dessous ; vous pouvez ensuite les ajuster.</p>
+          </section>
+          <section class="carte" aria-labelledby="generateur-reglages-titre">
+            <h2 id="generateur-reglages-titre" class="titre-carte">Réglages</h2>
+
+            <div class="panneau-mode" data-mode-panneau="characters">
+              <div class="champ">
+                <div class="ligne-titre">
+                  <label class="champ-libelle" for="generateur-longueur">Longueur</label>
+                  <input id="generateur-longueur-nombre" class="saisie saisie-nombre" type="number" min="8" max="256" step="1" value="24" aria-label="Longueur en caractères">
+                </div>
+                <input id="generateur-longueur" type="range" min="8" max="256" value="24" class="curseur">
+              </div>
+              <div class="familles" role="group" aria-label="Familles de caractères">
+                <div class="famille famille-entete aide"><span class="famille-nom">Famille</span><span>Au moins</span></div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-minuscules" checked> <span>Minuscules</span> <span class="famille-jeu mono">a à z</span></label>
+                <input id="generateur-minuscules-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : minuscules">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-majuscules" checked> <span>Majuscules</span> <span class="famille-jeu mono">A à Z</span></label>
+                <input id="generateur-majuscules-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : majuscules">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-chiffres" checked> <span>Chiffres</span> <span class="famille-jeu mono">0 à 9</span></label>
+                <input id="generateur-chiffres-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : chiffres">
+              </div>
+              <div class="famille">
+                <label class="case famille-nom"><input type="checkbox" id="generateur-symboles" checked> <span>Symboles</span> <span class="famille-jeu mono">liste ci-dessous</span></label>
+                <input id="generateur-symboles-min" class="saisie saisie-nombre" type="number" min="0" max="9" step="1" value="1" aria-label="Nombre minimal : symboles">
+              </div>
+              </div>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Symboles autorisés</span>
+                  <input id="generateur-jeu" class="saisie mono" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Jeu par défaut"></label>
+                <label class="champ"><span class="champ-libelle">Caractères exclus</span>
+                  <input id="generateur-exclus" class="saisie mono" type="text" maxlength="94" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-memes-touches"> <span class="case-nom">Mêmes touches en AZERTY et en QWERTY</span><span class="aide-ligne">lettres seulement</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-debut-lettre"> <span class="case-nom">Commencer par une lettre</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-sans-repetition"> <span class="case-nom">Aucun caractère répété à la suite</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="passphrase" hidden>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Nombre de mots (3 à 32)</span>
+                  <input id="generateur-mots" class="saisie" type="number" min="3" max="32" step="1" value="6"></label>
+                <label class="champ"><span class="champ-libelle">Séparateur</span>
+                  <select id="generateur-separateur" class="saisie">
+                    <option value="-">Tiret (-)</option>
+                    <option value=".">Point (.)</option>
+                    <option value="_">Tiret bas (_)</option>
+                    <option value=",">Virgule (,)</option>
+                    <option value=" ">Espace</option>
+                  </select></label>
+              </div>
+              <label class="champ"><span class="champ-libelle">Chiffres ajoutés (0 à 4)</span>
+                <input id="generateur-mots-chiffres" class="saisie" type="number" min="0" max="4" step="1" value="1"></label>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Options</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-mots-majuscule"> <span class="case-nom">Majuscule au début de chaque mot</span></label>
+              </fieldset>
+              <p class="aide">Les mots sont tirés d'une liste française embarquée dans le noyau.</p>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="pronounceable" hidden>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Nombre de syllabes (4 à 128)</span>
+                  <input id="generateur-syllabes" class="saisie" type="number" min="4" max="128" step="1" value="12"></label>
+                <label class="champ"><span class="champ-libelle">Chiffres ajoutés (0 à 4)</span>
+                  <input id="generateur-syllabes-chiffres" class="saisie" type="number" min="0" max="4" step="1" value="2"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Options</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-syllabes-majuscule"> <span class="case-nom">Majuscule au début</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-syllabes-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="pin" hidden>
+              <label class="champ"><span class="champ-libelle">Nombre de chiffres (4 à 12)</span>
+                <input id="generateur-pin" class="saisie" type="number" min="4" max="12" step="1" value="6"></label>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-pin-sans-repetition"> <span class="case-nom">Aucun chiffre répété à la suite</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-pin-sans-suite"> <span class="case-nom">Aucune suite montante ou descendante</span><span class="aide-ligne">123, 987</span></label>
+              </fieldset>
+            </div>
+
+            <div class="panneau-mode" data-mode-panneau="template" hidden>
+              <label class="champ"><span class="champ-libelle">Modèle</span>
+                <input id="generateur-modele" class="saisie mono" type="text" maxlength="256" autocomplete="off" spellcheck="false" value="Aa-9999-aaa-AA" aria-describedby="generateur-modele-aide"></label>
+              <p id="generateur-modele-aide" class="aide"><span class="mono">a</span> minuscule, <span class="mono">A</span> majuscule,
+                <span class="mono">9</span> chiffre, <span class="mono">#</span> symbole, <span class="mono">*</span> l'un des quatre.
+                La ponctuation et l'espace restent tels quels ; <span class="mono">\x</span> écrit le caractère x lui-même.</p>
+              <div class="deux-champs">
+                <label class="champ"><span class="champ-libelle">Symboles autorisés</span>
+                  <input id="generateur-modele-jeu" class="saisie mono" type="text" maxlength="64" autocomplete="off" spellcheck="false" placeholder="Jeu par défaut"></label>
+                <label class="champ"><span class="champ-libelle">Caractères exclus</span>
+                  <input id="generateur-modele-exclus" class="saisie mono" type="text" maxlength="94" autocomplete="off" spellcheck="false"></label>
+              </div>
+              <fieldset class="cases">
+                <legend class="champ-libelle">Règles</legend>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-sans-ambigus"> <span class="case-nom">Écarter les caractères qui se confondent</span><span class="aide-ligne">0 O o, 1 l I</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-memes-touches"> <span class="case-nom">Mêmes touches en AZERTY et en QWERTY</span><span class="aide-ligne">lettres seulement</span></label>
+            <label class="case case-ligne"><input type="checkbox" id="generateur-modele-sans-repetition"> <span class="case-nom">Aucun caractère répété à la suite</span></label>
+              </fieldset>
+            </div>
+          </section>
+          <p class="aide">Chaque valeur est tirée uniformément par le noyau, sur l'aléa du système.</p>
         </div>
       </form>
     </main>
@@ -348,14 +543,20 @@
       <section id="serveur-accords" class="carte" aria-labelledby="serveur-accords-titre" hidden>
         <h2 id="serveur-accords-titre" class="titre-carte">Accords entre propriétaires</h2>
         <p class="texte-secondaire">Retirer un propriétaire plus ancien que vous, changer son rôle ou changer le quorum
-          exige l'accord d'autres propriétaires. Chacun signe la demande sur son propre poste ; l'accord, signé par sa
-          clé d'appareil, vous revient par le canal de votre choix. Le noyau vérifie chaque signature.</p>
+          exige l'accord d'autres propriétaires. Les demandes et les accords voyagent scellés par le serveur, qui ne
+          peut ni les lire ni les signer. Le noyau vérifie chaque signature.</p>
+        <h3 class="sous-titre" id="recues-titre">Demandes à examiner</h3>
+        <ul id="recues-lignes" class="demandes" aria-labelledby="recues-titre"></ul>
+        <p id="recues-vide" class="texte-secondaire">Aucune demande à examiner.</p>
+        <h3 class="sous-titre">Vos demandes</h3>
         <table class="tableau">
           <thead><tr><th scope="col">Demande</th><th scope="col">Accords</th><th scope="col"><span class="visuellement-cache">Actions</span></th></tr></thead>
           <tbody id="accords-lignes"></tbody>
         </table>
         <p id="accords-vide" class="texte-secondaire">Aucune demande en cours. Une demande se prépare depuis les membres
           d'un casier, quand le noyau répond que l'action exige l'accord de plusieurs propriétaires.</p>
+        <details class="repli">
+          <summary>Échanger par copie, sans passer par le serveur</summary>
         <form id="form-accord-ajout" class="encadre" novalidate>
           <label class="champ">
             <span class="champ-libelle">Ajouter un accord reçu</span>
@@ -371,6 +572,7 @@
             <button id="accords-signer" class="bouton bouton-secondaire" type="button">Signer une demande reçue…</button>
           </div>
         </form>
+        </details>
       </section>
 
       <section id="serveur-identite" class="carte" aria-labelledby="serveur-identite-titre">
@@ -383,6 +585,22 @@
           <dt>Poste</dt><dd id="identite-poste" class="mono"></dd>
           <dt>Code de contrôle du poste</dt><dd id="identite-code" class="mono"></dd>
         </dl>
+        <form id="form-nom" class="encadre" novalidate hidden>
+          <label class="champ" for="identite-nom">
+            <span class="champ-libelle">Nom affiché</span>
+          </label>
+          <div class="saisie-groupe">
+            <input id="identite-nom" class="saisie" type="text" maxlength="64" autocomplete="off" placeholder="Prénom Nom">
+            <button id="identite-nom-envoyer" class="bouton bouton-secondaire" type="submit">Enregistrer le nom</button>
+          </div>
+          <p class="aide">Les autres membres voient ce nom à côté de l'empreinte de votre clé, et vous trouvent grâce à
+            lui. Il est inscrit au registre des clés, signé par votre clé ; le serveur peut le lire. Laissez vide pour
+            le retirer.</p>
+          <div id="identite-nom-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+        </form>
         <div class="ligne-actions">
           <button id="identite-exporter" class="bouton bouton-secondaire" type="button">Enregistrer votre clé publique…</button>
         </div>
@@ -412,18 +630,58 @@
           </select>
         </label>
       </section>
+      <section class="carte" aria-labelledby="reglages-poste">
+        <h2 id="reglages-poste" class="titre-carte">Sur ce poste</h2>
+        <label class="case"><input type="checkbox" id="reglage-zone" aria-describedby="reglage-zone-aide"> Garder
+          Hirzla dans la zone de notification</label>
+        <p id="reglage-zone-aide" class="aide">Fermer la fenêtre la masque sans verrouiller le coffre : il reste ouvert
+          jusqu'au délai d'inactivité, à la veille, au verrouillage de votre session ou à « Verrouiller ». Décochez
+          pour que fermer la fenêtre verrouille le coffre et arrête Hirzla.</p>
+        <p id="reglage-zone-absente" class="aide" hidden>Ce bureau n'a pas de zone de notification : fermer la fenêtre
+          verrouille le coffre et arrête Hirzla.</p>
+        <div id="reglage-saisie">
+          <h3 class="champ-libelle">Applications sans avertissement de saisie</h3>
+          <p id="reglage-saisie-vide" class="aide">Aucune. Hirzla vous nomme l'application avant chaque saisie
+            automatique.</p>
+          <ul id="reglage-saisie-liste" class="liste-simple"></ul>
+          <div class="ligne-actions">
+            <button id="reglage-saisie-tout" class="bouton bouton-secondaire bouton-petit" type="button" hidden>Avertir
+              de nouveau pour toutes</button>
+          </div>
+        </div>
+        <div id="reglages-poste-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+      </section>
       <section class="carte" aria-labelledby="reglages-coffre">
         <h2 id="reglages-coffre" class="titre-carte">Coffre</h2>
         <form id="form-reglages-coffre" novalidate>
           <label class="champ">
-            <span class="champ-libelle">Verrouillage automatique après inactivité (secondes)</span>
-            <input id="reglage-auto" class="saisie" type="number" min="0" max="86400" step="1" required
-                   aria-describedby="reglage-auto-aide">
+            <span class="champ-libelle">Verrouillage automatique après inactivité</span>
+            <select id="reglage-auto" class="saisie" aria-describedby="reglage-auto-aide">
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+              <option value="600">10 minutes</option>
+              <option value="900">15 minutes</option>
+              <option value="1800">30 minutes</option>
+              <option value="3600">1 heure</option>
+              <option value="14400">4 heures</option>
+              <option value="28800">8 heures</option>
+            </select>
           </label>
-          <p id="reglage-auto-aide" class="aide">De 30 s à 24 h (86 400 s) ; 0 rend le délai par défaut du noyau.</p>
+          <p id="reglage-auto-aide" class="aide">Le coffre se verrouille seul quand vous ne l'utilisez plus pendant cette durée.</p>
           <label class="champ">
-            <span class="champ-libelle">Effacement du presse-papiers après une copie (secondes)</span>
-            <input id="reglage-pp" class="saisie" type="number" min="5" max="600" step="1" required>
+            <span class="champ-libelle">Effacement du presse-papiers après une copie</span>
+            <select id="reglage-pp" class="saisie">
+              <option value="10">10 secondes</option>
+              <option value="20">20 secondes</option>
+              <option value="30">30 secondes</option>
+              <option value="60">1 minute</option>
+              <option value="120">2 minutes</option>
+              <option value="300">5 minutes</option>
+            </select>
           </label>
           <fieldset class="cases">
             <legend class="champ-libelle">Verrouiller aussi le coffre</legend>
@@ -442,8 +700,8 @@
           <dt>Version du noyau</dt><dd id="reglage-version" class="mono"></dd>
           <dt>Version de l'application</dt><dd id="reglage-version-app" class="mono"></dd>
         </dl>
-        <p class="aide">Ces réglages sont enregistrés dans le coffre. Le coffre est aussi verrouillé à la fermeture de
-          l'application.</p>
+        <p class="aide">Ces réglages sont enregistrés dans le coffre. Le coffre est aussi verrouillé quand vous
+          quittez Hirzla.</p>
       </section>
       <section class="carte" aria-labelledby="reglages-mdp">
         <h2 id="reglages-mdp" class="titre-carte">Mot de passe maître</h2>
@@ -534,6 +792,9 @@
         <legend class="champ-libelle">Type</legend>
         <label class="case"><input type="radio" name="secret-type" value="password" checked> Mot de passe</label>
         <label class="case"><input type="radio" name="secret-type" value="note"> Note</label>
+        <label class="case"><input type="radio" name="secret-type" value="ssh"> Connexion SSH</label>
+        <label class="case"><input type="radio" name="secret-type" value="rdp"> Connexion RDP</label>
+        <label class="case"><input type="radio" name="secret-type" value="ssh_key"> Clé SSH</label>
       </fieldset>
       <label class="champ">
         <span class="champ-libelle">Titre</span>
@@ -543,11 +804,39 @@
         <span class="champ-libelle">Casier</span>
         <select id="secret-casier" class="saisie"></select>
       </label>
-      <label class="champ" data-pour="password">
+      <div class="grille-ajout" data-pour="ssh rdp">
+        <label class="champ">
+          <span class="champ-libelle">Hôte (nom ou adresse)</span>
+          <input id="secret-hote" class="saisie saisie-mono" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="champ">
+          <span class="champ-libelle">Port</span>
+          <input id="secret-port" class="saisie saisie-mono" type="text" inputmode="numeric" maxlength="5" autocomplete="off" spellcheck="false">
+        </label>
+      </div>
+      <div class="champ" data-pour="ssh_key" data-creation>
+        <span class="champ-libelle" id="secret-fichier-libelle">Fichier de la clé privée</span>
+        <div class="saisie-groupe">
+          <output id="secret-fichier-nom" class="saisie saisie-mono fichier-choisi" aria-labelledby="secret-fichier-libelle">Aucun fichier choisi</output>
+          <button id="secret-fichier-choisir" class="bouton bouton-secondaire" type="button">Choisir…</button>
+        </div>
+        <p class="aide">Une clé au format OpenSSH (« BEGIN OPENSSH PRIVATE KEY »). Si le fichier « .pub » se trouve à
+          côté, la clé publique est rangée avec elle. La clé privée reste scellée dans le coffre et aucune commande
+          ne la rend : conservez votre fichier tant que l'ouverture de session n'est pas disponible.</p>
+      </div>
+      <label class="champ" data-pour="ssh_key" data-creation>
+        <span class="champ-libelle">Phrase de passe de la clé (si elle en a une)</span>
+        <input id="secret-phrase" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
+      </label>
+      <label class="champ" data-pour="password ssh rdp ssh_key">
         <span class="champ-libelle">Identifiant</span>
         <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
-      <div class="champ" data-pour="password">
+      <label class="champ" data-pour="rdp">
+        <span class="champ-libelle">Domaine</span>
+        <input id="secret-domaine" class="saisie saisie-mono" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+      </label>
+      <div class="champ" data-pour="password ssh rdp">
         <label class="champ-libelle" for="secret-mdp">Mot de passe</label>
         <div class="saisie-groupe">
           <input id="secret-mdp" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
@@ -556,6 +845,19 @@
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
       </div>
+      <label class="champ" data-pour="ssh">
+        <span class="champ-libelle">Clé SSH du coffre</span>
+        <select id="secret-cle" class="saisie"></select>
+      </label>
+      <label class="champ" data-pour="ssh rdp">
+        <span class="champ-libelle">Rebond (connexion SSH par laquelle passer)</span>
+        <select id="secret-rebond" class="saisie"></select>
+      </label>
+      <label class="champ" data-pour="ssh rdp">
+        <span class="champ-libelle">Empreinte de la clé de l'hôte</span>
+        <input id="secret-empreinte" class="saisie saisie-mono" type="text" maxlength="50" autocomplete="off" spellcheck="false">
+        <span class="aide">Facultative. Forme attendue : « SHA256: » suivi de 43 caractères.</span>
+      </label>
       <label class="champ" data-pour="password" data-creation>
         <span class="champ-libelle">Adresses web (une par ligne)</span>
         <textarea id="secret-urls" class="saisie saisie-mono" rows="2" maxlength="8192" spellcheck="false"></textarea>
@@ -564,12 +866,12 @@
         <span class="champ-libelle">Étiquettes (séparées par des virgules)</span>
         <input id="secret-etiquettes" class="saisie" type="text" maxlength="2048" autocomplete="off">
       </label>
-      <label class="champ">
+      <label class="champ" data-pour="password note ssh rdp">
         <span class="champ-libelle">Notes</span>
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
-      <label class="case"><input type="checkbox" id="secret-favori"> Favori</label>
+      <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -660,21 +962,33 @@
       <fieldset id="membres-ajout" class="encadre ajout-membre">
         <legend class="champ-libelle">Ajouter un membre</legend>
         <div class="grille-ajout">
+          <div class="champ">
+            <label class="champ-libelle" for="ajout-recherche">Nom d'un membre du serveur</label>
+            <div class="saisie-groupe">
+              <input id="ajout-recherche" class="saisie" type="text" autocomplete="off" maxlength="64">
+              <button id="ajout-chercher" class="bouton bouton-secondaire" type="button">Rechercher</button>
+            </div>
+          </div>
+          <label class="champ">
+            <span class="champ-libelle">Rôle</span>
+            <select id="ajout-role" class="saisie"></select>
+          </label>
+        </div>
+        <ul id="ajout-resultats" class="demandes" aria-label="Membres trouvés"></ul>
+        <p id="ajout-resultats-note" class="aide" role="status"></p>
+        <details class="repli">
+          <summary>Ajouter par identifiant de membre</summary>
           <label class="champ">
             <span class="champ-libelle">Identifiant du membre</span>
             <input id="ajout-membre" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
                    maxlength="64" placeholder="32 chiffres hexadécimaux">
           </label>
           <label class="champ">
-            <span class="champ-libelle">Rôle</span>
-            <select id="ajout-role" class="saisie"></select>
+            <span class="champ-libelle">Empreinte de sa clé (recommandée)</span>
+            <input id="ajout-empreinte" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
+                   maxlength="64" placeholder="ABCDE FGHIJ KLMNO PQRST">
           </label>
-        </div>
-        <label class="champ">
-          <span class="champ-libelle">Empreinte de sa clé (recommandée)</span>
-          <input id="ajout-empreinte" class="saisie saisie-mono" type="text" autocomplete="off" spellcheck="false"
-                 maxlength="64" placeholder="ABCDE FGHIJ KLMNO PQRST">
-        </label>
+        </details>
         <p id="ajout-aide" class="aide">Le noyau vérifie que la clé du membre est inscrite au registre de transparence ;
           l'empreinte, obtenue du membre lui-même, ajoute une comparaison hors bande.</p>
         <div class="ligne-actions">
@@ -684,6 +998,59 @@
       <div class="ligne-actions ligne-actions-fin">
         <button id="membres-quorum-changer" class="bouton bouton-secondaire" type="button" hidden>Changer le quorum…</button>
         <button class="bouton bouton-secondaire" value="ok">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Comparing the fingerprint of a member out of band (ADR 0069). -->
+  <dialog id="dialogue-empreinte" class="dialogue dialogue-etroit" aria-labelledby="empreinte-titre" aria-describedby="empreinte-texte">
+    <form method="dialog">
+      <h2 id="empreinte-titre" class="titre-carte"></h2>
+      <p id="empreinte-texte"></p>
+      <p id="empreinte-valeur" class="empreinte-grande mono"></p>
+      <p class="aide">Un nom se choisit librement : seule l'empreinte prouve à qui appartient la clé. Si elle diffère,
+        ne partagez rien avec ce membre et prévenez votre administrateur de sécurité.</p>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" value="non" autofocus>Elles diffèrent, ou je n'ai pas pu comparer</button>
+        <button class="bouton bouton-principal" value="oui">Elles sont identiques</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Typing a field into another application (ADR 0072). -->
+  <dialog id="dialogue-saisie" class="dialogue dialogue-etroit" aria-labelledby="saisie-titre">
+    <form id="form-saisie" method="dialog" novalidate>
+      <h2 id="saisie-titre" class="titre-carte">Saisir dans une application</h2>
+      <div id="saisie-etape-choix">
+        <p class="texte-secondaire">Placez d'abord le curseur dans le champ voulu de l'autre application, puis revenez
+          ici. Hirzla se met en retrait, repère l'application qui reprend le clavier et vous la nomme avant de
+          saisir.</p>
+        <fieldset class="cases">
+          <legend class="champ-libelle">Que saisir ?</legend>
+          <div id="saisie-choix" class="cases"></div>
+        </fieldset>
+        <p class="aide">Hirzla n'appuie jamais sur Entrée : vous validez vous-même.</p>
+      </div>
+      <div id="saisie-etape-avertissement" hidden>
+        <p>Hirzla va saisir <strong id="saisie-quoi"></strong> de « <span id="saisie-secret"></span> » dans :</p>
+        <p class="cible-saisie"><strong id="saisie-application"></strong><span id="saisie-chemin" class="mono"></span>
+          <span id="saisie-fenetre" class="texte-secondaire"></span></p>
+        <div id="saisie-terminal" class="alerte" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p>C'est un terminal : ce qui y est saisi peut rester dans l'historique des commandes.</p>
+        </div>
+        <p class="aide">Une fois saisie, la valeur est visible de cette application et de tout ce qui observe le
+          clavier, comme une frappe à la main. Le nom d'un programme est un indice, pas une preuve.</p>
+        <label id="saisie-ne-plus-ligne" class="case"><input type="checkbox" id="saisie-ne-plus"> Ne plus m'avertir pour
+          cette application</label>
+      </div>
+      <div id="saisie-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button id="saisie-annuler" class="bouton bouton-secondaire" type="button">Annuler</button>
+        <button id="saisie-valider" class="bouton bouton-principal" type="submit">Continuer</button>
       </div>
     </form>
   </dialog>
@@ -707,9 +1074,9 @@
           <span class="champ-libelle">Demande à transmettre aux autres propriétaires</span>
           <textarea id="preparer-demande" class="saisie saisie-mono saisie-texte" rows="4" readonly></textarea>
         </label>
-        <p class="aide">Elle ne contient aucun secret. Chaque propriétaire la colle dans « Signer une demande reçue »,
-          vérifie avec vous de vive voix qu'elle vient bien de vous, puis vous renvoie son accord, que vous ajoutez dans
-          Serveur, Accords entre propriétaires.</p>
+        <p class="aide">Elle ne contient aucun secret. Chaque propriétaire la trouve dans Serveur, Demandes à examiner,
+          vérifie avec vous de vive voix qu'elle vient bien de vous, puis signe : son accord vous revient par le
+          serveur. Sans serveur joignable, transmettez-lui ce texte par le canal de votre choix.</p>
       </div>
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" type="button" data-fermer>Fermer</button>
@@ -825,6 +1192,21 @@
         <button id="recouvrement-ouvrir" class="bouton bouton-principal" type="submit" disabled>Ouvrir le coffre</button>
       </div>
     </form>
+  </dialog>
+
+  <!-- Quick access (Ctrl+K): secrets and actions, from the keyboard. -->
+  <dialog id="dialogue-palette" class="dialogue palette" aria-label="Aller à un secret ou à une action">
+    <div class="palette-saisie">
+      <svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-recherche"/></svg>
+      <label for="palette-recherche" class="visuellement-cache">Rechercher un secret ou une action</label>
+      <input id="palette-recherche" type="text" role="combobox" aria-expanded="true" aria-controls="palette-liste"
+             aria-autocomplete="list" autocomplete="off" spellcheck="false" maxlength="256"
+             placeholder="Rechercher un secret ou une action">
+      <span class="touche" aria-hidden="true">Échap</span>
+    </div>
+    <ul id="palette-liste" class="palette-liste" role="listbox" aria-label="Résultats"></ul>
+    <p id="palette-vide" class="vide" hidden>Aucun secret ni action ne correspond.</p>
+    <p class="palette-aide"><span class="touche">Entrée</span> ouvrir <span class="touche">Ctrl Entrée</span> copier le mot de passe <span class="touche">↑ ↓</span> choisir</p>
   </dialog>
 </body>
 </html>

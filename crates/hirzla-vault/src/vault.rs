@@ -98,6 +98,8 @@ pub struct SecretVersion {
 /// An open vault. Keys and unsealed index fragments are erased when it is dropped.
 pub struct Vault {
     conn: Connection,
+    /// Format version of the file: raised when the first version 2 object is written.
+    format_version: u16,
     vault_id: Id16,
     /// Kept to wrap it under a new unlock method (password change, recovery kit).
     device_key: SymmetricKey,
@@ -342,6 +344,7 @@ impl Vault {
         )?;
         let wrapped = sym::wrap_key(&kek, &device_key)?;
         let header = Header {
+            format_version: crate::FORMAT_VERSION,
             vault_id,
             suite_write: SUITE,
             suites_read: vec![SUITE],
@@ -452,6 +455,7 @@ impl Vault {
         let device_vk = device_sign.verifying_key().clone();
         let mut vault = Vault {
             conn,
+            format_version: crate::FORMAT_VERSION,
             vault_id,
             device_key,
             dev_wrap,
@@ -500,6 +504,14 @@ impl Vault {
     ) -> Result<Vault, VaultError> {
         let conn = store::open(path)?;
         let (body, auth, header) = Self::read_header(&conn)?;
+        // § 5.3: `user_version` and the header name the same format version.
+        let user_version: i64 = conn
+            .pragma_query_value(None, "user_version", |r| r.get(0))
+            .map_err(|_| VaultError::Corrupt)?;
+        if user_version != i64::from(header.format_version) {
+            return Err(VaultError::Corrupt);
+        }
+        let format_version = header.format_version;
         let device_key = unlock(&header)?;
         let vault_id = header.vault_id;
         let dev_wrap = kdf::derive_key(&device_key, &vault_id, KdfLabel::DeviceWrap)?;
@@ -592,6 +604,7 @@ impl Vault {
         }
         let mut vault = Vault {
             conn,
+            format_version,
             vault_id,
             device_key,
             dev_wrap,
@@ -740,6 +753,13 @@ impl Vault {
     /// Closes the vault. Keys and unsealed data are erased as the value is dropped.
     pub fn close(self) {}
 
+    /// Format version of the file (`docs/format.md` § 5.3): 1 until a version 2 object is
+    /// written to a vault created in version 1.
+    #[must_use]
+    pub fn format_version(&self) -> u16 {
+        self.format_version
+    }
+
     /// The vault identifier.
     #[must_use]
     pub fn vault_id(&self) -> Id16 {
@@ -844,6 +864,34 @@ impl Vault {
             (3, Value::Uint(revoked_ms)),
         ]))?;
         Ok(key.revoke_device(&body)?.as_bytes().to_vec())
+    }
+
+    /// Signs with the member key, inside the vault, a member profile (`format.md` § 3.7,
+    /// ADR 0069). Returns the hybrid signature over keys 1 to 4 of the `MemberProfile`
+    /// (member, `seq`, `name`, `issued_ms`): the member key never leaves the vault. The
+    /// caller checks the name; the vault only refuses a rank 0.
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] if this device does not hold the member key (not a
+    /// certification device), [`VaultError::InvalidInput`] for a rank 0, or a cryptographic
+    /// failure.
+    pub fn sign_member_profile(
+        &self,
+        seq: u64,
+        name: &str,
+        issued_ms: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        if seq == 0 {
+            return Err(VaultError::InvalidInput);
+        }
+        let key = self.member_signing_key()?;
+        let body = cbor::encode(&Value::map(vec![
+            (1, Value::bytes(&self.identity.member.member)),
+            (2, Value::Uint(seq)),
+            (3, Value::text(name)),
+            (4, Value::Uint(issued_ms)),
+        ]))?;
+        Ok(key.sign_profile(&body)?.as_bytes().to_vec())
     }
 
     /// Certifies another device of this member (tests only: enrolling a second device is
@@ -1608,6 +1656,13 @@ impl Vault {
         let epoch = self.current_epoch(&locker)?;
         let key = self.locker_key(&locker, &epoch)?;
         let tx = self.conn.unchecked_transaction()?;
+        // A version 1 file is raised to the version its first later object needs, in the
+        // transaction that writes that object (§ 5.3, ADR 0067).
+        let needed = secret_type.min_format_version();
+        let raised = needed > self.format_version;
+        if raised {
+            self.raise_format_version(&tx, needed)?;
+        }
         let id = self.store_op(
             &tx,
             locker,
@@ -1647,6 +1702,9 @@ impl Vault {
         }
         before_commit();
         tx.commit()?;
+        if raised {
+            self.format_version = needed;
+        }
         self.shards.insert(locker, shard);
         Ok(())
     }
@@ -1772,6 +1830,9 @@ pub(crate) mod test_hooks {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tests_connections;
 
 #[cfg(test)]
 mod tests_keys;

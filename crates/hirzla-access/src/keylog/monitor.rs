@@ -75,6 +75,12 @@ pub enum Alert {
         /// Rank of the entry.
         index: u64,
     },
+    /// A profile (display name) this device did not issue is inscribed in the member's name
+    /// (ADR 0069).
+    UnknownOwnProfile {
+        /// Rank of the entry.
+        index: u64,
+    },
 }
 
 /// Result of comparing a peer's head with the local log.
@@ -94,6 +100,7 @@ impl RuleViolation {
             RuleViolation::UnknownMember => 3,
             RuleViolation::DeviceHistory => 4,
             RuleViolation::DuplicateRemoval => 5,
+            RuleViolation::DuplicateProfile => 7,
         }
     }
 
@@ -104,6 +111,7 @@ impl RuleViolation {
             3 => RuleViolation::UnknownMember,
             4 => RuleViolation::DeviceHistory,
             5 => RuleViolation::DuplicateRemoval,
+            7 => RuleViolation::DuplicateProfile,
             _ => return Err(CborError::Malformed),
         })
     }
@@ -113,7 +121,7 @@ impl ForkEvidence {
     /// Canonical value, kept by the device (`format.md` § 15.2, ADR 0040):
     /// `{1: local (KeyLogHead)?, 2: other (KeyLogHead), 3: reason, 4: index?, 5: rule?}`,
     /// `reason` 1 root, 2 size decrease, 3 rule (with 4 and 5), 4 peer head, 5 unserved,
-    /// 6 proof entry; `rule` 1 to 5 for R1 to R5.
+    /// 6 proof entry; `rule` 1 to 5 for R1 to R5, 7 for R7.
     #[must_use]
     pub fn to_value(&self) -> Value {
         let mut e = Vec::new();
@@ -168,7 +176,7 @@ impl ForkEvidence {
 impl Alert {
     /// Canonical value, kept by the device (`format.md` § 15.2, ADR 0040):
     /// `{1: kind, 2: index, 3: device?}`, `kind` 1 foreign member key, 2 unknown own device,
-    /// 3 unknown own revocation.
+    /// 3 unknown own revocation, 4 unknown own profile (ADR 0069).
     #[must_use]
     pub fn to_value(&self) -> Value {
         match self {
@@ -185,6 +193,9 @@ impl Alert {
                 (2, Value::Uint(*index)),
                 (3, Value::bytes(device)),
             ]),
+            Alert::UnknownOwnProfile { index } => {
+                Value::map(vec![(1, Value::Uint(4)), (2, Value::Uint(*index))])
+            }
         }
     }
 
@@ -196,8 +207,9 @@ impl Alert {
         let f = Fields::new(v, &[1, 2, 3])?;
         let index = uint(f.req(2)?)?;
         let device = f.opt(3).map(fixed::<16>).transpose()?;
-        Ok(match (uint_in(f.req(1)?, 1..=3)?, device) {
+        Ok(match (uint_in(f.req(1)?, 1..=4)?, device) {
             (1, None) => Alert::ForeignMemberKey { index },
+            (4, None) => Alert::UnknownOwnProfile { index },
             (2, Some(device)) => Alert::UnknownOwnDevice { device, index },
             (3, Some(device)) => Alert::UnknownOwnRevocation { device, index },
             _ => return Err(CborError::Malformed),
@@ -247,7 +259,7 @@ impl KeyLogMonitor {
     }
 
     /// Declares an object of the member that the device knows: a certificate of one of its
-    /// devices (from the personal locker) or a revocation it issued.
+    /// devices (from the personal locker), a revocation or a profile it issued.
     pub fn expect_own(&mut self, object: [u8; 48]) {
         self.own_expected.insert(object);
     }
@@ -390,6 +402,9 @@ impl KeyLogMonitor {
                     if !self.own_expected.contains(&e.object) =>
                 {
                     alerts.push(Alert::UnknownOwnRevocation { device, index });
+                }
+                (EntryKind::MemberProfile, _) if !self.own_expected.contains(&e.object) => {
+                    alerts.push(Alert::UnknownOwnProfile { index });
                 }
                 _ => {}
             }

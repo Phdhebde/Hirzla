@@ -108,6 +108,9 @@ fn record_bytes(r: &Record, out: &mut Vec<u8>) {
         Record::Pruned { stub, .. } => out.extend(stub.op_id),
         Record::LateSeen { op_id, .. } => out.extend(op_id),
         Record::Seen { device, .. } => out.extend(device),
+        Record::Profile { profile, .. } => out.extend(profile.encode().unwrap()),
+        Record::Mail { mail, .. } => out.extend(mail),
+        Record::MailDone { mail_id, .. } => out.extend(mail_id),
     }
 }
 

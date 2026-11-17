@@ -10,7 +10,8 @@ use hirzla_keystore::platform::HardeningReport;
 
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
-use crate::proto::{ErrorCode, Op};
+use crate::connections::proto::ConnectionOp;
+use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
 
@@ -108,6 +109,13 @@ pub enum Event {
     },
     /// The core stops.
     Stopped,
+    /// The desktop application typed a value into another application (ADR 0072).
+    AutoTyped {
+        /// What was typed.
+        what: Typed,
+        /// The target is a terminal.
+        terminal: bool,
+    },
     /// An agent request was answered (`docs/api-locale.md` § 14). `result` is `ok`, the
     /// name of the error, or the reason a grant was refused: fixed words only.
     AgentRequest {
@@ -142,6 +150,14 @@ pub enum Event {
     SelfRequest {
         /// Operation.
         op: SelfOp,
+        /// Outcome.
+        result: &'static str,
+    },
+    /// A connection request was answered (`docs/api-locale.md` § 17). `result` is `ok` or the
+    /// name of the error: fixed words only.
+    ConnectionRequest {
+        /// Operation.
+        op: ConnectionOp,
         /// Outcome.
         result: &'static str,
     },
@@ -204,6 +220,12 @@ impl Event {
                 }
             ),
             Event::Stopped => write!(out, "event=stopped"),
+            Event::AutoTyped { what, terminal } => write!(
+                out,
+                "event=auto_type what={} target={}",
+                what.name(),
+                if *terminal { "terminal" } else { "application" }
+            ),
             Event::AgentRequest { op, result } => {
                 write!(out, "event=agent_request op={} result={result}", op.name())
             }
@@ -224,6 +246,13 @@ impl Event {
             ),
             Event::SelfRequest { op, result } => {
                 write!(out, "event=self_request op={} result={result}", op.name())
+            }
+            Event::ConnectionRequest { op, result } => {
+                write!(
+                    out,
+                    "event=connection_request op={} result={result}",
+                    op.name()
+                )
             }
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
@@ -312,6 +341,14 @@ mod tests {
             Event::MemoryNotLocked {
                 limit_kib: Some(8192),
             },
+            Event::AutoTyped {
+                what: Typed::UsernameAndPassword,
+                terminal: true,
+            },
+            Event::AutoTyped {
+                what: Typed::Other,
+                terminal: false,
+            },
             Event::MemoryNotLocked { limit_kib: None },
         ];
         for reason in [
@@ -361,6 +398,11 @@ mod tests {
             let op = SelfOp::from_u64(n).unwrap_or(SelfOp::GetSettings);
             for result in ["ok", "import_key_rejected", "unlock_failed"] {
                 events.push(Event::SelfRequest { op, result });
+            }
+        }
+        for op in ConnectionOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
+                events.push(Event::ConnectionRequest { op, result });
             }
         }
         for n in 40..=48 {

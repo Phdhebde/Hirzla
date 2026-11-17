@@ -11,11 +11,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hirzla_access::approval::{ApprovalRequest, SensitiveAction};
+use hirzla_core::connections::proto::{
+    ConnectionCard, ConnectionFields, ConnectionReply, ConnectionRequest, LinkState,
+};
 use hirzla_core::events::Log;
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
 use hirzla_core::server_mode::proto::{
-    AlertKind, QuarantinedOp, QuorumAction, QuorumState, Refusal, Role, ServerCode, ServerReply,
-    ServerRequest, SuspectReason,
+    AlertKind, QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role,
+    ServerCode, ServerReply, ServerRequest, SuspectReason,
 };
 use hirzla_core::server_mode::{annex_path, COMPACT_MIN};
 use hirzla_core::service::{Config, Core};
@@ -30,7 +33,7 @@ use hirzla_sync::text::{ApprovalOffer, ApprovalToken, Invitation};
 use hirzla_sync::wire::OpItem;
 use hirzla_sync::{AccessAuthorizer, LocalDevice, Replica};
 use hirzla_vault::model::{Id16, MemberKeys};
-use hirzla_vault::secret::{Field, FieldValue, SecretType};
+use hirzla_vault::secret::{Field, FieldValue, SecretLink, SecretType};
 use hirzla_vault::Vault;
 use rcgen::{
     BasicConstraints, CertificateParams, ExtendedKeyUsagePurpose, IsCa, Issuer, KeyPair,
@@ -502,6 +505,7 @@ fn two_members_share_a_locker_then_one_is_removed() {
     let ServerReply::Granted {
         fingerprint,
         devices,
+        ..
     } = grant(&mut alice, locker, bob.id, Role::Reader, Some(&bob_fp)).unwrap()
     else {
         panic!("granted expected");
@@ -1366,6 +1370,158 @@ fn quorum_removes_the_senior_owner() {
     );
 }
 
+fn inbox(m: &mut Member) -> Vec<ReceivedRequest> {
+    match m.server(ServerRequest::QuorumInbox).unwrap() {
+        ServerReply::Inbox(r) => r,
+        other => panic!("inbox expected, got {other:?}"),
+    }
+}
+
+fn send(m: &mut Member, request: Id16) -> QuorumState {
+    request_of(m.server(ServerRequest::QuorumSend { request }))
+}
+
+fn request_of(reply: Result<ServerReply, ServerCode>) -> QuorumState {
+    request(reply)
+}
+
+fn respond(
+    m: &mut Member,
+    locker: Id16,
+    request: Id16,
+    accept: bool,
+) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::QuorumRespond {
+        locker,
+        request,
+        accept,
+    })
+}
+
+fn held_mail(server: &Server, m: &Member) -> usize {
+    let device = m.device().device_id();
+    server.running.with_core(|c| c.held_mail(&device)).unwrap()
+}
+
+fn listed(m: &mut Member, request: Id16) -> QuorumState {
+    match m
+        .server(ServerRequest::QuorumList { locker: None })
+        .unwrap()
+    {
+        ServerReply::Requests(r) => r.into_iter().find(|q| q.request == request).unwrap(),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// ADR 0070: Bob sends his request to remove Alice through the server. Carol finds it in her
+/// inbox after a synchronisation (and after a restart), signs it there, and Bob collects her
+/// approval at his next synchronisation. Alice, the target, receives a cover she never sees;
+/// Dave, a reader, receives nothing. A request declined is noted; one cancelled leaves the
+/// inbox.
+#[test]
+fn approvals_travel_sealed_through_the_server() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol", "dave"]);
+    let [alice, bob, carol, dave] = &mut m[..] else {
+        unreachable!()
+    };
+    let ids = (alice.id, bob.id, carol.id, dave.id);
+    grant(alice, locker, ids.1, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.2, Role::Owner, None).unwrap();
+    grant(alice, locker, ids.3, Role::Reader, None).unwrap();
+    bob.sync();
+    carol.sync();
+    dave.sync();
+
+    use QuorumAction::{OwnerRemoval, Policy};
+    let q = request(prepare(bob, locker, OwnerRemoval, Some(ids.0), None));
+    assert_eq!(q.sent_ms, None);
+    let sent = send(bob, q.request);
+    assert!(sent.sent_ms.is_some());
+    assert_eq!(sent.queued, 0, "the server took everything");
+    // One mail for Carol, a cover of the same size for Alice, nothing for Dave.
+    assert_eq!(held_mail(&server, carol), 1);
+    assert_eq!(held_mail(&server, alice), 1);
+    assert_eq!(held_mail(&server, dave), 0);
+    // Sent again: nobody is served twice.
+    send(bob, q.request);
+    assert_eq!(held_mail(&server, carol), 1);
+    assert_eq!(
+        respond(carol, locker, q.request, true),
+        Err(ServerCode::General(ErrorCode::NotFound)),
+        "nothing received yet"
+    );
+
+    carol.sync();
+    assert_eq!(held_mail(&server, carol), 0, "taken and acknowledged");
+    let got = inbox(carol);
+    assert_eq!(got.len(), 1);
+    let r = &got[0];
+    assert_eq!(
+        (r.request, r.locker, r.action, r.target, r.issuer),
+        (q.request, locker, OwnerRemoval, Some(ids.0), ids.1)
+    );
+    assert_eq!(r.name.as_deref().map(String::as_str), Some("Racine"));
+    assert!(r.can_sign);
+    assert_eq!(r.required, 2);
+    assert_eq!(r.offer, q.offer);
+    assert_eq!(
+        r.issuer_fingerprint.as_deref(),
+        Some(bob.fingerprint.as_str())
+    );
+    // The target and the reader see nothing.
+    alice.sync();
+    dave.sync();
+    assert!(inbox(alice).is_empty());
+    assert!(inbox(dave).is_empty());
+    assert_eq!(held_mail(&server, alice), 0);
+
+    // Kept across a restart (annex v5).
+    carol.restart();
+    assert_eq!(inbox(carol), got);
+
+    // Carol signs from her inbox; the approval reaches Bob at his next synchronisation.
+    let ServerReply::Approved(token) = respond(carol, locker, q.request, true).unwrap() else {
+        panic!("approval expected");
+    };
+    assert!(token.starts_with("hirzla-accord:"));
+    assert!(inbox(carol).is_empty());
+    assert_eq!(listed(bob, q.request).counted, vec![ids.1]);
+    bob.sync();
+    assert_eq!(listed(bob, q.request).counted, vec![ids.1, ids.2]);
+    // The same approval by copy is a replay.
+    assert_eq!(collect(bob, &token), Err(ServerCode::ApprovalInvalid));
+
+    // A request declined.
+    let p = request(prepare(bob, locker, Policy, None, Some(3)));
+    send(bob, p.request);
+    carol.sync();
+    assert_eq!(inbox(carol).len(), 1);
+    assert_eq!(
+        respond(carol, locker, p.request, false),
+        Ok(ServerReply::Done)
+    );
+    bob.sync();
+    assert_eq!(listed(bob, p.request).declined, vec![ids.2]);
+
+    // A request cancelled leaves the inbox.
+    let c = request(prepare(bob, locker, Policy, None, Some(3)));
+    send(bob, c.request);
+    carol.sync();
+    assert_eq!(inbox(carol).len(), 1);
+    bob.server(ServerRequest::QuorumCancel { request: c.request })
+        .unwrap();
+    bob.sync();
+    carol.sync();
+    assert!(inbox(carol).is_empty());
+
+    // Applied: Alice is removed.
+    bob.server(ServerRequest::QuorumApply { request: q.request })
+        .unwrap();
+    carol.sync();
+    assert!(!quorum_of(carol, locker).1.contains(&ids.0));
+}
+
 thread_local! {
     static CLOCK_SHIFT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
@@ -1833,5 +1989,439 @@ fn an_own_revocation_read_after_a_restart_raises_no_alert() {
     assert_eq!(
         alice.server(ServerRequest::DeviceRevoke { device: p }),
         Err(ServerCode::AlreadyRevoked)
+    );
+}
+
+// -----------------------------------------------------------------------------------------
+// Display names (ADR 0069)
+// -----------------------------------------------------------------------------------------
+
+fn set_name(m: &mut Member, name: &str) -> Result<ServerReply, ServerCode> {
+    m.server(ServerRequest::ProfileSet {
+        name: name.to_owned(),
+    })
+}
+
+fn own_name(m: &mut Member) -> Option<String> {
+    match m.server(ServerRequest::ServerIdentity).unwrap() {
+        ServerReply::Identity { name, .. } => name,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn search(
+    m: &mut Member,
+    text: &str,
+) -> Result<(Vec<hirzla_core::server_mode::proto::FoundInfo>, bool), ServerCode> {
+    match m.server(ServerRequest::MemberSearch {
+        text: text.to_owned(),
+    })? {
+        ServerReply::Found { members, more } => Ok((members, more)),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Name and « fingerprint compared » of each member of `locker`, as `m` sees them.
+fn names_in(m: &mut Member, locker: Id16) -> Vec<(Id16, Option<String>, bool)> {
+    match m.server(ServerRequest::LockerMembers { locker }).unwrap() {
+        ServerReply::Members { members, .. } => members
+            .into_iter()
+            .map(|x| (x.member, x.name, x.verified))
+            .collect(),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn keylog_entries(m: &mut Member) -> u64 {
+    match m.server(ServerRequest::ServerStatus).unwrap() {
+        ServerReply::Status {
+            keylog: Some(k), ..
+        } => k.entries,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// ADR 0069: each member signs its display name with its member key; the name is inscribed
+/// in the key log and another member sees it only once its own core verified the chain. A
+/// member is found by its name, added by its identifier, and its fingerprint compared once.
+/// The names and the compared fingerprints come back from the annex without network.
+#[test]
+fn display_names_are_signed_inscribed_and_searched() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["alice", "bob", "carol"]);
+    let [alice, bob, carol] = &mut m[..] else {
+        unreachable!()
+    };
+    let n = |s: &str| Some(s.to_owned());
+
+    // No name before one is given; an invalid one is refused before anything is signed.
+    assert_eq!(own_name(alice), None);
+    for bad in ["Alice ", " Alice", "Al\u{202E}ice", "A\u{200B}", "a\tb"] {
+        assert_eq!(
+            set_name(alice, bad),
+            Err(ServerCode::General(ErrorCode::InvalidInput)),
+            "{bad:?}"
+        );
+    }
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(own_name(alice), n("Alice Martin"));
+    // The same name again inscribes nothing.
+    let before = keylog_entries(alice);
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(keylog_entries(alice), before);
+    assert_eq!(set_name(bob, "Bob Durand"), Ok(ServerReply::Done));
+    assert_eq!(set_name(carol, "Carole DURAND"), Ok(ServerReply::Done));
+    // Her own profile is expected in the key log: no alert.
+    assert!(alerts(alice).is_empty());
+
+    // Search: case ignored, each answer verified against the local key log.
+    assert_eq!(
+        search(alice, "d").unwrap_err(),
+        ServerCode::General(ErrorCode::InvalidInput)
+    );
+    assert_eq!(search(alice, "personne").unwrap(), (Vec::new(), false));
+    let (found, more) = search(alice, "durand").unwrap();
+    assert!(!more);
+    assert_eq!(
+        found
+            .iter()
+            .map(|f| (
+                f.member,
+                f.name.as_str(),
+                f.fingerprint.as_str(),
+                f.verified
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (bob.id, "Bob Durand", bob.fingerprint.as_str(), false),
+            (carol.id, "Carole DURAND", carol.fingerprint.as_str(), false),
+        ]
+    );
+
+    // The fingerprint compared out of band: refused if it is not the one of the key, or for
+    // a member this core never saw.
+    let verify = |m: &mut Member, member: Id16, fp: &str| {
+        m.server(ServerRequest::MemberVerify {
+            member,
+            fingerprint: fp.to_owned(),
+        })
+    };
+    let (bob_fp, carol_fp) = (bob.fingerprint.clone(), carol.fingerprint.clone());
+    assert_eq!(
+        verify(alice, bob.id, &carol_fp),
+        Err(ServerCode::FingerprintMismatch)
+    );
+    assert_eq!(
+        verify(alice, [0x77; 16], &bob_fp),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+    assert_eq!(verify(alice, bob.id, &bob_fp), Ok(ServerReply::Done));
+    let (found, _) = search(alice, "Durand").unwrap();
+    assert_eq!(
+        found.iter().map(|f| f.verified).collect::<Vec<_>>(),
+        vec![true, false]
+    );
+
+    // Members are added by identifier; the grant gives the name back. A grant with the
+    // expected fingerprint counts as a comparison, a grant without does not.
+    let ServerReply::Granted { name, .. } =
+        grant(alice, locker, bob.id, Role::Editor, None).unwrap()
+    else {
+        panic!("granted expected");
+    };
+    assert_eq!(name, n("Bob Durand"));
+    grant(alice, locker, carol.id, Role::Reader, None).unwrap();
+    assert_eq!(names_in(alice, locker), {
+        let mut v = vec![
+            (alice.id, n("Alice Martin"), true),
+            (bob.id, n("Bob Durand"), true),
+            (carol.id, n("Carole DURAND"), false),
+        ];
+        v.sort();
+        v
+    });
+    grant(alice, locker, carol.id, Role::Editor, Some(&carol_fp)).unwrap();
+    assert!(names_in(alice, locker)
+        .iter()
+        .all(|(_, name, verified)| name.is_some() && *verified));
+
+    // Bob learns the names of the locker at his next synchronisation, each verified by his
+    // own core; he compared no fingerprint.
+    bob.sync();
+    let seen = names_in(bob, locker);
+    assert!(seen.contains(&(alice.id, n("Alice Martin"), false)));
+    assert!(seen.contains(&(bob.id, n("Bob Durand"), true)));
+    assert!(seen.contains(&(carol.id, n("Carole DURAND"), false)));
+
+    // A new name replaces the old one once the key log is read; a withdrawn name leaves
+    // the identifier and the fingerprint only, and is no longer found.
+    assert_eq!(set_name(bob, "Robert Durand"), Ok(ServerReply::Done));
+    assert_eq!(set_name(carol, ""), Ok(ServerReply::Done));
+    assert_eq!(own_name(carol), None);
+    assert!(names_in(alice, locker).contains(&(bob.id, n("Bob Durand"), true)));
+    alice.sync();
+    let seen = names_in(alice, locker);
+    assert!(seen.contains(&(bob.id, n("Robert Durand"), true)));
+    assert!(seen.contains(&(carol.id, None, true)));
+    assert_eq!(search(alice, "carole").unwrap().0, Vec::new());
+
+    // Everything comes back from the annex, without the server.
+    alice.restart();
+    let running = server.running;
+    running.stop();
+    assert_eq!(own_name(alice), n("Alice Martin"));
+    assert_eq!(names_in(alice, locker), seen);
+    assert_eq!(set_name(alice, "Alice"), Err(ServerCode::ServerUnreachable));
+}
+
+/// ADR 0069, point 2: a profile signed with the member key but not issued by this core
+/// (a stolen key, a server replaying nothing but inscribing what it received) raises the
+/// alert « nom affiché inconnu inscrit à votre nom ». A profile issued here does not, even
+/// when its inscription is read after a restart; its rank follows the inscribed one.
+#[test]
+fn a_profile_issued_elsewhere_raises_an_alert() {
+    use hirzla_access::profile::MemberProfile;
+    let tmp = tempdir();
+    let (server, mut m, _locker) = joined(tmp.path(), &["alice"]);
+    let alice = &mut m[0];
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    alice.sync();
+    assert!(alerts(alice).is_empty());
+    let before = std::fs::read(annex_path(&alice.vault)).unwrap();
+
+    // Her own second profile, whose inscription the core forgets before a restart.
+    assert_eq!(set_name(alice, "Alice M."), Ok(ServerReply::Done));
+    alice.core.handle(Request::Lock).unwrap();
+    rewind_keylog(alice, &before);
+    alice.restart();
+    alice.sync();
+    assert!(alerts(alice).is_empty());
+    assert_eq!(own_name(alice), Some("Alice M.".to_owned()));
+
+    // Someone else signs with her member key.
+    alice.core.handle(Request::Lock).unwrap();
+    let forged = {
+        let v = Vault::open(&alice.vault, PASSWORD).unwrap();
+        let mut p = MemberProfile {
+            member: v.member_id(),
+            seq: 3,
+            name: "Mallory".to_owned(),
+            issued_ms: 9,
+            sig: Vec::new(),
+        };
+        p.sig = v.sign_member_profile(p.seq, &p.name, p.issued_ms).unwrap();
+        p.encode().unwrap()
+    };
+    let device = alice.device();
+    let mut c = Client::connect(
+        server.running.addr,
+        SERVER_NAME,
+        &server.device_tls,
+        None,
+        &Identity::Device {
+            device: &device,
+            present_cert: true,
+        },
+    )
+    .unwrap();
+    let index = c.put_member_profile(&forged).unwrap();
+    // A profile already inscribed is not inscribed again (R7), nor one of a lower rank.
+    assert!(c.put_member_profile(&forged).is_err());
+    let _ = c.bye();
+    alice.restart();
+    alice.sync();
+    assert_eq!(
+        alerts(alice)
+            .iter()
+            .filter(|a| a.kind == AlertKind::UnknownOwnProfile)
+            .map(|a| a.index)
+            .collect::<Vec<_>>(),
+        vec![Some(index)]
+    );
+    // The name is the one her key signed last; she takes it back with a higher rank.
+    assert_eq!(own_name(alice), Some("Mallory".to_owned()));
+    assert_eq!(set_name(alice, "Alice Martin"), Ok(ServerReply::Done));
+    assert_eq!(own_name(alice), Some("Alice Martin".to_owned()));
+    assert_eq!(
+        alerts(alice)
+            .iter()
+            .filter(|a| a.kind == AlertKind::UnknownOwnProfile)
+            .count(),
+        1
+    );
+}
+
+// -----------------------------------------------------------------------------------------
+// Connections in a shared locker (ADR 0067 § 5)
+// -----------------------------------------------------------------------------------------
+
+fn connection(
+    m: &mut Member,
+    locker: Option<Id16>,
+    secret_type: SecretType,
+    fields: ConnectionFields,
+) -> Result<SecretLink, ErrorCode> {
+    match m.core.handle_connection(ConnectionRequest::Create {
+        locker,
+        secret_type,
+        fields,
+        tags: Vec::new(),
+    })? {
+        ConnectionReply::Created { locker, id } => Ok(SecretLink { locker, secret: id }),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+fn connection_card(m: &mut Member, l: SecretLink) -> ConnectionCard {
+    match m
+        .core
+        .handle_connection(ConnectionRequest::Read {
+            locker: l.locker,
+            id: l.secret,
+        })
+        .unwrap()
+    {
+        ConnectionReply::Card(card) => *card,
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Alice stores a bastion and a server in a shared locker; the server jumps through the
+/// bastion and uses a key kept in her personal locker. Bob, a reader, sees the connection
+/// and its jump, reads its password, and sees the key link as broken: a link gives no right.
+#[test]
+fn connections_are_shared_and_a_link_gives_no_right() {
+    let tmp = tempdir();
+    let (_server, mut members, locker) = joined(tmp.path(), &["alice", "bob"]);
+    let mut bob = members.pop().unwrap();
+    let mut alice = members.pop().unwrap();
+
+    let ConnectionReply::Created {
+        locker: personal,
+        id: key_id,
+    } = alice
+        .core
+        .handle_connection(ConnectionRequest::SshKeyCreate {
+            locker: None,
+            title: z("Clé de déploiement"),
+            private_key: Zeroizing::new(
+                b"-----BEGIN OPENSSH PRIVATE KEY-----\nAAAA\n-----END OPENSSH PRIVATE KEY-----\n"
+                    .to_vec(),
+            ),
+            public_key: Some(z("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFictive deploy")),
+            passphrase: None,
+            username: None,
+            tags: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!("created expected");
+    };
+    assert_ne!(personal, locker);
+    let key = SecretLink {
+        locker: personal,
+        secret: key_id,
+    };
+
+    let bastion = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::SshConnection,
+        ConnectionFields {
+            title: Some(z("Bastion Hornn")),
+            host: Some(z("bastion.exemple.test")),
+            port: Some(2222),
+            username: Some(z("max")),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+    let web = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::SshConnection,
+        ConnectionFields {
+            title: Some(z("Serveur web")),
+            host: Some(z("web-01.exemple.test")),
+            username: Some(z("admin")),
+            password: Some(z("mot-de-passe-du-serveur")),
+            ssh_key: Some(key),
+            jump: Some(bastion),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+    // An RDP connection goes through the same bastion.
+    let rdp = connection(
+        &mut alice,
+        Some(locker),
+        SecretType::RdpConnection,
+        ConnectionFields {
+            title: Some(z("Poste d'administration")),
+            host: Some(z("10.0.0.12")),
+            domain: Some(z("EXEMPLE")),
+            username: Some(z("Max Dupont")),
+            jump: Some(bastion),
+            ..ConnectionFields::default()
+        },
+    )
+    .unwrap();
+
+    // The writer sees every link resolved.
+    let card = connection_card(&mut alice, web);
+    assert_eq!(card.ssh_key.as_ref().unwrap().state, LinkState::Valid);
+    assert_eq!(card.jumps.len(), 1);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+
+    let bob_fp = bob.fingerprint.clone();
+    grant(&mut alice, locker, bob.id, Role::Reader, Some(&bob_fp)).unwrap();
+    assert!(alice.sync().iter().all(|r| r.refused == 0));
+    assert!(bob.sync().iter().all(|r| r.refused == 0));
+
+    let card = connection_card(&mut bob, web);
+    assert_eq!(card.secret_type, SecretType::SshConnection);
+    assert_eq!(
+        card.fields.host.as_ref().unwrap().as_str(),
+        "web-01.exemple.test"
+    );
+    assert_eq!(card.effective_port, 22);
+    assert!(card.has_password);
+    assert_eq!(card.jumps.len(), 1);
+    assert_eq!(card.jumps[0].link, bastion);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+    assert_eq!(card.jumps[0].port, Some(2222));
+    assert_eq!(
+        card.jumps[0].host.as_ref().unwrap().as_str(),
+        "bastion.exemple.test"
+    );
+    // The key is in a locker Bob does not hold: the link is kept and shown as broken.
+    let shown = card.ssh_key.as_ref().unwrap();
+    assert_eq!(shown.link, key);
+    assert_eq!(shown.state, LinkState::Broken);
+    assert!(shown.title.is_none() && shown.public_key.is_none());
+    assert_eq!(
+        bob.password(locker, web.secret).unwrap(),
+        "mot-de-passe-du-serveur"
+    );
+
+    let card = connection_card(&mut bob, rdp);
+    assert_eq!(card.secret_type, SecretType::RdpConnection);
+    assert_eq!(card.effective_port, 3389);
+    assert_eq!(card.jumps[0].state, LinkState::Valid);
+
+    // A reader writes nothing, a connection no more than a password (same code as `Update`).
+    assert_eq!(
+        bob.core
+            .handle_connection(ConnectionRequest::Update {
+                locker,
+                id: web.secret,
+                set: ConnectionFields {
+                    port: Some(2200),
+                    ..ConnectionFields::default()
+                },
+                clear: Vec::new(),
+            })
+            .unwrap_err(),
+        ErrorCode::InvalidInput
     );
 }

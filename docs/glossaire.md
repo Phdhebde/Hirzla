@@ -47,8 +47,22 @@ l'anglais dans le code.
 | Appareil de certification | `CertificationDevice` | Appareil qui détient la clé privée du membre |
 | Accord | `Approval` | Signature d'un propriétaire jointe à une action à plusieurs |
 | Quorum | `Quorum` | Nombre de propriétaires requis pour retirer un propriétaire plus ancien |
+| Phrase de passe | `Passphrase` | Mots tirés d'une liste, séparés ; mode du générateur (ADR 0068) |
+| Modèle | `Template` | Motif qui fixe la nature de chaque position d'une valeur générée |
+| Profil de génération | `Profile` | Réglages nommés du générateur |
 | Empreinte | `Fingerprint` | Résumé court d'une clé publique, comparé hors bande |
+| Nom affiché | `DisplayName` | Nom qu'un membre se donne, signé par sa clé et inscrit au registre ; ne prouve rien (ADR 0069) |
+| Profil de membre | `MemberProfile` | Objet signé par la clé du membre qui porte son nom affiché (ADR 0069) |
+| Courrier des accords | `ApprovalMail` | Paquet scellé pour un appareil propriétaire et signé par l'appareil expéditeur, qui porte une demande, un accord, un refus ou un retrait par le serveur (ADR 0070) |
+| Paquet leurre | `Cover` | Paquet du courrier envoyé à la cible d'une demande, de même taille, que son noyau jette : le serveur ne peut pas désigner la cible ; à ne pas confondre avec un leurre (`Decoy`) (ADR 0070) |
+| Demande à examiner | `ReceivedRequest` | Demande d'accord reçue par le courrier, gardée dans la boîte de réception jusqu'à la réponse (ADR 0070) |
+| Empreinte comparée | `verified` | L'utilisateur a comparé hors bande l'empreinte de la clé actuelle d'un membre |
 | Clé d'éditeur | `PublisherKey` | Clé hybride de l'éditeur, hors ligne ; signe le manifeste des clients et les paquets de mise à jour (ADR 0042, 0043) |
 | Manifeste des clients | `ClientManifest` | Empreintes signées des exécutables installés, vérifiées par le noyau sous Linux (ADR 0042) |
 | Paquet de mise à jour | `UpdatePackage` | Fichier signé qui porte une nouvelle version, appliqué sans réseau (ADR 0043) |
 | Identifiant de bloc | `BlockId` | Identifiant opaque d'un contenu scellé, lié aux données associées |
+| Connexion SSH | `SshConnection` | Secret qui décrit un accès SSH : hôte, port, compte, mot de passe ou clé liée, rebond, empreinte de l'hôte (ADR 0067) |
+| Connexion RDP | `RdpConnection` | Secret qui décrit un accès Bureau à distance : hôte, port, domaine, compte, mot de passe, rebond (ADR 0067) |
+| Lien de secret | `SecretLink` | Référence faible d'un secret vers un autre (casier et secret) ; ne donne aucun droit et peut être rompue |
+| Rebond | `Jump` | Connexion SSH par laquelle passe une autre connexion (bastion) |
+| Empreinte de l'hôte | `HostKey` | Empreinte SHA-256 de la clé publique d'un hôte SSH ou du certificat d'un serveur RDP, comparée à la connexion |

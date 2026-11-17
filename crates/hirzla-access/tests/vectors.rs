@@ -227,6 +227,34 @@ fn cases() -> Vec<(&'static str, Vec<u8>)> {
             entry(EntryKind::LockerRevoke).encode().unwrap(),
         ),
         (
+            "keylog-entry-member-profile",
+            entry(EntryKind::MemberProfile).encode().unwrap(),
+        ),
+        (
+            "member-profile-body",
+            hirzla_access::profile::MemberProfile {
+                member: [0xA1; 16],
+                seq: 3,
+                name: "Zoé Durand".to_owned(),
+                issued_ms: 1_700_000_000_002,
+                sig: vec![],
+            }
+            .body()
+            .unwrap(),
+        ),
+        (
+            "member-profile",
+            hirzla_access::profile::MemberProfile {
+                member: [0xA1; 16],
+                seq: 3,
+                name: "Zoé Durand".to_owned(),
+                issued_ms: 1_700_000_000_002,
+                sig: vec![0x33; 4725],
+            }
+            .encode()
+            .unwrap(),
+        ),
+        (
             "keylog-leaf-hash-member-key",
             entry(EntryKind::MemberKey).leaf_hash().unwrap().to_vec(),
         ),
@@ -279,7 +307,10 @@ fn encodings_are_frozen() {
 #[test]
 fn frozen_bodies_decode_back() {
     for (name, bytes) in cases() {
-        if name.starts_with("approval") || name.starts_with("keylog") || name.starts_with("device")
+        if name.starts_with("approval")
+            || name.starts_with("keylog")
+            || name.starts_with("device")
+            || name.starts_with("member-profile")
         {
             continue;
         }

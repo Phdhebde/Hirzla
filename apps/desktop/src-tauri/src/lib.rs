@@ -7,26 +7,39 @@
 //!
 //! - [`link`]: the connection to the core, hardening of this process after it is accepted;
 //! - [`commands`]: what the web view may ask, checked strictly;
+//! - [`autotype`]: typing a field into another application, with its warning (ADR 0072);
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
+//! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
+//!   ADR 0067);
+//! - [`generator`]: settings, profiles and strength of the generator screen (local API
+//!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
 //!   state of the key transparency log (local API version 4, ADR 0041);
+//! - [`prefs`]: what belongs to this workstation, in a local file (ADR 0071);
+//! - [`tray`]: notification area icon, window that closes without locking, and the call
+//!   for the window through the core (local API version 8, ADR 0071);
 //! - `events` (Linux): sleep and session lock reported to the core (ADR 0033).
 
 #![forbid(unsafe_code)]
 
+pub mod autotype;
 pub mod clipboard;
 pub mod commands;
+pub mod connections;
 pub mod csv;
 pub mod error;
 #[cfg(target_os = "linux")]
 pub mod events;
+pub mod generator;
 pub mod import;
 pub mod link;
+pub mod prefs;
 pub mod selfmode;
 pub mod servermode;
+pub mod tray;
 
 use commands::AppState;
 use link::{CoreLink, LinkConfig};
@@ -55,10 +68,24 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// # Errors
 /// A failure of the window system or of the web view.
 pub fn run() -> Result<(), tauri::Error> {
-    let link = LinkConfig::for_this_process().map(CoreLink::new);
+    let config = LinkConfig::for_this_process();
+    // A second start only brings the first one's window to the front (ADR 0071).
+    if config.as_ref().is_ok_and(link::another_instance_shown) {
+        return Ok(());
+    }
+    let link = config.map(CoreLink::new);
     let app = tauri::Builder::default()
         .plugin(navigation_guard())
         .manage(AppState::new(link))
+        .manage(tray::TrayState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Manager;
+                if tray::on_close_requested(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::create_vault,
@@ -72,6 +99,14 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::delete_secret,
             commands::generate_password,
             commands::copy_generated,
+            connections::create_connection,
+            connections::connection_card,
+            connections::update_connection,
+            connections::choose_ssh_key_file,
+            connections::create_ssh_key,
+            generator::generator_profiles,
+            generator::generate_with,
+            generator::copy_generated_at,
             commands::import_csv,
             selfmode::get_settings,
             selfmode::set_settings,
@@ -110,19 +145,37 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::quorum_cancel,
             servermode::quarantine_list,
             servermode::quarantine_decide,
+            servermode::profile_set,
+            servermode::member_search,
+            servermode::member_verify,
+            servermode::quorum_send,
+            servermode::quorum_inbox,
+            servermode::quorum_respond,
+            tray::get_preferences,
+            tray::set_preferences,
+            autotype::auto_type_available,
+            autotype::auto_type_prepare,
+            autotype::auto_type_confirm,
+            autotype::auto_type_cancel,
+            autotype::auto_type_trusted,
+            autotype::auto_type_forget,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             events::start(app.handle());
-            let _ = app;
+            tray::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())?;
-    app.run(|handle, event| {
-        if let tauri::RunEvent::Exit = event {
+    app.run(|handle, event| match event {
+        tauri::RunEvent::Exit => {
             use tauri::Manager;
             handle.state::<AppState>().shutdown();
         }
+        // The dock icon, while the window is hidden.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_window(handle),
+        _ => {}
     });
     Ok(())
 }

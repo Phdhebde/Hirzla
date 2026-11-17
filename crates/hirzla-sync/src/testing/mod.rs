@@ -80,6 +80,26 @@ impl TestMember {
             .to_vec();
         r
     }
+
+    /// A profile of rank `seq` naming the member `name`, signed by the member key
+    /// (ADR 0069).
+    #[must_use]
+    pub fn profile(&self, seq: u64, name: &str) -> hirzla_access::profile::MemberProfile {
+        let mut p = hirzla_access::profile::MemberProfile {
+            member: self.keys.member,
+            seq,
+            name: name.to_owned(),
+            issued_ms: 3,
+            sig: Vec::new(),
+        };
+        p.sig = self
+            .key
+            .sign_profile(&p.body().expect("body"))
+            .expect("sign")
+            .as_bytes()
+            .to_vec();
+        p
+    }
 }
 
 impl Default for TestMember {

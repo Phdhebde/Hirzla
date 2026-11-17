@@ -124,6 +124,15 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("ArrowDown");
   await shot(p, "05-recherche", theme);
   await p.fill("#recherche", "");
+
+  // Command palette: secrets and actions from the keyboard.
+  await p.keyboard.press("Control+k");
+  await p.waitForSelector("#dialogue-palette[open]");
+  await p.keyboard.type("ma");
+  await p.waitForSelector("#palette-liste li");
+  await shot(p, "05b-palette", theme);
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("#dialogue-palette:not([open])", { state: "attached" });
   await p.dispatchEvent("#recherche", "input");
 
   // New secret.
@@ -137,15 +146,66 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "06-nouveau-secret", theme);
   await p.keyboard.press("Escape");
 
+  // Connections: the record of an SSH connection through a jump host, then an RDP one.
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("[data-filtre='type:connexion']");
+  await p.waitForFunction(() => document.getElementById("liste-titre")?.textContent === "Connexions");
+  await p.click("#opt-00000000000000000000000000000016");
+  await p.waitForSelector("#fiche-champs .chaine");
+  await shot(p, "06b-connexion-ssh", theme);
+  await p.click("#opt-00000000000000000000000000000017");
+  await p.waitForFunction(() => document.getElementById("fiche-champs")?.textContent?.includes("ATELIER"));
+  await shot(p, "06c-connexion-rdp", theme);
+
+  // Typing the RDP password into another application: the choice, then the warning that
+  // names the application (ADR 0072).
+  await p.click("#fiche-principales button:has-text('Saisir dans une application')");
+  await p.waitForSelector("#dialogue-saisie[open]");
+  await shot(p, "06f-saisie-choix", theme);
+  await p.click("#saisie-valider");
+  await p.waitForSelector("#saisie-etape-avertissement:not([hidden])");
+  await shot(p, "06g-saisie-avertissement", theme);
+  await p.check("#saisie-ne-plus");
+  await p.click("#saisie-valider");
+  await p.waitForSelector("#dialogue-saisie:not([open])", { state: "attached" });
+
+  // A new SSH connection, linked to a key of the vault and to a jump host.
+  await p.keyboard.press("Control+n");
+  await p.waitForSelector("#dialogue-secret[open]");
+  await p.check("input[name='secret-type'][value='ssh']");
+  await p.fill("#secret-titre", "Serveur web de préproduction");
+  await p.fill("#secret-hote", "preprod.atelier-durand.fr");
+  await p.fill("#secret-identifiant", "deploiement");
+  await p.selectOption("#secret-cle", { index: 1 });
+  await p.selectOption("#secret-rebond", { index: 1 });
+  await shot(p, "06d-nouvelle-connexion-ssh", theme);
+
+  // An existing SSH key, read from a file chosen with the system's file picker.
+  await p.check("input[name='secret-type'][value='ssh_key']");
+  await p.fill("#secret-titre", "");
+  await p.click("#secret-fichier-choisir");
+  await p.waitForSelector("#secret-fichier-nom.choisi");
+  await shot(p, "06e-nouvelle-cle-ssh", theme);
+  await p.keyboard.press("Escape");
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("[data-filtre='tous']");
+
   // Generator.
   await p.keyboard.press("Control+g");
   await p.waitForFunction(() => document.querySelector("#generateur-resultat").textContent.length > 0);
   await shot(p, "07-generateur", theme);
+  await p.click("#generateur-modes [data-mode='passphrase']");
+  await p.waitForFunction(() => document.querySelector("#generateur-resultat").textContent.includes("-"));
+  await p.click("#generateur-lot");
+  await p.waitForSelector("#generateur-lot-liste li");
+  await shot(p, "07b-generateur-phrase-de-passe", theme);
 
   // Settings, then an import.
   await p.click("[data-vue='reglages']");
   await p.waitForSelector("#reglage-durcissement tr");
   await shot(p, "08-reglages", theme);
+  await p.evaluate(() => document.querySelector("#reglages-poste").scrollIntoView({ block: "start" }));
+  await shot(p, "08b-reglages-sur-ce-poste", theme);
   await p.click("#import-csv");
   await p.waitForSelector("#import-resultat:not([hidden])");
   await p.evaluate(() => document.querySelector("#import-resultat").scrollIntoView({ block: "end" }));
@@ -171,10 +231,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.waitForFunction(() => document.querySelector("#reglage-auto").value === "300");
   await p.evaluate(() => document.querySelector("#reglages-coffre").scrollIntoView({ block: "start" }));
   await shot(p, "12-reglages-du-coffre", theme);
-  await p.fill("#reglage-auto", "5");
-  await p.click("#form-reglages-coffre button[type=submit]");
-  await p.waitForSelector("#reglages-coffre-erreur:not([hidden])");
-  await p.fill("#reglage-auto", "600");
+  await p.selectOption("#reglage-auto", "600");
   await p.click("#form-reglages-coffre button[type=submit]");
   await p.waitForSelector("#reglages-coffre-erreur", { state: "hidden" });
   await p.fill("#recouvrement-parts", "5");
@@ -190,6 +247,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   // History of a secret, then the trash.
   await p.click("[data-vue='secrets'][data-filtre='tous']");
   await p.click("#liste-secrets li");
+  await p.click("#fiche-menu summary");
   await p.click("#fiche-historique");
   await p.waitForSelector("#dialogue-historique[open] #historique-liste li");
   await p.click("#historique-liste li:nth-child(2) button");
@@ -197,6 +255,7 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "14-historique", theme);
   await p.keyboard.press("Escape");
   await p.click("[data-filtre='corbeille']");
+  await p.waitForFunction(() => document.querySelector("#liste-titre").textContent === "Corbeille");
   await p.click("#liste-secrets li");
   await p.waitForSelector("#fiche-restaurer:not([hidden])");
   await shot(p, "15-corbeille", theme);
@@ -300,10 +359,16 @@ for (const theme of only && only !== "serveur" ? [] : ["clair", "sombre"]) {
   await p.click("#liste-casiers li:nth-child(2) button");
   await p.click("#liste-membres");
   await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
-  await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
-  await p.fill("#ajout-empreinte", "N3KQ7 XZB2T VW5RM H4DJC");
+  // Adding a member found by its display name: its fingerprint is compared once (ADR 0069).
+  await p.fill("#ajout-recherche", "inès");
+  await p.click("#ajout-chercher");
+  await p.waitForSelector("#ajout-resultats li");
+  await p.check("#ajout-resultats li:first-child input");
   await shot(p, "24-membres-proprietaire", theme);
   await p.click("#ajout-envoyer");
+  await p.waitForSelector("#dialogue-empreinte[open]");
+  await shot(p, "24b-comparer-l-empreinte", theme);
+  await p.click("#dialogue-empreinte button[value='oui']");
   await p.waitForFunction(() => document.querySelectorAll("#membres-lignes tr").length === 5);
   await p.keyboard.press("Escape");
 
@@ -352,6 +417,7 @@ for (const theme of only && only !== "serveur" ? [] : ["clair", "sombre"]) {
   // Sharing is refused while the log is suspect.
   await p.click("#casiers-lignes tr:first-child button");
   await p.waitForSelector("#dialogue-membres[open] #membres-lignes tr");
+  await p.click("#membres-ajout summary");
   await p.fill("#ajout-membre", "0d1c2b3a4f5e6d7c8b9a0f1e2d3c4b5a");
   await p.click("#ajout-envoyer");
   await p.waitForSelector("#membres-erreur:not([hidden])");
@@ -401,6 +467,7 @@ for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("Escape");
 
   // Another owner signs a request received: inspect, then sign.
+  await p.click("#serveur-accords summary");
   await p.click("#accords-signer");
   await p.waitForSelector("#dialogue-accord-signer[open]");
   await p.fill("#signer-saisie", "hirzla-demande:pGEBYQKCUGofDC6bjU8Xo8XgLSL6jBQAx7Kq3mZp9TfR2wVbN4cHdL8sJ6gYkE1uQ0oA5iX");
@@ -449,6 +516,31 @@ for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
     card.closest(".vue").scrollTop = card.offsetTop - 120;
   });
   await shot(p, "38-casier-gele", theme);
+  await p.close();
+
+  // Requests carried by the server (ADR 0070): one to examine, one of mine waiting; then the
+  // display name in the identity (ADR 0069).
+  p = await page(theme, "unlocked", { ...SYNCED, mail: true });
+  await serverView(p);
+  await p.waitForSelector("#recues-lignes li");
+  await p.waitForSelector("#compte-serveur:not([hidden])");
+  await quiet(p);
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-accords");
+    card.closest(".vue").scrollTop = card.offsetTop - 16;
+  });
+  await shot(p, "39-demandes-a-examiner", theme);
+  await p.click("#recues-lignes li:first-child button.bouton-principal");
+  await p.waitForSelector("#dialogue-confirmation[open]");
+  await shot(p, "40-signer-une-demande", theme);
+  await p.click("#confirmation-oui");
+  await p.waitForFunction(() => document.querySelectorAll("#recues-lignes li").length === 0);
+  await quiet(p);
+  await p.evaluate(() => {
+    const card = document.querySelector("#serveur-identite");
+    card.closest(".vue").scrollTop = card.offsetTop - 16;
+  });
+  await shot(p, "41-nom-affiche", theme);
   await p.close();
 }
 

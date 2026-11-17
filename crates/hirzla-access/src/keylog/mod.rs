@@ -12,5 +12,5 @@ pub use entry::{
     member_keys_object, revocation_object, EntryKind, ExpectedEntry, InclusionItem, KeyLogEntry,
     KeyLogHead, KeyLogProof, MAX_PROOF_ITEMS,
 };
-pub use log::KeyLog;
+pub use log::{KeyLog, MAX_PROFILES_PER_MEMBER};
 pub use monitor::{Alert, ForkEvidence, ForkReason, KeyLogMonitor, PeerHead};

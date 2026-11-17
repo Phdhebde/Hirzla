@@ -37,6 +37,9 @@ use super::{
 };
 use crate::proto::ErrorCode;
 
+/// Most devices a request is sent to (ADR 0070): 16 owners of 16 devices.
+const MAX_RECIPIENTS: usize = 256;
+
 // -----------------------------------------------------------------------------------------
 // Annex, version 3 (`format.md` § 15.2, keys 6 and 7)
 // -----------------------------------------------------------------------------------------
@@ -66,6 +69,23 @@ pub(super) fn encode_requests(requests: &BTreeMap<Id16, PendingRequest>) -> Valu
                     Value::Array(r.approvals.iter().map(Approval::to_value).collect()),
                 ));
                 e.push((7, Value::Uint(r.created_ms)));
+                // Version 5 (ADR 0070).
+                if let Some(t) = r.sent_ms {
+                    e.push((8, Value::Uint(t)));
+                }
+                e.push((
+                    9,
+                    Value::Array(
+                        r.recipients
+                            .iter()
+                            .map(|(m, d)| Value::Array(vec![Value::bytes(m), Value::bytes(d)]))
+                            .collect(),
+                    ),
+                ));
+                e.push((
+                    10,
+                    Value::Array(r.declined.iter().map(|m| Value::bytes(m)).collect()),
+                ));
                 Value::map(e)
             })
             .collect(),
@@ -76,7 +96,7 @@ pub(super) fn decode_requests(v: &Value) -> Result<BTreeMap<Id16, PendingRequest
     let mut out = BTreeMap::new();
     let mut last: Option<Id16> = None;
     for r in array_max(v, MAX_REQUESTS).map_err(corrupt)? {
-        let f = Fields::new(r, &[1, 2, 3, 4, 5, 6, 7]).map_err(corrupt)?;
+        let f = Fields::new(r, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10]).map_err(corrupt)?;
         let id = fixed::<16>(f.req(2).map_err(corrupt)?).map_err(corrupt)?;
         if last.is_some_and(|l| l >= id) {
             return Err(general(ErrorCode::Corrupt));
@@ -99,6 +119,34 @@ pub(super) fn decode_requests(v: &Value) -> Result<BTreeMap<Id16, PendingRequest
         if !sorted_strictly(&members) {
             return Err(general(ErrorCode::Corrupt));
         }
+        // Keys 8 to 10 (version 5, ADR 0070); absent before.
+        let recipients: Vec<(Id16, Id16)> = match f.opt(9) {
+            None => Vec::new(),
+            Some(a) => array_max(a, MAX_RECIPIENTS)
+                .map_err(corrupt)?
+                .iter()
+                .map(|p| {
+                    let pair = array_max(p, 2)?;
+                    match pair {
+                        [m, d] => Ok((fixed::<16>(m)?, fixed::<16>(d)?)),
+                        _ => Err(hirzla_vault::cbor::CborError::Malformed),
+                    }
+                })
+                .collect::<Result<_, _>>()
+                .map_err(corrupt)?,
+        };
+        let declined: Vec<Id16> = match f.opt(10) {
+            None => Vec::new(),
+            Some(a) => array_max(a, MAX_APPROVALS)
+                .map_err(corrupt)?
+                .iter()
+                .map(fixed::<16>)
+                .collect::<Result<_, _>>()
+                .map_err(corrupt)?,
+        };
+        if !sorted_strictly(&recipients) || !sorted_strictly(&declined) {
+            return Err(general(ErrorCode::Corrupt));
+        }
         out.insert(
             id,
             PendingRequest {
@@ -108,6 +156,9 @@ pub(super) fn decode_requests(v: &Value) -> Result<BTreeMap<Id16, PendingRequest
                 detail,
                 approvals,
                 created_ms: uint(f.req(7).map_err(corrupt)?).map_err(corrupt)?,
+                sent_ms: f.opt(8).map(uint).transpose().map_err(corrupt)?,
+                recipients,
+                declined,
             },
         );
     }
@@ -335,7 +386,7 @@ fn emit(e: hirzla_sync::SyncError) -> ServerCode {
 }
 
 impl ServerMode {
-    fn offer_of(&self, request: Id16, p: &PendingRequest) -> Result<String, ServerCode> {
+    pub(super) fn offer_of(&self, request: Id16, p: &PendingRequest) -> Result<String, ServerCode> {
         ApprovalOffer {
             locker_id: p.locker,
             request_id: request,
@@ -349,7 +400,11 @@ impl ServerMode {
         .map_err(internal)
     }
 
-    fn quorum_state(&self, request: Id16, p: &PendingRequest) -> Result<QuorumState, ServerCode> {
+    pub(super) fn quorum_state(
+        &self,
+        request: Id16,
+        p: &PendingRequest,
+    ) -> Result<QuorumState, ServerCode> {
         let j = self.joined()?;
         let required = j
             .lockers
@@ -368,6 +423,9 @@ impl ServerMode {
             required,
             offer: self.offer_of(request, p)?,
             created_ms: p.created_ms,
+            sent_ms: p.sent_ms,
+            declined: p.declined.clone(),
+            queued: self.queued(&request),
         })
     }
 
@@ -431,6 +489,9 @@ impl ServerMode {
             detail,
             approvals: Vec::new(),
             created_ms: self.now(),
+            sent_ms: None,
+            recipients: Vec::new(),
+            declined: Vec::new(),
         };
         let state = self.quorum_state(request, &p)?;
         self.joined
@@ -443,7 +504,7 @@ impl ServerMode {
     }
 
     /// Whether the current member may sign `offer` (`sync-protocol.md` § 7.8).
-    fn may_sign(&self, offer: &ApprovalOffer) -> Result<(), ServerCode> {
+    pub(super) fn may_sign(&self, offer: &ApprovalOffer) -> Result<(), ServerCode> {
         let me = self.me();
         let j = self.joined()?;
         let s = j
@@ -504,6 +565,11 @@ impl ServerMode {
             issuer: offer.issuer,
             issuer_fingerprint: fp(&offer.issuer),
             can_sign: self.may_sign(&offer).is_ok(),
+            target_name: match &offer.target {
+                Some(t) => self.display_name(t)?,
+                None => None,
+            },
+            issuer_name: self.display_name(&offer.issuer)?,
         })
     }
 
@@ -541,6 +607,17 @@ impl ServerMode {
         text: &str,
     ) -> Result<ServerReply, ServerCode> {
         let token = ApprovalToken::decode(text).map_err(|_| ServerCode::ApprovalInvalid)?;
+        let state = self.add_approval(&token)?;
+        self.save(vault)?;
+        Ok(ServerReply::Request(state))
+    }
+
+    /// Adds a verified approval to a pending request, by copy or by mail (ADR 0070); the
+    /// caller saves the annex.
+    pub(super) fn add_approval(
+        &mut self,
+        token: &ApprovalToken,
+    ) -> Result<QuorumState, ServerCode> {
         let me = self.me();
         let j = self.joined()?;
         let p = j
@@ -581,16 +658,17 @@ impl ServerMode {
         };
         verify_approval(a, &request, cert).map_err(|_| bad)?;
         let mut p = p.clone();
-        p.approvals.push(token.approval);
+        p.approvals.push(token.approval.clone());
         p.approvals.sort_by_key(|x| x.member);
+        // An owner who declined, then signed: the signature counts.
+        p.declined.retain(|m| *m != token.approval.member);
         let state = self.quorum_state(token.request_id, &p)?;
         self.joined
             .as_mut()
             .ok_or(ServerCode::NotJoined)?
             .requests
             .insert(token.request_id, p);
-        self.save(vault)?;
-        Ok(ServerReply::Request(state))
+        Ok(state)
     }
 
     /// `QuorumApply`: publishes the operation once the approvals reach the quorum.
@@ -676,12 +754,17 @@ impl ServerMode {
         if let Some(op) = op {
             self.note_issued(locker, op, now)?;
         }
+        // The others take the request out of their inbox (ADR 0070).
+        self.enqueue_withdrawn(request, &p);
         self.joined
             .as_mut()
             .ok_or(ServerCode::NotJoined)?
             .requests
             .remove(&request);
         self.publish(vault, &mut client, &locker)?;
+        // What does not leave now leaves at the next `ServerSync`.
+        let _ = self.flush_outbox(&mut client);
+        self.save(vault)?;
         let _ = client.bye();
         Ok(ServerReply::Done)
     }
@@ -710,10 +793,16 @@ impl ServerMode {
         vault: &Vault,
         request: Id16,
     ) -> Result<ServerReply, ServerCode> {
+        let p = self
+            .joined()?
+            .requests
+            .get(&request)
+            .cloned()
+            .ok_or(general(ErrorCode::NotFound))?;
+        // The withdrawal leaves at the next `ServerSync` (ADR 0070).
+        self.enqueue_withdrawn(request, &p);
         let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
-        if j.requests.remove(&request).is_none() {
-            return Err(general(ErrorCode::NotFound));
-        }
+        j.requests.remove(&request);
         self.save(vault)?;
         Ok(ServerReply::Done)
     }

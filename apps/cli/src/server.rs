@@ -5,8 +5,8 @@
 use hirzla_core::client::Client;
 use hirzla_core::proto::{ErrorCode, ErrorReply, LockerEntry, Reply, Request};
 use hirzla_core::server_mode::proto::{
-    normalise_fingerprint, AlertKind, KeyLogStatus, QuarantinedOp, QuorumAction, QuorumState, Role,
-    ServerCode, ServerReply, ServerRequest, SuspectReason,
+    normalise_fingerprint, AlertKind, KeyLogStatus, QuarantinedOp, QuorumAction, QuorumState,
+    ReceivedRequest, Role, ServerCode, ServerReply, ServerRequest, SuspectReason,
 };
 use hirzla_vault::model::{Id16, OpId};
 use zeroize::Zeroizing;
@@ -201,6 +201,7 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
                 fingerprint,
                 device,
                 control_code,
+                name,
             } = call_server(&mut c, &ServerRequest::ServerIdentity)?
             else {
                 return bad_reply();
@@ -215,9 +216,11 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
                 ));
             }
             say(&format!(
-                "Membre : {}\nEmpreinte de la clé de membre : {}\nPoste : {}\n\
+                "Membre : {}\nNom affiché : {}\nEmpreinte de la clé de membre : {}\nPoste : {}\n\
                  Code de contrôle du poste : {control_code}",
                 hex(&member_id(&member_keys)?),
+                name.as_deref()
+                    .unwrap_or("(aucun ; « hirzla serveur nom NOM »)"),
                 grouped(&fingerprint),
                 hex(&device),
             ));
@@ -289,6 +292,68 @@ pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), 
             };
             say("Empreinte du serveur confirmée.");
             say_account(account);
+            Ok(())
+        }
+        ServerCommand::Name { name } => {
+            call_server(&mut c, &ServerRequest::ProfileSet { name: name.clone() })?;
+            if name.is_empty() {
+                say("Nom affiché retiré. Les autres membres vous verront par votre identifiant.");
+            } else {
+                say(&format!(
+                    "Nom affiché : « {name} », signé par votre clé de membre et inscrit au \
+                     registre. Il est visible des membres du serveur et du serveur lui-même."
+                ));
+            }
+            Ok(())
+        }
+        ServerCommand::Search { text } => {
+            let ServerReply::Found { members, more } =
+                call_server(&mut c, &ServerRequest::MemberSearch { text: text.clone() })?
+            else {
+                return bad_reply();
+            };
+            if members.is_empty() {
+                say("Aucun membre ne porte ce nom.");
+            }
+            for m in &members {
+                say(&format!(
+                    "{}  {}  {}  « {} »",
+                    hex(&m.member),
+                    grouped(&m.fingerprint),
+                    if m.verified {
+                        "empreinte comparée"
+                    } else {
+                        "empreinte à comparer"
+                    },
+                    m.name
+                ));
+            }
+            if more {
+                note("D'autres membres correspondent : précisez le texte.");
+            }
+            if !members.is_empty() {
+                note(
+                    "Un nom est déclaré par le membre lui-même et ne prouve rien. Avant de \
+                     partager, comparez son empreinte de vive voix, puis « hirzla casier \
+                     ajouter CASIER MEMBRE ROLE --empreinte E ».",
+                );
+            }
+            Ok(())
+        }
+        ServerCommand::Verify {
+            member,
+            fingerprint,
+        } => {
+            let member = member_arg(member)?;
+            let fingerprint = fingerprint_arg(fingerprint)?;
+            call_server(
+                &mut c,
+                &ServerRequest::MemberVerify {
+                    member,
+                    fingerprint,
+                },
+            )?;
+            say("Empreinte comparée : notée pour ce membre.");
             Ok(())
         }
         ServerCommand::Status => {
@@ -417,6 +482,11 @@ fn keylog_lines(k: &KeyLogStatus) -> String {
             AlertKind::WithheldOperation => {
                 "opérations en attente d'une dépendance que le serveur ne sert pas".to_owned()
             }
+            AlertKind::UnknownOwnProfile => {
+                "nom affiché inconnu inscrit à votre nom : quelqu'un d'autre a signé avec \
+                 votre clé de membre"
+                    .to_owned()
+            }
         };
         let mut place = String::new();
         if let Some(i) = a.index {
@@ -478,12 +548,20 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
             };
             for m in &members {
                 say(&format!(
-                    "{}  {:<16}  {} poste(s)  {}{}",
+                    "{}  {:<16}  {} poste(s)  {}  {}{}{}",
                     hex(&m.member),
                     role_name(m.role),
                     m.devices,
                     grouped(&m.fingerprint),
-                    if m.proven { "" } else { "  (sans preuve)" }
+                    if m.verified {
+                        "empreinte comparée"
+                    } else {
+                        "empreinte à comparer"
+                    },
+                    if m.proven { "" } else { "  (sans preuve)" },
+                    m.name
+                        .as_deref()
+                        .map_or_else(String::new, |n| format!("  « {n} »")),
                 ));
             }
             Ok(())
@@ -501,6 +579,7 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
             let ServerReply::Granted {
                 fingerprint,
                 devices,
+                name,
             } = call_server(
                 &mut c,
                 &ServerRequest::RoleGrant {
@@ -514,8 +593,10 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
                 return bad_reply();
             };
             say(&format!(
-                "Rôle {} donné. Empreinte du membre : {} ({devices} poste(s)).",
+                "Rôle {} donné{}. Empreinte du membre : {} ({devices} poste(s)).",
                 role_name(role),
+                name.as_deref()
+                    .map_or_else(String::new, |n| format!(" à « {n} »")),
                 grouped(&fingerprint)
             ));
             Ok(())
@@ -624,14 +705,110 @@ fn action_line(
 }
 
 fn state_line(q: &QuorumState) -> String {
-    format!(
+    let mut line = format!(
         "{}  casier {}  {}  {} accord(s) sur {}",
         hex(&q.request[..4]),
         hex(&q.locker[..4]),
         action_line(q.action, q.target.as_ref(), q.detail, |m| hex(m)),
         q.counted.len(),
         q.required
+    );
+    if let Some(t) = q.sent_ms {
+        line.push_str(&format!("  envoyée {}", ago(t)));
+    }
+    if !q.declined.is_empty() {
+        let who: Vec<String> = q.declined.iter().map(|m| hex(&m[..4])).collect();
+        line.push_str(&format!("  refusée par {}", who.join(", ")));
+    }
+    if q.queued > 0 {
+        line.push_str(&format!(
+            "  {} paquet(s) partiront à la prochaine synchronisation",
+            q.queued
+        ));
+    }
+    line
+}
+
+/// « il y a … » from a wall clock time in milliseconds.
+fn ago(ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    let min = now.saturating_sub(ms) / 60_000;
+    match min {
+        0 => "à l'instant".to_owned(),
+        1..=59 => format!("il y a {min} min"),
+        60..=1439 => format!("il y a {} h", min / 60),
+        _ => format!("il y a {} j", min / 1440),
+    }
+}
+
+fn inbox(c: &mut Client) -> Result<Vec<ReceivedRequest>, String> {
+    match call_server(c, &ServerRequest::QuorumInbox)? {
+        ServerReply::Inbox(r) => Ok(r),
+        _ => bad_reply(),
+    }
+}
+
+/// A member as the approver sees it: name, identifier, fingerprint, compared or not.
+fn person(m: &Id16, fp: Option<&str>, name: Option<&str>, verified: bool) -> String {
+    let named = name.map_or_else(String::new, |n| format!("« {n} », "));
+    match fp {
+        Some(fp) => format!(
+            "{named}{} (empreinte {}, {})",
+            hex(m),
+            grouped(fp),
+            if verified { "comparée" } else { "à comparer" }
+        ),
+        None => format!("{named}{} (empreinte inconnue ici)", hex(m)),
+    }
+}
+
+fn received_text(r: &ReceivedRequest) -> String {
+    format!(
+        "{}  casier {} ({})\n  Action : {}\n  Demandée par : {}\n  Reçue {} · quorum {}{}",
+        hex(&r.request[..4]),
+        r.name.as_deref().map_or("(nom illisible)", |n| n.as_str()),
+        hex(&r.locker[..4]),
+        action_line(r.action, r.target.as_ref(), r.detail, |m| person(
+            m,
+            r.target_fingerprint.as_deref(),
+            r.target_name.as_deref(),
+            r.target_verified
+        )),
+        person(
+            &r.issuer,
+            r.issuer_fingerprint.as_deref(),
+            r.issuer_name.as_deref(),
+            r.issuer_verified
+        ),
+        ago(r.received_ms),
+        r.required,
+        if r.can_sign {
+            ""
+        } else {
+            " · vous ne pouvez pas la signer"
+        }
     )
+}
+
+/// A received request by the start of its identifier (4 hexadecimal digits at least).
+fn resolve_received(list: &[ReceivedRequest], typed: &str) -> Result<ReceivedRequest, String> {
+    let lower = typed.to_ascii_lowercase();
+    if lower.len() < 4 || !lower.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        return Err("ID : 4 chiffres hexadécimaux au moins.".into());
+    }
+    let hits: Vec<&ReceivedRequest> = list
+        .iter()
+        .filter(|r| hex(&r.request).starts_with(&lower))
+        .collect();
+    match hits.as_slice() {
+        [one] => Ok((*one).clone()),
+        [] => Err(format!(
+            "demande reçue introuvable : {typed}. Voir « hirzla accord recues »."
+        )),
+        _ => Err("plusieurs demandes correspondent : précisez l'ID.".into()),
+    }
 }
 
 fn requests(c: &mut Client, locker: Option<Id16>) -> Result<Vec<QuorumState>, String> {
@@ -711,6 +888,8 @@ pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), 
                 issuer,
                 issuer_fingerprint,
                 can_sign,
+                target_name,
+                issuer_name,
             } = call_server(
                 &mut c,
                 &ServerRequest::QuorumInspect {
@@ -720,9 +899,14 @@ pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), 
             else {
                 return bad_reply();
             };
-            let who = |m: &Id16, fp: &Option<String>| match fp {
-                Some(fp) => format!("{} (empreinte {})", hex(m), grouped(fp)),
-                None => format!("{} (empreinte inconnue ici)", hex(m)),
+            let who = |m: &Id16, fp: &Option<String>, name: &Option<String>| {
+                let named = name
+                    .as_deref()
+                    .map_or_else(String::new, |n| format!("« {n} », "));
+                match fp {
+                    Some(fp) => format!("{named}{} (empreinte {})", hex(m), grouped(fp)),
+                    None => format!("{named}{} (empreinte inconnue ici)", hex(m)),
+                }
             };
             note(&format!(
                 "Casier : {} ({})\nAction : {}\nDemandée par : {}",
@@ -730,9 +914,10 @@ pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), 
                 hex(&locker[..4]),
                 action_line(action, target.as_ref(), detail, |m| who(
                     m,
-                    &target_fingerprint
+                    &target_fingerprint,
+                    &target_name
                 )),
-                who(&issuer, &issuer_fingerprint)
+                who(&issuer, &issuer_fingerprint, &issuer_name)
             ));
             if matches!(command, QuorumCommand::Inspect { .. }) {
                 note(if can_sign {
@@ -791,6 +976,72 @@ pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), 
             let request = resolve_request(&mut c, request)?;
             call_server(&mut c, &ServerRequest::QuorumCancel { request })?;
             say("Demande abandonnée.");
+            Ok(())
+        }
+        QuorumCommand::Send { request } => {
+            let request = resolve_request(&mut c, request)?;
+            let ServerReply::Request(q) =
+                call_server(&mut c, &ServerRequest::QuorumSend { request })?
+            else {
+                return bad_reply();
+            };
+            say(&format!(
+                "Demande envoyée aux autres propriétaires, scellée : le serveur ne peut ni la \
+                 lire ni la signer.\n{}",
+                state_line(&q)
+            ));
+            note("Les accords arrivent à vos prochaines synchronisations (« hirzla sync »).");
+            Ok(())
+        }
+        QuorumCommand::Inbox => {
+            let list = inbox(&mut c)?;
+            if list.is_empty() {
+                say("Aucune demande à examiner.");
+            }
+            for r in &list {
+                say(&received_text(r));
+            }
+            if !list.is_empty() {
+                note("Répondez avec « hirzla accord repondre ID accepter|refuser ».");
+            }
+            Ok(())
+        }
+        QuorumCommand::Respond { request, accept } => {
+            let r = resolve_received(&inbox(&mut c)?, request)?;
+            if *accept {
+                say(&received_text(&r));
+                // ADR 0070, point 4: a request that came through the server is no safer
+                // than one pasted: the device of the initiator may have been stolen.
+                let who = r
+                    .issuer_name
+                    .as_deref()
+                    .map_or_else(|| hex(&r.issuer[..4]), |n| format!("« {n} »"));
+                note(&format!(
+                    "Avant de signer, vérifiez de vive voix auprès de {who} que la demande \
+                     vient bien de cette personne."
+                ));
+                if !confirm("Signer cette demande ? Tapez « oui » pour confirmer : ")? {
+                    say("Rien n'a été signé.");
+                    return Ok(());
+                }
+            }
+            let reply = call_server(
+                &mut c,
+                &ServerRequest::QuorumRespond {
+                    locker: r.locker,
+                    request: r.request,
+                    accept: *accept,
+                },
+            )?;
+            match reply {
+                ServerReply::Approved(token) => {
+                    say("Accord signé et renvoyé au demandeur par le serveur.");
+                    note("Sans serveur joignable, rendez-lui ce texte :");
+                    say(&token);
+                }
+                ServerReply::Done => say("Demande refusée ; le demandeur en sera informé."),
+                _ => return bad_reply(),
+            }
             Ok(())
         }
     }

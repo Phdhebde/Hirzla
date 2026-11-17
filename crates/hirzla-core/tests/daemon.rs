@@ -322,6 +322,24 @@ fn browser_profile_is_enforced_by_the_core() {
         Reply::Generated(p) => assert_eq!(p.chars().count(), 24),
         _ => panic!(),
     }
+    // The full generator (version 7) is open to the browser profile too.
+    match c
+        .call(&Request::GenerateWith {
+            spec: hirzla_core::generator::Spec::Passphrase {
+                words: 6,
+                separator: '-',
+                capitalize: false,
+                digits: 0,
+            },
+        })
+        .unwrap()
+    {
+        Reply::GeneratedWith(g) => {
+            assert_eq!(g.value.split('-').count(), 6);
+            assert_eq!(g.estimate.entropy_millibits, 66_000);
+        }
+        _ => panic!(),
+    }
     // Allowed, but there is no vault yet.
     let m = Request::Match {
         origin: "https://bank.example".into(),
@@ -541,4 +559,109 @@ fn self_mode_operations_are_refused_to_the_browser_profile() {
     assert_eq!(state(&mut c), VaultState::Absent);
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
     assert!(log.contains("event=self_request op=recovery_status result=unauthorized"));
+}
+
+#[test]
+fn connections_answer_over_the_real_channel() {
+    use hirzla_core::connections::proto::{ConnectionFields, ConnectionReply, ConnectionRequest};
+    const HOST: &str = "hote-confidentiel.exemple.test";
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "conn");
+    let me = std::env::current_exe().unwrap();
+    let _core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    let create = ConnectionRequest::Create {
+        locker: None,
+        secret_type: SecretType::SshConnection,
+        fields: ConnectionFields {
+            title: Some(z(TITLE)),
+            host: Some(z(HOST)),
+            password: Some(z(SECRET)),
+            ..ConnectionFields::default()
+        },
+        tags: Vec::new(),
+    };
+    assert_eq!(
+        c.call_connection(&create).unwrap().err(),
+        Some(ErrorCode::NoVault)
+    );
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: hirzla_crypto::password::MIN_M_KIB,
+            t: hirzla_crypto::password::MIN_T,
+            p: 1,
+        }),
+    })
+    .unwrap();
+    let Ok(ConnectionReply::Created { locker, id }) = c.call_connection(&create).unwrap() else {
+        panic!()
+    };
+    let Ok(ConnectionReply::Card(card)) = c
+        .call_connection(&ConnectionRequest::Read { locker, id })
+        .unwrap()
+    else {
+        panic!()
+    };
+    assert_eq!(card.fields.host.as_ref().unwrap().as_str(), HOST);
+    assert!(card.has_password && card.fields.password.is_none());
+    assert_eq!(card.effective_port, 22);
+    // The password leaves by the general `Read`, as for any secret.
+    match c
+        .call(&Request::Read {
+            selector: Selector::Id { locker, id },
+            field: Field::Password,
+        })
+        .unwrap()
+    {
+        Reply::Value(ApiValue::Text(t)) => assert_eq!(t.as_str(), SECRET),
+        _ => panic!(),
+    }
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=connection_request op=connection_create result=ok"),
+        "{log}"
+    );
+    assert!(log.contains("event=connection_request op=connection_create result=no_vault"));
+    for secret in [PASSWORD, SECRET, TITLE, HOST] {
+        assert!(!log.contains(secret));
+    }
+}
+
+#[test]
+fn connections_are_refused_to_the_browser_profile() {
+    use hirzla_core::connections::proto::{ConnectionFields, ConnectionRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "conn-browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    let id: hirzla_vault::model::Id16 = [7; 16];
+    for r in [
+        ConnectionRequest::Create {
+            locker: None,
+            secret_type: SecretType::RdpConnection,
+            fields: ConnectionFields {
+                title: Some(z("t")),
+                host: Some(z("h")),
+                ..ConnectionFields::default()
+            },
+            tags: Vec::new(),
+        },
+        ConnectionRequest::Read { locker: id, id },
+    ] {
+        assert_eq!(
+            c.call_connection(&r).unwrap().err(),
+            Some(ErrorCode::Unauthorized)
+        );
+    }
+    assert_eq!(state(&mut c), VaultState::Absent);
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=connection_request op=connection_read result=unauthorized"));
 }

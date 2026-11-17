@@ -85,8 +85,8 @@ signature = suite_id ‖ ECDSA-P384-SHA384(M) en r ‖ s ‖ ML-DSA-87.Sign(M, c
 
 | Rôle | Étiquettes |
 | --- | --- |
-| Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke` |
-| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share`, `hirzla/v1/device-audit-checkpoint` |
+| Membre | `hirzla/v1/device-cert`, `hirzla/v1/device-revoke`, `hirzla/v1/member-profile` (ADR 0069) |
+| Appareil | `hirzla/v1/op`, `hirzla/v1/approval`, `hirzla/v1/device-auth`, `hirzla/v1/exchange-file`, `hirzla/v1/device-enrol`, `hirzla/v1/recovery-share`, `hirzla/v1/device-audit-checkpoint`, `hirzla/v1/quorum-mail` (ADR 0070) |
 | Serveur | `hirzla/v1/server-auth`, `hirzla/v1/receipt`, `hirzla/v1/audit-checkpoint`, `hirzla/v1/keylog-head` |
 | Plan de contrôle Hornn (vérifiée seulement) | `hirzla/v1/hornn-session-grant` (`integration-hornn.md` § 3.3, ADR 0031) |
 | Éditeur (vérifiée seulement par les postes) | `hirzla/v1/client-manifest`, `hirzla/v1/update-package` (`livraison.md` § 7 et § 8, ADR 0042, 0043) |

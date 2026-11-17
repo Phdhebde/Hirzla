@@ -11,9 +11,10 @@ use std::io::Read;
 use std::path::Path;
 
 use hirzla_core::server_mode::proto::{
-    normalise_fingerprint, AlertKind, KeyLogStatus, LockerStatus, MemberInfo, QuarantinedOp,
-    QuorumAction, QuorumState, Refusal, Role, ServerReply, ServerRequest, SuspectReason,
-    SyncReport, MAX_LOCKER_NAME, MAX_ROOTS, MAX_TEXT,
+    normalise_fingerprint, AlertKind, FoundInfo, KeyLogStatus, LockerStatus, MemberInfo,
+    QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role, ServerReply,
+    ServerRequest, SuspectReason, SyncReport, MAX_DISPLAY_NAME, MAX_LOCKER_NAME, MAX_ROOTS,
+    MAX_TEXT, MIN_SEARCH,
 };
 use hirzla_vault::model::{Id16, MemberKeys, OpId, MAX_SERVER_URL};
 use serde::{Deserialize, Serialize};
@@ -114,7 +115,8 @@ impl From<LockerStatus> for SharedLockerDto {
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct AlertDto {
     /// `foreign_member_key`, `unknown_device`, `unknown_revocation`, `withheld_removal`,
-    /// `uninscribed_removal`, `withheld_inscription` or `withheld_operation`.
+    /// `uninscribed_removal`, `withheld_inscription`, `withheld_operation` or
+    /// `unknown_profile` (ADR 0069).
     kind: &'static str,
     /// Rank of the entry in the log, when there is one.
     index: Option<u64>,
@@ -156,6 +158,7 @@ impl From<KeyLogStatus> for KeyLogDto {
                         AlertKind::UninscribedRemoval => "uninscribed_removal",
                         AlertKind::WithheldInscription => "withheld_inscription",
                         AlertKind::WithheldOperation => "withheld_operation",
+                        AlertKind::UnknownOwnProfile => "unknown_profile",
                     },
                     index: a.index,
                     device: a.device.as_ref().map(|d| hex(d)),
@@ -201,6 +204,8 @@ pub struct IdentityDto {
     fingerprint: String,
     device: String,
     control_code: String,
+    /// Display name the member gave itself, if any (ADR 0069).
+    name: Option<String>,
 }
 
 /// Outcome of joining.
@@ -247,6 +252,10 @@ pub struct MemberDto {
     change_to: Vec<RoleName>,
     change_refusal: Option<&'static str>,
     remove_refusal: Option<&'static str>,
+    /// Display name, verified against the key log (ADR 0069). The fingerprint stays the proof.
+    name: Option<String>,
+    /// Whether the user compared this fingerprint out of band.
+    verified: bool,
 }
 
 /// Members of a shared locker.
@@ -281,6 +290,8 @@ fn members_dto(
                 change_to: m.change_to.into_iter().map(Into::into).collect(),
                 change_refusal: m.change_refusal.map(refusal_name),
                 remove_refusal: m.remove_refusal.map(refusal_name),
+                name: m.name,
+                verified: m.verified,
             })
             .collect(),
         grantable: grantable.iter().map(|r| (*r).into()).collect(),
@@ -327,6 +338,98 @@ pub struct QuorumStateDto {
     /// The `hirzla-demande:` text to hand to the other owners.
     offer: String,
     created_ms: u64,
+    /// When it was last sent through the server (ADR 0070), if it was.
+    sent_ms: Option<u64>,
+    /// Owners who declined it.
+    declined: Vec<String>,
+    /// Mails of this request waiting to reach the server.
+    queued: u64,
+}
+
+/// A member found in the directory (ADR 0069).
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct FoundDto {
+    member: String,
+    name: String,
+    fingerprint: String,
+    /// Whether the user compared this fingerprint out of band.
+    verified: bool,
+}
+
+impl From<FoundInfo> for FoundDto {
+    fn from(f: FoundInfo) -> Self {
+        FoundDto {
+            member: hex(&f.member),
+            name: f.name,
+            fingerprint: f.fingerprint,
+            verified: f.verified,
+        }
+    }
+}
+
+/// Result of a search in the directory.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct SearchDto {
+    members: Vec<FoundDto>,
+    /// The server holds more matches than it returned.
+    more: bool,
+}
+
+/// A request received through the server, to examine (ADR 0070).
+#[derive(Clone, Serialize)]
+pub struct ReceivedDto {
+    request: String,
+    locker: String,
+    name: Option<Zeroizing<String>>,
+    action: QuorumActionName,
+    target: Option<String>,
+    target_fingerprint: Option<String>,
+    target_name: Option<String>,
+    target_verified: bool,
+    role: Option<RoleName>,
+    quorum: Option<u64>,
+    issuer: String,
+    issuer_fingerprint: Option<String>,
+    issuer_name: Option<String>,
+    issuer_verified: bool,
+    can_sign: bool,
+    /// Quorum in force. The approver does not know how many approvals were collected.
+    required: u64,
+    received_ms: u64,
+    /// The `hirzla-demande:` text, for the copy route.
+    offer: String,
+}
+
+impl std::fmt::Debug for ReceivedDto {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ReceivedDto(can_sign: {})", self.can_sign)
+    }
+}
+
+impl From<ReceivedRequest> for ReceivedDto {
+    fn from(r: ReceivedRequest) -> Self {
+        let (role, quorum) = detail_names(r.action, r.detail);
+        ReceivedDto {
+            request: hex(&r.request),
+            locker: hex(&r.locker),
+            name: r.name,
+            action: r.action.into(),
+            target: r.target.as_ref().map(|t| hex(t)),
+            target_fingerprint: r.target_fingerprint,
+            target_name: r.target_name,
+            target_verified: r.target_verified,
+            role,
+            quorum,
+            issuer: hex(&r.issuer),
+            issuer_fingerprint: r.issuer_fingerprint,
+            issuer_name: r.issuer_name,
+            issuer_verified: r.issuer_verified,
+            can_sign: r.can_sign,
+            required: r.required,
+            received_ms: r.received_ms,
+            offer: r.offer,
+        }
+    }
 }
 
 fn detail_names(action: QuorumAction, detail: Option<u64>) -> (Option<RoleName>, Option<u64>) {
@@ -351,6 +454,9 @@ impl From<QuorumState> for QuorumStateDto {
             required: q.required,
             offer: q.offer,
             created_ms: q.created_ms,
+            sent_ms: q.sent_ms,
+            declined: q.declined.iter().map(|m| hex(m)).collect(),
+            queued: q.queued,
         }
     }
 }
@@ -368,6 +474,8 @@ pub struct InspectedDto {
     issuer: String,
     issuer_fingerprint: Option<String>,
     can_sign: bool,
+    target_name: Option<String>,
+    issuer_name: Option<String>,
 }
 
 impl std::fmt::Debug for InspectedDto {
@@ -500,6 +608,27 @@ fn text_arg(typed: &str, prefix: &str) -> Result<String, DesktopError> {
     Ok(t)
 }
 
+/// A display name (ADR 0069): empty to withdraw it. The core checks its characters.
+fn display_name_arg(typed: &str) -> Result<String, DesktopError> {
+    let name = typed.trim();
+    if name.len() > MAX_DISPLAY_NAME {
+        return Err(DesktopError::Invalid(
+            "Le nom affiché compte 64 octets au plus.",
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+fn search_arg(typed: &str) -> Result<String, DesktopError> {
+    let text = typed.trim();
+    if text.len() < MIN_SEARCH || text.len() > MAX_DISPLAY_NAME {
+        return Err(DesktopError::Invalid(
+            "Saisissez au moins deux caractères du nom recherché.",
+        ));
+    }
+    Ok(text.to_owned())
+}
+
 fn hex_id<const N: usize>(typed: &str) -> Result<[u8; N], DesktopError> {
     let bad = DesktopError::Invalid("Identifiant non valide.");
     if typed.len() != 2 * N || !typed.is_ascii() {
@@ -590,6 +719,7 @@ impl AppState {
             fingerprint,
             device,
             control_code,
+            name,
         } = self.call_server(&ServerRequest::ServerIdentity)?
         else {
             return Err(DesktopError::Protocol);
@@ -604,6 +734,7 @@ impl AppState {
             fingerprint,
             device: hex(&device),
             control_code,
+            name,
         };
         Ok((member_keys, dto))
     }
@@ -852,6 +983,8 @@ impl AppState {
                 issuer,
                 issuer_fingerprint,
                 can_sign,
+                target_name,
+                issuer_name,
             } => {
                 let (role, quorum) = detail_names(action, detail);
                 Ok(InspectedDto {
@@ -865,6 +998,8 @@ impl AppState {
                     issuer: hex(&issuer),
                     issuer_fingerprint,
                     can_sign,
+                    target_name,
+                    issuer_name,
                 })
             }
             _ => Err(DesktopError::Protocol),
@@ -925,6 +1060,89 @@ impl AppState {
         let request = hex_id::<16>(request)?;
         self.call_server(&ServerRequest::QuorumCancel { request })
             .map(drop)
+    }
+
+    /// Sets the display name of the member, or withdraws it when `name` is empty (ADR 0069).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn profile_set(&self, name: &str) -> Result<(), DesktopError> {
+        let name = display_name_arg(name)?;
+        self.call_server(&ServerRequest::ProfileSet { name })
+            .map(drop)
+    }
+
+    /// Searches the members of the server by display name.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn member_search(&self, text: &str) -> Result<SearchDto, DesktopError> {
+        let text = search_arg(text)?;
+        match self.call_server(&ServerRequest::MemberSearch { text })? {
+            ServerReply::Found { members, more } => Ok(SearchDto {
+                members: members.into_iter().map(Into::into).collect(),
+                more,
+            }),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Records that the user compared the fingerprint of a member out of band.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a fingerprint that is not the member's is refused.
+    pub fn member_verify(&self, member: &str, fingerprint: &str) -> Result<(), DesktopError> {
+        let request = ServerRequest::MemberVerify {
+            member: member_arg(member)?,
+            fingerprint: fingerprint_arg(fingerprint)?,
+        };
+        self.call_server(&request).map(drop)
+    }
+
+    /// Sends a prepared request to the other owners through the server (ADR 0070).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_send(&self, request: &str) -> Result<QuorumStateDto, DesktopError> {
+        let request = hex_id::<16>(request)?;
+        match self.call_server(&ServerRequest::QuorumSend { request })? {
+            ServerReply::Request(q) => Ok(q.into()),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Requests received through the server, oldest first.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_inbox(&self) -> Result<Vec<ReceivedDto>, DesktopError> {
+        match self.call_server(&ServerRequest::QuorumInbox)? {
+            ServerReply::Inbox(r) => Ok(r.into_iter().map(Into::into).collect()),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Signs or declines a received request. Signing returns the `hirzla-accord:` text, which
+    /// the server also carries back to the initiator.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn quorum_respond(
+        &self,
+        locker: &str,
+        request: &str,
+        accept: bool,
+    ) -> Result<Option<String>, DesktopError> {
+        let request = ServerRequest::QuorumRespond {
+            locker: locker_arg(locker)?,
+            request: hex_id::<16>(request)?,
+            accept,
+        };
+        match self.call_server(&request)? {
+            ServerReply::Approved(t) if accept => Ok(Some(t)),
+            ServerReply::Done if !accept => Ok(None),
+            _ => Err(DesktopError::Protocol),
+        }
     }
 
     /// The quarantine of a locker.
@@ -1156,11 +1374,66 @@ pub fn quarantine_decide(
     state.quarantine_decide(&locker, &ops, accept)
 }
 
+/// See [`AppState::profile_set`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn profile_set(state: State<'_>, name: String) -> Result<(), DesktopError> {
+    state.profile_set(&name)
+}
+
+/// See [`AppState::member_search`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn member_search(state: State<'_>, text: String) -> Result<SearchDto, DesktopError> {
+    state.member_search(&text)
+}
+
+/// See [`AppState::member_verify`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn member_verify(
+    state: State<'_>,
+    member: String,
+    fingerprint: String,
+) -> Result<(), DesktopError> {
+    state.member_verify(&member, &fingerprint)
+}
+
+/// See [`AppState::quorum_send`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_send(state: State<'_>, request: String) -> Result<QuorumStateDto, DesktopError> {
+    state.quorum_send(&request)
+}
+
+/// See [`AppState::quorum_inbox`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_inbox(state: State<'_>) -> Result<Vec<ReceivedDto>, DesktopError> {
+    state.quorum_inbox()
+}
+
+/// See [`AppState::quorum_respond`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn quorum_respond(
+    state: State<'_>,
+    locker: String,
+    request: String,
+    accept: bool,
+) -> Result<Option<String>, DesktopError> {
+    state.quorum_respond(&locker, &request, accept)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
     use hirzla_core::server_mode::proto::KeyLogAlert;
+
+    #[test]
+    fn display_names_and_searches_are_bounded() {
+        assert_eq!(display_name_arg("  Marie Durand ").unwrap(), "Marie Durand");
+        assert_eq!(display_name_arg("  ").unwrap(), "");
+        assert!(display_name_arg(&"é".repeat(33)).is_err());
+        assert_eq!(search_arg(" du ").unwrap(), "du");
+        assert!(search_arg("d").is_err());
+        assert!(search_arg(&"a".repeat(MAX_DISPLAY_NAME + 1)).is_err());
+    }
 
     #[test]
     fn typed_values_are_checked_before_the_core() {
@@ -1230,6 +1503,8 @@ mod tests {
                 change_to: vec![Role::Manager],
                 change_refusal: None,
                 remove_refusal: Some(Refusal::LastOwner),
+                name: None,
+                verified: true,
             }],
             &[Role::Editor, Role::Reader],
             None,
@@ -1281,6 +1556,9 @@ mod tests {
             required: 2,
             offer: "hirzla-demande:x".into(),
             created_ms: 5,
+            sent_ms: None,
+            declined: Vec::new(),
+            queued: 0,
         }
         .into();
         let json = serde_json::to_value(&q).unwrap();

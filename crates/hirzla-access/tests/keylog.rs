@@ -416,6 +416,153 @@ fn device_or_revocation_unknown_to_its_member_alerts() {
     );
 }
 
+// ----- member profiles: display names (ADR 0069) -----
+
+#[test]
+fn the_server_log_inscribes_only_valid_growing_profiles() {
+    let mut w = world();
+    let first = w.alice.profile(1, "Alice Martin");
+    let index = w.log.append_profile(&first, T).unwrap();
+    assert_eq!(w.log.profile(&w.alice.id()), Some(&first));
+    assert_eq!(
+        w.log.directory().profile(&w.alice.id()),
+        Some(first.object().unwrap())
+    );
+    assert_eq!(w.log.index_of(&first.object().unwrap()), Some(index));
+    assert_eq!(
+        w.log.object(&first.object().unwrap()),
+        Some(first.encode().unwrap().as_slice())
+    );
+    // The same profile again, a rank that does not grow, another member's key, a member
+    // without an account: nothing is inscribed.
+    let size = w.log.size();
+    assert!(w.log.append_profile(&first, T).is_err());
+    assert!(w
+        .log
+        .append_profile(&w.alice.profile(1, "Alice M."), T)
+        .is_err());
+    let mut forged = w.bob.profile(2, "Alice Martin");
+    forged.member = w.alice.id();
+    assert_eq!(
+        w.log.append_profile(&forged, T),
+        Err(AccessError::InvalidSignature)
+    );
+    assert!(w
+        .log
+        .append_profile(&Person::new(40, 1).profile(1, "Nobody"), T)
+        .is_err());
+    assert_eq!(w.log.size(), size);
+    // A new rank replaces the name; the empty name withdraws it.
+    let second = w.alice.profile(2, "Alice Durand");
+    w.log.append_profile(&second, T).unwrap();
+    assert_eq!(w.log.profile(&w.alice.id()), Some(&second));
+    let none = w.alice.profile(3, "");
+    w.log.append_profile(&none, T).unwrap();
+    assert_eq!(w.log.profile(&w.alice.id()).unwrap().name, "");
+    assert_eq!(w.log.directory().profile_count(&w.alice.id()), 3);
+    // Every device accepts this log, and learns the hash of the current profile.
+    let m = w.synced(&w.bob);
+    assert_eq!(
+        m.directory().profile(&w.alice.id()),
+        Some(none.object().unwrap())
+    );
+    assert_eq!(m.directory().profile(&w.bob.id()), None);
+}
+
+#[test]
+fn the_number_of_profiles_of_a_member_is_bounded() {
+    use hirzla_access::keylog::MAX_PROFILES_PER_MEMBER;
+    let w = world();
+    let mut log = w.log.clone();
+    let p = w.bob.profile(MAX_PROFILES_PER_MEMBER + 1, "Bob");
+    for n in 1..=MAX_PROFILES_PER_MEMBER {
+        let q = w.bob.profile(n, "Bob");
+        log.append_profile(&q, T).unwrap();
+    }
+    assert_eq!(
+        log.append_profile(&p, T),
+        Err(AccessError::Denied(Denial::Invalid))
+    );
+}
+
+#[test]
+fn a_profile_inscribed_twice_or_for_an_unknown_member_is_proof() {
+    let w = world();
+    let p = w.bob.profile(1, "Bob");
+    let e = KeyLogEntry::member_profile(&p, T).unwrap();
+    // R7: the server replays an inscribed profile to bring an old name back.
+    let mut later = e.clone();
+    later.logged_ms += 60_000;
+    let mut m = w.synced(&w.carol);
+    let entries = honest_plus(&w, &[e.clone(), later]);
+    let head = forged(&w.key, &entries);
+    let size = m.size();
+    assert_eq!(
+        m.ingest(size, &entries[size as usize..], &head),
+        Err(fail(KeyLogFailure::Inconsistent))
+    );
+    assert_eq!(
+        m.suspect().unwrap().reason,
+        ForkReason::RuleViolation {
+            index: size + 1,
+            rule: RuleViolation::DuplicateProfile
+        }
+    );
+    // R3: a profile for a member that has no key in the log.
+    let stranger = Person::new(40, 1);
+    let mut m = w.synced(&w.carol);
+    let entries = honest_plus(
+        &w,
+        &[KeyLogEntry::member_profile(&stranger.profile(1, "Mallory"), T).unwrap()],
+    );
+    let head = forged(&w.key, &entries);
+    assert!(m.ingest(size, &entries[size as usize..], &head).is_err());
+    assert_eq!(
+        m.suspect().unwrap().reason,
+        ForkReason::RuleViolation {
+            index: size,
+            rule: RuleViolation::UnknownMember
+        }
+    );
+    // A profile entry carries neither a device nor a locker (R1).
+    let mut odd = e;
+    odd.device = Some(device_id(2, 1));
+    assert!(KeyLogEntry::decode(&odd.encode().unwrap()).is_err());
+}
+
+#[test]
+fn a_profile_its_member_did_not_issue_alerts_that_member() {
+    let mut w = world();
+    let mine = w.alice.profile(1, "Alice Martin");
+    w.log.append_profile(&mine, T).unwrap();
+    // Alice's device issued it: no alert. Bob is not concerned.
+    let mut a = w.monitor_for(&w.alice);
+    a.expect_own(mine.object().unwrap());
+    assert!(a
+        .ingest(0, w.log.entries(0, usize::MAX), &w.head())
+        .unwrap()
+        .is_empty());
+    let size = a.size();
+    // The server inscribes under her name a profile she never issued (it cannot sign one:
+    // only the hash is there).
+    let mut ghost = KeyLogEntry::member_profile(&mine, T).unwrap();
+    ghost.object = [0xEE; 48];
+    let entries = honest_plus(&w, &[ghost]);
+    let head = forged(&w.key, &entries);
+    assert_eq!(
+        a.ingest(size, &entries[size as usize..], &head).unwrap(),
+        vec![Alert::UnknownOwnProfile { index: size }]
+    );
+    let mut b = w.synced(&w.bob);
+    assert!(b
+        .ingest(size, &entries[size as usize..], &head)
+        .unwrap()
+        .is_empty());
+    // The alert survives its canonical encoding.
+    let alert = Alert::UnknownOwnProfile { index: size };
+    assert_eq!(Alert::from_value(&alert.to_value()).unwrap(), alert);
+}
+
 // ----- forks, rewrites, bad heads -----
 
 #[test]

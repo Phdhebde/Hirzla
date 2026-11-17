@@ -4,6 +4,9 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use hirzla_core::generator::{rules, Profile, Spec};
+use hirzla_core::proto::classes;
+
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -23,8 +26,19 @@ Commandes :
                           --casier CASIER (casier partagé, à la création).
   rm NOM                  Met un secret à la corbeille. --purger : suppression définitive.
                           --id ID.
-  gen [LONGUEUR]          Génère un mot de passe (24 caractères par défaut).
-                          --sans-symboles, --sans-chiffres, --sans-majuscules, --stdout.
+  gen [TAILLE]            Génère un mot de passe (24 caractères par défaut) et affiche
+                          son entropie. --stdout. TAILLE : caractères, mots, syllabes
+                          ou chiffres selon le mode.
+                          --mode caracteres|phrase|prononcable|pin|modele
+                          --profil defaut|longue-duree|site-capricieux|wifi|compte-de-service
+                          Caractères : --sans-minuscules, --sans-majuscules,
+                          --sans-chiffres, --sans-symboles, --min MIN,MAJ,CHIFFRES,SYMBOLES,
+                          --symboles LISTE, --exclure LISTE.
+                          Règles : --sans-ambigus, --memes-touches (AZERTY et QWERTY),
+                          --sans-repetition, --lettre-en-tete, --sans-suite (pin).
+                          Phrase, prononçable : --separateur C, --majuscule, --chiffres N.
+                          Modèle : --modele MODELE (a A 9 # * tirés, le reste recopié,
+                          \\x pour un x littéral), --symboles, --exclure.
   history NOM             Versions d'un secret, la plus récente en premier. --id ID.
                           --version N --champ CHAMP : un champ d'une version (comme get).
   restore NOM             Sort un secret de la corbeille. --id ID.
@@ -33,6 +47,21 @@ Commandes :
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.
+  connexion ssh NOM --hote H
+                          Range une connexion SSH. --port P, --identifiant U, --cle CLÉ,
+                          --rebond REBOND, --empreinte E, --mot-de-passe (demandé),
+                          --casier CASIER, --tag T.
+  connexion rdp NOM --hote H
+                          Range une connexion RDP. --port P, --identifiant U, --domaine D,
+                          --rebond REBOND, --empreinte E, --mot-de-passe (demandé),
+                          --casier CASIER, --tag T.
+  connexion voir NOM      Fiche d'une connexion, sans son mot de passe. --id ID.
+  connexion modifier NOM  Modifie une connexion : options de création (sauf --casier et
+                          --tag), --titre T, --effacer CHAMP. --id ID.
+  cle-ssh ajouter NOM FICHIER
+                          Range une clé SSH privée existante (format OpenSSH).
+                          --publique FICHIER, --identifiant U, --phrase (demandée),
+                          --casier CASIER, --tag T.
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
                           Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
@@ -54,6 +83,13 @@ Mode Serveur :
                           Confirme l'empreinte du serveur, vérifiée hors bande.
   serveur etat            Serveur rattaché et état des casiers partagés.
   serveur sync            Synchronise les casiers partagés.
+  serveur nom NOM         Donne à votre clé de membre le nom affiché aux autres membres
+                          du serveur (64 octets au plus), signé par cette clé et inscrit
+                          au registre. NOM vide (\"\") : retire le nom.
+  serveur chercher TEXTE  Cherche des membres du serveur par leur nom affiché. Un nom ne
+                          prouve rien : comparez l'empreinte avant de partager.
+  serveur verifier MEMBRE EMPREINTE
+                          Note que vous avez comparé hors bande l'empreinte d'un membre.
   casier creer NOM        Crée un casier partagé.
   casier membres CASIER   Liste les membres d'un casier partagé et leurs rôles.
   casier ajouter CASIER MEMBRE ROLE [--empreinte E]
@@ -69,6 +105,12 @@ Mode Serveur :
   accord liste [CASIER]   Demandes en cours et accords recueillis.
   accord appliquer ID     Publie l'action quand le quorum est atteint.
   accord annuler ID       Abandonne une demande.
+  accord envoyer ID       Envoie la demande aux autres propriétaires, scellée par le
+                          serveur, qui ne peut ni la lire ni la signer.
+  accord recues           Demandes reçues par le serveur, à examiner.
+  accord repondre ID accepter|refuser
+                          Signe ou refuse une demande reçue et renvoie la réponse. Vérifiez
+                          d'abord de vive voix que la demande vient bien du demandeur.
   quarantaine CASIER [accepter|rejeter OP…]
                           Opérations en quarantaine d'un casier ; les accepte ou les
                           rejette (propriétaires).
@@ -88,12 +130,15 @@ Mises à jour hors ligne (sans réseau ni noyau) :
                           --cle-editeur FICHIER : clé publique d'éditeur (développement).
 
 Options globales :
+  --version               Affiche la version de hirzla.
   --socket POINT          Point de connexion du noyau (ou HIRZLA_SOCKET).
   --core EXÉCUTABLE       Exécutable du noyau attendu (par défaut : hirzla-core à côté
                           de hirzla).
   --vault FICHIER         Coffre, transmis au noyau quand hirzla le démarre (ou HIRZLA_VAULT).
 
 Champs : titre, identifiant, mot-de-passe, notes.
+CLÉ, REBOND : titre d'une clé SSH, d'une connexion SSH du coffre. --effacer accepte port,
+identifiant, domaine, mot-de-passe, cle, rebond, empreinte, notes.
 Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
 CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
 moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
@@ -122,6 +167,19 @@ pub enum ServerCommand {
     },
     Status,
     Sync,
+    /// Set (or, empty, withdraw) the display name of the member (ADR 0069).
+    Name {
+        name: String,
+    },
+    /// Search members by display name.
+    Search {
+        text: String,
+    },
+    /// Record a fingerprint compared out of band.
+    Verify {
+        member: String,
+        fingerprint: String,
+    },
 }
 
 /// What a quorum request does (`docs/api-locale.md` § 15.8).
@@ -135,13 +193,37 @@ pub enum QuorumWhat {
 /// A command on approvals (`docs/api-locale.md` § 15.6, ADR 0044). Texts may be `@FILE`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuorumCommand {
-    Prepare { locker: String, what: QuorumWhat },
-    Inspect { offer: String },
-    Approve { offer: String },
-    Collect { token: String },
-    List { locker: Option<String> },
-    Apply { request: String },
-    Cancel { request: String },
+    Prepare {
+        locker: String,
+        what: QuorumWhat,
+    },
+    Inspect {
+        offer: String,
+    },
+    Approve {
+        offer: String,
+    },
+    Collect {
+        token: String,
+    },
+    List {
+        locker: Option<String>,
+    },
+    Apply {
+        request: String,
+    },
+    Cancel {
+        request: String,
+    },
+    /// ADR 0070.
+    Send {
+        request: String,
+    },
+    Inbox,
+    Respond {
+        request: String,
+        accept: bool,
+    },
 }
 
 /// `quarantaine CASIER [accepter|rejeter OP…]` (ADR 0045).
@@ -179,6 +261,57 @@ pub enum LockerCommand {
         locker: String,
         member: String,
     },
+}
+
+/// Fields of a connection given on the command line (`docs/api-locale.md` § 17.5). The
+/// password is never an argument: `password` asks for it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConnectionOptions {
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub username: Option<String>,
+    pub domain: Option<String>,
+    /// Title of an SSH key of the vault.
+    pub key: Option<String>,
+    /// Title of an SSH connection of the vault.
+    pub jump: Option<String>,
+    pub host_key: Option<String>,
+    pub password: bool,
+}
+
+/// `connexion ssh|rdp|voir|modifier` (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConnectionCommand {
+    Create {
+        rdp: bool,
+        name: String,
+        options: ConnectionOptions,
+        locker: Option<String>,
+        tags: Vec<String>,
+    },
+    Show {
+        name: Option<String>,
+        id: Option<String>,
+    },
+    Update {
+        name: Option<String>,
+        id: Option<String>,
+        options: ConnectionOptions,
+        title: Option<String>,
+        clear: Vec<String>,
+    },
+}
+
+/// `cle-ssh ajouter NOM FICHIER` (ADR 0067).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshKeyAdd {
+    pub name: String,
+    pub file: PathBuf,
+    pub public: Option<PathBuf>,
+    pub username: Option<String>,
+    pub passphrase: bool,
+    pub locker: Option<String>,
+    pub tags: Vec<String>,
 }
 
 /// An offline update command (ADR 0043).
@@ -228,8 +361,7 @@ pub enum Command {
         purge: bool,
     },
     Gen {
-        length: u32,
-        classes: u64,
+        spec: Spec,
         stdout: bool,
     },
     History {
@@ -250,6 +382,8 @@ pub enum Command {
     Passwd,
     Settings(SettingsChange),
     Recovery(Recovery),
+    Connection(ConnectionCommand),
+    SshKeyAdd(SshKeyAdd),
     Status,
     Stop,
     Server(ServerCommand),
@@ -258,6 +392,8 @@ pub enum Command {
     Quarantine(QuarantineCommand),
     DeviceRevoke(DeviceRevokeCommand),
     Update(UpdateCommand),
+    /// `--version`: prints the version of `hirzla`, without starting the core.
+    Version,
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
@@ -275,6 +411,200 @@ pub struct Args {
 fn text(v: OsString, what: &str) -> Result<String, String> {
     v.into_string()
         .map_err(|_| format!("{what} : texte non valide (UTF-8 attendu)."))
+}
+
+/// Options of `gen`.
+const GEN_OPTIONS: &[&str] = &[
+    "--stdout",
+    "--mode",
+    "--profil",
+    "--sans-minuscules",
+    "--sans-majuscules",
+    "--sans-chiffres",
+    "--sans-symboles",
+    "--min",
+    "--symboles",
+    "--exclure",
+    "--sans-ambigus",
+    "--memes-touches",
+    "--sans-repetition",
+    "--lettre-en-tete",
+    "--sans-suite",
+    "--separateur",
+    "--majuscule",
+    "--chiffres",
+    "--modele",
+];
+
+/// Settings of `gen` from its size, its flags and its valued options. An option that
+/// does not belong to the mode is refused here; bounds are checked by the core.
+fn gen_spec(
+    size: Option<u32>,
+    has: &dyn Fn(&str) -> bool,
+    values: &[(&str, String)],
+) -> Result<Spec, String> {
+    let value = |name: &str| {
+        values
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, v)| v.as_str())
+    };
+    let given = |name: &str| has(name) || value(name).is_some();
+    // Everything but `--stdout`, to tell which options a mode may not take.
+    let settings = &GEN_OPTIONS[1..];
+    let only = |mode: &str, allowed: &[&str]| -> Result<(), String> {
+        match settings
+            .iter()
+            .find(|o| given(o) && !allowed.contains(o) && **o != "--mode")
+        {
+            Some(o) => Err(format!("{o} ne s'applique pas à « {mode} ».")),
+            None => Ok(()),
+        }
+    };
+
+    if let Some(id) = value("--profil") {
+        only("--profil", &["--profil"])?;
+        if size.is_some() || given("--mode") {
+            return Err("--profil fixe tous les réglages : ni TAILLE ni --mode.".into());
+        }
+        return Profile::from_id(id).map(Profile::spec).ok_or_else(|| {
+            format!(
+                "--profil : profil inconnu. Profils : {}.",
+                Profile::ALL.map(Profile::id).join(", ")
+            )
+        });
+    }
+
+    let mut rule_mask = 0;
+    for (flag, bit) in [
+        ("--sans-ambigus", rules::NO_AMBIGUOUS),
+        ("--memes-touches", rules::SAME_KEYS),
+        ("--sans-repetition", rules::NO_REPEAT),
+        ("--lettre-en-tete", rules::START_LETTER),
+        ("--sans-suite", rules::NO_SEQUENCE),
+    ] {
+        if has(flag) {
+            rule_mask |= bit;
+        }
+    }
+    let digits = value("--chiffres")
+        .map(|v| number(v, "--chiffres"))
+        .transpose()?
+        .unwrap_or(0);
+    let mode = match value("--mode") {
+        Some(m) => m,
+        None if given("--modele") => "modele",
+        None => "caracteres",
+    };
+    match mode {
+        "caracteres" => {
+            only(
+                mode,
+                &[
+                    "--sans-minuscules",
+                    "--sans-majuscules",
+                    "--sans-chiffres",
+                    "--sans-symboles",
+                    "--min",
+                    "--symboles",
+                    "--exclure",
+                    "--sans-ambigus",
+                    "--memes-touches",
+                    "--sans-repetition",
+                    "--lettre-en-tete",
+                ],
+            )?;
+            let families = [
+                ("--sans-minuscules", classes::LOWER),
+                ("--sans-majuscules", classes::UPPER),
+                ("--sans-chiffres", classes::DIGITS),
+                ("--sans-symboles", classes::SYMBOLS),
+            ];
+            let mut mask = classes::ALL;
+            for (flag, bit) in families {
+                if has(flag) {
+                    mask &= !bit;
+                }
+            }
+            let minimums = match value("--min") {
+                // One of each chosen family, as before.
+                None => families.map(|(_, bit)| u8::from(mask & bit != 0)),
+                Some(v) => {
+                    let parts: Vec<&str> = v.split(',').collect();
+                    let parts: [&str; 4] = parts.try_into().map_err(|_| {
+                        "--min : quatre nombres attendus, MIN,MAJ,CHIFFRES,SYMBOLES.".to_owned()
+                    })?;
+                    let mut minimums = [0u8; 4];
+                    for (slot, part) in minimums.iter_mut().zip(parts) {
+                        *slot = number(part, "--min")?;
+                    }
+                    minimums
+                }
+            };
+            Ok(Spec::Characters {
+                length: size.unwrap_or(24),
+                classes: mask,
+                minimums,
+                symbols: value("--symboles").map(str::to_owned),
+                excluded: value("--exclure").unwrap_or_default().to_owned(),
+                rules: rule_mask,
+            })
+        }
+        "phrase" => {
+            only(mode, &["--separateur", "--majuscule", "--chiffres"])?;
+            let mut separator = value("--separateur").unwrap_or("-").chars();
+            let (Some(separator), None) = (separator.next(), separator.next()) else {
+                return Err("--separateur : un seul caractère attendu.".into());
+            };
+            Ok(Spec::Passphrase {
+                words: size.unwrap_or(6),
+                separator,
+                capitalize: has("--majuscule"),
+                digits,
+            })
+        }
+        "prononcable" => {
+            only(mode, &["--majuscule", "--chiffres", "--sans-ambigus"])?;
+            Ok(Spec::Pronounceable {
+                syllables: size.unwrap_or(9),
+                capitalize: has("--majuscule"),
+                digits,
+                rules: rule_mask,
+            })
+        }
+        "pin" => {
+            only(mode, &["--sans-repetition", "--sans-suite"])?;
+            Ok(Spec::Pin {
+                length: size.unwrap_or(6),
+                rules: rule_mask,
+            })
+        }
+        "modele" => {
+            only(
+                mode,
+                &[
+                    "--modele",
+                    "--symboles",
+                    "--exclure",
+                    "--sans-ambigus",
+                    "--memes-touches",
+                    "--sans-repetition",
+                ],
+            )?;
+            if size.is_some() {
+                return Err("le mode « modele » ne prend pas de TAILLE.".into());
+            }
+            Ok(Spec::Template {
+                template: value("--modele")
+                    .ok_or_else(|| "--modele MODELE attendu.".to_owned())?
+                    .to_owned(),
+                symbols: value("--symboles").map(str::to_owned),
+                excluded: value("--exclure").unwrap_or_default().to_owned(),
+                rules: rule_mask,
+            })
+        }
+        _ => Err("--mode : caracteres, phrase, prononcable, pin ou modele.".into()),
+    }
 }
 
 fn number<T: std::str::FromStr>(v: &str, what: &str) -> Result<T, String> {
@@ -300,6 +630,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--core" => core = Some(PathBuf::from(value("--core")?)),
             "--vault" => vault = Some(PathBuf::from(value("--vault")?)),
             "-h" | "--help" | "help" => return Err(USAGE.to_owned()),
+            "-V" | "--version" => {
+                return Ok(Args {
+                    socket,
+                    core,
+                    vault,
+                    command: Command::Version,
+                })
+            }
             _ if arg.starts_with('-') => return Err(format!("option inconnue : {arg}\n\n{USAGE}")),
             _ => break arg,
         }
@@ -328,6 +666,22 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--empreinte",
         "--repertoire",
         "--cle-editeur",
+        "--hote",
+        "--port",
+        "--domaine",
+        "--cle",
+        "--rebond",
+        "--titre",
+        "--effacer",
+        "--publique",
+        "--mode",
+        "--profil",
+        "--min",
+        "--symboles",
+        "--exclure",
+        "--separateur",
+        "--chiffres",
+        "--modele",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -366,6 +720,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--generer",
             "--casier",
         ],
+        "connexion" => &[
+            "--hote",
+            "--port",
+            "--identifiant",
+            "--domaine",
+            "--cle",
+            "--rebond",
+            "--empreinte",
+            "--mot-de-passe",
+            "--casier",
+            "--tag",
+            "--id",
+            "--titre",
+            "--effacer",
+        ],
+        "cle-ssh" => &[
+            "--publique",
+            "--identifiant",
+            "--phrase",
+            "--casier",
+            "--tag",
+        ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte"],
         "appareil" => &["--oui"],
@@ -379,12 +755,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--veille",
             "--session",
         ],
-        "gen" => &[
-            "--sans-symboles",
-            "--sans-chiffres",
-            "--sans-majuscules",
-            "--stdout",
-        ],
+        "gen" => GEN_OPTIONS,
         _ => &[],
     };
     if let Some((f, _)) = flags.iter().find(|(f, _)| !allowed.contains(&f.as_str())) {
@@ -583,6 +954,150 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 locker: one("--casier")?,
             }
         }
+        "connexion" => {
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            max_positional(2)?;
+            let only = |names: &[&str]| -> Result<(), String> {
+                match flags.iter().find(|(f, _)| !names.contains(&f.as_str())) {
+                    Some((f, _)) => Err(format!("option inconnue pour « connexion {sub} » : {f}")),
+                    None => Ok(()),
+                }
+            };
+            let options = || -> Result<ConnectionOptions, String> {
+                let port = one("--port")?
+                    .map(|p| number::<u16>(&p, "--port"))
+                    .transpose()?;
+                if port == Some(0) {
+                    return Err("--port : de 1 à 65535.".to_owned());
+                }
+                Ok(ConnectionOptions {
+                    host: one("--hote")?,
+                    port,
+                    username: one("--identifiant")?,
+                    domain: one("--domaine")?,
+                    key: one("--cle")?,
+                    jump: one("--rebond")?,
+                    host_key: one("--empreinte")?,
+                    password: has("--mot-de-passe"),
+                })
+            };
+            let name = positional.get(1).cloned();
+            let sub_command = match sub {
+                "ssh" | "rdp" => {
+                    let rdp = sub == "rdp";
+                    if rdp {
+                        only(&[
+                            "--hote",
+                            "--port",
+                            "--identifiant",
+                            "--domaine",
+                            "--rebond",
+                            "--empreinte",
+                            "--mot-de-passe",
+                            "--casier",
+                            "--tag",
+                        ])?;
+                    } else {
+                        only(&[
+                            "--hote",
+                            "--port",
+                            "--identifiant",
+                            "--cle",
+                            "--rebond",
+                            "--empreinte",
+                            "--mot-de-passe",
+                            "--casier",
+                            "--tag",
+                        ])?;
+                    }
+                    let options = options()?;
+                    if options.host.is_none() {
+                        return Err(format!("« connexion {sub} » attend --hote H."));
+                    }
+                    ConnectionCommand::Create {
+                        rdp,
+                        name: name.ok_or_else(|| format!("« connexion {sub} » attend le NOM."))?,
+                        options,
+                        locker: one("--casier")?,
+                        tags: all("--tag"),
+                    }
+                }
+                "voir" => {
+                    only(&["--id"])?;
+                    let id = one("--id")?;
+                    if name.is_some() == id.is_some() {
+                        return Err(
+                            "« connexion voir » attend un NOM ou --id ID, l'un des deux.".into(),
+                        );
+                    }
+                    ConnectionCommand::Show { name, id }
+                }
+                "modifier" => {
+                    only(&[
+                        "--hote",
+                        "--port",
+                        "--identifiant",
+                        "--domaine",
+                        "--cle",
+                        "--rebond",
+                        "--empreinte",
+                        "--mot-de-passe",
+                        "--id",
+                        "--titre",
+                        "--effacer",
+                    ])?;
+                    let id = one("--id")?;
+                    if name.is_some() == id.is_some() {
+                        return Err(
+                            "« connexion modifier » attend un NOM ou --id ID, l'un des deux."
+                                .into(),
+                        );
+                    }
+                    let options = options()?;
+                    let title = one("--titre")?;
+                    let clear = all("--effacer");
+                    if options == ConnectionOptions::default()
+                        && title.is_none()
+                        && clear.is_empty()
+                    {
+                        return Err("« connexion modifier » : rien à modifier.".into());
+                    }
+                    ConnectionCommand::Update {
+                        name,
+                        id,
+                        options,
+                        title,
+                        clear,
+                    }
+                }
+                _ => {
+                    return Err(format!(
+                        "sous-commande de « connexion » inconnue.\n\n{USAGE}"
+                    ))
+                }
+            };
+            Command::Connection(sub_command)
+        }
+        "cle-ssh" => {
+            max_positional(3)?;
+            let usage = "« cle-ssh » attend ajouter NOM FICHIER.";
+            match (
+                positional.first().map(String::as_str),
+                positional.get(1),
+                positional.get(2),
+            ) {
+                (Some("ajouter"), Some(name), Some(file)) => Command::SshKeyAdd(SshKeyAdd {
+                    name: name.clone(),
+                    file: PathBuf::from(file),
+                    public: one("--publique")?.map(PathBuf::from),
+                    username: one("--identifiant")?,
+                    passphrase: has("--phrase"),
+                    locker: one("--casier")?,
+                    tags: all("--tag"),
+                }),
+                _ => return Err(usage.to_owned()),
+            }
+        }
         "serveur" => {
             let sub = positional.first().map(String::as_str).unwrap_or_default();
             let arg = |i: usize, what: &str| -> Result<String, String> {
@@ -643,6 +1158,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     max_positional(1)?;
                     only(&[])?;
                     ServerCommand::Sync
+                }
+                "nom" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Name {
+                        name: arg(1, "le NOM à afficher (\"\" pour le retirer)")?,
+                    }
+                }
+                "chercher" => {
+                    max_positional(2)?;
+                    only(&[])?;
+                    ServerCommand::Search {
+                        text: arg(1, "le TEXTE à chercher")?,
+                    }
+                }
+                "verifier" => {
+                    max_positional(3)?;
+                    only(&[])?;
+                    ServerCommand::Verify {
+                        member: arg(1, "le MEMBRE et son EMPREINTE")?,
+                        fingerprint: arg(2, "le MEMBRE et son EMPREINTE")?,
+                    }
                 }
                 _ => return Err(format!("sous-commande de « serveur » inconnue.\n\n{USAGE}")),
             };
@@ -770,6 +1307,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                         request: arg(1, "l'ID de la demande")?,
                     }
                 }
+                "envoyer" => {
+                    max_positional(2)?;
+                    QuorumCommand::Send {
+                        request: arg(1, "l'ID de la demande")?,
+                    }
+                }
+                "recues" | "reçues" => {
+                    max_positional(1)?;
+                    QuorumCommand::Inbox
+                }
+                "repondre" | "répondre" => {
+                    max_positional(3)?;
+                    let request = arg(1, "l'ID de la demande et accepter ou refuser")?;
+                    let accept = match arg(2, "accepter ou refuser")?.as_str() {
+                        "accepter" => true,
+                        "refuser" => false,
+                        _ => {
+                            return Err("« accord repondre » attend accepter ou refuser.".to_owned())
+                        }
+                    };
+                    QuorumCommand::Respond { request, accept }
+                }
                 _ => return Err(format!("sous-commande de « accord » inconnue.\n\n{USAGE}")),
             };
             Command::Quorum(sub_command)
@@ -841,24 +1400,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         }
         "gen" => {
             max_positional(1)?;
-            let length = positional
+            let size = positional
                 .first()
-                .map(|l| number(l, "LONGUEUR"))
-                .transpose()?
-                .unwrap_or(24);
-            let mut classes = hirzla_core::proto::classes::ALL;
-            if has("--sans-symboles") {
-                classes &= !hirzla_core::proto::classes::SYMBOLS;
+                .map(|l| number(l, "TAILLE"))
+                .transpose()?;
+            let mut values = Vec::new();
+            for name in GEN_OPTIONS {
+                if let Some(v) = one(name)? {
+                    values.push((*name, v));
+                }
             }
-            if has("--sans-chiffres") {
-                classes &= !hirzla_core::proto::classes::DIGITS;
-            }
-            if has("--sans-majuscules") {
-                classes &= !hirzla_core::proto::classes::UPPER;
-            }
+            let spec = gen_spec(size, &|name| has(name), &values)?;
             Command::Gen {
-                length,
-                classes,
+                spec,
                 stdout: has("--stdout"),
             }
         }
@@ -888,6 +1442,12 @@ mod tests {
 
     fn p(a: &[&str]) -> Result<Args, String> {
         parse(a.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn version_needs_no_command() {
+        assert_eq!(p(&["--version"]).unwrap().command, Command::Version);
+        assert_eq!(p(&["-V"]).unwrap().command, Command::Version);
     }
 
     #[test]
@@ -964,8 +1524,7 @@ mod tests {
         assert_eq!(
             p(&["gen", "16", "--sans-symboles"]).unwrap().command,
             Command::Gen {
-                length: 16,
-                classes: 7,
+                spec: Spec::characters(16, 7),
                 stdout: false
             }
         );
@@ -977,6 +1536,269 @@ mod tests {
                 kdf: Some((65536, 3, 1))
             }
         );
+    }
+
+    #[test]
+    fn parses_connection_commands() {
+        assert_eq!(
+            p(&[
+                "connexion",
+                "ssh",
+                "Serveur web",
+                "--hote",
+                "web-01.exemple.test",
+                "--port",
+                "2222",
+                "--identifiant",
+                "admin",
+                "--cle",
+                "Clé de déploiement",
+                "--rebond",
+                "Bastion Hornn",
+                "--mot-de-passe",
+                "--tag",
+                "prod",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Create {
+                rdp: false,
+                name: "Serveur web".into(),
+                options: ConnectionOptions {
+                    host: Some("web-01.exemple.test".into()),
+                    port: Some(2222),
+                    username: Some("admin".into()),
+                    key: Some("Clé de déploiement".into()),
+                    jump: Some("Bastion Hornn".into()),
+                    password: true,
+                    ..ConnectionOptions::default()
+                },
+                locker: None,
+                tags: vec!["prod".into()],
+            })
+        );
+        assert_eq!(
+            p(&[
+                "connexion",
+                "rdp",
+                "Poste",
+                "--hote",
+                "10.0.0.12",
+                "--domaine",
+                "EXEMPLE",
+                "--casier",
+                "Ops",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Create {
+                rdp: true,
+                name: "Poste".into(),
+                options: ConnectionOptions {
+                    host: Some("10.0.0.12".into()),
+                    domain: Some("EXEMPLE".into()),
+                    ..ConnectionOptions::default()
+                },
+                locker: Some("Ops".into()),
+                tags: vec![],
+            })
+        );
+        assert_eq!(
+            p(&["connexion", "voir", "--id", "00ff"]).unwrap().command,
+            Command::Connection(ConnectionCommand::Show {
+                name: None,
+                id: Some("00ff".into()),
+            })
+        );
+        assert_eq!(
+            p(&[
+                "connexion",
+                "modifier",
+                "Poste",
+                "--titre",
+                "Poste 2",
+                "--effacer",
+                "port",
+                "--effacer",
+                "rebond",
+            ])
+            .unwrap()
+            .command,
+            Command::Connection(ConnectionCommand::Update {
+                name: Some("Poste".into()),
+                id: None,
+                options: ConnectionOptions::default(),
+                title: Some("Poste 2".into()),
+                clear: vec!["port".into(), "rebond".into()],
+            })
+        );
+        assert_eq!(
+            p(&["cle-ssh", "ajouter", "Clé", "id_ed25519", "--phrase"])
+                .unwrap()
+                .command,
+            Command::SshKeyAdd(SshKeyAdd {
+                name: "Clé".into(),
+                file: PathBuf::from("id_ed25519"),
+                public: None,
+                username: None,
+                passphrase: true,
+                locker: None,
+                tags: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn refuses_bad_connection_usage() {
+        // A host is required; a port is 1 to 65535; no secret is an argument.
+        assert!(p(&["connexion", "ssh", "x"]).is_err());
+        assert!(p(&["connexion", "ssh", "--hote", "h"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--port", "0"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--port", "65536"]).is_err());
+        assert!(p(&[
+            "connexion",
+            "ssh",
+            "x",
+            "--hote",
+            "h",
+            "--mot-de-passe",
+            "secret"
+        ])
+        .is_err());
+        // Options of the other protocol.
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--domaine", "d"]).is_err());
+        assert!(p(&["connexion", "rdp", "x", "--hote", "h", "--cle", "k"]).is_err());
+        // Creation options that an update does not take, and the reverse.
+        assert!(p(&["connexion", "modifier", "x", "--casier", "c", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "modifier", "x", "--tag", "t"]).is_err());
+        assert!(p(&["connexion", "ssh", "x", "--hote", "h", "--titre", "t"]).is_err());
+        assert!(p(&["connexion", "modifier", "x"]).is_err());
+        assert!(p(&["connexion", "modifier", "x", "--id", "00ff", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "voir"]).is_err());
+        assert!(p(&["connexion", "voir", "x", "--port", "1"]).is_err());
+        assert!(p(&["connexion", "ouvrir", "x"]).is_err());
+        assert!(p(&["cle-ssh", "ajouter", "x"]).is_err());
+        assert!(p(&["cle-ssh", "generer", "x", "f"]).is_err());
+        assert!(p(&["cle-ssh", "ajouter", "x", "f", "--mot-de-passe"]).is_err());
+    }
+
+    #[test]
+    fn parses_generator_settings() {
+        let spec = |a: &[&str]| match p(a).unwrap().command {
+            Command::Gen { spec, .. } => spec,
+            _ => Spec::characters(0, 0),
+        };
+        assert_eq!(spec(&["gen"]), Spec::characters(24, classes::ALL));
+        assert_eq!(
+            spec(&[
+                "gen",
+                "32",
+                "--sans-symboles",
+                "--min",
+                "2,2,4,0",
+                "--exclure",
+                "-x",
+                "--sans-ambigus",
+                "--sans-repetition",
+                "--lettre-en-tete",
+            ]),
+            Spec::Characters {
+                length: 32,
+                classes: 7,
+                minimums: [2, 2, 4, 0],
+                symbols: None,
+                excluded: "-x".into(),
+                rules: rules::NO_AMBIGUOUS | rules::NO_REPEAT | rules::START_LETTER,
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--symboles", "-_", "--memes-touches"]),
+            Spec::Characters {
+                length: 24,
+                classes: classes::ALL,
+                minimums: [1; 4],
+                symbols: Some("-_".into()),
+                excluded: String::new(),
+                rules: rules::SAME_KEYS,
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--mode", "phrase"]),
+            Spec::Passphrase {
+                words: 6,
+                separator: '-',
+                capitalize: false,
+                digits: 0
+            }
+        );
+        assert_eq!(
+            spec(&[
+                "gen",
+                "8",
+                "--mode",
+                "phrase",
+                "--separateur",
+                " ",
+                "--majuscule",
+                "--chiffres",
+                "2"
+            ]),
+            Spec::Passphrase {
+                words: 8,
+                separator: ' ',
+                capitalize: true,
+                digits: 2
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--mode", "prononcable", "--sans-ambigus"]),
+            Spec::Pronounceable {
+                syllables: 9,
+                capitalize: false,
+                digits: 0,
+                rules: rules::NO_AMBIGUOUS
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "8", "--mode", "pin", "--sans-suite"]),
+            Spec::Pin {
+                length: 8,
+                rules: rules::NO_SEQUENCE
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--modele", "Aa-9999", "--sans-repetition"]),
+            Spec::Template {
+                template: "Aa-9999".into(),
+                symbols: None,
+                excluded: String::new(),
+                rules: rules::NO_REPEAT
+            }
+        );
+        assert_eq!(
+            spec(&["gen", "--profil", "longue-duree"]),
+            Profile::LongTerm.spec()
+        );
+        for refused in [
+            &["gen", "--mode", "inconnu"][..],
+            &["gen", "--profil", "inconnu"],
+            &["gen", "12", "--profil", "wifi"],
+            &["gen", "--profil", "wifi", "--sans-ambigus"],
+            &["gen", "--profil", "wifi", "--mode", "pin"],
+            &["gen", "--mode", "pin", "--sans-ambigus"],
+            &["gen", "--mode", "phrase", "--sans-symboles"],
+            &["gen", "--mode", "phrase", "--separateur", "--"],
+            &["gen", "--mode", "modele"],
+            &["gen", "4", "--modele", "aaaa"],
+            &["gen", "--sans-suite"],
+            &["gen", "--min", "1,1,1"],
+            &["gen", "--min", "1,1,1,x"],
+            &["gen", "--chiffres", "deux", "--mode", "phrase"],
+            &["gen", "--mode", "pin", "--mode", "phrase"],
+            &["gen", "--inconnu"],
+        ] {
+            assert!(p(refused).is_err(), "{refused:?}");
+        }
     }
 
     #[test]
@@ -1118,6 +1940,28 @@ mod tests {
             })
         );
         assert!(p(&["accord", "appliquer"]).is_err());
+        assert_eq!(
+            p(&["accord", "envoyer", "ab12"]).unwrap().command,
+            Command::Quorum(QuorumCommand::Send {
+                request: "ab12".into()
+            })
+        );
+        assert_eq!(
+            p(&["accord", "recues"]).unwrap().command,
+            Command::Quorum(QuorumCommand::Inbox)
+        );
+        assert_eq!(
+            p(&["accord", "repondre", "ab12", "refuser"])
+                .unwrap()
+                .command,
+            Command::Quorum(QuorumCommand::Respond {
+                request: "ab12".into(),
+                accept: false
+            })
+        );
+        assert!(p(&["accord", "repondre", "ab12"]).is_err());
+        assert!(p(&["accord", "repondre", "ab12", "peut-etre"]).is_err());
+        assert!(p(&["accord", "recues", "x"]).is_err());
         assert!(p(&["accord", "voter", "x"]).is_err());
         assert_eq!(
             p(&["quarantaine", "Ops"]).unwrap().command,
@@ -1138,6 +1982,34 @@ mod tests {
         assert!(p(&["quarantaine"]).is_err());
         assert!(p(&["quarantaine", "Ops", "accepter"]).is_err());
         assert!(p(&["quarantaine", "Ops", "ignorer", "x"]).is_err());
+        assert_eq!(
+            p(&["serveur", "nom", "Marie Durand"]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: "Marie Durand".into()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "nom", ""]).unwrap().command,
+            Command::Server(ServerCommand::Name {
+                name: String::new()
+            })
+        );
+        assert_eq!(
+            p(&["serveur", "chercher", "dur"]).unwrap().command,
+            Command::Server(ServerCommand::Search { text: "dur".into() })
+        );
+        assert_eq!(
+            p(&["serveur", "verifier", "00ff", "ABCD"]).unwrap().command,
+            Command::Server(ServerCommand::Verify {
+                member: "00ff".into(),
+                fingerprint: "ABCD".into()
+            })
+        );
+        assert!(p(&["serveur", "nom"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "b"]).is_err());
+        assert!(p(&["serveur", "chercher"]).is_err());
+        assert!(p(&["serveur", "verifier", "00ff"]).is_err());
+        assert!(p(&["serveur", "nom", "a", "--empreinte", "E"]).is_err());
         assert!(p(&["serveur"]).is_err());
         assert!(p(&["serveur", "rejoindre", "hirzla://h"]).is_err());
         assert!(p(&["serveur", "etat", "--ac", "x"]).is_err());

@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
+use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
@@ -64,6 +65,27 @@ impl LinkConfig {
     }
 }
 
+/// Asks a running core to bring the window of the application already started to the front
+/// (`ShowApp`, ADR 0071): `true` if one is listening, and this process has nothing to do but
+/// stop. It starts no core and does not harden this process: a second start must leave no
+/// trace. One more try after a second if the core had just received the same call.
+#[must_use]
+pub fn another_instance_shown(config: &LinkConfig) -> bool {
+    let Ok(mut client) = Client::connect(&config.endpoint, Some(&config.core)) else {
+        return false;
+    };
+    for attempt in 0..2 {
+        match client.call(&Request::ShowApp) {
+            Ok(Reply::Flag(listening)) => return listening,
+            Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
+                std::thread::sleep(Duration::from_millis(1100));
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// A link to the core, connected on demand.
 pub struct CoreLink {
     config: LinkConfig,
@@ -76,7 +98,7 @@ pub struct CoreLink {
 fn is_idempotent(op: Op) -> bool {
     matches!(
         op,
-        Op::Status | Op::List | Op::Read | Op::Generate | Op::Lock
+        Op::Status | Op::List | Op::Read | Op::Generate | Op::Lock | Op::AppPoll
     )
 }
 
@@ -237,6 +259,42 @@ impl CoreLink {
                     return Err(DesktopError::from_self(code, retry_after_s));
                 }
                 Err(ClientError::Io(_)) if !retried && is_idempotent_self(request.op()) => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one connection request (`docs/api-locale.md` § 17, version 6). Only the read is
+    /// sent again on a new connection.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::connections::refusal`].
+    pub fn call_connection(
+        &mut self,
+        request: &ConnectionRequest,
+    ) -> Result<ConnectionReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_connection(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::connections::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, ConnectionRequest::Read { .. }) =>
+                {
                     retried = true;
                 }
                 Err(e) => return Err(e.into()),

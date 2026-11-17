@@ -277,6 +277,12 @@ fn browser_flow_against_a_real_core() {
         r#"{"ok":false,"error":"locked"}"#
     );
 
+    // Calling for the window of the application works locked; none runs here.
+    assert_eq!(
+        one(&sock, r#"{"type":"show"}"#),
+        r#"{"ok":false,"error":"no_app"}"#
+    );
+
     // A message that cannot be delimited ends the run after one refusal.
     let mut child = Command::new(host_exe())
         .env("HIRZLA_SOCKET", &sock)

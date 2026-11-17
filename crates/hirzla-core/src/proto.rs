@@ -13,10 +13,13 @@ use hirzla_vault::model::Id16;
 use hirzla_vault::secret::{Field, SecretType};
 use zeroize::Zeroizing;
 
+use crate::generator::{self, Estimate, Generated, Spec};
+
 /// Latest version of the protocol spoken by this build.
-pub const PROTOCOL_VERSION: u64 = 2;
-/// Versions this build accepts.
-pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2];
+pub const PROTOCOL_VERSION: u64 = 8;
+/// Versions this build accepts for the general operations. Versions 3 to 6 belong to the
+/// agent, server, Self and connection operations, which have their own code ranges.
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8];
 /// Largest frame accepted, in bytes (length prefix excluded).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Longest master password, in bytes.
@@ -31,7 +34,8 @@ pub const MAX_ORIGIN: usize = 2048;
 pub const MAX_FIELDS: usize = 32;
 /// Most URLs or tags given by one request.
 pub const MAX_ITEMS: usize = 64;
-/// Shortest and longest generated password.
+/// Shortest and longest password of the `Generate` operation (`GenerateWith` has its own
+/// bounds, in [`crate::generator`]).
 pub const GENERATE_LENGTH: std::ops::RangeInclusive<u64> = 8..=128;
 /// Longest core version string.
 const MAX_VERSION_TEXT: usize = 64;
@@ -158,10 +162,18 @@ pub enum Op {
     Match = 12,
     /// User name and password of one secret, for its exact web origin (version 2).
     Fill = 13,
+    /// Generate a password, a passphrase, a PIN… from full settings (version 7, ADR 0068).
+    GenerateWith = 14,
+    /// Ask the desktop application to bring its window to the front (version 8, ADR 0071).
+    ShowApp = 130,
+    /// The desktop application asks whether its window was called for (version 8, ADR 0071).
+    AppPoll = 131,
+    /// The desktop application typed a value into another application (version 8, ADR 0072).
+    AutoTyped = 132,
 }
 
 impl Op {
-    const ALL: [Op; 13] = [
+    const ALL: [Op; 17] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -175,6 +187,10 @@ impl Op {
         Op::Shutdown,
         Op::Match,
         Op::Fill,
+        Op::GenerateWith,
+        Op::ShowApp,
+        Op::AppPoll,
+        Op::AutoTyped,
     ];
 
     /// The operation from its number.
@@ -200,6 +216,10 @@ impl Op {
             Op::Shutdown => "shutdown",
             Op::Match => "match",
             Op::Fill => "fill",
+            Op::GenerateWith => "generate_with",
+            Op::ShowApp => "show_app",
+            Op::AppPoll => "app_poll",
+            Op::AutoTyped => "auto_typed",
         }
     }
 
@@ -209,6 +229,8 @@ impl Op {
     pub fn min_version(self) -> u64 {
         match self {
             Op::Match | Op::Fill => 2,
+            Op::GenerateWith => 7,
+            Op::ShowApp | Op::AppPoll | Op::AutoTyped => 8,
             _ => 1,
         }
     }
@@ -445,6 +467,58 @@ pub enum Request {
         /// Serialised web origin.
         origin: String,
     },
+    /// Generate from full settings; needs no vault (v7).
+    GenerateWith {
+        /// The settings.
+        spec: Spec,
+    },
+    /// Ask the desktop application to bring its window to the front; carries nothing (v8).
+    ShowApp,
+    /// The desktop application asks whether its window was called for (v8).
+    AppPoll,
+    /// The desktop application typed a value into another application: for the log only.
+    /// It names what was typed and the kind of target, never the secret, its identifier
+    /// or the application (v8).
+    AutoTyped {
+        /// What was typed.
+        what: Typed,
+        /// The target is a terminal.
+        terminal: bool,
+    },
+}
+
+/// What the desktop application typed into another application (ADR 0072).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Typed {
+    /// The user name.
+    Username = 1,
+    /// The password.
+    Password = 2,
+    /// The user name, Tab, the password.
+    UsernameAndPassword = 3,
+    /// Another field.
+    Other = 4,
+}
+
+impl Typed {
+    /// All values.
+    pub const ALL: [Typed; 4] = [
+        Typed::Username,
+        Typed::Password,
+        Typed::UsernameAndPassword,
+        Typed::Other,
+    ];
+
+    /// Stable short name, for logs.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Typed::Username => "username",
+            Typed::Password => "password",
+            Typed::UsernameAndPassword => "username_and_password",
+            Typed::Other => "other",
+        }
+    }
 }
 
 impl std::fmt::Debug for Request {
@@ -472,6 +546,10 @@ impl Request {
             Request::Shutdown => Op::Shutdown,
             Request::Match { .. } => Op::Match,
             Request::Fill { .. } => Op::Fill,
+            Request::GenerateWith { .. } => Op::GenerateWith,
+            Request::ShowApp => Op::ShowApp,
+            Request::AppPoll => Op::AppPoll,
+            Request::AutoTyped { .. } => Op::AutoTyped,
         }
     }
 
@@ -488,7 +566,15 @@ impl Request {
             Value::Array(items.iter().map(|t| Value::text(t)).collect())
         };
         match self {
-            Request::Status | Request::Lock | Request::Shutdown => None,
+            Request::Status
+            | Request::Lock
+            | Request::Shutdown
+            | Request::ShowApp
+            | Request::AppPoll => None,
+            Request::AutoTyped { what, terminal } => Some(Value::map(vec![
+                (1, Value::Uint(*what as u64)),
+                (2, Value::Bool(*terminal)),
+            ])),
             Request::Init { password, kdf } => {
                 let mut m = vec![(1, Value::text(password))];
                 if let Some(k) = kdf {
@@ -576,6 +662,7 @@ impl Request {
                 (2, Value::bytes(id)),
                 (3, Value::text(origin)),
             ])),
+            Request::GenerateWith { spec } => Some(spec_value(spec)),
         }
     }
 
@@ -647,6 +734,20 @@ impl Request {
             Op::Status => none(Request::Status),
             Op::Lock => none(Request::Lock),
             Op::Shutdown => none(Request::Shutdown),
+            Op::ShowApp => none(Request::ShowApp),
+            Op::AppPoll => none(Request::AppPoll),
+            Op::AutoTyped => {
+                let f = fields(args()?, &[1, 2])?;
+                let req = |k| f.req(k).map_err(|_| ErrorCode::Malformed);
+                let n = uint(req(1)?).map_err(|_| ErrorCode::Malformed)?;
+                Ok(Request::AutoTyped {
+                    what: Typed::ALL
+                        .into_iter()
+                        .find(|t| *t as u64 == n)
+                        .ok_or(ErrorCode::InvalidInput)?,
+                    terminal: boolean(req(2)?).map_err(|_| ErrorCode::Malformed)?,
+                })
+            }
             Op::Init => {
                 let f = fields(args()?, &[1, 2])?;
                 let password = password(f.req(1).map_err(|_| ErrorCode::Malformed)?)?;
@@ -761,6 +862,9 @@ impl Request {
                     classes,
                 })
             }
+            Op::GenerateWith => Ok(Request::GenerateWith {
+                spec: spec_from(args()?)?,
+            }),
             Op::Match => {
                 let f = fields(args()?, &[1])?;
                 Ok(Request::Match {
@@ -880,6 +984,11 @@ pub enum Reply {
         /// Password.
         password: Zeroizing<String>,
     },
+    /// Generated value with its entropy (v7).
+    GeneratedWith(Generated),
+    /// Answer of `ShowApp` (an application is listening) and of `AppPoll` (the window was
+    /// called for) (v8).
+    Flag(bool),
 }
 
 impl std::fmt::Debug for Reply {
@@ -893,6 +1002,8 @@ impl std::fmt::Debug for Reply {
             Reply::Generated(_) => "Reply::Generated",
             Reply::Matches(_) => "Reply::Matches",
             Reply::Filled { .. } => "Reply::Filled",
+            Reply::GeneratedWith(_) => "Reply::GeneratedWith",
+            Reply::Flag(_) => "Reply::Flag",
         })
     }
 }
@@ -1051,6 +1162,17 @@ impl Reply {
                 m.push((2, Value::text(password)));
                 Some(Value::map(m))
             }
+            Reply::GeneratedWith(g) => {
+                let mut m = vec![
+                    (1, Value::text(&g.value)),
+                    (2, Value::Uint(g.estimate.entropy_millibits)),
+                ];
+                if g.estimate.pool != 0 {
+                    m.push((3, Value::Uint(g.estimate.pool)));
+                }
+                Some(Value::map(m))
+            }
+            Reply::Flag(b) => Some(Value::map(vec![(1, Value::Bool(*b))])),
         }
     }
 
@@ -1058,6 +1180,8 @@ impl Reply {
     fn min_version(&self) -> u64 {
         match self {
             Reply::Matches(_) | Reply::Filled { .. } => 2,
+            Reply::GeneratedWith(_) => 7,
+            Reply::Flag(_) => 8,
             _ => 1,
         }
     }
@@ -1159,7 +1283,13 @@ impl Reply {
             return Ok((id, Err(e)));
         }
         let reply = match op {
-            Op::Init | Op::Unlock | Op::Lock | Op::Update | Op::Delete | Op::Shutdown => {
+            Op::Init
+            | Op::Unlock
+            | Op::Lock
+            | Op::Update
+            | Op::Delete
+            | Op::Shutdown
+            | Op::AutoTyped => {
                 if body.is_some() {
                     return Err(ErrorCode::Malformed);
                 }
@@ -1233,6 +1363,29 @@ impl Reply {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
                 Reply::Generated(text(b.req(1).map_err(|_| ErrorCode::Malformed)?, 1024)?)
             }
+            Op::ShowApp | Op::AppPoll => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
+                Reply::Flag(
+                    boolean(b.req(1).map_err(|_| ErrorCode::Malformed)?)
+                        .map_err(|_| ErrorCode::Malformed)?,
+                )
+            }
+            Op::GenerateWith => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2, 3])?;
+                let req = |k| b.req(k).map_err(|_| ErrorCode::Malformed);
+                Reply::GeneratedWith(Generated {
+                    value: text(req(1)?, 1024)?,
+                    estimate: Estimate {
+                        entropy_millibits: uint(req(2)?).map_err(|_| ErrorCode::Malformed)?,
+                        pool: match b.opt(3) {
+                            None => 0,
+                            Some(v) => {
+                                uint_in(v, 1..=u64::MAX).map_err(|_| ErrorCode::Malformed)?
+                            }
+                        },
+                    },
+                })
+            }
             Op::Match => {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
                 Reply::Matches(
@@ -1258,6 +1411,224 @@ impl Reply {
 // -----------------------------------------------------------------------------------------
 // Decoding helpers
 // -----------------------------------------------------------------------------------------
+
+/// Modes of `GenerateWith` (key 1 of its arguments).
+mod mode {
+    pub const CHARACTERS: u64 = 1;
+    pub const PASSPHRASE: u64 = 2;
+    pub const PRONOUNCEABLE: u64 = 3;
+    pub const PIN: u64 = 4;
+    pub const TEMPLATE: u64 = 5;
+}
+
+/// Longest list of symbols or exclusions: the printable ASCII characters.
+const MAX_SET_TEXT: usize = 94;
+
+/// Arguments of `GenerateWith` (§ 6.2). Values at their default are left out, so that one
+/// set of settings has one encoding.
+fn spec_value(spec: &Spec) -> Value {
+    let mut m = Vec::new();
+    let size = |n: &u32| (2, Value::Uint(u64::from(*n)));
+    let push_sets = |m: &mut Vec<(u64, Value)>, symbols: &Option<String>, excluded: &String| {
+        if let Some(s) = symbols {
+            m.push((5, Value::text(s)));
+        }
+        if !excluded.is_empty() {
+            m.push((6, Value::text(excluded)));
+        }
+    };
+    let push_rules = |m: &mut Vec<(u64, Value)>, rules: u64| {
+        if rules != 0 {
+            m.push((7, Value::Uint(rules)));
+        }
+    };
+    let push_tail = |m: &mut Vec<(u64, Value)>, capitalize: bool, digits: u32| {
+        if capitalize {
+            m.push((9, Value::Bool(true)));
+        }
+        if digits != 0 {
+            m.push((10, Value::Uint(u64::from(digits))));
+        }
+    };
+    match spec {
+        Spec::Characters {
+            length,
+            classes,
+            minimums,
+            symbols,
+            excluded,
+            rules,
+        } => {
+            m.push((1, Value::Uint(mode::CHARACTERS)));
+            m.push(size(length));
+            m.push((3, Value::Uint(*classes)));
+            m.push((
+                4,
+                Value::Array(
+                    minimums
+                        .iter()
+                        .map(|n| Value::Uint(u64::from(*n)))
+                        .collect(),
+                ),
+            ));
+            push_sets(&mut m, symbols, excluded);
+            push_rules(&mut m, *rules);
+        }
+        Spec::Passphrase {
+            words,
+            separator,
+            capitalize,
+            digits,
+        } => {
+            m.push((1, Value::Uint(mode::PASSPHRASE)));
+            m.push(size(words));
+            m.push((8, Value::text(separator.encode_utf8(&mut [0u8; 4]))));
+            push_tail(&mut m, *capitalize, *digits);
+        }
+        Spec::Pronounceable {
+            syllables,
+            capitalize,
+            digits,
+            rules,
+        } => {
+            m.push((1, Value::Uint(mode::PRONOUNCEABLE)));
+            m.push(size(syllables));
+            push_rules(&mut m, *rules);
+            push_tail(&mut m, *capitalize, *digits);
+        }
+        Spec::Pin { length, rules } => {
+            m.push((1, Value::Uint(mode::PIN)));
+            m.push(size(length));
+            push_rules(&mut m, *rules);
+        }
+        Spec::Template {
+            template,
+            symbols,
+            excluded,
+            rules,
+        } => {
+            m.push((1, Value::Uint(mode::TEMPLATE)));
+            push_sets(&mut m, symbols, excluded);
+            push_rules(&mut m, *rules);
+            m.push((11, Value::text(template)));
+        }
+    }
+    Value::map(m)
+}
+
+/// Reads the arguments of `GenerateWith`. A key that does not belong to the mode is
+/// refused as malformed; a value out of bounds as invalid input. The generator checks the
+/// settings as a whole afterwards.
+fn spec_from(v: &Value) -> Result<Spec, ErrorCode> {
+    let Value::Map(entries) = v else {
+        return Err(ErrorCode::Malformed);
+    };
+    let mode = entries
+        .iter()
+        .find(|(k, _)| matches!(k, Value::Uint(1)))
+        .map(|(_, v)| uint(v))
+        .ok_or(ErrorCode::Malformed)?
+        .map_err(|_| ErrorCode::Malformed)?;
+    let allowed: &[u64] = match mode {
+        mode::CHARACTERS => &[1, 2, 3, 4, 5, 6, 7],
+        mode::PASSPHRASE => &[1, 2, 8, 9, 10],
+        mode::PRONOUNCEABLE => &[1, 2, 7, 9, 10],
+        mode::PIN => &[1, 2, 7],
+        mode::TEMPLATE => &[1, 5, 6, 7, 11],
+        _ => return Err(ErrorCode::InvalidInput),
+    };
+    let f = fields(v, allowed)?;
+    let small = |k: u64| -> Result<u32, ErrorCode> {
+        let n = f.req(k).and_then(uint).map_err(|_| ErrorCode::Malformed)?;
+        u32::try_from(n).map_err(|_| ErrorCode::InvalidInput)
+    };
+    let opt_small = |k: u64| -> Result<u32, ErrorCode> {
+        match f.opt(k) {
+            None => Ok(0),
+            Some(v) => {
+                let n = uint(v).map_err(|_| ErrorCode::Malformed)?;
+                u32::try_from(n).map_err(|_| ErrorCode::InvalidInput)
+            }
+        }
+    };
+    let rules = || -> Result<u64, ErrorCode> {
+        match f.opt(7) {
+            None => Ok(0),
+            Some(v) => uint_in(v, 0..=generator::rules::ALL).map_err(|_| ErrorCode::InvalidInput),
+        }
+    };
+    let set = |k: u64| -> Result<Option<String>, ErrorCode> {
+        f.opt(k)
+            .map(|v| {
+                text_max(v, MAX_SET_TEXT)
+                    .map(str::to_owned)
+                    .map_err(|_| ErrorCode::InvalidInput)
+            })
+            .transpose()
+    };
+    match mode {
+        mode::CHARACTERS => {
+            let classes = f
+                .req(3)
+                .and_then(|v| uint_in(v, 1..=classes::ALL))
+                .map_err(|_| ErrorCode::InvalidInput)?;
+            let items = array_max(f.req(4).map_err(|_| ErrorCode::Malformed)?, 4)
+                .map_err(|_| ErrorCode::Malformed)?;
+            if items.len() != 4 {
+                return Err(ErrorCode::Malformed);
+            }
+            let mut minimums = [0u8; 4];
+            for (slot, item) in minimums.iter_mut().zip(items) {
+                let n = uint_in(item, 0..=u64::from(generator::MAX_MINIMUM))
+                    .map_err(|_| ErrorCode::InvalidInput)?;
+                *slot = u8::try_from(n).map_err(|_| ErrorCode::InvalidInput)?;
+            }
+            Ok(Spec::Characters {
+                length: small(2)?,
+                classes,
+                minimums,
+                symbols: set(5)?,
+                excluded: set(6)?.unwrap_or_default(),
+                rules: rules()?,
+            })
+        }
+        mode::PASSPHRASE => {
+            let separator = text_max(f.req(8).map_err(|_| ErrorCode::Malformed)?, 1)
+                .map_err(|_| ErrorCode::InvalidInput)?;
+            let mut chars = separator.chars();
+            let (Some(separator), None) = (chars.next(), chars.next()) else {
+                return Err(ErrorCode::InvalidInput);
+            };
+            Ok(Spec::Passphrase {
+                words: small(2)?,
+                separator,
+                capitalize: opt_bool(f.opt(9))?,
+                digits: opt_small(10)?,
+            })
+        }
+        mode::PRONOUNCEABLE => Ok(Spec::Pronounceable {
+            syllables: small(2)?,
+            capitalize: opt_bool(f.opt(9))?,
+            digits: opt_small(10)?,
+            rules: rules()?,
+        }),
+        mode::PIN => Ok(Spec::Pin {
+            length: small(2)?,
+            rules: rules()?,
+        }),
+        _ => Ok(Spec::Template {
+            template: text_max(
+                f.req(11).map_err(|_| ErrorCode::Malformed)?,
+                generator::MAX_TEMPLATE,
+            )
+            .map_err(|_| ErrorCode::InvalidInput)?
+            .to_owned(),
+            symbols: set(5)?,
+            excluded: set(6)?.unwrap_or_default(),
+            rules: rules()?,
+        }),
+    }
+}
 
 fn fields<'a>(v: &'a Value, allowed: &[u64]) -> Result<Fields<'a>, ErrorCode> {
     Fields::new(v, allowed).map_err(|_| ErrorCode::Malformed)

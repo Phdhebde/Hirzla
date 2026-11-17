@@ -17,6 +17,9 @@
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
  * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
  *   lock_on_session_lock: boolean }} VaultSettings
+ * @typedef {{ keep_in_tray: boolean, tray_available: boolean }} LocalPreferences
+ * @typedef {"username" | "password" | "username_password" | "notes" | "ssh_passphrase"} TypedWhat
+ * @typedef {{ name: string, path: string, title: string, terminal: boolean, can_remember: boolean }} AutoTypeTarget
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
  *   username: string | null, fields: string[], changed: string[], custom: number }} Version
  * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
@@ -28,26 +31,34 @@
  * @typedef {{ id: string, name: string | null, role: RoleName | null, unsent: number, pending: number,
  *   quarantined: number, access: boolean, frozen: boolean }} SharedLocker
  * @typedef {"foreign_member_key" | "unknown_device" | "unknown_revocation" | "withheld_removal" |
- *   "uninscribed_removal" | "withheld_inscription" | "withheld_operation"} AlertKind
+ *   "uninscribed_removal" | "withheld_inscription" | "withheld_operation" | "unknown_profile"} AlertKind
  * @typedef {{ kind: AlertKind, index: number | null, device: string | null, locker: string | null }} KeyLogAlert
  * @typedef {{ suspect: boolean, reason: "root" | "shorter" | "rule" | "peer" | "proof" | null, entries: number,
  *   alerts: KeyLogAlert[] }} KeyLog
  * @typedef {{ joined: boolean, url: string | null, server_id: string | null, fingerprint: string | null,
  *   verified: boolean, last_sync_ms: number | null, keylog: KeyLog | null, lockers: SharedLocker[] }} ServerStatus
- * @typedef {{ member: string, fingerprint: string, device: string, control_code: string }} Identity
+ * @typedef {{ member: string, fingerprint: string, device: string, control_code: string, name: string | null }} Identity
  * @typedef {{ fingerprint: string, verified: boolean, account: boolean }} Joined
  * @typedef {{ locker: string, received: number, sent: number, refused: number, access: boolean }} SyncReport
  * @typedef {{ member: string, me: boolean, role: RoleName, devices: number, fingerprint: string, proven: boolean,
- *   change_to: RoleName[], change_refusal: Refusal | null, remove_refusal: Refusal | null }} Member
+ *   change_to: RoleName[], change_refusal: Refusal | null, remove_refusal: Refusal | null, name: string | null,
+ *   verified: boolean }} Member
  * @typedef {{ me: string, members: Member[], grantable: RoleName[], grant_refusal: Refusal | null,
  *   quorum: number | null }} Members
  * @typedef {"owner_removal" | "owner_role_change" | "policy"} QuorumActionName
  * @typedef {{ request: string, locker: string, action: QuorumActionName, target: string | null,
  *   role: RoleName | null, quorum: number | null, counted: string[], required: number, offer: string,
- *   created_ms: number }} QuorumRequest
+ *   created_ms: number, sent_ms: number | null, declined: string[], queued: number }} QuorumRequest
+ * @typedef {{ member: string, name: string, fingerprint: string, verified: boolean }} FoundMember
+ * @typedef {{ members: FoundMember[], more: boolean }} MemberSearch
+ * @typedef {{ request: string, locker: string, name: string | null, action: QuorumActionName, target: string | null,
+ *   target_fingerprint: string | null, target_name: string | null, target_verified: boolean, role: RoleName | null,
+ *   quorum: number | null, issuer: string, issuer_fingerprint: string | null, issuer_name: string | null,
+ *   issuer_verified: boolean, can_sign: boolean, required: number, received_ms: number, offer: string }} ReceivedRequest
  * @typedef {{ locker: string, name: string | null, action: QuorumActionName, target: string | null,
  *   target_fingerprint: string | null, role: RoleName | null, quorum: number | null, issuer: string,
- *   issuer_fingerprint: string | null, can_sign: boolean }} Inspected
+ *   issuer_fingerprint: string | null, can_sign: boolean, target_name: string | null,
+ *   issuer_name: string | null }} Inspected
  * @typedef {{ op_id: string, member: string, device: string, cause: "removal" | "fork", class: "data" | "control",
  *   wall_ms: number | null, title: string | null, secret: string | null, received_ms: number,
  *   due_ms: number }} QuarantinedOp
@@ -92,6 +103,35 @@ export function toApiError(e) {
   return { code: "internal", message: "Erreur inattendue de l'application.", retry_after_s: null };
 }
 
+/**
+ * Settings of the generator (ADR 0068), one shape per mode.
+ * @typedef {{ mode: "characters", length: number, lower: boolean, upper: boolean, digits: boolean, symbols: boolean,
+ *             minimums: [number, number, number, number], symbol_set: string | null, excluded: string,
+ *             no_ambiguous: boolean, same_keys: boolean, no_repeat: boolean, start_letter: boolean }
+ *   | { mode: "passphrase", words: number, separator: string, capitalize: boolean, digits: number }
+ *   | { mode: "pronounceable", syllables: number, capitalize: boolean, digits: number, no_ambiguous: boolean }
+ *   | { mode: "pin", length: number, no_repeat: boolean, no_sequence: boolean }
+ *   | { mode: "template", template: string, symbol_set: string | null, excluded: string,
+ *       no_ambiguous: boolean, same_keys: boolean, no_repeat: boolean }} GeneratorSpec
+ * @typedef {{ id: string, target_bits: number, spec: GeneratorSpec }} GeneratorProfile
+ * @typedef {{ values: string[], strength: { entropy_millibits: number, pool: number } }} GeneratedBatch
+ */
+
+/**
+ * SSH and RDP connections (local API version 6, ADR 0067).
+ * @typedef {"valid" | "broken" | "trashed" | "wrong_type" | "loop"} LinkState
+ * @typedef {{ locker: string, id: string, state: LinkState, title: string | null, host: string | null,
+ *   port: number | null, username: string | null, public_key: string | null }} ResolvedLink
+ * @typedef {{ kind: "ssh" | "rdp", trashed: boolean, title: string | null, host: string | null,
+ *   port: number | null, effective_port: number, username: string | null, domain: string | null,
+ *   host_key: string | null, favorite: boolean, has_password: boolean, has_notes: boolean, tags: string[],
+ *   ssh_key: ResolvedLink | null, jumps: ResolvedLink[] }} ConnectionCard
+ * @typedef {{ title?: string, host?: string, port?: number, username?: string, domain?: string,
+ *   password?: string, ssh_key?: SecretRef, jump?: SecretRef, host_key?: string, notes?: string,
+ *   favorite?: boolean }} ConnectionFields
+ * @typedef {"port" | "username" | "domain" | "password" | "ssh_key" | "jump" | "host_key" | "notes"} ConnectionClear
+ */
+
 export const api = {
   /** @returns {Promise<Status>} */
   status: () => call("app_status"),
@@ -117,8 +157,52 @@ export const api = {
   generate: (options) => call("generate_password", { options }),
   /** @returns {Promise<number>} */
   copyGenerated: () => call("copy_generated"),
+  /** @returns {Promise<GeneratorProfile[]>} */
+  generatorProfiles: () => call("generator_profiles"),
+  /** @param {GeneratorSpec} spec @param {number} count @returns {Promise<GeneratedBatch>} */
+  generateWith: (spec, count) => call("generate_with", { spec, count }),
+  /** @param {number} index @returns {Promise<number>} */
+  copyGeneratedAt: (index) => call("copy_generated_at", { index }),
   /** @returns {Promise<ImportReport>} */
   importCsv: () => call("import_csv"),
+
+  // Connections (local API version 6).
+  /**
+   * @param {{ kind: "ssh" | "rdp", locker: string | null, fields: ConnectionFields, tags: string[] }} connection
+   * @returns {Promise<SecretRef>}
+   */
+  createConnection: (connection) => call("create_connection", { connection }),
+  /** @param {SecretRef} target @returns {Promise<ConnectionCard>} */
+  connectionCard: (target) => call("connection_card", { target }),
+  /** @param {SecretRef} target @param {ConnectionFields} set @param {ConnectionClear[]} clear @returns {Promise<void>} */
+  updateConnection: (target, set, clear) => call("update_connection", { target, set, clear }),
+  /** @returns {Promise<string>} Name of the chosen file. */
+  chooseSshKeyFile: () => call("choose_ssh_key_file"),
+  /**
+   * @param {{ locker: string | null, title: string, passphrase?: string, username?: string, tags: string[] }} key
+   * @returns {Promise<SecretRef>}
+   */
+  createSshKey: (key) => call("create_ssh_key", { key }),
+
+  // This workstation (ADR 0071).
+  /** @returns {Promise<LocalPreferences>} */
+  getPreferences: () => call("get_preferences"),
+  /** @param {boolean} keepInTray @returns {Promise<LocalPreferences>} */
+  setPreferences: (keepInTray) => call("set_preferences", { keep_in_tray: keepInTray }),
+
+  // Typing into another application (ADR 0072).
+  /** @returns {Promise<boolean>} */
+  autoTypeAvailable: () => call("auto_type_available"),
+  /** @param {SecretRef} target @param {TypedWhat} what @returns {Promise<{ typed: boolean, target: AutoTypeTarget }>} */
+  autoTypePrepare: (target, what) => call("auto_type_prepare", { target, what }),
+  /** @param {boolean} remember @returns {Promise<void>} */
+  autoTypeConfirm: (remember) => call("auto_type_confirm", { remember }),
+  /** @returns {Promise<void>} */
+  autoTypeCancel: () => call("auto_type_cancel"),
+  /** @returns {Promise<string[]>} */
+  autoTypeTrusted: () => call("auto_type_trusted"),
+  /** @param {string | null} path  One application, or all of them. @returns {Promise<string[]>} */
+  autoTypeForget: (path) => call("auto_type_forget", { path }),
 
   // Self mode (local API version 5).
   /** @returns {Promise<VaultSettings>} */
@@ -198,6 +282,19 @@ export const api = {
   quorumApply: (request) => call("quorum_apply", { request }),
   /** @param {string} request @returns {Promise<void>} */
   quorumCancel: (request) => call("quorum_cancel", { request }),
+  // Display names and requests carried by the server (ADR 0069, ADR 0070).
+  /** @param {string} name  Empty to withdraw the name. @returns {Promise<void>} */
+  profileSet: (name) => call("profile_set", { name }),
+  /** @param {string} text @returns {Promise<MemberSearch>} */
+  memberSearch: (text) => call("member_search", { text }),
+  /** @param {string} member @param {string} fingerprint @returns {Promise<void>} */
+  memberVerify: (member, fingerprint) => call("member_verify", { member, fingerprint }),
+  /** @param {string} request @returns {Promise<QuorumRequest>} */
+  quorumSend: (request) => call("quorum_send", { request }),
+  /** @returns {Promise<ReceivedRequest[]>} */
+  quorumInbox: () => call("quorum_inbox"),
+  /** @param {string} locker @param {string} request @param {boolean} accept @returns {Promise<string | null>} */
+  quorumRespond: (locker, request, accept) => call("quorum_respond", { locker, request, accept }),
   /** @param {string} locker @returns {Promise<Quarantine>} */
   quarantineList: (locker) => call("quarantine_list", { locker }),
   /** @param {string} locker @param {string[]} ops @param {boolean} accept @returns {Promise<void>} */

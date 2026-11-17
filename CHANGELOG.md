@@ -8,10 +8,35 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [Non publié]
+
+### Connexions SSH et RDP (ADR 0067)
+
+- Deux types de secret : connexion SSH et connexion RDP (hôte, port, identifiant, domaine,
+  mot de passe, clé SSH liée, rebond, empreinte de l'hôte). Le coffre les range et les
+  montre ; il n'ouvre aucune session.
+- Format du coffre v2, sur-ensemble du v1 : un coffre v1 s'ouvre sans changement et ne passe
+  en v2 qu'à l'écriture de sa première connexion, dans la même transaction.
+- API locale version 6 (`docs/api-locale.md` § 17) : `ConnectionCreate`, `ConnectionRead`,
+  `ConnectionUpdate`, `SshKeyCreate`, profil complet seulement. La clé privée n'est jamais
+  rendue.
+- Ligne de commande : `connexion ssh|rdp|voir|modifier`, `cle-ssh ajouter`.
+
+### Générateur
+
+- Cinq modes : caractères, phrase de passe (liste française embarquée de 2 048 mots),
+  prononçable, code PIN et modèle (ADR 0068).
+- Réglages : minimum par famille, symboles et exclusions au choix, règles « sans ambigus »,
+  « mêmes touches en AZERTY et en QWERTY », « sans répétition », « lettre en tête ».
+- Entropie renvoyée avec chaque valeur, calculée après filtrage par les règles.
+- Profils intégrés, dont « longue durée » à 256 bits.
+- API locale version 7 : opération `GenerateWith` (14). `Generate` (10) ne change pas.
+- Ligne de commande : `hirzla gen --mode …`, `--profil …` et les réglages correspondants.
+
 ## [1.0.0] — 2026-11-16
 
 Première version publiée. Installeurs pour Windows (MSI), macOS (paquet d'installation
-`.pkg`, Apple Silicon) et Linux (deb, rpm, AppImage), ligne de commande et serveur `hirzlad`
+`.pkg`, Apple Silicon) et Linux (deb, rpm), ligne de commande et serveur `hirzlad`
 pour Linux, extension Firefox et Chromium.
 
 ### Cryptographie
@@ -52,6 +77,16 @@ pour Linux, extension Firefox et Chromium.
 - Accords et quorum, quarantaine, gel des écritures et délais (ADR 0044, 0045) ; lien
   d'invitation (ADR 0046) ; purge et rétention configurable des opérations tardives
   (ADR 0047, 0058) ; révocation de son propre appareil depuis une alerte (ADR 0059).
+- Nom affiché des membres : signé par la clé du membre, inscrit au registre de transparence
+  (entrée de type 6, règle R7), recherche dans l'annuaire du serveur, vérification de toute
+  la chaîne par le poste avant d'afficher un nom, drapeau « empreinte comparée » et alerte
+  « nom affiché inconnu inscrit à votre nom » (ADR 0069 ; `hirzla serveur nom`,
+  `serveur chercher`, `serveur verifier`).
+- Demandes d'accord transportées par le serveur : scellées pour chaque appareil
+  propriétaire et signées par l'appareil expéditeur, de taille fixe, avec un leurre pour la
+  cible ; boîte « à examiner », refus et retraits ; le serveur les garde 30 jours au plus sans
+  pouvoir les lire ni les signer, et l'échange par copie reste possible (ADR 0070 ;
+  `hirzla accord envoyer`, `accord recues`, `accord repondre`).
 - Sceau du serveur à quorum, descellement et administration par un port distinct à
   certificat client (`hirzlad admin`, ADR 0053) ; bornes de connexion réglables (ADR 0051).
 - Journal d'audit chaîné et signé, export CEF et syslog TLS, vérification hors ligne par

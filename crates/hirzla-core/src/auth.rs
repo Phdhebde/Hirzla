@@ -93,6 +93,8 @@ impl ClientProfile {
                 Request::Status
                 | Request::Lock
                 | Request::Generate { .. }
+                | Request::GenerateWith { .. }
+                | Request::ShowApp
                 | Request::Match { .. }
                 | Request::Fill { .. } => true,
                 // A new login proposed by the extension: a password secret, bound to at
@@ -109,6 +111,9 @@ impl ClientProfile {
                 | Request::Read { .. }
                 | Request::Update { .. }
                 | Request::Delete { .. }
+                // Only the desktop application takes the call for its window.
+                | Request::AppPoll
+                | Request::AutoTyped { .. }
                 | Request::Shutdown => false,
             },
         }
@@ -341,6 +346,10 @@ mod tests {
                 length: 20,
                 classes: 15,
             },
+            Request::GenerateWith {
+                spec: crate::generator::Profile::Default.spec(),
+            },
+            Request::ShowApp,
             Request::Match {
                 origin: "https://a.example".into(),
             },
@@ -352,6 +361,11 @@ mod tests {
             create(None, SecretType::Password, vec![z("https://a.example")]),
         ];
         let refused = [
+            Request::AppPoll,
+            Request::AutoTyped {
+                what: crate::proto::Typed::Password,
+                terminal: false,
+            },
             Request::Init {
                 password: z("p"),
                 kdf: None,

@@ -31,12 +31,21 @@ pub struct AppState {
     link: Mutex<Result<CoreLink, DesktopError>>,
     pub(crate) clipboard: SecretClipboard,
     generated: Mutex<Option<Zeroizing<String>>>,
+    /// Values of the last batch of the generator screen ([`crate::generator`]).
+    pub(crate) generated_batch: Mutex<Vec<Zeroizing<String>>>,
     /// KeePass database chosen with the file picker, waiting for its password.
     pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
+    /// SSH private key file chosen with the file picker, waiting for its title.
+    pub(crate) pending_ssh_key: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
     pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
     /// Site CA chosen with the file picker, waiting for the address of the server.
     pub(crate) pending_ca: Mutex<Option<crate::servermode::PendingCa>>,
+    /// A typing into another application waiting for the user's agreement
+    /// ([`crate::autotype`]).
+    pub(crate) pending_auto_type: Mutex<Option<crate::autotype::Pending>>,
+    /// Local preferences ([`crate::prefs`]), loaded at start.
+    pub(crate) prefs: Mutex<crate::prefs::PrefsStore>,
 }
 
 pub(crate) fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -52,9 +61,13 @@ impl AppState {
             link: Mutex::new(link),
             clipboard: SecretClipboard::default(),
             generated: Mutex::new(None),
+            generated_batch: Mutex::new(Vec::new()),
             pending_kdbx: Mutex::new(None),
+            pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
+            pending_auto_type: Mutex::new(None),
+            prefs: Mutex::new(crate::prefs::PrefsStore::default()),
         }
     }
 
@@ -77,7 +90,21 @@ impl AppState {
     /// generated password.
     pub(crate) fn forget(&self) {
         self.clipboard.clear_now();
+        *guard(&self.pending_auto_type) = None;
         *guard(&self.generated) = None;
+        guard(&self.generated_batch).clear();
+    }
+
+    /// Asks the core whether the window was called for (`AppPoll`, ADR 0071), and takes the
+    /// call.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn app_poll(&self) -> Result<bool, DesktopError> {
+        match self.call(&Request::AppPoll)? {
+            Reply::Flag(called) => Ok(called),
+            _ => Err(DesktopError::Protocol),
+        }
     }
 
     /// On exit: lock the vault and clear the clipboard. Errors are ignored: the core locks
@@ -217,6 +244,12 @@ pub struct StatusDto {
 }
 
 impl StatusDto {
+    /// `absent`, `locked` or `unlocked`.
+    #[must_use]
+    pub fn state(&self) -> &'static str {
+        self.state
+    }
+
     fn new(s: StatusInfo, app: Option<HardeningReport>) -> StatusDto {
         StatusDto {
             state: match s.state {
@@ -246,6 +279,8 @@ fn type_name(t: u64) -> &'static str {
         4 => "passkey",
         5 => "note",
         6 => "file",
+        7 => "ssh_connection",
+        8 => "rdp_connection",
         _ => "unknown",
     }
 }
@@ -564,7 +599,7 @@ impl AppState {
         }
     }
 
-    fn read_text(
+    pub(crate) fn read_text(
         &self,
         target: &SecretRef,
         field: FieldName,

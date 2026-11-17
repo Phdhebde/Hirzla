@@ -67,3 +67,17 @@ export function announce(text, ms = 4000) {
 export function mask() {
   return "••••••••••••";
 }
+
+/**
+ * An icon of the sprite of index.html (`<symbol id="i-…">`), as a decorative `<svg>`.
+ * @param {string} name
+ * @param {string} [cls]  Extra class names.
+ * @returns {Element}
+ */
+export function icon(name, cls = "") {
+  const template = /** @type {HTMLTemplateElement} */ (byId("gabarit-icone"));
+  const svg = /** @type {Element} */ (/** @type {Element} */ (template.content.firstElementChild).cloneNode(true));
+  svg.querySelector("use")?.setAttribute("href", `#i-${name}`);
+  if (cls) svg.setAttribute("class", `icone ${cls}`);
+  return svg;
+}

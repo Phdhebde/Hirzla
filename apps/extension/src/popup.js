@@ -9,6 +9,7 @@ import {
   generate,
   listForTab,
   lockVault,
+  showApp,
   readLoginForTab,
   saveLogin,
   useGeneratedForTab,
@@ -48,15 +49,26 @@ function renderEntries(entries) {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'entry';
+    const badge = document.createElement('span');
+    badge.className = 'badge';
+    badge.setAttribute('aria-hidden', 'true');
+    badge.textContent = (e.title.trim()[0] ?? '?').toUpperCase();
+    const names = document.createElement('span');
+    names.className = 'names';
     const t = document.createElement('span');
+    t.className = 'title';
     t.textContent = e.title;
-    b.append(t);
+    names.append(t);
     if (e.username) {
       const u = document.createElement('span');
       u.className = 'user';
       u.textContent = e.username;
-      b.append(u);
+      names.append(u);
     }
+    const fill = document.createElement('span');
+    fill.className = 'fill';
+    fill.textContent = 'Remplir';
+    b.append(badge, names, fill);
     b.addEventListener('click', async () => {
       b.disabled = true;
       const r = await fillForTab(tab, e);
@@ -70,6 +82,13 @@ function renderEntries(entries) {
     li.append(b);
     list.append(li);
   }
+}
+
+/** The vault's state as the popup knows it: `null` when the core did not answer. */
+function showState(open) {
+  show('state', open !== null);
+  $('state').classList.toggle('open', open === true);
+  $('state-text').textContent = open ? 'Ouvert' : 'Verrouillé';
 }
 
 function openSaveForm(login) {
@@ -93,19 +112,27 @@ async function refresh() {
   origin = r.origin ?? null;
   show('site', origin !== null);
   $('origin').textContent = origin ?? '';
+  $('site').classList.toggle('verified', r.ok);
+  $('site-note').textContent = r.ok ? 'Site vérifié : domaine exact, en https' : '';
+  showState(r.ok ? true : r.error === 'locked' ? false : null);
   if (!r.ok) {
     say(r.error);
     show('logins', false);
     show('actions', false);
     show('lock', r.error !== 'locked' && r.error !== 'no_vault' && origin !== null);
+    // The application is where the vault is created and unlocked.
+    show('open-app', ['locked', 'no_vault', 'unsupported_page'].includes(r.error));
     return;
   }
   say(null);
+  show('open-app', false);
   show('lock');
   show('actions');
   renderEntries(r.entries);
   show('logins', r.entries.length > 0);
   show('truncated', r.truncated);
+  // The first match takes the focus: Enter fills it, as a click would.
+  $('entries').querySelector('button')?.focus();
   if (r.entries.length === 0) sayText('Aucun identifiant enregistré pour ce site exact.');
 }
 
@@ -148,6 +175,13 @@ async function main() {
     const r = await useGeneratedForTab(tab, password);
     if (!r.ok) return say(r.error);
     openSaveForm({ ...r, password });
+  });
+
+  $('open-app').addEventListener('click', async () => {
+    const r = await showApp();
+    if (!r.ok) return say(r.error);
+    // The window of the application takes the focus; nothing more to do here.
+    window.close();
   });
 
   $('lock').addEventListener('click', async () => {

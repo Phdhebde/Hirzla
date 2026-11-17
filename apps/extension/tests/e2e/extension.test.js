@@ -335,6 +335,11 @@ test('the browser profile cannot list, read or unlock: only what the host expose
   }
 });
 
+test('calling for the application window: the host starts nothing', async () => {
+  assert.deepEqual(await ask({ type: 'show' }), { ok: false, error: 'no_app' });
+  assert.deepEqual(await ask({ type: 'show', origin: 'https://bank.test' }), { ok: false, error: 'bad_request' });
+});
+
 test('locking from the extension; nothing is filled while locked', async () => {
   assert.deepEqual(await ask({ type: 'lock' }), { ok: true });
   const { page, url } = await open('https://bank.test/login');

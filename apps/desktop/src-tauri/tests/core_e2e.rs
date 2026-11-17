@@ -583,3 +583,200 @@ Vk83Xgz+gJqOWhcSegKX485IMqnibTUCMHVUfZhnI/haugLJx2PwOGp8Qz0T7GP9\n\
 r62SVJqDcufcgXZY7rsiQYxB762fYktrWA==\n\
 -----END CERTIFICATE-----\n\
 ";
+
+/// ADR 0071: a second start reaches the first application through the core, exactly once;
+/// without an application, or without a core, it has nobody to hand over to.
+#[test]
+fn a_second_start_calls_the_window_of_the_first() {
+    use hirzla_desktop::link::another_instance_shown;
+
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    // No core: the second start becomes the application.
+    assert!(!another_instance_shown(&config(&sock)));
+    let _core = start_core(dir.path(), &sock, true);
+    // A core, but no application polling it. This also tests the retry: the next call
+    // comes within the second.
+    assert!(!another_instance_shown(&config(&sock)));
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    assert!(!state.app_poll().unwrap());
+    assert!(another_instance_shown(&config(&sock)));
+    assert!(state.app_poll().unwrap());
+    assert!(!state.app_poll().unwrap());
+    // The call is not activity and works with no vault at all.
+    assert_eq!(state.status().unwrap().state(), "absent");
+}
+
+/// ADR 0072, the whole chain on a display of its own: a user name and a password read from
+/// a real core are typed into a terminal, and the core's log says so without naming them.
+/// Linux with `Xvfb` and `xterm` only. The test runs itself again with `DISPLAY` set, so
+/// that the environment of the other tests is never touched.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_secret_is_typed_into_another_application() {
+    use hirzla_desktop::autotype::TypedWhat;
+    use hirzla_keystore::platform::{foreground_window, AutoTypeError};
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xproto::{ConnectionExt as _, InputFocus, MapState};
+
+    const CHILD: &str = "HIRZLA_AUTOTYPE_E2E_OUT";
+    const USER: &str = "max@exemple.fr";
+    const TYPED: &str = "Tapé-é€-7f1c~{}";
+
+    let installed = |program: &str| {
+        std::env::var_os("PATH")
+            .is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
+    };
+    let wait = |what: &str, f: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !f() {
+            assert!(Instant::now() < deadline, "timeout: {what}");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    };
+
+    let Some(out) = std::env::var_os(CHILD).map(PathBuf::from) else {
+        if !installed("Xvfb") || !installed("xterm") {
+            eprintln!("skipped: Xvfb or xterm is not installed");
+            return;
+        }
+        let dir = private_dir();
+        let out = dir.path().join("typed.txt");
+        let display = format!(":{}", 3000 + std::process::id() % 20000);
+        let _server = Core(
+            Command::new("Xvfb")
+                .args([&display, "-screen", "0", "640x480x24", "-nolisten", "tcp"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        wait("display", &mut || {
+            x11rb::rust_connection::RustConnection::connect(Some(&display)).is_ok()
+        });
+        let status = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "a_secret_is_typed_into_another_application",
+                "--nocapture",
+            ])
+            .env("DISPLAY", &display)
+            .env_remove("WAYLAND_DISPLAY")
+            .env_remove("XDG_SESSION_TYPE")
+            .env(CHILD, &out)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        return;
+    };
+
+    // From here on: the child, on the private display.
+    let (conn, screen) = x11rb::rust_connection::RustConnection::connect(None).unwrap();
+    let root = conn.setup().roots[screen].root;
+    let script = format!("stty raw -echo; cat > '{}'", out.display());
+    let _terminal = Core(
+        Command::new("xterm")
+            .env("LC_ALL", "C.UTF-8")
+            .args(["-u8", "-e", "sh", "-c", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let mut window = 0;
+    wait("terminal window", &mut || {
+        let Some(w) = conn
+            .query_tree(root)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .children
+            .first()
+            .copied()
+        else {
+            return false;
+        };
+        window = w;
+        conn.get_window_attributes(w)
+            .unwrap()
+            .reply()
+            .unwrap()
+            .map_state
+            == MapState::VIEWABLE
+            && out.exists()
+    });
+    conn.set_input_focus(InputFocus::POINTER_ROOT, window, 0u32)
+        .unwrap();
+    conn.get_input_focus().unwrap().reply().unwrap();
+
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+    let secret = state
+        .create_secret(
+            serde_json::from_value(serde_json::json!({
+                "kind": "password", "locker": null, "title": "Poste",
+                "username": USER, "password": TYPED, "notes": "ligne 1\nligne 2"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+    let target = foreground_window().unwrap();
+    assert!(!target.is_own());
+    state
+        .auto_type(&target, &secret, TypedWhat::UsernamePassword)
+        .unwrap();
+    let want = format!("{USER}\t{TYPED}");
+    wait("typed text", &mut || {
+        std::fs::read_to_string(&out).is_ok_and(|got| got.len() >= want.len())
+    });
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), want);
+
+    // A line break would be an Enter key: the notes are refused whole, nothing is typed.
+    assert_eq!(
+        state
+            .auto_type(&target, &secret, TypedWhat::Notes)
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    // Locked: nothing to read, nothing typed.
+    state.lock().unwrap();
+    assert_eq!(
+        state
+            .auto_type(&target, &secret, TypedWhat::Password)
+            .unwrap_err()
+            .code(),
+        "locked"
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), want);
+    assert_ne!(
+        foreground_window().map(|w| w.same_window(&target)),
+        Err(AutoTypeError::Unsupported)
+    );
+
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=auto_type what=username_and_password target=terminal"),
+        "{log}"
+    );
+    assert_eq!(log.matches("event=auto_type").count(), 1);
+    for needle in [USER, TYPED, "xterm", "Poste"] {
+        assert!(!log.contains(needle), "the core log holds {needle:?}");
+    }
+}

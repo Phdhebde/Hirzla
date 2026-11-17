@@ -399,6 +399,59 @@ impl Client {
         MemberKeysResult::from_value(&m.body)
     }
 
+    /// `PutMemberProfile` (§ 11.11, ADR 0069): asks the server to inscribe a profile signed
+    /// by the member key. Returns the rank of its entry in the key log.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn put_member_profile(&mut self, profile: &[u8]) -> Result<u64, NetError> {
+        let m = self.request(kind::PUT_MEMBER_PROFILE, proto::blob_value(profile))?;
+        proto::read_index(&m.body)
+    }
+
+    /// `FindMembers` (§ 11.11, ADR 0069): the members whose current name holds `query`.
+    /// Nothing in the answer is trusted: the caller checks each profile against its own key
+    /// log.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn find_members(&mut self, query: &str) -> Result<proto::MembersFound, NetError> {
+        let m = self.request(kind::FIND_MEMBERS, proto::find_members_value(query))?;
+        proto::MembersFound::from_value(&m.body)
+    }
+
+    /// `GetKeyLogObject` (`transparence.md` § 4): the object whose SHA-384 is `hash`. The
+    /// caller hashes the answer itself.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn keylog_object(&mut self, hash: &[u8; 48], max: usize) -> Result<Vec<u8>, NetError> {
+        let m = self.request(kind::GET_KEYLOG_OBJECT, proto::object_hash_value(hash))?;
+        proto::read_blob(&m.body, max)
+    }
+
+    /// `MailPut` (§ 11.12, ADR 0070): one status per mail, 0 when kept.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn mail_put(&mut self, mails: &[Vec<u8>]) -> Result<Vec<u64>, NetError> {
+        let m = self.request(kind::MAIL_PUT, proto::mail_put_value(mails))?;
+        let statuses = proto::read_mail_put_result(&m.body)?;
+        if statuses.len() != mails.len() {
+            return Err(NetError::Malformed);
+        }
+        Ok(statuses)
+    }
+
+    /// `MailGet` (§ 11.12): erases the mails `ack`, then returns at most `limit` waiting.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn mail_get(&mut self, ack: &[Id16], limit: u64) -> Result<proto::MailItems, NetError> {
+        let m = self.request(kind::MAIL_GET, proto::mail_get_value(ack, limit))?;
+        proto::MailItems::from_value(&m.body)
+    }
+
     /// `MailboxPut` (§ 11.5).
     ///
     /// # Errors
