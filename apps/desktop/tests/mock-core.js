@@ -419,6 +419,17 @@
       kdbxKey = null;
       return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
     },
+    export_locker: (a) => {
+      if (a.password !== null && a.password.length < 16) return refuse("export_password_weak", "Mot de passe trop faible : au moins 16 caractères, dont 8 différents.");
+      const password = a.password === null ? "falaise-orage-brindille-tamis-lanterne-cobalt-vergue-osier" : null;
+      return { password, file: "Atelier.hirzla-export", secrets: 3, trashed: 1, attachments: 0, links_dropped: 0 };
+    },
+    copy_export_password: () => 30,
+    choose_export_file: () => "Equipe-reseau.hirzla-export",
+    import_locker: (a) => {
+      if (a.password !== "falaise-orage-brindille-tamis-lanterne-cobalt-vergue-osier") return refuse("export_key_rejected", "Mot de passe incorrect, ou fichier d'export altéré. Rien n'a été importé.");
+      return { locker: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b", secrets: 12, attachments: 1, folders_as_tags: 2, refused: 0 };
+    },
     server_status: () => {
       if (!S.joined) return { joined: false, url: null, server_id: null, fingerprint: null, verified: false, last_sync_ms: null, keylog: null, lockers: [] };
       return {

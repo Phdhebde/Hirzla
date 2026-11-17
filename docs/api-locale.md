@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v7
+# API locale du noyau — spécification v9
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -10,7 +10,8 @@ sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
 les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
-§ 6.2) par l'ADR 0068.
+§ 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
+chiffré d'un casier (version 10, § 19) par l'ADR 0077.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -476,7 +477,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) et les méthodes de déverrouillage matérielles (version 12, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19) et les méthodes de déverrouillage matérielles (version 12, § 20) ont leurs propres versions et ne sont pas annoncés par `Status`.
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
@@ -508,7 +509,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
-RDP au § 17.5, celles des méthodes de déverrouillage matérielles au § 19.5.
+RDP au § 17.5, celles des méthodes de déverrouillage matérielles au § 20.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -583,11 +584,15 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
-- Méthodes de déverrouillage (§ 19) : `UnlockMethods` (écran de déverrouillage et Réglages ›
+- Méthodes de déverrouillage (§ 20) : `UnlockMethods` (écran de déverrouillage et Réglages ›
   Déverrouillage), `EnrollMethod`, `UnlockWithMethod`, `RemoveMethod`. L'écran de
   déverrouillage propose la première méthode matérielle utilisable au-dessus du mot de passe
   maître ; le geste n'est lancé que sur demande. Seule `UnlockMethods` est renvoyée sur une
   nouvelle connexion : un geste n'est jamais demandé deux fois.
+- Export de casier (§ 19) : `LockerExport` et `LockerImport`, depuis les réglages. Le fichier
+  est choisi par le sélecteur du système ; la vue web reçoit son nom, les nombres du compte
+  rendu et, une fois, la phrase de passe tirée, que le bouton « Copier » copie par le processus
+  Rust.
 - Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
   `ActiveChanged` de l'économiseur d'écran sur D-Bus, et envoie `SystemEvent` (ADR 0033).
 - Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers quand elle
@@ -1512,7 +1517,88 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
-## 19. Méthodes de déverrouillage matérielles (version 12)
+## 19. Export chiffré d'un casier (version 10)
+
+Décision : ADR 0077. Format du fichier : `format.md` § 16. Le noyau parle en plus la
+**version 10**, qui écrit une copie chiffrée d'un casier du coffre et importe une telle copie
+comme un nouveau casier. Codes : opérations **140 à 149**, erreurs **140 à 149** réservées.
+Code : `crates/hirzla-core/src/locker_export`, `hirzla_vault::export`.
+
+La version 9 est celle du mode Self (fichier clé d'`ImportKdbx`, § 16) : l'export prend la
+version 10. Une requête d'export en version 9 reçoit `UnsupportedVersion`.
+
+### 19.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+140 à 149 va à l'export ; elle doit porter `v = 10`, sinon `UnsupportedVersion` avec `{2: [10]}`. Un code de la
+plage sans opération : `UnknownOperation`. Les réponses portent `v = 10`. Réservé au profil
+complet : le profil navigateur reçoit `Unauthorized`, et le refus est journalisé. `Status` (§ 6)
+n'annonce pas la version 10 : un noyau plus ancien répond `UnknownOperation` dans sa propre
+version.
+
+Le noyau lit et écrit **lui-même** le fichier, au chemin absolu donné (4 096 octets au plus) : un
+export peut dépasser la taille d'une trame (8 Mio). Il l'écrit en `0600`, sans jamais remplacer
+un fichier existant (création exclusive), et l'efface si l'écriture échoue. Argon2id, le sceau
+et l'accès au fichier se font **hors du verrou du noyau** : les autres requêtes ne
+l'attendent pas. Ces opérations comptent comme une activité pour le verrouillage automatique.
+
+### 19.2 Opérations
+
+| Code | Nom | Arguments | Réponse |
+| --- | --- | --- | --- |
+| 140 | `LockerExport` | `{1: casier bstr(16), 2: chemin tstr, 3?: mot de passe tstr}` | `{1?: phrase tstr, 2: {1: secrets, 2: corbeille, 3: fichiers joints, 4: liens écartés}}` |
+| 141 | `LockerImport` | `{1: chemin tstr, 2: mot de passe tstr, 3?: nom tstr}` | `{1: casier bstr(16), 2: {1: secrets, 2: fichiers joints, 3: dossiers en étiquettes, 4: refusés}}` |
+
+- **`LockerExport`** : sans mot de passe, le noyau tire une phrase de 8 mots de la liste
+  française du générateur, séparés par `-` (88 bits), et la rend dans la clé 1, **une seule
+  fois** ; il ne la garde pas. Avec un mot de passe, il exige 16 caractères au moins après NFC,
+  dont 8 distincts (`ExportPasswordWeak`), et la clé 1 est absente. Le casier doit être un
+  casier du coffre : un casier partagé d'un serveur reçoit `ExportUnsupported` (ADR 0077 § 6).
+  Les nombres disent ce qui a été écrit, ce qui est resté à la corbeille et les liens vers
+  d'autres casiers retirés.
+- **`LockerImport`** : le fichier est entièrement vérifié avant la première écriture
+  (`format.md` § 16.4). Le nouveau casier prend le nom donné (1 à 256 octets) ou celui du
+  fichier. Importer deux fois crée deux casiers.
+- Chemin relatif ou vide, mot de passe vide, nom vide : `InvalidInput`. Casier inconnu ou
+  fichier absent : `NotFound`. Coffre verrouillé : `Locked`, avant toute lecture ou écriture.
+
+### 19.3 Erreurs et journal
+
+| Code | Nom | Sens |
+| --- | --- | --- |
+| 140 | `ExportPasswordWeak` | Mot de passe choisi sous le plancher |
+| 141 | `ExportKeyRejected` | Mot de passe faux, ou manifeste altéré |
+| 142 | `ExportMalformed` | Pas un export, ou fichier altéré, tronqué ou incohérent |
+| 143 | `ExportTooLarge` | Casier ou fichier au-delà des limites (`format.md` § 16.5) |
+| 144 | `ExportFileExists` | Un fichier existe déjà au chemin d'export |
+| 145 | `ExportUnsupported` | Casier partagé d'un serveur, ou fichier d'une version plus récente |
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de mot de passe, de chemin ni de nom. Le journal n'écrit que l'opération et le nom du résultat :
+`event=export_request op=<locker_export|locker_import> result=<ok|nom>`.
+
+### 19.4 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `casier exporter CASIER FICHIER [--mot-de-passe]` | `List` (résolution de CASIER parmi les casiers du coffre), `LockerExport` |
+| `casier importer FICHIER [--nom NOM]` | `LockerImport` |
+
+- Sans `--mot-de-passe`, la phrase tirée est écrite sur la **sortie d'erreur**, jamais sur la
+  sortie standard. Avec, le mot de passe est demandé deux fois sans écho (ou lu sur l'entrée
+  standard). Aucun secret en argument (§ 11).
+- `casier importer` demande le mot de passe sans écho.
+- La ligne de commande rend le chemin absolu avant de l'envoyer.
+
+### 19.5 Points ouverts
+
+1. **Casiers partagés** : l'action 4 de `roles.md` (export par un `Owner` avec quorum, événement
+   `locker_exported`) attend un ADR qui l'ajoute au courrier des accords.
+2. **Dossiers** : l'import convertit un chemin de dossier en étiquette tant que l'ADR 0076 n'est
+   pas fusionné ; l'export n'écrit pas encore de chemin.
+3. **Variante scellée pour la clé publique d'un collègue** : version 2 du fichier (ADR 0077 § 7).
+
+## 20. Méthodes de déverrouillage matérielles (version 12)
 
 Décision : ADR 0075. Le coffre s'ouvre avec Windows Hello, Touch ID (clé de la Secure Enclave)
 ou une clé de sécurité FIDO2 (`hmac-secret`, sémantique WebAuthn PRF), **à côté** du mot de
@@ -1520,7 +1606,7 @@ passe maître, qui reste toujours. Le format est au `format.md` § 4.2.1. Codes 
 **150 à 159**, erreurs **150 à 159**. Code : `crates/hirzla-core/src/methods`, facteurs
 matériels dans `crates/hirzla-keystore/src/unlock`.
 
-### 19.1 Aiguillage
+### 20.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
 150 à 159 va à cette famille ; elle doit porter `v = 12`, sinon `UnsupportedVersion` avec
@@ -1528,7 +1614,7 @@ Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame
 `v = 12`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
 journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'essayant.
 
-### 19.2 Types
+### 20.2 Types
 
 | Nom | Encodage |
 | --- | --- |
@@ -1541,7 +1627,7 @@ facteur de ce type, disponible maintenant, et lit son `keystore_blob`. « PIN à
 client doit demander le PIN de la clé de sécurité et le transmettre (FIDO2 sous Linux et
 macOS) ; sous Windows, le système le demande lui-même.
 
-### 19.3 Opérations
+### 20.3 Opérations
 
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
@@ -1567,7 +1653,7 @@ macOS) ; sous Windows, le système le demande lui-même.
   le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
   exige un reçoit `Busy`. Le système abandonne après 60 s.
 
-### 19.4 Erreurs et journal
+### 20.4 Erreurs et journal
 
 | Code | Nom | Sens |
 | --- | --- | --- |
@@ -1583,7 +1669,7 @@ matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `Alre
 journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
 ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
 
-### 19.5 Ligne de commande
+### 20.5 Ligne de commande
 
 | Commande | Requêtes |
 | --- | --- |
@@ -1592,7 +1678,7 @@ ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
 | `methods remove RANG` | `RemoveMethod` |
 | `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
 
-### 19.6 Points ouverts
+### 20.6 Points ouverts
 
 Voir l'ADR 0075 : FIDO2 sous Linux et macOS derrière la fonctionnalité `fido2-hid`, désactivée
 par défaut ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans

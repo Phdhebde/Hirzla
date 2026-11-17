@@ -1,4 +1,4 @@
-//! Hardware unlock methods of the local API (`docs/api-locale.md` § 19, version 12, ADR 0075):
+//! Hardware unlock methods of the local API (`docs/api-locale.md` § 20, version 12, ADR 0075):
 //! Windows Hello, Touch ID (Secure Enclave) and FIDO2, beside the master password that always
 //! stays.
 //!

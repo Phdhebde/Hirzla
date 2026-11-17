@@ -48,6 +48,11 @@ fn labels_encode_exactly() {
         KdfLabel::DeviceWrap.info(),
         [&[0x00, 0x15][..], b"hirzla/v1/device-wrap"].concat()
     );
+    // 0x001b = 27, the length of "hirzla/v1/locker-export-key".
+    assert_eq!(
+        KdfLabel::LockerExport.info(),
+        [&[0x00, 0x1b][..], b"hirzla/v1/locker-export-key"].concat()
+    );
     // 0x0010 = 16, then two one-byte parameters.
     assert_eq!(
         KdfLabel::Unlock {
@@ -68,10 +73,12 @@ fn labels_encode_exactly() {
 #[test]
 fn frozen_kdf_vectors() {
     let recs = records(KDF_V1);
-    assert_eq!(recs.len(), 3);
+    assert_eq!(recs.len(), 4);
     for r in &recs {
         let label = if field(r, "name") == b"hirzla/v1/device-wrap" {
             KdfLabel::DeviceWrap
+        } else if field(r, "name") == b"hirzla/v1/locker-export-key" {
+            KdfLabel::LockerExport
         } else {
             let p = field(r, "label_params");
             KdfLabel::Unlock {
@@ -107,7 +114,12 @@ fn derivation_is_deterministic_and_label_bound() {
         )
         .unwrap()
     };
+    let export = derive_key(&ikm, &salt, KdfLabel::LockerExport).unwrap();
+    assert_ne!(export.as_bytes(), a.as_bytes());
     let others = [unlock(0, 1), unlock(1, 1), unlock(0, 2)];
+    for o in &others {
+        assert_ne!(o.as_bytes(), export.as_bytes());
+    }
     for o in &others {
         assert_ne!(o.as_bytes(), a.as_bytes());
     }
@@ -124,6 +136,7 @@ fn derivation_matches_the_reference() {
     let salt = [0x24u8; 16];
     for label in [
         KdfLabel::DeviceWrap,
+        KdfLabel::LockerExport,
         KdfLabel::Unlock {
             method_index: 0,
             method_kind: 1,

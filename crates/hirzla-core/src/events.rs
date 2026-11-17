@@ -11,6 +11,7 @@ use hirzla_keystore::platform::HardeningReport;
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
 use crate::connections::proto::ConnectionOp;
+use crate::locker_export::proto::ExportOp;
 use crate::methods::proto::MethodOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
@@ -162,7 +163,7 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
-    /// A hardware unlock method request was answered (`docs/api-locale.md` § 19, ADR 0075).
+    /// A hardware unlock method request was answered (`docs/api-locale.md` § 20, ADR 0075).
     /// `kind` is `hello`, `enclave`, `fido` or `-`; `result` is `ok` or the name of the error:
     /// fixed words only, never a key name, a credential identifier nor a rank.
     MethodRequest {
@@ -170,6 +171,14 @@ pub enum Event {
         op: MethodOp,
         /// Kind of method.
         kind: &'static str,
+        /// Outcome.
+        result: &'static str,
+    },
+    /// An export request was answered (`docs/api-locale.md` § 19). `result` is `ok` or the
+    /// name of the error: fixed words only. Neither the path nor the locker is written.
+    ExportRequest {
+        /// Operation.
+        op: ExportOp,
         /// Outcome.
         result: &'static str,
     },
@@ -271,6 +280,9 @@ impl Event {
                 "event=unlock_method op={} kind={kind} result={result}",
                 op.name()
             ),
+            Event::ExportRequest { op, result } => {
+                write!(out, "event=export_request op={} result={result}", op.name())
+            }
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
             }
@@ -427,6 +439,11 @@ mod tests {
                 for result in ["ok", "method_cancelled", "unlock_failed"] {
                     events.push(Event::MethodRequest { op, kind, result });
                 }
+            }
+        }
+        for op in ExportOp::ALL {
+            for result in ["ok", "export_key_rejected", "export_file_exists", "locked"] {
+                events.push(Event::ExportRequest { op, result });
             }
         }
         for n in 40..=48 {

@@ -801,10 +801,61 @@
         <div class="ligne-actions">
           <button id="import-csv" class="bouton bouton-secondaire" type="button">Importer un fichier CSV…</button>
           <button id="import-kdbx" class="bouton bouton-secondaire" type="button">Importer depuis KeePass (KDBX)…</button>
+          <button id="import-export" class="bouton bouton-secondaire" type="button">Importer un export de casier…</button>
         </div>
         <p class="aide">CSV reconnus : KeePass, KeePassXC, Bitwarden, Firefox, Chrome et les tableurs dont la
           première ligne nomme les colonnes (titre, identifiant, mot de passe, URL, notes, groupe).</p>
         <div id="import-resultat" class="encadre" role="status" hidden></div>
+      </section>
+      <section class="carte" aria-labelledby="reglages-export">
+        <h2 id="reglages-export" class="titre-carte">Export chiffré d'un casier</h2>
+        <p class="texte-secondaire">Une copie chiffrée d'un casier de ce coffre, à remettre à un collègue qui
+          l'importe dans son propre coffre, sans serveur. Le noyau scelle le fichier ; la corbeille et l'historique
+          ne sont pas exportés.</p>
+        <form id="form-export" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Casier</span>
+            <select id="export-casier" class="saisie"></select>
+          </label>
+          <fieldset class="cases">
+            <legend class="champ-libelle">Mot de passe de l'export</legend>
+            <label class="case"><input type="radio" name="export-mode" value="tire" checked> Phrase de passe tirée
+              par Hirzla (huit mots, recommandé)</label>
+            <label class="case"><input type="radio" name="export-mode" value="choisi"> Mot de passe choisi</label>
+          </fieldset>
+          <div id="export-choisi" hidden>
+            <label class="champ">
+              <span class="champ-libelle">Mot de passe (16 caractères au moins)</span>
+              <input id="export-mdp" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                     spellcheck="false" minlength="16" maxlength="1024">
+            </label>
+            <label class="champ">
+              <span class="champ-libelle">Confirmation</span>
+              <input id="export-confirmation" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                     spellcheck="false" minlength="16" maxlength="1024">
+            </label>
+          </div>
+          <p class="aide">Transmettez le mot de passe par un autre canal que le fichier : quiconque détient les deux
+            lit tout le casier. Le fichier ne se révoque pas : retirer plus tard l'accès à un collègue ne lui reprend
+            pas sa copie. Elle ne se synchronise pas : les changements faits ensuite n'y figurent pas.</p>
+          <div id="export-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="export-lancer" class="bouton bouton-principal" type="submit">Exporter…</button>
+          </div>
+        </form>
+        <div id="export-resultat" class="encadre" role="status" hidden>
+          <p id="export-compte"></p>
+          <div id="export-phrase-bloc" hidden>
+            <p>Phrase de passe de l'export, affichée une seule fois :</p>
+            <p id="export-phrase" class="mono"></p>
+            <div class="ligne-actions">
+              <button id="export-copier" class="bouton bouton-secondaire" type="button">Copier</button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -953,6 +1004,37 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
         <button id="kdbx-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Import of a locker export (ADR 0077): the file is chosen by the application, read by the core. -->
+  <dialog id="dialogue-import-export" class="dialogue dialogue-etroit" aria-labelledby="import-export-titre">
+    <form id="form-import-export" method="dialog" novalidate>
+      <h2 id="import-export-titre" class="titre-carte">Importer un export de casier</h2>
+      <p class="texte-secondaire">Le noyau vérifie le fichier entier, puis crée un nouveau casier dans votre coffre
+        avec de nouvelles clés. Rien n'est fusionné avec vos casiers existants.</p>
+      <div class="ligne-actions">
+        <button id="import-export-choisir" class="bouton bouton-secondaire" type="button">Choisir le fichier…</button>
+        <span id="import-export-fichier" class="mono"></span>
+      </div>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe de l'export</span>
+        <input id="import-export-mdp" class="saisie saisie-mono" type="password" autocomplete="off"
+               spellcheck="false" maxlength="1024">
+      </label>
+      <label class="champ">
+        <span class="champ-libelle">Nom du nouveau casier (facultatif)</span>
+        <input id="import-export-nom" class="saisie" type="text" autocomplete="off" maxlength="256"
+               placeholder="Celui de l'export">
+      </label>
+      <div id="import-export-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="import-export-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
       </div>
     </form>
   </dialog>

@@ -13,6 +13,7 @@ use hirzla_keystore::platform::{self, HardeningReport, HardeningStatus};
 use zeroize::Zeroizing;
 
 use hirzla_access::hornn::HornnTrust;
+use hirzla_vault::export::ExportCost;
 use hirzla_vault::model::Id16;
 
 use crate::agent::proto::{is_agent_request, AgentCode, AgentReply, AgentRequest};
@@ -21,6 +22,8 @@ use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
 use crate::events::{Event, Log, Refusal};
+use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
+use crate::locker_export::service as export_service;
 use crate::methods::proto::{is_method_request, MethodCode, MethodReply, MethodRequest};
 use crate::methods::service::{run_gesture, Prepared};
 use crate::proto::{
@@ -615,7 +618,7 @@ fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]
     write_frame(conn, &body).is_ok()
 }
 
-/// Answers a hardware unlock method request (`docs/api-locale.md` § 19, ADR 0075). The
+/// Answers a hardware unlock method request (`docs/api-locale.md` § 20, ADR 0075). The
 /// browser profile is refused. The user's gesture runs outside the core's lock: the other
 /// clients and the automatic lock go on meanwhile. Returns `false` if the connection must
 /// close.
@@ -731,6 +734,42 @@ fn serve_connection(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers an export request (`docs/api-locale.md` § 19). The browser profile is refused
+/// (§ 19.1). Argon2id, the sealing and the file run outside the core's lock. Returns `false`
+/// if the connection must close.
+fn serve_export(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
+    let (id, result) = match ExportRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ExportCode::General(ErrorCode::Unauthorized);
+            log.record(Event::ExportRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            export_service::serve(lock, request, ExportCost::DEFAULT),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = ExportReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, version, code) = match SelfRequest::decode_versioned(frame) {
@@ -817,6 +856,12 @@ fn serve(
         }
         if is_connection_request(&frame) {
             if serve_connection(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_export_request(&frame) {
+            if serve_export(&mut conn, core, log, &frame, profile) {
                 continue;
             }
             break;

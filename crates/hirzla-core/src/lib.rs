@@ -16,6 +16,7 @@
 //! - [`connections`]: SSH and RDP connections (version 6, ADR 0067);
 //! - [`methods`]: hardware unlock methods (version 12, ADR 0075): Windows Hello, Touch ID,
 //!   FIDO2;
+//! - [`locker_export`]: encrypted export and import of a locker (version 9, ADR 0077);
 //! - [`codesign`]: the signature of the core's clients (ADR 0042);
 //! - [`release`]: documents signed by the publisher key, client manifest and offline update
 //!   package (ADR 0042, 0043).
@@ -30,6 +31,7 @@ pub mod connections;
 pub mod daemon;
 pub mod events;
 pub mod generator;
+pub mod locker_export;
 pub mod methods;
 pub mod origin;
 pub mod proto;

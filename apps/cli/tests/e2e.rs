@@ -252,14 +252,21 @@ fn self_mode_from_the_command_line() {
     // Usage errors.
     assert_eq!(hirzla(&sock, &["frobnicate"], None).status.code(), Some(2));
 
-    // Stop: the core locks and exits.
+    // Stop: the core locks and exits. While it exits, a `status` can reach the socket and
+    // lose the connection before the handshake ends: that is retried, not a failure.
     ok(&hirzla(&sock, &["stop"], None));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let s = ok(&hirzla(&sock, &["status"], None));
-        if s.contains("arrêté") {
+        let out = hirzla(&sock, &["status"], None);
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("arrêté") {
             break;
         }
+        assert!(
+            out.status.success()
+                || String::from_utf8_lossy(&out.stderr).contains("la connexion au noyau a échoué"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(Instant::now() < deadline, "the core did not stop");
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -833,5 +840,108 @@ fn connections_from_the_command_line() {
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap_or_default();
     for secret in [MASTER, SECRET, PRIVATE_BODY, "exemple.test"] {
         assert!(!log.contains(secret));
+    }
+}
+
+/// Encrypted export of a locker (ADR 0077): a drawn passphrase on the error output only,
+/// a chosen password, the refusals, and the import into a new locker of another vault.
+#[test]
+fn locker_export_from_the_command_line() {
+    const CHOSEN: &str = "une phrase choisie assez longue e2e";
+    let dir = private_dir();
+    let (dir_a, dir_b) = (private_dir(), private_dir());
+    let (a, b) = (dir_a.path(), dir_b.path());
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    let sock_a = socket(a);
+    let _core_a = start_core(a, &sock_a);
+    wait_ready(&sock_a);
+    ok(&hirzla(&sock_a, init, Some(MASTER)));
+    ok(&hirzla(&sock_a, &["set", "Routeur"], Some(SECRET)));
+
+    // Drawn passphrase: on the error output, never on the standard output.
+    let drawn = dir.path().join("tire.hirzla-export");
+    let out = hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", drawn.to_str().unwrap()],
+        None,
+    );
+    let stdout = ok(&out);
+    let stderr = String::from_utf8(out.stderr.clone()).unwrap();
+    assert!(stdout.contains("1 secret(s)"), "{stdout}");
+    let phrase = stderr
+        .lines()
+        .find(|l| l.starts_with("  "))
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert_eq!(phrase.split('-').count(), 8, "{stderr}");
+    assert!(!stdout.contains(&phrase));
+    // Never replaces a file; a weak chosen password is refused.
+    let refused = fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", drawn.to_str().unwrap()],
+        None,
+    ));
+    assert!(refused.contains("existe déjà"), "{refused}");
+    let chosen = dir.path().join("choisi.hirzla-export");
+    let path = chosen.to_str().unwrap();
+    let refused = fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", path, "--mot-de-passe"],
+        Some("court"),
+    ));
+    assert!(refused.contains("trop faible"), "{refused}");
+    assert!(!chosen.exists());
+    ok(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", path, "--mot-de-passe"],
+        Some(CHOSEN),
+    ));
+    assert!(fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Absent", path],
+        None
+    ))
+    .contains("introuvable"));
+
+    let sock_b = socket(b);
+    let _core_b = start_core(b, &sock_b);
+    wait_ready(&sock_b);
+    ok(&hirzla(&sock_b, init, Some(MASTER)));
+    let refused = fails(&hirzla(
+        &sock_b,
+        &["casier", "importer", path],
+        Some("une autre phrase assez longue"),
+    ));
+    assert!(refused.contains("incorrect"), "{refused}");
+    let out = ok(&hirzla(
+        &sock_b,
+        &["casier", "importer", path, "--nom", "Reçu"],
+        Some(CHOSEN),
+    ));
+    assert!(
+        out.contains("Casier importé") && out.contains("1 secret(s)"),
+        "{out}"
+    );
+    assert_eq!(
+        ok(&hirzla(&sock_b, &["get", "Routeur"], None)),
+        format!("{SECRET}\n")
+    );
+    ok(&hirzla(
+        &sock_b,
+        &["casier", "importer", drawn.to_str().unwrap()],
+        Some(&phrase),
+    ));
+    assert_eq!(
+        ok(&hirzla(&sock_b, &["ls"], None))
+            .matches("Routeur")
+            .count(),
+        2
+    );
+    for log in [a.join("core.log"), b.join("core.log")] {
+        let log = std::fs::read_to_string(log).unwrap();
+        for leak in [SECRET, CHOSEN, phrase.as_str(), "Routeur", "Reçu"] {
+            assert!(!log.contains(leak), "{leak} in the log");
+        }
     }
 }

@@ -1,4 +1,4 @@
-//! What the core does with a hardware unlock method request (`docs/api-locale.md` § 19,
+//! What the core does with a hardware unlock method request (`docs/api-locale.md` § 20,
 //! ADR 0075 § 5).
 //!
 //! Rules:

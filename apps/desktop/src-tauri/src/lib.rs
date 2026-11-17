@@ -20,6 +20,8 @@
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
 //!   state of the key transparency log (local API version 4, ADR 0041);
+//! - [`locker_export`]: encrypted export of a locker and its import into a new locker
+//!   (local API version 10, ADR 0077);
 //! - [`prefs`]: what belongs to this workstation, in a local file (ADR 0071);
 //! - [`tray`]: notification area icon, window that closes without locking, and the call
 //!   for the window through the core (local API version 8, ADR 0071);
@@ -38,6 +40,7 @@ pub mod events;
 pub mod generator;
 pub mod import;
 pub mod link;
+pub mod locker_export;
 pub mod methods;
 pub mod prefs;
 pub mod selfmode;
@@ -132,6 +135,10 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::choose_kdbx_key_file,
             selfmode::clear_kdbx_key_file,
             selfmode::import_kdbx,
+            locker_export::export_locker,
+            locker_export::copy_export_password,
+            locker_export::choose_export_file,
+            locker_export::import_locker,
             servermode::server_status,
             servermode::server_identity,
             servermode::export_server_identity,

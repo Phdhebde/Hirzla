@@ -2,6 +2,7 @@
 //! the user; none carries a secret, a path or a cryptographic cause.
 
 use hirzla_core::client::ClientError;
+use hirzla_core::locker_export::proto::ExportCode;
 use hirzla_core::methods::proto::MethodCode;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
 use hirzla_core::selfmode::proto::SelfCode;
@@ -48,9 +49,12 @@ pub enum DesktopError {
     /// The core refused a server mode request (`docs/api-locale.md` § 15.5).
     #[error("the core refused the server mode request: {}", .0.name())]
     Server(ServerCode),
-    /// The core refused a hardware unlock method request (`docs/api-locale.md` § 19).
+    /// The core refused a hardware unlock method request (`docs/api-locale.md` § 20).
     #[error("the core refused the unlock method request: {}", .0.name())]
     Method(MethodCode),
+    /// The core refused an export request (`docs/api-locale.md` § 19.3).
+    #[error("the core refused the export request: {}", .0.name())]
+    Export(ExportCode),
 }
 
 impl DesktopError {
@@ -73,6 +77,7 @@ impl DesktopError {
             DesktopError::Server(ServerCode::ServerRefused(4)) => "access_lost",
             DesktopError::Server(c) => c.name(),
             DesktopError::Method(c) => c.name(),
+            DesktopError::Export(c) => c.name(),
         }
     }
 
@@ -100,6 +105,7 @@ impl DesktopError {
             DesktopError::Cancelled => "Opération annulée.".into(),
             DesktopError::Server(c) => server_message(*c),
             DesktopError::Method(c) => method_message(*c),
+            DesktopError::Export(c) => crate::locker_export::message(*c),
         }
     }
 
@@ -116,7 +122,7 @@ impl DesktopError {
         }
     }
 
-    /// A refusal of a hardware unlock method request (`docs/api-locale.md` § 19). The general
+    /// A refusal of a hardware unlock method request (`docs/api-locale.md` § 20). The general
     /// refusals whose meaning differs here keep the method family; the others keep their
     /// usual meaning.
     #[must_use]
@@ -272,7 +278,7 @@ pub fn server_message(code: ServerCode) -> String {
 }
 
 /// French message for a refusal of a hardware unlock method request
-/// (`docs/api-locale.md` § 19).
+/// (`docs/api-locale.md` § 20).
 #[must_use]
 pub fn method_message(code: MethodCode) -> String {
     match code {

@@ -217,7 +217,7 @@ Erreurs : 150 `MethodUnavailable` (pas de matériel, système trop ancien, fonct
 (clé supprimée, empreintes changées, clé FIDO2 réinitialisée : le client propose le mot de
 passe puis le réenrôlement), 153 `PinRequired` (PIN absent ou faux ; le nombre d'essais
 restants n'est pas donné), 154 `PinBlocked` (clé FIDO2 bloquée). Détail dans
-`api-locale.md` § 19.
+`api-locale.md` § 20.
 
 ### 7. Interfaces
 

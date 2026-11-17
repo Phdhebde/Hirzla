@@ -13,6 +13,7 @@
 //! | [`KdfLabel::Unlock`] | `hirzla/v1/unlock` | method index (1 byte), method kind (1 byte) |
 //! | [`KdfLabel::DeviceWrap`] | `hirzla/v1/device-wrap` | none |
 //! | [`KdfLabel::HardwareSecret`] | `hirzla/v1/hardware-secret` | method kind (1 byte) |
+//! | [`KdfLabel::LockerExport`] | `hirzla/v1/locker-export-key` | none |
 //!
 //! The output is always a 32-byte [`SymmetricKey`].
 
@@ -44,6 +45,9 @@ pub enum KdfLabel {
         /// Kind of the method (3 Secure Enclave, 4 FIDO2, 5 Windows Hello).
         method_kind: u8,
     },
+    /// `K_export`, the key of an encrypted locker export, derived from the Argon2id output of
+    /// the export password (`docs/format.md` § 16, ADR 0077).
+    LockerExport,
 }
 
 impl KdfLabel {
@@ -52,6 +56,7 @@ impl KdfLabel {
             KdfLabel::Unlock { .. } => b"hirzla/v1/unlock",
             KdfLabel::DeviceWrap => b"hirzla/v1/device-wrap",
             KdfLabel::HardwareSecret { .. } => b"hirzla/v1/hardware-secret",
+            KdfLabel::LockerExport => b"hirzla/v1/locker-export-key",
         }
     }
 
@@ -61,7 +66,7 @@ impl KdfLabel {
                 method_index,
                 method_kind,
             } => vec![vec![method_index], vec![method_kind]],
-            KdfLabel::DeviceWrap => Vec::new(),
+            KdfLabel::DeviceWrap | KdfLabel::LockerExport => Vec::new(),
             KdfLabel::HardwareSecret { method_kind } => vec![vec![method_kind]],
         }
     }

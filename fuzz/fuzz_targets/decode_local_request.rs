@@ -1,9 +1,10 @@
 //! Requests of the local API (`docs/api-locale.md`), as the core reads them from any process
 //! that reaches its socket or named pipe: the length-prefixed frame, then the CBOR body of each
-//! profile (v1 to v3, agent, Self mode v5, server mode v4). Must never panic.
+//! profile (v1 to v3, agent, Self mode v5, server mode v4, locker export v10). Must never panic.
 #![no_main]
 
 use hirzla_core::agent::proto::AgentRequest;
+use hirzla_core::locker_export::proto::ExportRequest;
 use hirzla_core::proto::{read_frame, Request};
 use hirzla_core::selfmode::proto::SelfRequest;
 use hirzla_core::server_mode::proto::ServerRequest;
@@ -14,6 +15,7 @@ fn decode_all(body: &[u8]) {
     let _ = SelfRequest::decode(body);
     let _ = ServerRequest::decode(body);
     let _ = AgentRequest::decode(body);
+    let _ = ExportRequest::decode(body);
 }
 
 fuzz_target!(|data: &[u8]| {
