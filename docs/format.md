@@ -152,6 +152,9 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | `hirzla/v1/recovery-kit` | AAD, kit de récupération (clé privée du membre) | `roles.md` |
 | `hirzla/v1/recovery-parcel` | Contexte KEM et AAD, colis d'une part de récupération | `roles.md` |
 | `hirzla/v1/server-state` | AAD, fichier annexe du mode Serveur | § 15 |
+| `hirzla/v1/locker-export-key` | Info HKDF, clé d'un export de casier | § 16 |
+| `hirzla/v1/locker-export` | AAD, manifeste d'un export de casier | § 16 |
+| `hirzla/v1/locker-export-chunk` | AAD, morceau de fichier joint d'un export de casier | § 16 |
 
 Une étiquette n'a qu'un seul usage. Toute nouvelle étiquette s'ajoute à ce registre.
 
@@ -1451,3 +1454,90 @@ statuts, le même passé élagué et les mêmes opérations à envoyer que celle
   incohérence.
 - Le fichier grossit avec les journaux des casiers partagés ; il est réécrit en entier à chaque
   changement. À remplacer par les tables du coffre (ADR 0032, point 3).
+
+## 16. Fichier d'export de casier `.hirzla-export` (version 1)
+
+Décision : ADR 0077. Une copie ponctuelle d'un casier du coffre, qu'un collègue importe dans
+son propre coffre comme un **nouveau casier**. Le fichier ne porte aucun identifiant, aucune
+clé, aucun horodatage ni aucune signature du coffre de l'expéditeur. Il ne change pas le
+format du coffre et n'a pas d'effet sur `format_version`. Code : `hirzla_vault::export`.
+
+### 16.1 Enveloppe
+
+CBOR canonique (§ 2.1), en clair :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `magic` | `tstr` | `"hirzla-export"` |
+| 2 | `version` | `uint` | `1` |
+| 3 | `export_id` | `bstr(16)` | Aléa, neuf à chaque export |
+| 4 | `kdf` | map | `{1: m_kib, 2: t, 3: p, 4: salt bstr(32), 5: 19}` (Argon2id 1.3) |
+| 5 | `manifest` | `bstr` | `SealedBox` (§ 3.2) du manifeste bourré (§ 11) |
+| 6 | `chunks` | `array<bstr>` | `SealedBox` des morceaux bourrés, fichier joint par fichier joint, puis rang par rang |
+
+Les bornes de `kdf` sont celles du déverrouillage (§ 4.2) : `m_kib` de 65 536 à 4 194 304,
+`t` de 3 à 64, `p` de 1 à 16. Le noyau écrit **262 144 Kio, 3 passes, 4 voies**. Une clé
+inconnue, une magie ou une version différente, des paramètres hors bornes ou un fichier de plus
+de 256 Mio sont refusés **avant** toute dérivation.
+
+### 16.2 Clé et données associées
+
+```text
+S        = Argon2id(NFC(mot de passe), salt, m_kib, t, p), 32 octets
+K_export = HKDF-SHA-512(ikm = S, salt = export_id,
+                        info = len ‖ "hirzla/v1/locker-export-key", L = 32)
+```
+
+`K_export` est la KEK de chaque `SealedBox` du fichier ; chaque boîte a sa clé de donnée, son
+nonce et son `block_id` neufs.
+
+- AAD du manifeste : `CBOR({1: "hirzla/v1/locker-export", 2: export_id, 3: version, 4: nombre
+  total de morceaux})`.
+- AAD d'un morceau : `CBOR({1: "hirzla/v1/locker-export-chunk", 2: export_id, 3: rang du
+  fichier joint, 4: rang du morceau, 5: nombre de morceaux de ce fichier joint})`.
+
+Un mot de passe faux et un manifeste altéré donnent la même erreur (`KeyRejected`). Un morceau
+altéré, échangé ou déplacé est refusé (`Malformed`).
+
+### 16.3 Manifeste
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `created_ms` | `uint` | Heure de l'export, ms depuis l'époque Unix |
+| 2 | `locker` | map | `{1: nom (1 à 256 octets), 2?: description (4 096 octets au plus), 3?: couleur uint, 4?: icône (64 octets au plus)}` (§ 7.4) |
+| 3 | `secrets` | `array<map>` | 100 000 au plus, voir ci-dessous |
+| 4 | `attachments` | `array<map>` | 4 096 au plus : `{1: nom (512 octets au plus), 2: type de média (128 octets au plus), 3: taille, 4: nombre de morceaux}` |
+
+Un secret :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `type` | `uint` | Type de secret (§ 8.1) |
+| 2 | `fields` | map | Champ → valeur, mêmes codes, valeurs et limites qu'au § 8.2 et § 8.3 ; les champs de lien en sont exclus |
+| 3? | `links` | map | Champ de lien (§ 8.5 : `ssh_key`, `jump`) → rang de la cible dans `secrets`, différent du rang du secret |
+| 4? | `sets` | map | `{1?: étiquettes, 2?: adresses, 4?: hôtes}`, tableaux de `tstr` triés sans doublon, bornes du § 8.2 |
+| 5? | `custom` | `array<map>` | `{1: libellé, 2: valeur, 3: sensible bool}`, bornes du § 8.3 |
+| 6? | `attachments` | `array<uint>` | Rangs dans `attachments`, triés sans doublon, 64 au plus |
+| 7? | `folder` | `array<tstr>` | Chemin de dossier de la racine vers le dossier, 1 à 16 noms de 1 à 256 octets |
+
+Une clé optionnelle vide n'est pas écrite : un tableau ou une map vide est refusé. Chaque
+fichier joint est cité par au moins un secret, et sa taille correspond à son nombre de
+morceaux. Morceaux de 1 048 572 octets de clair, comme au § 8.4.
+
+### 16.4 Lecture
+
+1. Taille, enveloppe, magie, version, bornes de `kdf` : refus sans dérivation.
+2. Dérivation, descellement et décodage strict du manifeste (CBOR canonique, § 2.1, clés connues seulement).
+3. Descellement de chaque morceau, contrôle des tailles.
+4. Contrôle de chaque secret par les règles ordinaires du coffre (types, champs, liens,
+   ensembles), sans écrire.
+5. Seulement alors, écriture d'un nouveau casier : nouvelle clé de casier, nouveaux
+   identifiants, fichiers joints rescellés sous de nouvelles clés, opérations signées par
+   l'appareil qui importe. Un chemin de dossier devient l'étiquette `a/b/c` tant que les
+   dossiers (ADR 0076) ne sont pas dans le coffre.
+
+### 16.5 Limites
+
+Fichier de 256 Mio au plus, manifeste de 64 Mio avant bourrage, 65 536 morceaux. Sont en clair :
+l'en-tête, la taille bourrée du manifeste et le nombre de morceaux. Le fichier et son mot de
+passe donnent tout le casier, sans limite de temps ni révocation (ADR 0077, conséquences).

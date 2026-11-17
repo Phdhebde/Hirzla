@@ -159,7 +159,9 @@ impl Field {
         Field::HostKey,
     ];
 
-    fn from_u64(n: u64) -> Option<Self> {
+    /// The field from its number (§ 8).
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<Self> {
         Field::ALL.into_iter().find(|f| *f as u64 == n)
     }
 }
@@ -185,7 +187,9 @@ impl SetKind {
         SetKind::Hosts,
     ];
 
-    fn from_u64(n: u64) -> Option<Self> {
+    /// The set from its number (§ 8).
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<Self> {
         SetKind::ALL.into_iter().find(|s| *s as u64 == n)
     }
 }
@@ -348,6 +352,41 @@ fn required_fields(t: SecretType) -> &'static [Field] {
         SecretType::SshConnection | SecretType::RdpConnection => &[Field::Title, Field::Host],
         _ => &[Field::Title],
     }
+}
+
+/// Whether `f` is a field of type `t` that holds a link to another secret (§ 8.5).
+#[must_use]
+pub fn is_link_field(t: SecretType, f: Field) -> bool {
+    field_spec(t, f).is_some_and(|s| s.kind == Kind::Link)
+}
+
+/// Longest element and most elements of a text set `s` of type `t` (tags, URLs, hosts);
+/// `None` if the set is not allowed for the type or does not hold text.
+#[must_use]
+pub fn text_set_bounds(t: SecretType, s: SetKind) -> Option<(usize, usize)> {
+    match set_spec(t, s)? {
+        SetSpec {
+            elem: ElemKind::Text(len),
+            max,
+        } => Some((len, max)),
+        _ => None,
+    }
+}
+
+/// Encodes a field value as stored in a version (§ 8.3, § 8.5).
+#[must_use]
+pub fn field_value_to_value(v: &FieldValue) -> Value {
+    field_to_value(v)
+}
+
+/// Decodes the value of field `f` of a secret of type `t`, under the rules of § 8.3.
+///
+/// # Errors
+/// [`CborError::Malformed`] if the field is not allowed for the type or the value breaks
+/// its rules.
+pub fn field_value_from_value(t: SecretType, f: Field, v: &Value) -> Result<FieldValue, CborError> {
+    let spec = field_spec(t, f).ok_or(CborError::Malformed)?;
+    field_from_value(spec.kind, v)
 }
 
 /// Whether a field never enters the index (§ 8).

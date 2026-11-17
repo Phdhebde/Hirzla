@@ -10,6 +10,21 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 
 ## [Non publié]
 
+### Export chiffré d'un casier (ADR 0077)
+
+- Un casier du coffre s'exporte dans un fichier `.hirzla-export`, protégé par un mot de passe
+  (Argon2id à 256 Mio, HKDF-SHA-512, sceau AES-256-GCM de la suite V1), et s'importe dans un
+  autre coffre comme un nouveau casier, sous les clés de celui qui importe. Sans serveur.
+- Par défaut, le noyau tire une phrase de passe de 8 mots (88 bits), montrée une seule fois ;
+  un mot de passe choisi doit compter 16 caractères au moins.
+- Exportés : secrets actifs, champs, fichiers joints, liens internes, description du casier.
+  Ni corbeille, ni historique, ni clés, ni identifiants. Les casiers partagés d'un serveur ne
+  s'exportent pas encore.
+- Format : `docs/format.md` § 16. API locale version 10 (`docs/api-locale.md` § 19) :
+  `LockerExport` (140), `LockerImport` (141), profil complet seulement.
+- Ligne de commande : `casier exporter`, `casier importer`. Application : réglages.
+- Nouvelle cible de fuzzing `decode_locker_export`.
+
 ### Connexions SSH et RDP (ADR 0067)
 
 - Deux types de secret : connexion SSH et connexion RDP (hôte, port, identifiant, domaine,

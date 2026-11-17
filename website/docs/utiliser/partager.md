@@ -6,7 +6,8 @@ description: Partager des mots de passe en équipe avec Hirzla - créer un casie
 # Partager un casier
 
 Le partage demande le mode Serveur : votre coffre doit être
-[rattaché à un serveur](rejoindre-un-serveur.md).
+[rattaché à un serveur](rejoindre-un-serveur.md). Sans serveur, vous pouvez
+[remettre une copie chiffrée d'un casier](exporter-un-casier.md) à un collègue.
 
 On ne partage pas un secret isolé, mais un **casier** : un groupe de secrets qui ont les mêmes
 membres. Pour partager un seul secret, placez-le dans un casier dédié.
