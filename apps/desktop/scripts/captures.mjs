@@ -130,6 +130,19 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   }
   await p.fill("#recherche", "");
 
+  // Clearing the notes of a secret in edit mode: an explicit choice, then no "Notes" row.
+  await p.click("#opt-00000000000000000000000000000004");
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : notes']");
+  await p.click("#fiche-modifier");
+  await p.waitForSelector("#dialogue-secret[open] #secret-notes-effacer-case:not([hidden])");
+  await p.check("#secret-notes-effacer");
+  await p.click("#secret-enregistrer");
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.waitForFunction(
+    () => document.getElementById("fiche-champs")?.textContent?.includes("Identifiant") &&
+      !document.querySelector("#fiche-champs button[aria-label^='Révéler : notes']"),
+  );
+
   // Command palette: secrets and actions from the keyboard.
   await p.keyboard.press("Control+k");
   await p.waitForSelector("#dialogue-palette[open]");

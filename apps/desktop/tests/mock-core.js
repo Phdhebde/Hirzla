@@ -195,8 +195,11 @@
     [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
   };
   // Fields each secret holds (what `secret_history` lists, never a value): only the bank
-  // account and the GitLab note have notes, only the backup server key has a passphrase.
+  // account, the tax account and the GitLab note have notes, only the backup server key has
+  // a passphrase. `update_secret` changes them.
+  const changedFields = new Map();
   const fieldsOf = (sid) => {
+    if (changedFields.has(sid)) return changedFields.get(sid);
     const e = entries.find((x) => x.id === sid);
     if (!e) return [];
     const f = ["title"];
@@ -204,7 +207,7 @@
     if (e.kind === "password") f.push("password");
     if (e.kind === "ssh_key") f.push("ssh_public_key");
     if (sid === id(6)) f.push("ssh_passphrase");
-    if (sid === id(1) || sid === id(3)) f.push("notes");
+    if (sid === id(1) || sid === id(3) || sid === id(4)) f.push("notes");
     return f;
   };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
@@ -239,6 +242,12 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e && "favorite" in a.changes) e.favorite = a.changes.favorite;
       if (e && a.changes.title) e.title = a.changes.title;
+      if (e) {
+        const f = new Set(fieldsOf(e.id));
+        for (const k of ["username", "password", "notes"]) if (a.changes[k]) f.add(k);
+        for (const k of a.changes.clear || []) f.delete(k);
+        changedFields.set(e.id, [...f]);
+      }
     },
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);
@@ -276,12 +285,15 @@
       if (a.set.port) { c.port = a.set.port; c.effective_port = a.set.port; }
       if (a.set.host_key) c.host_key = a.set.host_key;
       if (a.set.password) c.has_password = true;
+      if (a.set.notes) c.has_notes = true;
       for (const k of a.clear) {
         if (k === "port") { c.port = null; c.effective_port = c.kind === "rdp" ? 3389 : 22; }
         if (k === "username") e.username = null;
         if (k === "host_key") c.host_key = null;
         if (k === "ssh_key") c.ssh_key = null;
         if (k === "jump") c.jumps = [];
+        if (k === "password") c.has_password = false;
+        if (k === "notes") c.has_notes = false;
       }
     },
     choose_ssh_key_file: () => "id_ed25519",
@@ -367,7 +379,7 @@
       if (e) e.trash = false;
     },
     secret_history: (a) => {
-      if (a.target.id === id(1)) return history;
+      if (a.target.id === id(1)) return history.map((x, i) => (i === 0 ? { ...x, fields: fieldsOf(id(1)) } : x));
       const e = entries.find((x) => x.id === a.target.id);
       if (!e) return refuse("not_found", "Secret ou champ introuvable.");
       return [{ version: v(1), wall_ms: Date.UTC(2026, 0, 12, 9, 30), state: e.trash ? "trash" : "active", title: e.title, username: e.username, fields: fieldsOf(e.id), changed: fieldsOf(e.id), custom: 0 }];
