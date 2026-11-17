@@ -589,5 +589,6 @@ button.lien:hover { color: var(--hz-texte); }
 .cible-saisie { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--hz-bordure); border-radius: var(--hz-rayon); margin: 0 0 12px; overflow-wrap: anywhere; }
 .cible-saisie strong { font-size: 17px; }
 .liste-simple { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.separateur-ou { text-align: center; margin: 4px 0 0; }
 .ligne-application { display: flex; align-items: center; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; }
 #reglage-saisie { margin-top: 16px; }

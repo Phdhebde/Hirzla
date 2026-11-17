@@ -1,0 +1,1 @@
+{"$message_type":"unused_extern","lint_level":"force-warn","unused_extern_names":["hirzla_access","hirzla_crypto","hirzla_keystore","hirzla_sync","hirzla_vault","thiserror","url","zeroize"]}

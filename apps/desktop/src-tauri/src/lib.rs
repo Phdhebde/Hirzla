@@ -14,6 +14,8 @@
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
+//! - [`methods`]: unlock with Windows Hello, Touch ID or a FIDO2 security key (local API
+//!   version 9, ADR 0075);
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
@@ -36,6 +38,7 @@ pub mod events;
 pub mod generator;
 pub mod import;
 pub mod link;
+pub mod methods;
 pub mod prefs;
 pub mod selfmode;
 pub mod servermode;
@@ -121,6 +124,10 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::choose_recovery_shares,
             selfmode::recovery_unlock,
             selfmode::remove_recovery_kit,
+            methods::list_unlock_methods,
+            methods::enroll_unlock_method,
+            methods::unlock_with_method,
+            methods::remove_unlock_method,
             selfmode::choose_kdbx_file,
             selfmode::import_kdbx,
             servermode::server_status,

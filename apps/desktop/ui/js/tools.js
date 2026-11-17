@@ -1,5 +1,5 @@
 // @ts-check
-// Generator, settings (display, vault, master password, recovery kit) and import.
+// Generator, settings (display, vault, master password, unlock methods, recovery kit) and import.
 
 import { api } from "./api.js";
 import { announce, byId, h, icon, showError } from "./dom.js";
@@ -26,6 +26,28 @@ const DEFAULT_TARGET = 128;
 const GAUGE_MAX = 256;
 
 const FAMILIES = /** @type {const} */ (["minuscules", "majuscules", "chiffres", "symboles"]);
+
+/** Names of the unlock methods (ADR 0075). */
+/** @type {Record<string, string>} */
+const METHOD_NAMES = {
+  password: "Mot de passe maître",
+  hello: "Windows Hello",
+  touchid: "Touch ID",
+  fido2: "Clé de sécurité FIDO2",
+  recovery: "Kit de recouvrement",
+  tpm: "TPM",
+  unknown: "Méthode inconnue",
+};
+
+/** What the system asks for, by method. */
+/** @type {Record<string, string>} */
+const METHOD_GESTURES = {
+  hello: "Confirmez votre mot de passe maître, puis votre visage, votre empreinte ou votre code PIN Windows Hello.",
+  touchid: "Confirmez votre mot de passe maître, puis posez votre doigt sur Touch ID.",
+  fido2:
+    "Confirmez votre mot de passe maître, branchez votre clé de sécurité, puis touchez-la quand elle clignote. " +
+    "Une clé qui ne gère pas l'extension hmac-secret est refusée.",
+};
 
 /** @param {number} millibits */
 function bits(millibits) {
@@ -401,6 +423,126 @@ export class SettingsView {
     byId("recouvrement-retirer").addEventListener("click", () => void this.removeKit());
     /** @type {import("./api.js").RecoveryKit | null} */
     this.kit = null;
+    byId("form-methode").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.addMethod();
+    });
+    byId("dialogue-methode").addEventListener("close", () => this.wipeMethodDialog());
+    /** @type {import("./api.js").MethodKind | null} */
+    this.adding = null;
+  }
+
+  /** Reads the unlock methods of the vault. */
+  async loadMethods() {
+    showError(byId("methodes-erreur"), null);
+    try {
+      this.renderMethods(await api.unlockMethods());
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("methodes-erreur"), err.message);
+    }
+  }
+
+  /** @param {import("./api.js").UnlockMethods} m */
+  renderMethods(m) {
+    const last = m.methods[m.methods.length - 1];
+    const hardware = (/** @type {string} */ k) => k === "hello" || k === "touchid" || k === "fido2";
+    byId("methodes-liste").replaceChildren(
+      ...m.methods.map((method) => {
+        const notes = [];
+        if (hardware(method.kind) && !method.usable) notes.push("indisponible sur ce poste");
+        if (method.needs_pin) notes.push("code PIN");
+        const label = h("span", {
+          text: METHOD_NAMES[method.kind] + (notes.length ? ` (${notes.join(", ")})` : ""),
+        });
+        const row = h("li", { class: "ligne-application" }, [label]);
+        if (hardware(method.kind) && method === last) {
+          const remove = h("button", { class: "bouton bouton-secondaire bouton-petit bouton-danger", type: "button", text: "Retirer" });
+          remove.addEventListener("click", () => void this.removeMethod(method));
+          row.append(remove);
+        }
+        return row;
+      }),
+    );
+    byId("methodes-ajouter").replaceChildren(
+      ...m.enrollable.map((kind) => {
+        const b = h("button", { class: "bouton bouton-secondaire", type: "button", text: `Ajouter ${METHOD_NAMES[kind]}…` });
+        b.addEventListener("click", () => this.openMethodDialog(kind));
+        return b;
+      }),
+    );
+    byId("methodes-aucune").hidden = m.enrollable.length > 0;
+  }
+
+  /** @param {import("./api.js").MethodKind} kind */
+  openMethodDialog(kind) {
+    this.adding = kind;
+    this.wipeMethodDialog();
+    byId("methode-titre").textContent = `Ajouter ${METHOD_NAMES[kind]}`;
+    byId("methode-texte").textContent = METHOD_GESTURES[kind] ?? "";
+    showError(byId("methode-erreur"), null);
+    /** @type {HTMLDialogElement} */ (byId("dialogue-methode")).showModal();
+    byId("methode-mdp").focus();
+  }
+
+  wipeMethodDialog() {
+    /** @type {HTMLInputElement} */ (byId("methode-mdp")).value = "";
+    /** @type {HTMLInputElement} */ (byId("methode-pin")).value = "";
+    byId("methode-pin-champ").hidden = true;
+  }
+
+  async addMethod() {
+    const kind = this.adding;
+    if (!kind) return;
+    const pw = /** @type {HTMLInputElement} */ (byId("methode-mdp"));
+    const pin = /** @type {HTMLInputElement} */ (byId("methode-pin"));
+    const error = byId("methode-erreur");
+    const button = /** @type {HTMLButtonElement} */ (byId("methode-ajouter"));
+    if (!pw.value) {
+      showError(error, "Saisissez votre mot de passe maître.");
+      pw.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Suivez la demande du système…";
+    showError(error, null);
+    try {
+      await api.enrollMethod(kind, pw.value, pin.value || null);
+      /** @type {HTMLDialogElement} */ (byId("dialogue-methode")).close();
+      announce(`${METHOD_NAMES[kind]} ajouté. Le mot de passe maître reste valable.`, 6000);
+      await this.loadMethods();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "pin_required") {
+        byId("methode-pin-champ").hidden = false;
+        showError(error, err.message);
+        pin.value = "";
+        pin.focus();
+      } else if (!this.onError(err)) {
+        showError(error, err.message);
+      }
+    } finally {
+      button.disabled = false;
+      button.textContent = "Ajouter";
+    }
+  }
+
+  /** @param {import("./api.js").UnlockMethod} method */
+  async removeMethod(method) {
+    const ok = await confirmDialog(
+      `Retirer ${METHOD_NAMES[method.kind]} ?`,
+      "Cette méthode n'ouvrira plus le coffre. Le mot de passe maître reste valable.",
+      "Retirer",
+    );
+    if (!ok) return;
+    try {
+      await api.removeMethod(method.rank);
+      announce(`${METHOD_NAMES[method.kind]} retiré.`);
+      await this.loadMethods();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("methodes-erreur"), err.message);
+    }
   }
 
   /** @param {import("./api.js").LocalPreferences} p */
@@ -468,6 +610,7 @@ export class SettingsView {
       /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked = s.lock_on_sleep;
       /** @type {HTMLInputElement} */ (byId("reglage-session")).checked = s.lock_on_session_lock;
       this.renderKit(await api.recoveryStatus());
+      await this.loadMethods();
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("reglages-coffre-erreur"), err.message);
@@ -480,6 +623,7 @@ export class SettingsView {
       /** @type {HTMLInputElement} */ (byId(id)).value = "";
     }
     byId("recouvrement-resultat").hidden = true;
+    this.wipeMethodDialog();
     byId("kdbx-fichier").textContent = "";
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
   }

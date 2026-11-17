@@ -23,6 +23,9 @@
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
  *   username: string | null, fields: string[], changed: string[], custom: number }} Version
  * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
+ * @typedef {"password" | "tpm" | "touchid" | "fido2" | "hello" | "recovery" | "unknown"} MethodKind
+ * @typedef {{ rank: number, kind: MethodKind, usable: boolean, needs_pin: boolean }} UnlockMethod
+ * @typedef {{ methods: UnlockMethod[], enrollable: MethodKind[] }} UnlockMethods
  * @typedef {{ kit: string, threshold: number, count: number, folder: string, files: string[] }} CreatedKit
  * @typedef {{ imported: number, empty: number, recycled: number, attachments: number, history: number,
  *   custom_skipped: number, totp: number, refused: number }} KdbxReport
@@ -231,6 +234,15 @@ export const api = {
   recoveryUnlock: (password, confirmation) => call("recovery_unlock", { password, confirmation }),
   /** @returns {Promise<void>} */
   removeRecoveryKit: () => call("remove_recovery_kit"),
+  // Hardware unlock methods (local API version 9, ADR 0075).
+  /** @returns {Promise<UnlockMethods>} */
+  unlockMethods: () => call("list_unlock_methods"),
+  /** @param {MethodKind} kind @param {string} password @param {string | null} pin @returns {Promise<number>} */
+  enrollMethod: (kind, password, pin) => call("enroll_unlock_method", { kind, password, pin }),
+  /** @param {number} rank @param {string | null} pin @returns {Promise<void>} */
+  unlockWithMethod: (rank, pin) => call("unlock_with_method", { rank, pin }),
+  /** @param {number} rank @returns {Promise<void>} */
+  removeMethod: (rank) => call("remove_unlock_method", { rank }),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */

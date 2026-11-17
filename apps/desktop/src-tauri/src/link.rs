@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
+use hirzla_core::methods::proto::{MethodCode, MethodOp, MethodReply, MethodRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
@@ -259,6 +260,37 @@ impl CoreLink {
                     return Err(DesktopError::from_self(code, retry_after_s));
                 }
                 Err(ClientError::Io(_)) if !retried && is_idempotent_self(request.op()) => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one hardware unlock method request (`docs/api-locale.md` § 19, version 9). Only
+    /// the list is sent again on a new connection: a gesture is never asked for twice.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`DesktopError::from_method`].
+    pub fn call_methods(&mut self, request: &MethodRequest) -> Result<MethodReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_methods(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err((code, retry_after_s))) => {
+                    if code != MethodCode::General(ErrorCode::Unauthorized) {
+                        self.client = Some(client);
+                    }
+                    return Err(DesktopError::from_method(code, retry_after_s));
+                }
+                Err(ClientError::Io(_)) if !retried && request.op() == MethodOp::UnlockMethods => {
                     retried = true;
                 }
                 Err(e) => return Err(e.into()),

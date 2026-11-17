@@ -180,6 +180,9 @@
   let trusted = ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"];
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
+  // Hardware unlock methods (ADR 0075): the master password, then those enrolled.
+  const methods = [{ rank: 0, kind: "password", usable: true, needs_pin: false }, ...(cfg.methods || [])];
+  const enrollable = cfg.enrollable || ["hello", "fido2"];
   const v = (n) => n.toString(16).padStart(96, "0");
   const history = [
     { version: v(3), wall_ms: Date.UTC(2026, 9, 2, 8, 14), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["password"], custom: 0 },
@@ -366,6 +369,15 @@
     choose_recovery_shares: () => ["hirzla-part-3fa2c901-1.hirzla-part", "hirzla-part-3fa2c901-3.hirzla-part"],
     recovery_unlock: () => { state = "unlocked"; },
     remove_recovery_kit: () => { kit = null; },
+    list_unlock_methods: () => ({ methods, enrollable }),
+    enroll_unlock_method: (a) => {
+      if (a.password !== "démonstration") return refuse("unlock_failed", "Refusé : mot de passe maître incorrect, réponse refusée par le matériel, ou coffre altéré.");
+      const rank = methods.length;
+      methods.push({ rank, kind: a.kind, usable: true, needs_pin: false });
+      return delay(rank);
+    },
+    unlock_with_method: () => delay(undefined).then(() => { state = "unlocked"; }),
+    remove_unlock_method: (a) => { methods.splice(a.rank, 1); },
     choose_kdbx_file: () => "Personnel.kdbx",
     import_kdbx: (a) => {
       if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
