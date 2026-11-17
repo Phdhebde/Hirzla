@@ -76,7 +76,7 @@ done
 # 3. L'application, sans empaqueter : les exécutables sont maintenant définitifs.
 cd apps/desktop/src-tauri
 cargo tauri build --no-bundle --config tauri.livraison.conf.json --features livraison
-# 4. Manifeste des clients signé hors ligne pour ces exécutables (§ 7), copié en
+# 4. Manifeste des clients signé par la clé d'éditeur pour ces exécutables (§ 7), copié en
 #    binaries/hirzla-clients.manifest, puis les installeurs, sans toucher aux exécutables
 #    (sous Windows : tauri.manifeste.windows.conf.json).
 cargo tauri bundle --no-binary-patching --features livraison \
@@ -85,8 +85,8 @@ cargo tauri bundle --no-binary-patching --features livraison \
 
 Les étapes 3 et 4 sont séparées parce que le manifeste porte sur les exécutables définitifs :
 `cargo tauri build` en une passe réécrirait `hirzla-desktop` pendant l'empaquetage
-(*binary patching*, désactivé par `--no-binary-patching`), et la signature ne peut avoir
-lieu qu'entre les deux, hors ligne. Le flux de livraison du § 2.1 fait exactement cela.
+(*binary patching*, désactivé par `--no-binary-patching`), et la signature du manifeste a
+lieu entre les deux. Le flux de livraison du § 2.1 fait exactement cela.
 
 La fonctionnalité `livraison` de l'application, de la ligne de commande et de l'hôte natif
 fait vérifier par chaque client la signature du noyau avant tout envoi (ADR 0055) : empreinte
@@ -110,18 +110,43 @@ dépendance git, pas de script de construction qui télécharge.
 
 Chaque livraison publie aussi un fichier `SHA256SUMS` des installeurs, signé (§ 5).
 
-### 2.1 Flux de livraison en deux temps (ADR 0064)
+### 2.1 Flux de livraison (ADR 0064, 0073)
 
-Un seul flux GitHub Actions, « Livraison » (`.github/workflows/livraison.yml`), qui remplace
-l'ancien flux manuel. Il ne publie jamais lui-même : il prépare un **brouillon** de version
-que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md`, étape 7.
+Un seul flux GitHub Actions, « Livraison » (`.github/workflows/livraison.yml`), lancé par la
+pose d'une étiquette `vX.Y.Z`, en **une seule exécution**. Il ne publie jamais lui-même : il
+prépare un **brouillon** de version que l'éditeur publie. Marche à suivre de l'éditeur et
+réglages GitHub : `docs/guide-signature.md`.
 
-| Moment | Déclencheur | Ce qui se passe |
-| --- | --- | --- |
-| Étape 1 | pose de l'étiquette `vX.Y.Z` | contrôles de version et de `HIRZLA_PUBLISHER_KEYS` ; compilation unique des quatre exécutables par système (`livraison`, mode `manifeste`) ; sous macOS, `Hirzla.app` entière, signée ad hoc ; artefact `hirzla-X.Y.Z-a-signer` ; brouillon de version |
-| Signature | l'éditeur, hors ligne | `signer-manifestes.sh` : un manifeste par plateforme, joint au brouillon |
-| Étape 2 | *Run workflow* sur l'étiquette | vérification des manifestes ; installeurs à partir des exécutables de l'étape 1 (sous macOS, `.pkg` de la `Hirzla.app` de l'étape 1) ; contrôle de chaque installeur ; archives, extension, SBOM, `SHA256SUMS`, provenance ; envoi au brouillon |
-| Publication | l'éditeur | `SHA256SUMS.asc` (GPG) joint, relecture, *Publish release* |
+| Job | Ce qui se passe |
+| --- | --- |
+| `version` | contrôles de version et de `HIRZLA_PUBLISHER_KEYS` (`release-version.py`) |
+| `executables` | compilation unique des quatre exécutables par système (`livraison`, mode `manifeste`) ; sous macOS, `Hirzla.app` entière, signée ad hoc ; provenance Sigstore |
+| `authenticode-exe` | facultatif (variable `SIGNPATH_ORGANIZATION_ID`), environnement `signpath` : signature Authenticode des quatre `.exe` par SignPath, **avant** le manifeste ; provenance des fichiers signés |
+| `manifests` | environnement `editeur` (approbation de l'éditeur) : `hirzla-signer` compilé depuis l'étiquette, un manifeste signé par plateforme avec la clé du secret `HIRZLA_PUBLISHER_KEY`, vérifié contre `HIRZLA_PUBLISHER_KEYS` et les exécutables ; la clé est effacée |
+| `installers` | installeurs à partir de ces exécutables inchangés (sous macOS, `.pkg` de la `Hirzla.app` de `executables`) ; contrôle de chaque installeur ; archives Linux |
+| `authenticode-msi` | facultatif, comme `authenticode-exe` : signature Authenticode du MSI, après l'empaquetage |
+| `publish` | extension, SBOM, `SHA256SUMS`, provenance ; création du brouillon et envoi des fichiers |
+| Publication, l'éditeur | `SHA256SUMS.asc` (GPG) joint, relecture, *Publish release* |
+
+**Secrets, variables et environnements**
+
+| Nom | Sorte | Où | Contenu |
+| --- | --- | --- | --- |
+| `HIRZLA_PUBLISHER_KEYS` | variable | dépôt | clé(s) publique(s) d'éditeur, hexadécimal (`hirzla-signer cle-hex`), virgules entre plusieurs clés |
+| `editeur` | environnement | dépôt | relecteur obligatoire : l'éditeur ; déploiement : étiquettes `v*` seulement |
+| `HIRZLA_PUBLISHER_KEY` | secret | environnement `editeur` | base64 de `editeur.cle`, sur une ligne |
+| `HIRZLA_PUBLISHER_KEYS_ESSAI` | variable | dépôt | essai à blanc seulement : clé publique jetable |
+| `HIRZLA_PUBLISHER_KEY_ESSAI` | secret | environnement `editeur` | essai à blanc seulement : base64 de la clé jetable |
+| `signpath` | environnement | dépôt | facultatif ; déploiement : étiquettes `v*` seulement |
+| `SIGNPATH_API_TOKEN` | secret | environnement `signpath` | jeton de l'utilisateur CI de SignPath |
+| `SIGNPATH_ORGANIZATION_ID` | variable | dépôt | identifiant d'organisation SignPath ; vide : pas de signature Authenticode |
+| `SIGNPATH_PROJECT_SLUG` | variable | dépôt | `hirzla` |
+| `SIGNPATH_POLICY_SLUG`, `SIGNPATH_TEST_POLICY_SLUG`, `SIGNPATH_EXE_CONFIG_SLUG`, `SIGNPATH_MSI_CONFIG_SLUG` | variables | dépôt | facultatives ; défauts `release-signing`, `test-signing`, `executables`, `msi` |
+
+La clé d'éditeur n'est lue que par une étape du job `manifests` : décodée dans
+`$RUNNER_TEMP` sous `umask 077`, lue par `hirzla-signer` seul, effacée à la fin de l'étape
+(ADR 0073, risque accepté). Les paquets de mise à jour `.hirzla-maj` ne sont pas produits par
+le flux (§ 8).
 
 **Contrôles qui arrêtent la livraison**
 
@@ -132,75 +157,81 @@ que l'éditeur publie. Marche à suivre de l'éditeur : `docs/guide-signature.md
   pas) ; pour un essai à blanc, de même `HIRZLA_PUBLISHER_KEYS_ESSAI` (ci-dessous).
 - Les deux variables partagent une clé : une clé d'essai n'est jamais la clé d'éditeur, et une
   vraie livraison n'accepte jamais un manifeste signé par une clé d'essai.
-- Étape 2 lancée sur une branche, sans brouillon, ou sur un commit qui n'est pas celui de
-  l'étape 1.
-- Manifeste Linux, Windows ou macOS absent du brouillon ; manifeste qui ne vérifie avec
-  aucune clé de `HIRZLA_PUBLISHER_KEYS`, d'une autre version ou plateforme, ou qui ne nomme
-  pas exactement les quatre exécutables de l'étape 1 avec leurs tailles et empreintes
-  (`hirzla-signer verifier --executables` ; sous macOS, ceux de
-  `Hirzla.app/Contents/MacOS`).
+- Déploiement `editeur` refusé ou non approuvé ; secret `HIRZLA_PUBLISHER_KEY` (ou
+  `HIRZLA_PUBLISHER_KEY_ESSAI`) vide ou qui n'est pas du base64.
+- Manifeste qui ne vérifie avec aucune clé de `HIRZLA_PUBLISHER_KEYS` (le secret ne
+  correspond pas à la clé publique compilée), ou qui ne nomme pas exactement les quatre
+  exécutables avec leurs tailles et empreintes (`hirzla-signer verifier --executables` ;
+  sous macOS, ceux de `Hirzla.app/Contents/MacOS`).
+- SignPath configuré mais en échec (refus, délai dépassé d'une heure, fichiers rendus
+  inchangés ou sous d'autres noms).
 - Un deb, un rpm, un MSI ou un `.pkg` dont les exécutables ou le manifeste diffèrent, octet
   pour octet, des fichiers vérifiés (`.github/scripts/compare-installed.sh`, après extraction
   par `pkgutil --expand-full` pour le `.pkg`) ; une `Hirzla.app` dont la signature ne tient
   plus (`codesign --verify --strict`), ou que `macos-pkg.sh` refuse. Une AppImage qui diffère
   est écartée de la version avec un avertissement.
+- Une version déjà publiée pour l'étiquette : elle n'est jamais reconstruite. Un brouillon
+  existant est remis à zéro (fichiers remplacés).
 
-**Ce que l'étape 2 joint au brouillon**
+**Ce que le flux joint au brouillon**
 
 | Fichier | Contenu |
 | --- | --- |
-| `Hirzla_X.Y.Z_x64_fr-FR.msi` | Windows |
+| `Hirzla_X.Y.Z_x64_fr-FR.msi` | Windows (signé Authenticode si SignPath est configuré) |
 | `Hirzla_X.Y.Z_aarch64.pkg` | macOS (Apple Silicon), paquet d'installation non signé (§ 3) |
 | `Hirzla_X.Y.Z_amd64.deb`, `Hirzla-X.Y.Z-1.x86_64.rpm`, `Hirzla_X.Y.Z_amd64.AppImage` | Linux (AppImage si conforme) |
 | `hirzla-cli-X.Y.Z-linux-x86_64.tar.gz` | `hirzla`, `hirzla-core`, `hirzla-native-host`, manifeste, modèles de manifeste de messagerie native |
 | `hirzlad-X.Y.Z-linux-x86_64.tar.gz` | `hirzlad`, `hirzla-audit-verify` (pas d'unité systemd fournie : voir `docs/evaluation/guide-agd.md`) |
 | `hirzla-extension-X.Y.Z.zip` | l'extension (`apps/extension/src`), pour Firefox et Chromium |
-| `hirzla-clients-<plateforme>.manifest` | manifestes signés, tels que joints par l'éditeur |
+| `hirzla-clients-<plateforme>.manifest` | manifestes signés |
 | `*.cdx.json` | nomenclatures CycloneDX : exécutables par plateforme, `hirzlad`, paquets npm |
 | `SHA256SUMS` | empreintes de tous les fichiers ci-dessus, à signer en GPG (§ 5) |
 
-Chaque fichier porte une attestation de provenance Sigstore (`gh attestation verify`). Les
-exécutables de l'étape 1 en portent une aussi : l'éditeur peut vérifier, avant de signer,
-qu'ils viennent du flux.
+Chaque fichier porte une attestation de provenance Sigstore (`gh attestation verify`), de
+même que les exécutables de chaque plateforme (et les `.exe` signés par SignPath).
 
 **Règles qui rendent le manifeste valable**
 
-- Les exécutables sont compilés **une fois**, à l'étape 1, et ne sont plus modifiés : pas de
-  `strip`, pas de recompilation à l'étape 2 (`cargo tauri bundle`, pas `build`),
-  `--no-binary-patching`, `NO_STRIP=true` pour linuxdeploy. Sous macOS, l'étape 1 construit
-  `Hirzla.app` (`cargo tauri build --bundles app`) et la signe ad hoc avec le runtime renforcé
-  (§ 3 : exécutables imbriqués d'abord, puis le paquet), avant la signature du manifeste ;
-  l'éditeur reçoit `macos-aarch64/Hirzla.app.zip` (`ditto -c -k --norsrc --keepParent`) et le
-  manifeste porte sur `Hirzla.app/Contents/MacOS/*` tels que signés ; l'étape 2 met cette
-  même `Hirzla.app` dans le `.pkg`. Une signature Authenticode (§ 4) se placerait au même
-  endroit que la signature ad hoc.
+- Les exécutables sont compilés **une fois**, dans le job `executables`, et ne sont plus
+  modifiés : pas de `strip`, pas de recompilation (`cargo tauri bundle`, pas `build`),
+  `--no-binary-patching`, `NO_STRIP=true` pour linuxdeploy. Sous macOS, le job construit
+  `Hirzla.app` (`cargo tauri build --bundles app`) et la signe ad hoc avec le runtime
+  renforcé (§ 3 : exécutables imbriqués d'abord, puis le paquet), avant le manifeste ; elle
+  circule en `macos-aarch64/Hirzla.app.zip` (`ditto -c -k --norsrc --keepParent`), le
+  manifeste porte sur `Hirzla.app/Contents/MacOS/*` tels que signés, et le `.pkg` contient
+  cette même `Hirzla.app`.
+- Sous Windows, la signature Authenticode des exécutables (SignPath) a lieu avant le
+  manifeste, qui porte sur les fichiers signés ; celle du MSI après l'empaquetage, sans
+  toucher aux fichiers qu'il contient.
 - Le noyau, la ligne de commande, l'hôte natif et l'application ont les mêmes
   fonctionnalités : `livraison`, sans `signature-systeme`.
-- Les artefacts de l'étape 1 sont gardés 90 jours ; passé ce délai, ou si l'étape 1 est
-  relancée, les manifestes sont à signer de nouveau (une nouvelle étape 1 retire du brouillon
-  les manifestes devenus faux).
 
-**macOS** (ADR 0065) : livré en paquet d'installation `.pkg`, jamais en image disque.
-L'étape 2 décompresse la `Hirzla.app` de l'étape 1, vérifie sa signature et le manifeste
-macOS contre `Contents/MacOS` (mêmes options de `hirzla-signer verifier` que les autres
-systèmes), construit le `.pkg` par `.github/scripts/macos-pkg.sh`, puis l'ouvre
-(`pkgutil --expand-full`) pour comparer exécutables et manifeste aux fichiers vérifiés.
-macOS est exigé comme Linux et Windows : un échec arrête la livraison.
+**macOS** (ADR 0065) : livré en paquet d'installation `.pkg`, jamais en image disque. Le job
+`installers` décompresse la `Hirzla.app` du job `executables`, vérifie sa signature et le
+manifeste macOS contre `Contents/MacOS`, construit le `.pkg` par
+`.github/scripts/macos-pkg.sh`, puis l'ouvre (`pkgutil --expand-full`) pour comparer
+exécutables et manifeste aux fichiers vérifiés. macOS est exigé comme Linux et Windows.
+
+**Signature hors ligne de secours** : `.github/scripts/signer-manifestes.sh` signe les
+mêmes manifestes sur un poste hors ligne, à partir des artefacts `executables-*` d'une
+exécution ; le flux ne reprend pas de tels manifestes, et les installeurs se construisent
+alors à la main (§ 2).
 
 #### Essai à blanc (étiquette `vX.Y.Z-essai.N`)
 
-Avant la première vraie étiquette, ou après un changement du flux, on rejoue les deux étapes
-avec une **clé d'éditeur jetable**. Une étiquette `vX.Y.Z-essai.N` (N à partir de 1) lance le
-même flux pour la version `X.Y.Z` de l'espace de travail (que l'on ne relève pas), avec trois
+Avant la première vraie étiquette, ou après un changement du flux, on rejoue le flux avec
+une **clé d'éditeur jetable**. Une étiquette `vX.Y.Z-essai.N` (N à partir de 1) lance le
+même flux pour la version `X.Y.Z` de l'espace de travail (que l'on ne relève pas), avec ces
 différences :
 
 - les exécutables sont compilés avec les clés de la variable `HIRZLA_PUBLISHER_KEYS_ESSAI`,
   et non `HIRZLA_PUBLISHER_KEYS` ; le flux refuse de partir si elle est vide ou si elle
   partage une clé avec `HIRZLA_PUBLISHER_KEYS` ;
+- les manifestes sont signés avec le secret `HIRZLA_PUBLISHER_KEY_ESSAI` de l'environnement
+  `editeur` ; le job ne reçoit pas la vraie clé ;
+- SignPath, s'il est configuré, signe avec la politique de test (`test-signing`) ;
 - le brouillon est une **pré-version** intitulée « Essai Hirzla X.Y.Z-essai.N (ne pas
-  publier) », dont les notes commencent par un avertissement visible ;
-- l'artefact de l'éditeur s'appelle `hirzla-X.Y.Z-essai.N-a-signer` et contient un fichier
-  `ESSAI`, que `signer-manifestes.sh` affiche avant de signer.
+  publier) », dont les notes commencent par un avertissement visible.
 
 > **Ne publiez jamais un essai.** Ses exécutables ne font confiance qu'à la clé jetable :
 > publiés, ils accepteraient tout manifeste signé par quiconque détient cette clé, qui n'est
@@ -210,16 +241,17 @@ différences :
 
 Marche à suivre :
 
-1. Clé jetable, sur une machine quelconque (jamais la clé USB de la clé d'éditeur) :
+1. Clé jetable, sur une machine quelconque (jamais la clé d'éditeur) :
 
    ```sh
    hirzla-signer cle-generer --prive essai.cle --publique essai.pub
    hirzla-signer cle-hex --publique essai.pub
+   base64 -w0 essai.cle
    ```
 
-2. Sur GitHub, *Settings* › *Secrets and variables* › *Actions* › *Variables* : créer
-   `HIRZLA_PUBLISHER_KEYS_ESSAI` avec la valeur affichée (clé publique : variable, pas
-   secret).
+2. Sur GitHub : variable de dépôt `HIRZLA_PUBLISHER_KEYS_ESSAI` = la sortie de `cle-hex` ;
+   dans l'environnement `editeur`, secret `HIRZLA_PUBLISHER_KEY_ESSAI` = la sortie de
+   `base64` (`docs/guide-signature.md` § 1.3).
 3. Poser et pousser l'étiquette d'essai sur le commit à essayer :
 
    ```sh
@@ -227,18 +259,11 @@ Marche à suivre :
    git push origin v1.0.0-essai.1
    ```
 
-   L'étape 1 compile, crée la pré-version brouillon et l'artefact
-   `hirzla-1.0.0-essai.1-a-signer`.
-4. Dans le dossier de l'artefact décompressé, signer les manifestes avec la clé jetable :
-   `sh signer-manifestes.sh essai.cle essai.pub` (manifestes de version `1.0.0`, celle du
-   noyau). Joindre les trois `hirzla-clients-*.manifest` au brouillon
-   (`gh release upload v1.0.0-essai.1 hirzla-clients-*.manifest`).
-5. Lancer l'étape 2 : *Actions* › *Livraison* › *Run workflow*, sur l'étiquette
-   `v1.0.0-essai.1`.
-6. Examiner : journal des deux étapes, fichiers joints au brouillon, installation des
-   paquets sur des postes de test (le noyau démarre avec le manifeste de la clé jetable,
-   `event=client_signatures required=1 kind=manifeste`).
-7. Supprimer le brouillon et l'étiquette, puis la clé :
+4. Approuver le déploiement `editeur` de l'exécution (*Review deployments*).
+5. Examiner : journal de l'exécution, fichiers joints à la pré-version brouillon,
+   installation des paquets sur des postes de test (le noyau démarre avec le manifeste de la
+   clé jetable, `event=client_signatures required=1 kind=manifeste`).
+6. Supprimer le brouillon et l'étiquette, puis la clé :
 
    ```sh
    gh release delete v1.0.0-essai.1 --cleanup-tag --yes
@@ -246,9 +271,10 @@ Marche à suivre :
    shred -u essai.cle    # ou suppression sécurisée équivalente
    ```
 
-   Vider ou supprimer la variable `HIRZLA_PUBLISHER_KEYS_ESSAI` si aucun autre essai n'est
-   prévu. Un essai suivant prend le numéro `N + 1` (une étiquette supprimée peut aussi être
-   reposée, l'étape 1 remettant le brouillon à zéro).
+   Supprimer le secret `HIRZLA_PUBLISHER_KEY_ESSAI` et vider la variable
+   `HIRZLA_PUBLISHER_KEYS_ESSAI` si aucun autre essai n'est prévu. Un essai suivant prend le
+   numéro `N + 1` (une étiquette supprimée peut aussi être reposée : le brouillon est remis à
+   zéro).
 
 ### Compilation reproductible et nomenclature (ADR 0056)
 
@@ -303,8 +329,8 @@ pas à root ou est inscriptible par un groupe ou par les autres. Ordre de produc
    produit `target/release/bundle/macos/Hirzla.app` ;
 2. signature finale du paquet d'application (ad hoc, ou Developer ID aux étapes ci-dessous) :
    plus rien ne le modifie ensuite ;
-3. sur le poste de signature, manifeste des clients des exécutables **tels qu'ils sont dans le
-   paquet signé** (`Hirzla.app/Contents/MacOS/*`, § 7) ;
+3. manifeste des clients (job `manifests` du flux, § 2.1) des exécutables **tels qu'ils
+   sont dans le paquet signé** (`Hirzla.app/Contents/MacOS/*`, § 7) ;
 4. paquet d'installation, sur un poste ou un agent macOS (aucun secret nécessaire) :
 
    ```sh
@@ -359,6 +385,11 @@ commerciale), la signature Authenticode **modifie les exécutables** : signer d'
 ensuite le manifeste (§ 7), puis construire et signer le MSI sans signer de nouveau les
 exécutables.
 
+Le flux de livraison fait exactement cela avec la SignPath Foundation, si la variable
+`SIGNPATH_ORGANIZATION_ID` est renseignée (jobs `authenticode-exe` et `authenticode-msi`,
+§ 2.1, ADR 0073 ; réglages : `docs/guide-signature.md` § 2). Les points ci-dessous valent
+pour un certificat commercial.
+
 1. **Certificat** de signature de code (validation étendue de préférence, pour la réputation
    SmartScreen), gardé sur un module matériel (jeton USB ou HSM en nuage) : la clé privée ne
    doit jamais être exportable ni copiée sur un agent de CI.
@@ -402,15 +433,18 @@ exécutables.
       « Traçage interdit : appliqué ».
 - [ ] L'application démarre sans réseau (câble débranché, pare-feu sortant fermé).
 - [ ] `SHA256SUMS` publié et signé.
-- [ ] Le flux « Livraison » est vert sur les deux étapes ; s'il a écarté l'AppImage, les notes
+- [ ] Le flux « Livraison » est vert ; s'il a écarté l'AppImage, les notes
       de version le disent.
 
 ## 7. Clé d'éditeur et manifeste des clients (ADR 0042)
 
 La **clé d'éditeur** est une paire de signature hybride ECDSA P-384 + ML-DSA-87
 (`PublisherSigningKey`, domaines `hirzla/v1/client-manifest` et `hirzla/v1/update-package`).
-Elle est créée et gardée sur le **poste de signature hors ligne** de l'éditeur, jamais sur un
-agent de CI, jamais dans le dépôt :
+Elle est créée sur une machine de confiance de l'éditeur, jamais dans le dépôt ; une copie
+est gardée hors ligne (clés USB chiffrées) et une autre dans le secret `HIRZLA_PUBLISHER_KEY`
+de l'environnement GitHub protégé `editeur`, d'où le flux signe les manifestes des clients
+(§ 2.1 ; ADR 0073, risque accepté). Les paquets de mise à jour (§ 8) restent signés hors
+ligne :
 
 ```sh
 hirzla-signer cle-generer --prive editeur.cle --publique editeur.pub   # une fois
@@ -540,6 +574,7 @@ paquets. La version de l'espace de travail Cargo doit être relevée à chaque l
    domaine et la raison sociale de l'éditeur avant la première livraison signée.
 4. Mises à jour : aucun mécanisme automatique (il ferait du réseau). Paquets hors ligne signés
    (ADR 0043, § 8) en plus des outils de déploiement du parc et des dépôts de paquets.
-   Le manifeste est branché dans `livraison.yml` (§ 2.1, ADR 0064) ; un paquet de mise à jour
-   joint au brouillon par l'éditeur est vérifié et publié avec le reste. Reste : rien pour la
+   Le manifeste est branché dans `livraison.yml` (§ 2.1, ADR 0064, 0073) ; un paquet de mise
+   à jour, signé hors ligne, est joint au brouillon à la main par l'éditeur, avec ses
+   empreintes ajoutées à `SHA256SUMS` avant la signature GPG (`docs/guide-signature.md` § 3). Reste : rien pour la
    première version (un paquet `1.0.0` ne s'applique sur aucune installation).

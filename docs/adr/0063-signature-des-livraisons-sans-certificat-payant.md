@@ -56,6 +56,9 @@ fonctionnement.
    CI) un certificat Authenticode dont la clé reste dans son HSM. Sans elle, l'installeur
    n'est pas signé et SmartScreen affiche un avertissement à l'installation ; le produit
    fonctionne (point 1).
+   *Depuis l'ADR 0073* : la signature SignPath est branchée dans le flux `Livraison`,
+   facultative (variable `SIGNPATH_ORGANIZATION_ID`) ; exécutables signés avant le calcul
+   du manifeste Windows, MSI après l'empaquetage.
 5. **macOS : pas de solution gratuite pour Gatekeeper.** Apple ne délivre la signature
    Developer ID et la notarisation qu'aux comptes payants. En attendant : application signée
    **ad hoc** avec le runtime renforcé (`codesign -s - -o runtime`), qui garde la protection

@@ -64,6 +64,9 @@ réseau ni noyau.
    livraison, aucune autre clé n'est admise ; en développement, `--cle-editeur FICHIER`.
    La clé privée ne quitte pas le poste de signature de l'éditeur, hors ligne ; elle n'est
    jamais commitée ni copiée sur un agent de CI ; les tests génèrent leurs clés à la volée.
+   *Depuis l'ADR 0073* (décision de l'éditeur, risque accepté) : une copie est gardée en
+   secret d'un environnement GitHub protégé pour signer le manifeste des clients dans la CI ;
+   les paquets de mise à jour restent signés hors ligne.
 7. **Outil de l'éditeur** : `hirzla-signer` (`apps/release-signer`), jamais livré aux postes :
    `cle-generer`, `cle-hex`, `manifeste-clients`, `paquet`, `verifier`.
 8. **SLH-DSA : pas maintenant.** Ni `aws-lc-rs` 1.19 (aucune interface) ni `aws-lc-sys` 0.47

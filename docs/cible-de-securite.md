@@ -179,7 +179,7 @@ est réservé.
 | H10 | L'utilisateur compare hors bande l'empreinte du serveur au rattachement (ou la reçoit de l'administrateur avec l'invitation), et l'empreinte d'un membre avant de lui confier un casier sensible quand le registre de transparence ne la couvre pas encore. |
 | H11 | L'utilisateur choisit un mot de passe maître robuste : sans garde matérielle, c'est la seule protection d'un coffre copié, avec Argon2id. |
 | H12 | Les dépositaires gardent leurs parts séparément, sur support hors ligne ; moins de `t` d'entre eux ne s'entendent pas. Les parts sont effacées du poste qui a créé le kit ou initialisé le serveur. |
-| H13 | Le répertoire d'installation des exécutables n'est inscriptible que par root (ou l'administrateur) ; le poste de signature de l'éditeur est hors ligne et garde la clé d'éditeur. |
+| H13 | Le répertoire d'installation des exécutables n'est inscriptible que par root (ou l'administrateur) ; la clé d'éditeur est gardée par l'éditeur hors ligne et, pour signer le manifeste des clients, dans un secret d'environnement GitHub protégé (ADR 0073) ; le compte GitHub de l'éditeur, le dépôt et les agents hébergés par GitHub pendant la signature ne sont pas compromis. |
 
 ## 5. Biens sensibles
 
@@ -194,7 +194,7 @@ est réservé.
 | B7 | Attributions de rôle, état d'autorisation, certificats et révocations d'appareil, politique de quorum | Opérations de contrôle | Intégrité, authenticité |
 | B8 | Journal d'audit | Serveur, export | Intégrité, non-répudiation |
 | B9 | Registre de transparence des clés et sa dernière tête vérifiée | Serveur ; copie locale dans l'annexe | Intégrité, vérifiabilité |
-| B10 | Binaires, manifeste des clients, paquets de mise à jour, clé d'éditeur | Livraison, poste de signature | Intégrité, authenticité ; confidentialité de la clé d'éditeur |
+| B10 | Binaires, manifeste des clients, paquets de mise à jour, clé d'éditeur | Livraison, poste de signature, secret GitHub de l'environnement `editeur` (ADR 0073) | Intégrité, authenticité ; confidentialité de la clé d'éditeur |
 | B11 | Paramètres de sécurité du coffre : en-tête, suite, paramètres Argon2id, méthodes de déverrouillage, paramètres publics du kit | Coffre | Intégrité |
 | B12 | Clé de recouvrement et parts du kit (`.hirzla-part`) ; parts du sceau du serveur | Mémoire du noyau pendant la création ; supports des dépositaires | Confidentialité (`t` parts valent le mot de passe ou le descellement) |
 | B13 | État du mode Serveur : clé du serveur épinglée, AC du site, curseurs, opérations non envoyées | Annexe `<coffre>.serveur` scellée | Intégrité, confidentialité |
@@ -656,6 +656,15 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
 - **TLS** : ML-KEM-768 au lieu de ML-KEM-1024 dans le canal ; les contenus restent chiffrés de
   bout en bout en ML-KEM-1024 hybride.
 - **H1** : un attaquant administrateur du poste, pendant l'ouverture, lit ce qui est descellé.
+- **Clé d'éditeur dans la CI** (ADR 0073, risque accepté par l'éditeur) : le manifeste des
+  clients est signé par le flux GitHub « Livraison », la clé d'éditeur étant un secret
+  d'environnement protégé (relecteur obligatoire, étiquettes `v*` seulement). Qui compromet
+  le compte GitHub de l'éditeur, le dépôt ou le flux avec le droit de poser une étiquette,
+  une dépendance ou action exécutée dans le job de signature, ou un agent hébergé pendant ce
+  job, peut obtenir des manifestes et des paquets de mise à jour signés, donc faire accepter
+  un client ou un noyau piégé (contre H13). Atténuations : approbation de chaque signature
+  par l'éditeur, protection des étiquettes, dépendances figées, provenance Sigstore de chaque
+  fichier livré, rotation de la clé (`livraison.md` § 7).
 
 ## 9. Points ouverts
 

@@ -62,7 +62,9 @@ hostiles, et tout trafic chiffré aujourd'hui sera enregistré pour être déchi
   la protection d'un coffre copié.
 - Les dépositaires gardent leurs parts séparément et hors ligne ; moins de `t` d'entre eux ne
   s'entendent pas.
-- La clé d'éditeur reste sur un poste de signature hors ligne.
+- La clé d'éditeur est gardée hors ligne par l'éditeur et, pour signer le manifeste des
+  clients, dans un secret d'environnement GitHub protégé ; le compte GitHub de l'éditeur et
+  le dépôt ne sont pas compromis (ADR 0073, risque accepté).
 
 ## Risques résiduels assumés
 
