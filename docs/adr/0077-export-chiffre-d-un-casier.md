@@ -1,7 +1,6 @@
 # ADR 0077 — Export chiffré d'un casier, sans mode Serveur
 
-- Statut : proposé (fonction décidée par Max pour la version 1.1.0 ; détails ci-dessous à
-  confirmer)
+- Statut : accepté (2026-11-17, Claude par délégation de Max)
 - Date : 2026-11-17
 
 ## Contexte
