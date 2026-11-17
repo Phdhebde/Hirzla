@@ -499,7 +499,8 @@ fn self_mode_v5_commands() {
     assert!(fails(&hirzla(&sock, &["import-kdbx", kdbx], Some("faux"))).contains("incorrect"));
     let out = ok(&hirzla(&sock, &["import-kdbx", kdbx], Some("hirzla-test")));
     assert!(out.contains("5 secret(s) importé(s)"), "{out}");
-    assert!(out.contains("1 pièce(s) jointe(s)"), "{out}");
+    // The attachment of « Banque » is imported now: nothing to report.
+    assert!(!out.contains("pièce(s) jointe(s)"), "{out}");
     assert_eq!(ok(&hirzla(&sock, &["get", "Banque"], None)), "Pa55w0rd!\n");
 
     // History and restore of a version.

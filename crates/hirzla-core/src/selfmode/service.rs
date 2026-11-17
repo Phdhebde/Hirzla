@@ -2,7 +2,7 @@
 
 use hirzla_vault::kdbx::KdbxDatabase;
 use hirzla_vault::model::{Id16, Settings};
-use hirzla_vault::secret::{FieldValue, SecretState};
+use hirzla_vault::secret::{AttachmentRef, FieldValue, SecretState, SetKind, SetValue};
 use hirzla_vault::{recovery_params, RecoveryShare, Vault, VaultError};
 
 use super::import;
@@ -281,13 +281,13 @@ impl Core {
     }
 
     /// Creates one secret per entry of a decrypted database in `locker` (the personal locker
-    /// by default).
+    /// by default), with its attachments.
     ///
     /// # Errors
     /// `Locked`, `NotFound` for an unknown locker.
     pub fn import_database(
         &mut self,
-        db: KdbxDatabase,
+        mut db: KdbxDatabase,
         locker: Option<Id16>,
     ) -> Result<SelfReply, SelfRefusal> {
         let vault = self.vault().map_err(general)?;
@@ -299,16 +299,54 @@ impl Core {
             recycled: db.recycled as u64,
             ..ImportReport::default()
         };
-        for entry in db.entries {
-            let Some((secret_type, edit)) = import::plan(entry, &mut report) else {
+        let mut entries = std::mem::take(&mut db.entries);
+        import::resolve_references(&mut entries);
+        for entry in entries {
+            let Some(planned) = import::plan(entry, &mut report) else {
                 continue;
             };
-            match vault.create_secret(locker, secret_type, edit) {
+            let mut edit = planned.edit;
+            let mut stored: Vec<AttachmentRef> = Vec::new();
+            for a in planned.attachments {
+                let Some(data) = db.binary(a.reference) else {
+                    report.attachments += 1;
+                    continue;
+                };
+                match vault.add_attachment(locker, &a.name, import::media_type(&a.name), data) {
+                    Ok(r) => {
+                        stored.push(r.clone());
+                        edit.add
+                            .push((SetKind::Attachments, SetValue::Attachment(r)));
+                    }
+                    // Too large, or a name too long.
+                    Err(VaultError::InvalidInput) => report.attachments += 1,
+                    Err(e) => {
+                        discard(vault, locker, &stored);
+                        return Err(verr(e));
+                    }
+                }
+            }
+            match vault.create_secret(locker, planned.secret_type, edit) {
                 Ok(_) => report.imported += 1,
-                Err(VaultError::InvalidInput) => report.refused += 1,
-                Err(e) => return Err(verr(e)),
+                Err(VaultError::InvalidInput) => {
+                    report.refused += 1;
+                    report.attachments += stored.len() as u64;
+                    discard(vault, locker, &stored);
+                }
+                Err(e) => {
+                    discard(vault, locker, &stored);
+                    return Err(verr(e));
+                }
             }
         }
         Ok(SelfReply::Imported(report))
+    }
+}
+
+/// Drops the attachments stored for a secret that was not written. Best effort: a chunk left
+/// behind is unreachable (its key was only in the reference) and costs only space.
+fn discard(vault: &mut Vault, locker: Id16, stored: &[AttachmentRef]) {
+    for a in stored {
+        let _ = vault.discard_attachment(locker, a);
     }
 }

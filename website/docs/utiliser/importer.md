@@ -1,6 +1,6 @@
 ---
 title: Importer depuis KeePass ou un fichier CSV
-description: Migrer vers Hirzla depuis KeePass, KeePassXC, Bitwarden, Firefox ou Chrome - import direct d'une base KDBX 4 ou d'un export CSV, et ce qui n'est pas repris.
+description: Migrer vers Hirzla depuis KeePass, KeePassXC, Bitwarden, Firefox ou Chrome - import direct d'une base KDBX ou d'un export CSV, et ce qui n'est pas repris.
 ---
 
 # Importer depuis KeePass ou un fichier CSV
@@ -22,8 +22,10 @@ lui-même.
 
 | | |
 | --- | --- |
-| Bases acceptées | KDBX 4 (KeePass 2.35 et suivants, KeePassXC), protégées par un mot de passe seul, chiffrées en AES-256 ou ChaCha20 avec Argon2 |
-| Non importés | Pièces jointes, historique des entrées, codes TOTP. Le compte rendu les signale |
+| Bases acceptées | KDBX 3.1 et 4 (KeePass 2, KeePassXC), protégées par un mot de passe, chiffrées en AES-256 ou ChaCha20, dérivation AES-KDF ou Argon2 |
+| Repris | Titre, identifiant (même sans mot de passe), mot de passe, adresse, notes, étiquettes, champs personnalisés, pièces jointes, références entre entrées (`{REF:…@I:…}`), TOTP de KeePass 2 en base64 ou texte. Le groupe devient une étiquette `Groupe/Sous-groupe` |
+| Gardés dans des champs | Expiration, saisie automatique, TOTP en base32 (KeePassXC `otp`, `TimeOtp-Secret-Base32`), HOTP |
+| Non importés | Historique des entrées, corbeille KeePass, bases ouvertes par un fichier clé (pas encore), Twofish. Le compte rendu les signale |
 
 En ligne de commande :
 

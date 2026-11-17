@@ -676,13 +676,13 @@ export class SettingsView {
       ];
       /** @type {[number, string][]} */
       const notes = [
-        [r.empty, "entrée(s) vide(s) ignorée(s) (ni mot de passe ni notes)."],
+        [r.empty, "entrée(s) vide(s) ignorée(s) (titre seul : ni identifiant, mot de passe, adresse, notes, champ ni pièce jointe)."],
         [r.recycled, "entrée(s) de la corbeille KeePass ignorée(s)."],
         [r.refused, "entrée(s) refusée(s) par le coffre (valeur trop longue ou non permise)."],
-        [r.attachments, "pièce(s) jointe(s) non importée(s)."],
+        [r.attachments, "pièce(s) jointe(s) non importée(s) (plus de 100 Mio, nom trop long ou au-delà de 64 par entrée)."],
         [r.history, "version(s) antérieure(s) d'entrées non importée(s)."],
         [r.custom_skipped, "champ(s) personnalisé(s) au-delà des limites du coffre, non importé(s)."],
-        [r.totp, "configuration(s) TOTP non importée(s) : ce type arrive dans une prochaine version."],
+        [r.totp, "configuration(s) TOTP en base32 ou hexadécimal gardée(s) telle(s) quelle(s) dans un champ masqué, pas encore convertie(s)."],
       ];
       for (const [n, text] of notes) if (n) lines.push(`${n} ${text}`);
       const box = byId("import-resultat");

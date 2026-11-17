@@ -351,7 +351,8 @@ fn the_self_mode_commands_drive_a_real_core() {
     let report =
         serde_json::to_value(state.import_kdbx_file(&kdbx, z("hirzla-test")).unwrap()).unwrap();
     assert_eq!(report["imported"], 5);
-    assert_eq!(report["attachments"], 1);
+    // The attachment of « Banque » is imported now.
+    assert_eq!(report["attachments"], 0);
     let list = serde_json::to_value(state.list(Some(z("Banque")), false).unwrap()).unwrap();
     let bank = &list["entries"][0];
     let target = SecretRef {

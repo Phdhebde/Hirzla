@@ -27,8 +27,8 @@ fn self_message(code: SelfCode, retry_after_s: Option<u64>) -> String {
             versions: Vec::new(),
         }),
         SelfCode::ImportUnsupported => "base KeePass non prise en charge : seules les bases \
-             KDBX 4 (Argon2d ou Argon2id, AES-256 ou ChaCha20) protégées par un mot de passe \
-             seul sont importées."
+             KDBX 3.1 et 4 (AES-KDF, Argon2d ou Argon2id ; AES-256 ou ChaCha20) protégées par \
+             un mot de passe sont importées."
             .into(),
         SelfCode::ImportKeyRejected => {
             "mot de passe de la base KeePass incorrect, ou base altérée.".into()
@@ -69,18 +69,21 @@ fn report_lines(r: &ImportReport) -> Vec<String> {
             lines.push(format!("  {n} {what}"));
         }
     };
-    note(
-        r.empty,
-        "entrée(s) vide(s) ignorée(s) (ni mot de passe ni notes).",
-    );
+    note(r.empty, "entrée(s) vide(s) ignorée(s) (titre seul).");
     note(r.recycled, "entrée(s) de la corbeille KeePass ignorée(s).");
     note(
         r.refused,
         "entrée(s) refusée(s) par le coffre (valeur trop longue…).",
     );
-    note(r.attachments, "pièce(s) jointe(s) non importée(s).");
+    note(
+        r.attachments,
+        "pièce(s) jointe(s) non importée(s) (trop grande, nom trop long ou plus de 64).",
+    );
     note(r.history, "version(s) antérieure(s) non importée(s).");
-    note(r.totp, "configuration(s) TOTP non importée(s).");
+    note(
+        r.totp,
+        "configuration(s) TOTP gardée(s) en champ masqué, pas encore convertie(s).",
+    );
     note(
         r.custom_skipped,
         "champ(s) personnalisé(s) au-delà des limites, non importé(s).",

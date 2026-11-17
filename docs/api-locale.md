@@ -1144,7 +1144,7 @@ l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
 | Réglages | `{1: auto_lock_s uint, 2: clipboard_clear_s uint, 3: lock_on_sleep bool, 4: lock_on_session_lock bool}`, les quatre clés toujours présentes |
 | Version | `{1: op_id bstr(48), 2: lamport uint, 3: wall_ms uint, 4: état uint (0 actif, 1 corbeille, 2 purgé), 5: titre tstr, 6?: identifiant tstr, 7: [champ uint], 8: [champ uint], 9: champs personnalisés uint}` ; titre et identifiant de 4 096 octets au plus |
 | Fichier de part | `bstr` (≤ 16 Kio), le fichier `.hirzla-part` tel quel (`format.md` § 4.4) |
-| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP, 8: refusés}`, tous `uint` |
+| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes non importées, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP non convertis, 8: refusés}`, tous `uint` |
 
 Une version liste les **numéros** des champs présents (clé 7, `format.md` § 8) et ceux qui ont
 changé depuis la version précédente (clé 8) : un champ compte comme changé quand l'écriture qui
@@ -1213,19 +1213,24 @@ Détails :
     le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
     défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
     `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
-    clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
-    de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
-    identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
-    « Sans titre » ; chemin du groupe (sans la racine) en étiquette, plus les étiquettes
-    KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
-    KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
-    coffre (valeur trop longue) comptée dans « refusés ».
+    clients et le verrouillage automatique ne l'attendent pas. Bases KDBX 3.1 et 4, AES-KDF ou
+    Argon2 (ADR 0025). Correspondance (détail dans l'ADR 0025) : entrée qui n'a qu'un titre :
+    ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
+    même sans mot de passe ; sinon : note ; titre absent : hôte de l'adresse, puis identifiant,
+    puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
+    remplacées par la valeur visée ; chemin du groupe (sans la racine) en étiquette, plus les
+    étiquettes KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans
+    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP de KeePass 2 en
+    base64 ou en texte converti, les autres gardés tels quels en champs sensibles et comptés
+    dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
+    champs personnalisés ; corbeille KeePass et historique comptés, non importés ; entrée
+    refusée par le coffre comptée dans « refusés ».
 
 ### 16.4 Erreurs
 
 | Code | Nom | Sens | Détails |
 | --- | --- | --- | --- |
-| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 3 ou antérieur, AES-KDF, Twofish, Salsa20, fichier clé | — |
+| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 2 ou antérieur, Twofish, flux interne ArcFour, coût de dérivation au-delà des bornes | — |
 | 61 | `ImportKeyRejected` | Mot de passe de la base faux, ou en-tête altéré | — |
 | 62 | `ImportMalformed` | Pas une base KeePass, ou base malformée, altérée ou trop grande | — |
 
@@ -1263,6 +1268,10 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
+4. Le noyau sait ouvrir une base protégée par un **fichier clé** (seul ou avec le mot de
+   passe), mais `ImportKdbx` n'a pas de clé pour le chemin de ce fichier : l'ajouter, ainsi
+   que de nouveaux compteurs au compte rendu (références non résolues, réglages de saisie
+   automatique), demande une nouvelle version du mode Self (§ 10), à spécifier ici d'abord.
 
 ## 17. Connexions SSH et RDP (version 6)
 

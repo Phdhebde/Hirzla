@@ -43,7 +43,7 @@ Commandes :
                           --version N --champ CHAMP : un champ d'une version (comme get).
   restore NOM             Sort un secret de la corbeille. --id ID.
                           --version N : rétablit la version N (voir history).
-  import-kdbx FICHIER     Importe une base KeePass KDBX 4 ; son mot de passe est demandé.
+  import-kdbx FICHIER     Importe une base KeePass KDBX 3.1 ou 4 ; son mot de passe est demandé.
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.

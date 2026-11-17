@@ -218,17 +218,18 @@ pub struct RecoveryInfo {
 pub struct ImportReport {
     /// Secrets created.
     pub imported: u64,
-    /// Entries with nothing to keep (no password, no notes).
+    /// Entries with nothing to keep (a title at most).
     pub empty: u64,
     /// Entries of the recycle bin, skipped.
     pub recycled: u64,
-    /// Attachments not imported.
+    /// Attachments not imported (too large, name too long, beyond 64, missing content, or
+    /// of a refused entry).
     pub attachments: u64,
     /// Earlier versions not imported.
     pub history: u64,
     /// Custom fields left out (beyond the vault's bounds).
     pub custom_skipped: u64,
-    /// One-time password configurations not imported.
+    /// One-time password configurations not converted (kept as custom fields).
     pub totp: u64,
     /// Entries the vault refused.
     pub refused: u64,
