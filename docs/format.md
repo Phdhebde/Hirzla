@@ -125,6 +125,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | Étiquette | Usage | Document |
 | --- | --- | --- |
 | `hirzla/v1/unlock` | Info HKDF, clé de déverrouillage | § 4.2 |
+| `hirzla/v1/hardware-secret` | Info HKDF, secret d'une méthode matérielle (ADR 0075) | § 4.2.1 |
 | `hirzla/v1/device-wrap` | Info HKDF, `K_dev_wrap` | § 4.3 |
 | `hirzla/v1/header` | AAD, authentification de l'en-tête | § 5.4 |
 | `hirzla/v1/identity` | AAD, identité scellée | § 5.5 |
@@ -386,7 +387,7 @@ Paramètres matériels (`kind` 2 à 5) :
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `keystore_blob` | `bstr(≤65536)` | Objet opaque défini par `hirzla-keystore` (étape 5) |
+| 1 | `keystore_blob` | `bstr(≤65536)` | Objet opaque défini par `hirzla-keystore` (étape 5) ; contenu des `kind` 3, 4 et 5 au § 4.2.1 |
 
 Paramètres du kit de recouvrement (`kind = 6`, ADR 0034), publics, une méthode au plus par
 en-tête :
@@ -403,7 +404,8 @@ Le **secret de méthode** fait 32 octets :
 - mot de passe : `Argon2id(mot de passe en UTF-8 normalisé NFC, salt, m, t, p)`, sortie de 32 octets.
   C'est `hirzla-vault` qui normalise : il reçoit le mot de passe comme texte et le passe en NFC
   avant de le confier à `hirzla-crypto`. Un mot de passe vide est refusé ;
-- matériel : les 32 octets libérés par la puce ou la clé FIDO2 à partir de `keystore_blob` ;
+- matériel : dérivé du matériau libéré par la puce, l'enclave ou la clé FIDO2 à partir de
+  `keystore_blob` (§ 4.2.1) ;
 - kit de recouvrement : la clé de recouvrement de 32 octets d'aléa, partagée par Shamir
   authentifié (`hirzla-crypto`, module `shamir`) en `count` parts dont `threshold` suffisent,
   puis effacée. Elle se reconstitue à partir des parts, dont chaque signature est vérifiée
@@ -416,6 +418,42 @@ de la méthode est sa position dans le tableau `unlock` de l'en-tête, **à part
 
 Les plafonds protègent contre un en-tête piégé qui ferait calculer Argon2id indéfiniment.
 Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refusé avant tout calcul.
+
+#### 4.2.1 Méthodes matérielles : Windows Hello, Touch ID, FIDO2 (ADR 0075)
+
+Le `keystore_blob` des `kind` 3, 4 et 5 est une map CBOR canonique (§ 2.1), décodée
+strictement (clé inconnue, longueur hors bornes ou version autre que 1 : refus). Il ne contient
+**jamais** la clé publique de la clé matérielle.
+
+| `kind` | Clé 1 | Clé 2 | Clé 3 |
+| --- | --- | --- | --- |
+| 5 Windows Hello | `version` = 1 | `name` : `tstr(1..128)`, nom de la clé dans le conteneur Windows Hello (`Hirzla-` suivi de `vault_id` en hexadécimal minuscule) | `challenge` : `bstr(32)`, aléa signé à chaque ouverture |
+| 3 Secure Enclave (Touch ID) | `version` = 1 | `wrapped_key` : `bstr(1..4096)`, la clé P-256 de l'enclave sous la forme chiffrée par l'enclave de ce Mac | `ephemeral_public` : `bstr(65)`, clé publique P-256 non compressée (`04 ‖ X ‖ Y`) d'une clé logicielle tirée à l'enrôlement puis oubliée |
+| 4 FIDO2 | `version` = 1 | `credential_id` : `bstr(1..1023)` | `salt` : `bstr(32)`, entrée PRF tirée à l'enrôlement |
+
+Le **matériau** libéré, de 32 à 1 024 octets, est :
+
+- Windows Hello : la signature RSA PKCS#1 v1.5 (SHA-256, déterministe) de `challenge` par la
+  clé `name`, après le geste ; l'enrôlement signe deux fois et refuse deux signatures
+  différentes ;
+- Secure Enclave : `ECDH(clé de l'enclave, ephemeral_public)`, coordonnée X de 32 octets,
+  calculée par l'enclave après Touch ID (contrôle d'accès `BiometryCurrentSet`) ;
+- FIDO2 : la sortie `hmac-secret` de 32 octets pour l'entrée
+  `SHA-256("WebAuthn PRF" ‖ 0x00 ‖ salt)` (sémantique WebAuthn PRF, la même sur les trois
+  systèmes), vérification de l'utilisateur exigée, identifiant de partie de confiance
+  `hirzla.local`.
+
+`secret de méthode = HKDF-SHA-512(ikm = matériau, salt = vault_id,
+info = len ‖ "hirzla/v1/hardware-secret" ‖ len ‖ kind (1 octet), L = 32)`, puis `KEK_unlock`
+comme ci-dessus. Un matériau hors bornes est refusé avant toute dérivation.
+
+Règles d'en-tête : la méthode du mot de passe (rang 0) reste toujours ; Windows Hello et
+Secure Enclave ont au plus une méthode chacun, remplacée sur place à un nouvel enrôlement ;
+chaque clé FIDO2 ajoute une méthode ; huit méthodes au plus (§ 5.4). Le rang entrant dans
+`KEK_unlock`, seule la dernière méthode peut être retirée. À l'ouverture, la clé décrite par
+le `keystore_blob` doit être celle que le client a présentée au matériel, puis l'en-tête est
+authentifié comme pour le mot de passe (§ 5.3). Ces méthodes ne changent pas la version du
+format : un lecteur qui ne les connaît pas ouvre le coffre avec le mot de passe.
 
 ### 4.3 Clé d'emballage locale
 

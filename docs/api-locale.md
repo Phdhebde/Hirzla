@@ -476,7 +476,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16), les connexions (version 6, § 17) et les méthodes de déverrouillage matérielles (version 9, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -507,7 +507,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
-RDP au § 17.5.
+RDP au § 17.5, celles des méthodes de déverrouillage matérielles au § 19.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -574,6 +574,11 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   `ImportKdbx`. La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
+- Méthodes de déverrouillage (§ 19) : `UnlockMethods` (écran de déverrouillage et Réglages ›
+  Déverrouillage), `EnrollMethod`, `UnlockWithMethod`, `RemoveMethod`. L'écran de
+  déverrouillage propose la première méthode matérielle utilisable au-dessus du mot de passe
+  maître ; le geste n'est lancé que sur demande. Seule `UnlockMethods` est renvoyée sur une
+  nouvelle connexion : un geste n'est jamais demandé deux fois.
 - Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
   `ActiveChanged` de l'économiseur d'écran sur D-Bus, et envoie `SystemEvent` (ADR 0033).
 - Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers quand elle
@@ -1483,3 +1488,88 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
+## 19. Méthodes de déverrouillage matérielles (version 9)
+
+Décision : ADR 0075. Le coffre s'ouvre avec Windows Hello, Touch ID (clé de la Secure Enclave)
+ou une clé de sécurité FIDO2 (`hmac-secret`, sémantique WebAuthn PRF), **à côté** du mot de
+passe maître, qui reste toujours. Le format est au `format.md` § 4.2.1. Codes : opérations
+**140 à 149**, erreurs **140 à 149**. Code : `crates/hirzla-core/src/methods`, facteurs
+matériels dans `crates/hirzla-keystore/src/unlock`.
+
+### 19.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+140 à 149 va à cette famille ; elle doit porter `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [9]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 9`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
+journalisé. `Status` n'annonce pas la version 9 : un client la découvre en l'essayant.
+
+### 19.2 Types
+
+| Nom | Encodage |
+| --- | --- |
+| Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement (`format.md` § 4.2) |
+| PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
+
+« Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
+facteur de ce type, disponible maintenant, et lit son `keystore_blob`. « PIN à demander » : le
+client doit demander le PIN de la clé de sécurité et le transmettre (FIDO2 sous Linux et
+macOS) ; sous Windows, le système le demande lui-même.
+
+### 19.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 140 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 141 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN}` | `{1: rang}` |
+| 142 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
+| 143 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+
+- `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
+- `EnrollMethod` : frein (§ 6) ; vérification du mot de passe maître (un mot de passe faux
+  compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
+  geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
+  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
+  remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+- `UnlockWithMethod` : frein ; méthode lue dans l'en-tête en clair ; geste ; ouverture avec
+  tous les contrôles de `format.md` § 5.3. Un refus du matériel ou une ouverture qui échoue
+  comptent comme un échec de déverrouillage (même frein que le mot de passe) ; une
+  annulation, un matériel absent ou une clé disparue ne comptent pas.
+- `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
+  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello est ensuite supprimée du
+  système.
+- Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
+  le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
+  exige un reçoit `Busy`. Le système abandonne après 60 s.
+
+### 19.4 Erreurs et journal
+
+| Code | Nom | Sens |
+| --- | --- | --- |
+| 140 | `MethodUnavailable` | Pas de matériel, système trop ancien, prise en charge non compilée, ou `keystore_blob` illisible par ce poste |
+| 141 | `MethodCancelled` | Annulé par l'utilisateur, ou délai du système dépassé |
+| 142 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
+| 143 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
+| 144 | `PinBlocked` | Clé de sécurité bloquée |
+
+Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
+matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
+`NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
+journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
+ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
+
+### 19.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `methods` | `UnlockMethods` |
+| `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`) |
+| `methods remove RANG` | `RemoveMethod` |
+| `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
+
+### 19.6 Points ouverts
+
+Voir l'ADR 0075 : FIDO2 sous Linux et macOS derrière la fonctionnalité `fido2-hid`, désactivée
+par défaut ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
+fenêtre ; place de Windows Hello et Touch ID dans la configuration évaluée.

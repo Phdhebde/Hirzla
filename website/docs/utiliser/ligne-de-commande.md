@@ -60,6 +60,17 @@ hirzla settings --veille oui --session oui
 hirzla import-kdbx ancienne-base.kdbx
 ```
 
+## Windows Hello, Touch ID, clé de sécurité
+
+```sh
+hirzla methods                     # méthodes du coffre et celles qu'on peut ajouter
+hirzla methods add hello           # ou touchid, fido2 (le mot de passe maître est redemandé)
+hirzla unlock --materiel [RANG]    # ouvre le coffre d'un geste
+hirzla methods remove RANG         # la dernière méthode seulement
+```
+
+Voir [Ouvrir avec Windows Hello, Touch ID ou une clé de sécurité](deverrouillage.md).
+
 ## Kit de recouvrement
 
 ```sh

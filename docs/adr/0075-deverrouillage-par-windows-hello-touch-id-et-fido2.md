@@ -166,6 +166,12 @@ système (RSA pour Hello, P-256 pour l'enclave), sans variante post-quantique di
   protégé par biométrie, possible avec un certificat Developer ID), il remplace l'oracle
   asymétrique par un nouvel ADR.
 
+Note sur Touch ID : la forme chiffrée par l'enclave est lue dans l'attribut `toid`
+(`kSecAttrTokenOID`) que rend `SecKeyCopyAttributes`, puis rendue à `SecKeyCreateWithData` avec
+`kSecAttrTokenID = kSecAttrTokenIDSecureEnclave`. Apple utilise cet attribut dans ses propres
+outils mais **ne le documente pas publiquement** : c'est la première chose que le test manuel
+M2 doit confirmer. S'il change, la méthode devient `MethodInvalidated` et le mot de passe reste.
+
 ### 5. Ce que fait le noyau
 
 Le noyau, seul, parle au matériel (règle 4) ; ni l'application ni la ligne de commande ne
@@ -220,7 +226,7 @@ restants n'est pas donné), 144 `PinBlocked` (clé FIDO2 bloquée). Détail dans
   passe maître demandé, puis geste), « Retirer » sur la dernière seulement, avec la raison
   sinon. Écran de déverrouillage : la méthode matérielle utilisable vient **en premier**, un
   bouton unique (« Déverrouiller avec Windows Hello ») ; le champ du mot de passe reste sous
-  la main (« Utiliser le mot de passe maître »). Après `MethodInvalidated`, le message dit
+  la main (« ou avec le mot de passe maître »). Après `MethodInvalidated`, le message dit
   quoi faire.
 - **Ligne de commande.** `hirzla unlock --materiel [RANG]` (sans rang : la première méthode
   utilisable ici), `hirzla methods` (liste), `hirzla methods add hello|touchid|fido2`,
