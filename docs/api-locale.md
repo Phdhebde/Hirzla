@@ -476,7 +476,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16), les connexions (version 6, § 17) et les dossiers (version 9, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 9 ajoute les opérations de dossiers 140 à 145 (§ 19, ADR 0076). Elle ne change rien aux autres opérations.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -1483,3 +1484,117 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
+
+## 19. Dossiers dans les casiers (version 9)
+
+Décision : ADR 0076. Format : `format.md` § 7.5 (dossiers d'un casier, champ `folder` d'un
+secret, format du coffre v3). Le noyau parle en plus la **version 9**, qui lit l'arbre des
+dossiers de chaque casier, crée, renomme, déplace et supprime un dossier, et range un secret.
+Codes : opérations **140 à 149**, erreurs **140 à 149** réservées (aucune n'est définie : les
+codes généraux du § 7 suffisent). Code : `crates/hirzla-core/src/folders`.
+
+Un dossier range les secrets d'un casier ; il ne porte ni clé ni droit. Les mêmes opérations
+valent pour les casiers du coffre et pour les casiers partagés du mode Serveur.
+
+### 19.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+140 à 149 va aux dossiers ; elle doit porter `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [9]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 9`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé. `Status` n'annonce pas la version 9 : un client la
+découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`, et le client montre le coffre sans dossiers).
+
+### 19.2 Types
+
+**Dossier** : `{1: id bstr(16), 2: nom tstr, 3?: parent bstr(16)}`. Clé 3 absente : à la
+racine du casier. C'est le dossier tel que l'**arbre affiché** le place (`format.md` § 7.5 :
+cycles rattachés à la racine, dossiers supprimés absents, leur contenu remonté à l'ancêtre
+actif le plus proche).
+
+**Arbre d'un casier** : `{1: casier bstr(16), 2: [dossier], 3: [{1: secret bstr(16), 2: dossier
+bstr(16)}]}`. La clé 2 liste les dossiers actifs, triés par nom sans tenir compte de la casse,
+puis par identifiant. La clé 3 donne, pour chaque secret non purgé qui ne s'affiche pas à la
+racine, le dossier où il s'affiche ; triée par secret. Un secret absent de la clé 3 est à la
+racine.
+
+### 19.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 140 | `FolderTree` | ouvert | `{1?: casier}` | `{1: [arbre]}` |
+| 141 | `FolderCreate` | ouvert | `{1: casier, 2: nom, 3?: parent}` | `{1: dossier}` |
+| 142 | `FolderRename` | ouvert | `{1: casier, 2: dossier, 3: nom}` | — |
+| 143 | `FolderMove` | ouvert | `{1: casier, 2: dossier, 3?: parent}` | — |
+| 144 | `FolderDelete` | ouvert | `{1: casier, 2: dossier}` | `{1: secrets mis à la corbeille uint}` |
+| 145 | `SecretMove` | ouvert | `{1: casier, 2: secret, 3?: dossier}` | — |
+
+Détails :
+
+1. **`FolderTree`** — sans casier : un arbre par casier que ce poste détient, ceux du coffre
+   puis les casiers partagés. Avec un casier inconnu : `NotFound`.
+2. **Nom** — 1 à 255 octets UTF-8, sans caractère de contrôle ; `/` est permis. Deux frères
+   peuvent porter le même nom. Sinon `InvalidInput`.
+3. **`FolderCreate`** — le noyau tire l'identifiant. Parent absent : à la racine. Le parent
+   doit être un dossier actif du même casier ; 2 048 dossiers au plus par casier, supprimés
+   compris ; profondeur de 32 au plus. Sinon `InvalidInput`. Dans un coffre v1 ou v2, le
+   premier dossier passe le fichier en v3 dans la même transaction (`format.md` § 5.3).
+4. **`FolderMove`** — parent absent : à la racine. Un dossier ne se range ni sous lui-même ni
+   sous un de ses descendants, ni au-delà de 32 niveaux (`InvalidInput`).
+5. **`FolderDelete`** — met à la corbeille chaque secret actif affiché dans le dossier ou un de
+   ses sous-dossiers (une version par secret, qui garde son champ `folder`), puis marque le
+   dossier et ses sous-dossiers supprimés. Rend le nombre de secrets mis à la corbeille.
+   Restaurer un de ces secrets le montre dans l'ancêtre actif le plus proche.
+6. **`SecretMove`** — dossier absent : à la racine (le champ est écrit `null`). Le dossier doit
+   être actif dans le casier du secret (`InvalidInput`) ; un secret purgé ou absent :
+   `NotFound`. Ranger un secret là où il est déjà n'écrit rien. Déplacer un secret vers un
+   **autre casier** n'est pas un rangement et n'existe pas ici.
+7. **Casiers partagés** — créer, renommer, déplacer ou supprimer un dossier écrit les
+   métadonnées du casier : il faut un rôle qui écrit (`Editor` et plus) ; ranger un secret est
+   une écriture de ce secret. Un rôle qui ne le permet pas : `InvalidInput`, comme les autres
+   écritures refusées d'un casier partagé (§ 15.4). Les noms restent scellés : le serveur ne
+   les voit jamais.
+8. **Autres opérations** — `List` (5) et `Create` (7) ne changent pas : un client combine
+   `List` et `FolderTree`, et crée un secret dans un dossier par `Create` puis `SecretMove`.
+   La recherche de `List` porte sur tout le coffre, sans critère de dossier. `RestoreVersion`
+   (67) garde le dossier **actuel** du secret. `History` compte un rangement comme un changement
+   du champ 4.
+
+### 19.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de nom de dossier ni d'identifiant. Le journal du noyau n'écrit que l'opération et le nom du
+résultat : `event=folder_request op=<nom> result=<ok|nom>`, avec les noms `folder_tree`,
+`folder_create`, `folder_rename`, `folder_move`, `folder_delete`, `secret_move`.
+
+### 19.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `dossier liste [--casier C]` | `List`, `FolderTree` |
+| `dossier creer CHEMIN [--casier C]` | `List`, `FolderTree`, `FolderCreate` (un par dossier manquant) |
+| `dossier renommer CHEMIN NOM [--casier C]` | `List`, `FolderTree`, `FolderRename` |
+| `dossier deplacer CHEMIN DESTINATION [--casier C]` | `List`, `FolderTree`, `FolderMove` |
+| `dossier supprimer CHEMIN [--casier C] [--oui]` | `List`, `FolderTree`, `FolderDelete` |
+| `mv NOM \| --id ID DESTINATION` | `List`, `FolderTree`, `SecretMove` |
+
+- Sans `--casier`, le casier personnel. C : nom d'un casier, sans tenir compte de la casse, ou
+  début de son identifiant (4 chiffres hexadécimaux au moins).
+- Un CHEMIN sépare les noms par `/` ; `/` seul désigne la racine. Un élément `#` suivi d'au
+  moins 4 chiffres hexadécimaux désigne un dossier par le début de son identifiant (affiché
+  par `dossier liste`) : en tête de chemin, dans tout le casier ; plus loin, parmi les
+  sous-dossiers du précédent. C'est ainsi qu'on désigne un nom qui contient `/` ou deux frères
+  de même nom.
+- `dossier liste` affiche chaque dossier avec son identifiant abrégé et le nombre de secrets
+  actifs qu'il contient directement, et le nombre de secrets à la racine.
+- `dossier supprimer` dit combien de secrets iront à la corbeille et demande « oui » ; hors
+  terminal, `--oui` est obligatoire.
+- `mv` range le secret dans un dossier de **son** casier.
+
+### 19.6 Points ouverts
+
+1. **Création dans un dossier en une écriture** : `Create` ne prend pas de dossier ; créer un
+   secret dans un dossier en écrit deux versions. Une clé de `Create` demanderait une nouvelle
+   version de l'opération 7.
+2. **Glisser-déposer** dans l'application de poste : hors de ce lot (ADR 0076 § 10).

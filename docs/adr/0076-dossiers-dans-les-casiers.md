@@ -102,7 +102,7 @@ rien, et l'utilisateur voit le dossier « remonté » et le range à nouveau.
 | --- | --- |
 | Créer, renommer, déplacer un dossier | Une `LockerMetaPut` |
 | Supprimer un dossier | Une `SecretPut` par secret actif du sous-arbre (mise à la corbeille, le champ `folder` est gardé), puis une `LockerMetaPut` qui pose `state = 1` sur le dossier et tous ses sous-dossiers |
-| Déplacer un secret | Une `SecretPut` qui pose ou efface `folder` |
+| Déplacer un secret | Une `SecretPut` qui pose `folder` (`null` pour la racine) |
 | Importer une base | Une `LockerMetaPut` pour tous les dossiers, puis une `SecretPut` par entrée, `folder` compris |
 
 Règles du rédacteur, refus `InvalidInput` sinon :
