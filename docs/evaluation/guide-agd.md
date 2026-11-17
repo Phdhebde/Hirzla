@@ -19,8 +19,9 @@ x86-64), sauf mention contraire.
 | `hirzlad` | Serveur aveugle | Serveur |
 | `hirzla-audit-verify` | Vérification hors ligne d'un journal d'audit | Poste de l'auditeur |
 
-`hirzla-signer` (clé d'éditeur, manifeste, paquets) **n'est jamais livré** : il reste sur le
-poste de signature hors ligne de l'éditeur (`livraison.md` § 7).
+`hirzla-signer` (clé d'éditeur, manifeste, paquets) **n'est jamais livré** : il reste chez
+l'éditeur et dans le flux de livraison, qui signe les manifestes (`livraison.md` § 2.1, § 7 ;
+ADR 0073).
 
 ## 2. Prérequis du poste (configuration évaluée)
 

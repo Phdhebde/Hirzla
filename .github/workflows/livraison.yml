@@ -1,39 +1,48 @@
 name: Livraison
 
-# Two-stage release flow (ADR 0064, docs/livraison.md § 2.1, docs/guide-signature.md step 7).
+# Release flow in a single run (ADR 0073, which replaces the offline signing of ADR 0064;
+# docs/livraison.md § 2.1, docs/guide-signature.md).
 #
-# Stage 1, on a pushed tag vX.Y.Z: checks that the tag equals the workspace version, builds
-# the release executables of each platform once (Cargo feature `livraison`, mode
-# `manifeste`), publishes them as the artifact "hirzla-X.Y.Z-a-signer" for the publisher, and
-# opens a DRAFT release. The publisher signs one client manifest per platform OFFLINE and
-# attaches the files hirzla-clients-<platform>.manifest to the draft. The publisher key never
-# reaches a CI agent.
+# On a pushed tag vX.Y.Z:
+#   1. version           the tag equals the workspace version; publisher keys of the mode.
+#   2. executables       the release executables of each platform, built ONCE (Cargo feature
+#                        `livraison`, mode `manifeste`); macOS: Hirzla.app, ad hoc signed.
+#                        They are never rebuilt: the client manifest holds their SHA-384.
+#   3. authenticode-exe  optional (vars.SIGNPATH_ORGANIZATION_ID set): Authenticode signature
+#                        of the Windows executables by SignPath, BEFORE the manifest is
+#                        computed, since any signature changes the files.
+#   4. manifests         environment `editeur` (required reviewer: the publisher approves the
+#                        deployment): builds hirzla-signer from the tagged commit, signs one
+#                        client manifest per platform with the publisher key taken from a
+#                        secret, verifies each one against HIRZLA_PUBLISHER_KEYS (the public
+#                        keys compiled into the executables) and deletes the key.
+#   5. installers        built from those executables unchanged (no rebuild, no strip, no
+#                        binary patching), each one opened and checked byte for byte against
+#                        the executables and the manifest; macOS: .pkg of the very
+#                        Hirzla.app of step 2 (macos-pkg.sh, ADR 0065), no disk image.
+#   6. authenticode-msi  optional, like step 3: Authenticode signature of the MSI. It changes
+#                        the MSI, not the files inside it, so the manifest stays valid.
+#   7. publish           bills of materials, extension, SHA256SUMS, Sigstore provenance, and a
+#                        DRAFT release with every file. The publisher signs SHA256SUMS with
+#                        GPG, attaches SHA256SUMS.asc and publishes by hand: this workflow
+#                        never publishes a release.
 #
-# Stage 2, started by hand on the same tag (Actions > Livraison > Run workflow, "Use workflow
-# from: Tags > vX.Y.Z"): verifies each manifest against HIRZLA_PUBLISHER_KEYS and the stage-1
-# executables, builds the installers from those executables unchanged (no rebuild, no strip,
-# no binary patching), checks that every installer holds them byte for byte with the
-# manifest, then attaches installers, archives, extension, bills of materials, SHA256SUMS and
-# Sigstore provenance to the draft. The publisher then signs SHA256SUMS with GPG and publishes.
+# Dry run: a tag vX.Y.Z-essai.N runs the same flow for workspace version X.Y.Z, but compiles
+# the test keys of HIRZLA_PUBLISHER_KEYS_ESSAI, signs with the secret
+# HIRZLA_PUBLISHER_KEY_ESSAI, uses the SignPath test policy, and keeps the GitHub release a
+# pre-release draft titled "Essai ...". Its executables trust the test keys only: they must
+# never be published (docs/livraison.md § 2.1). release-version.py refuses test keys shared
+# with the real ones.
 #
-# macOS (ADR 0065): stage 1 builds and ad hoc signs Hirzla.app itself, and hands it to the
-# publisher zipped; the macOS manifest names the executables of Hirzla.app/Contents/MacOS as
-# signed. Stage 2 wraps that very bundle and the manifest into a .pkg (macos-pkg.sh), which
-# installs the manifest outside the bundle. No disk image is delivered.
-#
-# Dry run: a tag vX.Y.Z-essai.N runs the same two stages for workspace version X.Y.Z, but
-# compiles the throwaway test keys of HIRZLA_PUBLISHER_KEYS_ESSAI instead of
-# HIRZLA_PUBLISHER_KEYS, and keeps the GitHub release a pre-release draft titled "Essai ...".
-# Its executables trust the test keys only: they must never be published as a real release
-# (docs/livraison.md § 2.1). release-version.py refuses test keys shared with the real ones.
-#
-# No secret value is ever written here. HIRZLA_PUBLISHER_KEYS and HIRZLA_PUBLISHER_KEYS_ESSAI
-# are repository variables holding public keys; every job takes the keys of the mode from
-# the version job, never from the variables directly.
+# Secrets: HIRZLA_PUBLISHER_KEY (base64 of editeur.cle) and HIRZLA_PUBLISHER_KEY_ESSAI live in
+# the protected environment `editeur` and are read by ONE step of the manifests job only;
+# SIGNPATH_API_TOKEN lives in the environment `signpath`. HIRZLA_PUBLISHER_KEYS and
+# HIRZLA_PUBLISHER_KEYS_ESSAI are repository variables holding public keys; every job takes
+# the keys of the mode from the version job, never from the variables directly. No secret
+# value is ever written here or echoed to a log.
 on:
   push:
     tags: ["v*"]
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -49,7 +58,7 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------------------
-  # Both stages: the tag, the version and the publisher keys.
+  # The tag, the version and the publisher keys.
   # ---------------------------------------------------------------------------------------
   version:
     name: version and publisher keys
@@ -62,11 +71,6 @@ jobs:
       # HIRZLA_PUBLISHER_KEYS, or HIRZLA_PUBLISHER_KEYS_ESSAI for a dry run (public keys).
       publisher_keys: ${{ steps.check.outputs.publisher_keys }}
     steps:
-      - name: Started on a tag
-        if: github.ref_type != 'tag'
-        run: |
-          echo "::error::Start this workflow on a release tag (Use workflow from: Tags > vX.Y.Z), not on a branch."
-          exit 1
       - uses: actions/checkout@v4
       - name: Tag equals the workspace version; publisher keys of the mode are set
         id: check
@@ -82,12 +86,11 @@ jobs:
           fi
 
   # ---------------------------------------------------------------------------------------
-  # Stage 1: release executables, built once. They are never modified afterwards: the client
-  # manifest signed by the publisher holds their SHA-384.
+  # Release executables, built once. They are never modified afterwards, except by the
+  # Authenticode signature below, which happens before the manifest is computed.
   # ---------------------------------------------------------------------------------------
   executables:
-    name: stage 1, executables (${{ matrix.platform }})
-    if: github.event_name == 'push'
+    name: executables (${{ matrix.platform }})
     needs: version
     runs-on: ${{ matrix.os }}
     permissions:
@@ -169,9 +172,9 @@ jobs:
             cp "target/release/$n${{ matrix.ext }}" \
               "apps/desktop/src-tauri/binaries/$n-${{ matrix.triple }}${{ matrix.ext }}"
           done
-      # Compiles hirzla-desktop only: installers are built by stage 2 from these files.
-      # macOS: Hirzla.app itself (ADR 0065). Its seal covers the executables, so it is
-      # signed below and never rebuilt: stage 2 wraps this very bundle into the .pkg.
+      # Compiles hirzla-desktop only: installers are built by the installers job from these
+      # files. macOS: Hirzla.app itself (ADR 0065). Its seal covers the executables, so it is
+      # signed below and never rebuilt: the installers job wraps this very bundle into the .pkg.
       - name: Desktop application
         shell: bash
         working-directory: apps/desktop/src-tauri
@@ -198,8 +201,8 @@ jobs:
       # final ad hoc signature of Hirzla.app with the hardened runtime, BEFORE the manifest is
       # signed, since any signature changes the files. Nested executables first, then the
       # bundle (main executable and seal). Nothing changes the bundle afterwards: the zip
-      # below carries it to the publisher, who hashes Contents/MacOS/* as signed, and to
-      # stage 2, which puts it in the .pkg as it is.
+      # below carries it to the manifests job, which hashes Contents/MacOS/* as signed, and
+      # to the installers job, which puts it in the .pkg as it is.
       - name: Ad hoc signature of Hirzla.app, hardened runtime (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -213,15 +216,12 @@ jobs:
           dir="out/${{ matrix.platform }}"
           mkdir -p "$dir"
           ditto -c -k --norsrc --keepParent "$app" "$dir/Hirzla.app.zip"
-      # Hook: an Authenticode signature (SignPath Foundation, docs/guide-signature.md step 5)
-      # would go here, before the upload, for the same reason.
       - name: Fingerprints
         shell: bash
         run: |
           cd out
           if command -v sha256sum > /dev/null; then sum=sha256sum; else sum="shasum -a 256"; fi
           $sum ${{ matrix.platform }}/* | tee "${{ matrix.platform }}.sha256"
-      # Lets the publisher check, before signing, that the executables come from this run.
       - name: Build provenance of the executables (Sigstore)
         uses: actions/attest-build-provenance@v2
         with:
@@ -247,240 +247,226 @@ jobs:
           if-no-files-found: error
           retention-days: 90
 
-  # Stage 1: the publisher's folder and the draft release.
-  draft:
-    name: stage 1, publisher folder and draft release
-    if: github.event_name == 'push'
+  # ---------------------------------------------------------------------------------------
+  # Optional: Authenticode signature of the Windows executables by the SignPath Foundation
+  # (ADR 0063 § 4, ADR 0073). Skipped when vars.SIGNPATH_ORGANIZATION_ID is empty: the
+  # Windows files then stay unsigned (SmartScreen warning) and the flow still completes.
+  # Output: the artifact "executables-windows-x86_64-signes", same layout as the unsigned
+  # "executables-windows-x86_64". The manifest is computed afterwards, on these files.
+  # ---------------------------------------------------------------------------------------
+  authenticode-exe:
+    name: Authenticode, Windows executables (SignPath)
+    if: vars.SIGNPATH_ORGANIZATION_ID != ''
     needs: [version, executables]
     runs-on: ubuntu-24.04
+    environment: signpath
     permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      VERSION: ${{ needs.version.outputs.version }}
-      LABEL: ${{ needs.version.outputs.label }}
-      ESSAI: ${{ needs.version.outputs.essai }}
+      contents: read
+      # SignPath downloads the artifact and checks the run with the job token.
+      actions: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          pattern: executables-*
-          path: dl
-      - name: Publisher folder
+          name: executables-windows-x86_64
+          path: unsigned
+      - name: Unsigned executables
         run: |
-          dir="hirzla-$LABEL-a-signer"
-          mkdir -p "$dir"
-          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
-            cp -r "dl/executables-$p/$p" "$dir/$p"
-            cat "dl/executables-$p/$p.sha256" >> "$dir/SHA256SUMS"
-          done
-          printf '%s\n' "$VERSION" > "$dir/VERSION"
-          cp .github/scripts/signer-manifestes.sh "$dir/"
-          if [ "$ESSAI" = "true" ]; then
-            cat > "$dir/ESSAI" <<EOF
-          ESSAI DU FLUX DE LIVRAISON ($GITHUB_REF_NAME) : NE JAMAIS PUBLIER.
-          Ces exécutables portent les clés d'éditeur de test (HIRZLA_PUBLISHER_KEYS_ESSAI).
-          Signez les manifestes avec la clé d'éditeur jetable de l'essai, jamais avec la
-          vraie clé d'éditeur. Supprimez ensuite le brouillon et l'étiquette
-          (docs/livraison.md, § 2.1, essai à blanc).
-
-          EOF
+          cd unsigned
+          sha256sum -c windows-x86_64.sha256
+          got="$(cd windows-x86_64 && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs)"
+          if [ "$got" != "hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe hirzla.exe" ]; then
+            echo "::error::Unexpected Windows executables: $got"
+            exit 1
           fi
-          { cat "$dir/ESSAI" 2>/dev/null || true; cat <<EOF
-          Hirzla $VERSION : manifestes des clients à signer (étape 1 du flux Livraison).
-          Étiquette $GITHUB_REF_NAME, commit $(git rev-parse HEAD), exécution $GITHUB_RUN_ID.
-          Marche à suivre complète : docs/guide-signature.md, étape 7.
-
-          Sur le poste de signature, réseau débranché, dans ce dossier :
-
-            sh signer-manifestes.sh /media/usb/editeur.cle /media/usb/editeur.pub
-
-          ce qui revient à :
-
-            sha256sum -c SHA256SUMS
-            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
-              --plateforme linux-x86_64 --sortie hirzla-clients-linux-x86_64.manifest \\
-              linux-x86_64/hirzla linux-x86_64/hirzla-core \\
-              linux-x86_64/hirzla-desktop linux-x86_64/hirzla-native-host
-            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
-              --plateforme windows-x86_64 --sortie hirzla-clients-windows-x86_64.manifest \\
-              windows-x86_64/hirzla.exe windows-x86_64/hirzla-core.exe \\
-              windows-x86_64/hirzla-desktop.exe windows-x86_64/hirzla-native-host.exe
-            mkdir macos-aarch64/app
-            unzip -q macos-aarch64/Hirzla.app.zip -d macos-aarch64/app
-            M=macos-aarch64/app/Hirzla.app/Contents/MacOS
-            hirzla-signer manifeste-clients --cle /media/usb/editeur.cle --version $VERSION \\
-              --plateforme macos-aarch64 --sortie hirzla-clients-macos-aarch64.manifest \\
-              \$M/hirzla \$M/hirzla-core \$M/hirzla-desktop \$M/hirzla-native-host
-
-          puis, pour chaque plateforme P (pour macOS, dossier \$M au lieu de P) :
-
-            hirzla-signer verifier --publique /media/usb/editeur.pub --version $VERSION \\
-              --plateforme P --executables P hirzla-clients-P.manifest
-
-          macOS (ADR 0065) : Hirzla.app est livrée entière, déjà signée ad hoc par le flux ;
-          le manifeste porte sur les exécutables de Hirzla.app/Contents/MacOS tels qu'ils
-          sont dans ce paquet signé. Le manifeste ne va pas dans Hirzla.app : l'étape 2 met
-          les deux dans un paquet .pkg qui pose le manifeste dans
-          /Library/Application Support/Hirzla/.
-
-          Joignez ensuite les trois fichiers hirzla-clients-*.manifest au brouillon
-          de la version $GITHUB_REF_NAME sur GitHub (Releases > Edit > glisser les fichiers),
-          et lancez la seconde étape : Actions > Livraison > Run workflow, sur l'étiquette
-          $GITHUB_REF_NAME. Ne modifiez aucun exécutable : le manifeste les identifie.
-          EOF
-          } > "$dir/LISEZMOI.txt"
-          cat "$dir/LISEZMOI.txt"
-          echo "FOLDER=$dir" >> "$GITHUB_ENV"
+      # The four .exe at the root of a new artifact of this run: SignPath signs the
+      # artifact it is given by id (artifact configuration "executables").
+      - name: Executables to sign
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticode-exe-a-signer
+          path: unsigned/windows-x86_64/
+          if-no-files-found: error
+          retention-days: 1
+      - name: Authenticode signature (SignPath)
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ needs.version.outputs.essai == 'true' && (vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing') || (vars.SIGNPATH_POLICY_SLUG || 'release-signing') }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_EXE_CONFIG_SLUG || 'executables' }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          # A release signing policy may wait for a manual approval in SignPath.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-exe
+      - name: Signed executables, same layout as the unsigned artifact
+        run: |
+          got="$(cd signed-exe && find . -type f -printf '%P\n' | LC_ALL=C sort | xargs)"
+          if [ "$got" != "hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe hirzla.exe" ]; then
+            echo "::error::SignPath returned unexpected files: $got"
+            exit 1
+          fi
+          mkdir -p out/windows-x86_64
+          for n in hirzla.exe hirzla-core.exe hirzla-desktop.exe hirzla-native-host.exe; do
+            if cmp -s "signed-exe/$n" "unsigned/windows-x86_64/$n"; then
+              echo "::error::$n came back from SignPath unchanged: not signed."
+              exit 1
+            fi
+            cp "signed-exe/$n" out/windows-x86_64/
+          done
+          cd out
+          sha256sum windows-x86_64/* | tee windows-x86_64.sha256
+      - name: Build provenance of the signed executables (Sigstore)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: out/windows-x86_64/*
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.FOLDER }}
-          path: ${{ env.FOLDER }}/
+          name: executables-windows-x86_64-signes
+          path: |
+            out/windows-x86_64/
+            out/windows-x86_64.sha256
           if-no-files-found: error
           retention-days: 90
-      # One draft per tag. A new stage 1 replaces the executables, so manifests signed for
-      # an earlier run no longer match: they are removed from the draft.
-      # A dry run (tag vX.Y.Z-essai.N) is a pre-release draft titled "Essai ...", with a
-      # visible warning in its notes: it carries the test keys and is never published.
-      - name: Draft release
-        run: |
-          essai=() title="Hirzla $VERSION" prerelease=()
-          if [ "$ESSAI" = "true" ]; then
-            essai=(--essai) title="Essai Hirzla $LABEL (ne pas publier)" prerelease=(--prerelease)
-          fi
-          python3 .github/scripts/release-notes.py --version "$VERSION" --stage 1 \
-            --run-id "$GITHUB_RUN_ID" --sha "$(git rev-parse HEAD)" ${essai[@]+"${essai[@]}"} \
-            --output notes.md
-          if state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
-            if [ "$state" != "true" ]; then
-              echo "::error::Release $GITHUB_REF_NAME is already published: a published version is never rebuilt."
-              exit 1
-            fi
-            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --title "$title" \
-              ${prerelease[@]+"${prerelease[@]}"}
-            for a in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'); do
-              echo "Removing stale asset $a"
-              gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes
-            done
-          else
-            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
-              ${prerelease[@]+"${prerelease[@]}"} --title "$title" --notes-file notes.md
-          fi
-          {
-            if [ "$ESSAI" = "true" ]; then
-              echo "> **Essai à blanc** ($GITHUB_REF_NAME) : clés d'éditeur de test. Signez avec la clé jetable ; ne publiez jamais ce brouillon."
-              echo
-            fi
-            echo "### Étape 1 terminée"
-            echo
-            echo "1. Téléchargez l'artefact \`$FOLDER\` de cette exécution."
-            echo "2. Sur le poste de signature hors ligne : \`sh signer-manifestes.sh CLE_PRIVEE CLE_PUBLIQUE\` (voir \`LISEZMOI.txt\`)."
-            echo "3. Joignez les fichiers \`hirzla-clients-*.manifest\` au brouillon de la version $GITHUB_REF_NAME."
-            echo "4. Lancez l'étape 2 : Actions › Livraison › Run workflow, sur l'étiquette $GITHUB_REF_NAME."
-          } >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------------------
-  # Stage 2: verify the signed manifests against the keys and the stage-1 executables.
+  # Client manifests, signed with the publisher key (ADR 0073). Environment `editeur`: the
+  # job waits for the publisher's approval, and only tags v* may deploy to it. This is the
+  # only job that sees the key, and only its signing step: the key is decoded into
+  # $RUNNER_TEMP (umask 077), read by hirzla-signer alone and deleted at the end of the step.
   # ---------------------------------------------------------------------------------------
   manifests:
-    name: stage 2, signed manifests
-    if: github.event_name == 'workflow_dispatch'
-    needs: version
+    name: client manifests (publisher key)
+    needs: [version, executables, authenticode-exe]
+    if: >-
+      !cancelled() && needs.executables.result == 'success' &&
+      (needs.authenticode-exe.result == 'success' || needs.authenticode-exe.result == 'skipped')
     runs-on: ubuntu-24.04
-    # contents: write only so that the token can SEE the draft release: GitHub shows drafts
-    # to writers alone, and a read-only token gets "release not found". This job writes
-    # nothing to the release (stage-2 uploads happen in the "attach" job).
+    environment: editeur
     permissions:
-      contents: write
-      actions: read
+      contents: read
     outputs:
-      run_id: ${{ steps.stage1.outputs.run_id }}
+      # Artifact of the Windows executables named by the manifest: signed when
+      # authenticode-exe ran.
+      windows_executables: ${{ steps.windows.outputs.name }}
     env:
-      GH_TOKEN: ${{ github.token }}
       VERSION: ${{ needs.version.outputs.version }}
+      ESSAI: ${{ needs.version.outputs.essai }}
       HIRZLA_PUBLISHER_KEYS: ${{ needs.version.outputs.publisher_keys }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Stage-1 run of this tag
-        id: stage1
+      - name: Windows executables of the manifest
+        id: windows
+        env:
+          AUTHENTICODE: ${{ needs.authenticode-exe.result }}
         run: |
-          if ! state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)"; then
-            echo "::error::No draft release found for $GITHUB_REF_NAME. Push the tag first (stage 1). A release published by mistake and turned back into a draft is detached from its tag: delete it, re-run stage 1 and sign again (docs/livraison.md § 2.1)."
-            exit 1
+          if [ "$AUTHENTICODE" = "success" ]; then
+            echo "name=executables-windows-x86_64-signes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::SignPath not configured (vars.SIGNPATH_ORGANIZATION_ID): Windows files are not Authenticode-signed."
+            echo "name=executables-windows-x86_64" >> "$GITHUB_OUTPUT"
           fi
-          if [ "$state" != "true" ]; then
-            echo "::error::Release $GITHUB_REF_NAME is published, not a draft: a published version is never completed. If it was published by mistake, delete it, re-run stage 1 and sign again (docs/livraison.md § 2.1)."
-            exit 1
-          fi
-          gh release view "$GITHUB_REF_NAME" --json body --jq .body \
-            | python3 .github/scripts/release-notes.py --read-run-id > stage1.txt
-          . ./stage1.txt
-          commit="$(git rev-parse HEAD)"
-          if [ "$sha" != "$commit" ]; then
-            echo "::error::Stage 1 built commit $sha, the tag now points to $commit."
-            exit 1
-          fi
-          read -r head conclusion < <(gh run view "$run_id" --json headSha,conclusion --jq '"\(.headSha) \(.conclusion)"')
-          if [ "$head" != "$commit" ] || [ "$conclusion" != "success" ]; then
-            echo "::error::Stage-1 run $run_id is not a successful run of $commit ($head, $conclusion)."
-            exit 1
-          fi
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "Stage-1 run: $run_id"
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          pattern: executables-*
+          name: executables-linux-x86_64
           path: stage1
-          run-id: ${{ steps.stage1.outputs.run_id }}
-          github-token: ${{ github.token }}
-      - name: Signed files attached to the draft
+      - uses: actions/download-artifact@v4
+        with:
+          name: executables-macos-aarch64
+          path: stage1
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ steps.windows.outputs.name }}
+          path: stage1
+      - name: Executables of this run
         run: |
-          mkdir -p signed
-          gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' > assets.txt
-          cat assets.txt
+          cd stage1
           for p in linux-x86_64 windows-x86_64 macos-aarch64; do
-            f="hirzla-clients-$p.manifest"
-            if grep -qxF "$f" assets.txt; then
-              gh release download "$GITHUB_REF_NAME" --pattern "$f" --dir signed
-            fi
+            sha256sum -c "$p.sha256"
           done
-          if grep -q '\.hirzla-maj$' assets.txt; then
-            gh release download "$GITHUB_REF_NAME" --pattern '*.hirzla-maj' --dir signed
-          fi
-          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
-            if [ ! -f "signed/hirzla-clients-$p.manifest" ]; then
-              echo "::error::hirzla-clients-$p.manifest is not attached to the draft release (docs/guide-signature.md, step 7)."
-              exit 1
-            fi
+      # macOS (ADR 0065): the manifest names the executables of Hirzla.app/Contents/MacOS as
+      # they are in the signed bundle, and nothing else.
+      - name: Signed Hirzla.app, unzipped (macOS)
+        run: |
+          mkdir stage1/app-macos-aarch64
+          unzip -q stage1/macos-aarch64/Hirzla.app.zip -d stage1/app-macos-aarch64
+          for f in stage1/app-macos-aarch64/Hirzla.app/Contents/MacOS/* \
+            stage1/app-macos-aarch64/Hirzla.app/Contents/MacOS/.[!.]*; do
+            [ -e "$f" ] || continue
+            case "$(basename "$f")" in
+              hirzla | hirzla-core | hirzla-desktop | hirzla-native-host) ;;
+              *) echo "::error::Unexpected file in Contents/MacOS: $(basename "$f")"; exit 1 ;;
+            esac
           done
       - name: Toolchain
         run: rustup toolchain install
       - name: Build tools
         run: sudo apt-get update && sudo apt-get install -y cmake
+      # From the tagged commit, before the key is decoded.
       - name: hirzla-signer
-        run: cargo build --locked -p hirzla-release-signer
-      # Signature (both components, a key of HIRZLA_PUBLISHER_KEYS), version, platform, and
-      # the stage-1 executables named exactly, with the same size and SHA-384. macOS: the
-      # executables of the signed Hirzla.app, Contents/MacOS (ADR 0065).
-      - name: Verify the manifests and update packages
+        run: cargo build --locked --release -p hirzla-release-signer
+      # The only step that sees the key. Same commands as .github/scripts/signer-manifestes.sh.
+      # Each expression is empty outside its mode: a dry run never gets the real key.
+      - name: Sign the client manifests
+        shell: bash
+        env:
+          KEY_B64_REAL: ${{ needs.version.outputs.essai != 'true' && secrets.HIRZLA_PUBLISHER_KEY || '' }}
+          KEY_B64_ESSAI: ${{ needs.version.outputs.essai == 'true' && secrets.HIRZLA_PUBLISHER_KEY_ESSAI || '' }}
         run: |
-          signer=target/debug/hirzla-signer
-          for m in signed/hirzla-clients-*.manifest; do
-            p="${m#signed/hirzla-clients-}"; p="${p%.manifest}"
-            exe="stage1/executables-$p/$p"
-            if [ -f "$exe/Hirzla.app.zip" ]; then
-              mkdir "stage1/app-$p"
-              unzip -q "$exe/Hirzla.app.zip" -d "stage1/app-$p"
-              exe="stage1/app-$p/Hirzla.app/Contents/MacOS"
-            fi
-            "$signer" verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" --version "$VERSION" \
-              --plateforme "$p" --executables "$exe" "$m"
+          set +x
+          umask 077
+          key="$RUNNER_TEMP/editeur.cle"
+          trap 'rm -f "$key"' EXIT
+          if [ "$ESSAI" = "true" ]; then
+            name=HIRZLA_PUBLISHER_KEY_ESSAI key_b64="$KEY_B64_ESSAI"
+          else
+            name=HIRZLA_PUBLISHER_KEY key_b64="$KEY_B64_REAL"
+          fi
+          unset KEY_B64_REAL KEY_B64_ESSAI
+          if [ -z "$key_b64" ]; then
+            echo "::error::The secret $name of the environment 'editeur' is empty or missing (docs/guide-signature.md)."
+            exit 1
+          fi
+          if ! printf '%s' "$key_b64" | tr -d ' \r\n' | base64 -d > "$key" 2> /dev/null; then
+            echo "::error::The secret $name is not valid base64 (base64 of editeur.cle, docs/guide-signature.md)."
+            exit 1
+          fi
+          unset key_b64
+          signer="$GITHUB_WORKSPACE/target/release/hirzla-signer"
+          mkdir -p signed
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
+            ext=""
+            exe="stage1/$p"
+            case "$p" in
+              windows-*) ext=".exe" ;;
+              macos-*) exe="stage1/app-$p/Hirzla.app/Contents/MacOS" ;;
+            esac
+            echo "Client manifest $VERSION for $p"
+            "$signer" manifeste-clients --cle "$key" --version "$VERSION" --plateforme "$p" \
+              --sortie "signed/hirzla-clients-$p.manifest" \
+              "$exe/hirzla$ext" "$exe/hirzla-core$ext" \
+              "$exe/hirzla-desktop$ext" "$exe/hirzla-native-host$ext"
           done
-          for u in signed/*.hirzla-maj; do
-            [ -e "$u" ] || continue
-            p="${u#signed/hirzla-"$VERSION"-}"; p="${p%.hirzla-maj}"
+      - name: Delete the key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/editeur.cle"
+      # Signature (both components) by a key of HIRZLA_PUBLISHER_KEYS, the public keys
+      # compiled into the executables: proves that the secret matches them. Then version,
+      # platform, and exactly the four executables, same sizes and SHA-384.
+      - name: Verify the manifests
+        run: |
+          signer=target/release/hirzla-signer
+          for p in linux-x86_64 windows-x86_64 macos-aarch64; do
+            exe="stage1/$p"
+            case "$p" in macos-*) exe="stage1/app-$p/Hirzla.app/Contents/MacOS" ;; esac
             "$signer" verifier --cles-hex "$HIRZLA_PUBLISHER_KEYS" --version "$VERSION" \
-              --plateforme "$p" "$u"
+              --plateforme "$p" --executables "$exe" "signed/hirzla-clients-$p.manifest"
           done
       - uses: actions/upload-artifact@v4
         with:
@@ -488,14 +474,16 @@ jobs:
           path: signed/
           if-no-files-found: error
 
-  # Stage 2: installers from the stage-1 executables, unchanged.
+  # ---------------------------------------------------------------------------------------
+  # Installers from the executables named by the manifests, unchanged.
+  # ---------------------------------------------------------------------------------------
   installers:
-    name: stage 2, installers (${{ matrix.platform }})
+    name: installers (${{ matrix.platform }})
     needs: [version, manifests]
+    if: ${{ !cancelled() && needs.manifests.result == 'success' }}
     runs-on: ${{ matrix.os }}
     permissions:
       contents: read
-      actions: read
     strategy:
       fail-fast: false
       matrix:
@@ -512,7 +500,8 @@ jobs:
             ext: ".exe"
             bundles: msi
             manifest_config: tauri.manifeste.windows.conf.json
-          # macOS: no `tauri bundle`; the .pkg wraps the stage-1 Hirzla.app (ADR 0065).
+          # macOS: no `tauri bundle`; the .pkg wraps the Hirzla.app of the executables job
+          # (ADR 0065).
           - os: macos-latest
             platform: macos-aarch64
             triple: aarch64-apple-darwin
@@ -535,12 +524,12 @@ jobs:
       - name: Tauri CLI (pinned)
         if: runner.os != 'macOS'
         run: cargo install tauri-cli --version ${{ env.TAURI_CLI_VERSION }} --locked
+      # Windows: the Authenticode-signed executables when SignPath signed them, the very
+      # files the manifest names.
       - uses: actions/download-artifact@v4
         with:
-          name: executables-${{ matrix.platform }}
+          name: ${{ matrix.platform == 'windows-x86_64' && needs.manifests.outputs.windows_executables || format('executables-{0}', matrix.platform) }}
           path: stage1
-          run-id: ${{ needs.manifests.outputs.run_id }}
-          github-token: ${{ github.token }}
       - uses: actions/download-artifact@v4
         with:
           name: signed
@@ -623,10 +612,10 @@ jobs:
             exit 1
           fi
           .github/scripts/compare-installed.sh MSI expected "$(dirname "$core")" .exe
-      # macOS (ADR 0065): the stage-1 Hirzla.app, unzipped as signed, its manifest verified
-      # again here against the very executables that go into the .pkg, then the .pkg that
-      # installs Hirzla.app into /Applications and the manifest, owned by root, into
-      # /Library/Application Support/Hirzla/.
+      # macOS (ADR 0065): the Hirzla.app of the executables job, unzipped as signed, its
+      # manifest verified again here against the very executables that go into the .pkg,
+      # then the .pkg that installs Hirzla.app into /Applications and the manifest, owned by
+      # root, into /Library/Application Support/Hirzla/.
       - name: CMake (macOS)
         if: runner.os == 'macOS'
         uses: jwlawson/actions-setup-cmake@v2
@@ -676,12 +665,10 @@ jobs:
         with:
           name: serveur-linux-x86_64
           path: serveur
-          run-id: ${{ needs.manifests.outputs.run_id }}
-          github-token: ${{ github.token }}
       - name: Command line and server archives (Linux)
         if: runner.os == 'Linux'
         run: |
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"; export SOURCE_DATE_EPOCH
           tarball() {  # tarball NAME: deterministic .tar.gz of the folder NAME
             tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
               --format=gnu -cf - "$1" | gzip -n -9 > "out/$1.tar.gz"
@@ -717,14 +704,86 @@ jobs:
           path: out/
           if-no-files-found: error
 
-  # Stage 2: bills of materials, extension, fingerprints, provenance, upload to the draft.
+  # ---------------------------------------------------------------------------------------
+  # Optional, like authenticode-exe: Authenticode signature of the MSI, after the bundle. It
+  # changes the MSI file, not the executables inside it, so the manifest stays valid.
+  # Output: the artifact "installers-windows-x86_64-signes" (the signed MSI only).
+  # ---------------------------------------------------------------------------------------
+  authenticode-msi:
+    name: Authenticode, MSI (SignPath)
+    needs: [version, installers]
+    if: >-
+      !cancelled() && vars.SIGNPATH_ORGANIZATION_ID != '' && needs.installers.result == 'success'
+    runs-on: ubuntu-24.04
+    environment: signpath
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: installers-windows-x86_64
+          path: unsigned
+      - name: MSI to sign
+        run: |
+          shopt -s nullglob
+          msi=(unsigned/*.msi)
+          if [ "${#msi[@]}" -ne 1 ]; then
+            echo "::error::Expected one MSI in installers-windows-x86_64, found ${#msi[@]}."
+            exit 1
+          fi
+          echo "MSI=$(basename "${msi[0]}")" >> "$GITHUB_ENV"
+      - name: Upload for SignPath
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticode-msi-a-signer
+          path: unsigned/${{ env.MSI }}
+          if-no-files-found: error
+          retention-days: 1
+      - name: Authenticode signature (SignPath)
+        uses: signpath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ vars.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ needs.version.outputs.essai == 'true' && (vars.SIGNPATH_TEST_POLICY_SLUG || 'test-signing') || (vars.SIGNPATH_POLICY_SLUG || 'release-signing') }}
+          artifact-configuration-slug: ${{ vars.SIGNPATH_MSI_CONFIG_SLUG || 'msi' }}
+          github-artifact-id: ${{ steps.upload.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: signed-msi
+      - name: Signed MSI
+        run: |
+          got="$(cd signed-msi && find . -type f -printf '%P\n' | xargs)"
+          if [ "$got" != "$MSI" ]; then
+            echo "::error::SignPath returned unexpected files: $got"
+            exit 1
+          fi
+          if cmp -s "signed-msi/$MSI" "unsigned/$MSI"; then
+            echo "::error::$MSI came back from SignPath unchanged: not signed."
+            exit 1
+          fi
+          ls -l signed-msi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installers-windows-x86_64-signes
+          path: signed-msi/${{ env.MSI }}
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------------------
+  # Bills of materials, extension, fingerprints, provenance, and the draft release.
+  # ---------------------------------------------------------------------------------------
   publish:
-    name: stage 2, attach to the draft release
-    needs: [version, manifests, installers]
+    name: draft release
+    needs: [version, manifests, installers, authenticode-msi]
+    if: >-
+      !cancelled() && needs.manifests.result == 'success' && needs.installers.result == 'success' &&
+      (needs.authenticode-msi.result == 'success' || needs.authenticode-msi.result == 'skipped')
     runs-on: ubuntu-24.04
     permissions:
+      # Creates and fills the draft; GitHub shows drafts to writers only.
       contents: write
-      actions: read
       id-token: write
       attestations: write
     env:
@@ -732,6 +791,7 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       LABEL: ${{ needs.version.outputs.label }}
       ESSAI: ${{ needs.version.outputs.essai }}
+      AUTHENTICODE: ${{ needs.authenticode-msi.result == 'success' && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       - name: Toolchain
@@ -746,7 +806,8 @@ jobs:
         with:
           name: signed
           path: release
-      # The three platforms; macOS as a .pkg, never a disk image (ADR 0065).
+      # The three platforms; macOS as a .pkg, never a disk image (ADR 0065). Windows: the
+      # Authenticode-signed MSI when SignPath signed it, under the same name.
       - name: Installers and archives
         run: |
           mkdir -p release
@@ -757,9 +818,19 @@ jobs:
             fi
             cp dl/installers-$p/* release/
           done
+          if [ "$AUTHENTICODE" = "true" ]; then
+            shopt -s nullglob
+            msi=(dl/installers-windows-x86_64-signes/*.msi)
+            if [ "${#msi[@]}" -ne 1 ] || [ ! -f "release/$(basename "${msi[0]}")" ]; then
+              echo "::error::Signed MSI missing or renamed."
+              exit 1
+            fi
+            cp -f "${msi[0]}" release/
+          fi
+          ls -l release
       - name: Browser extension
         run: |
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"; export SOURCE_DATE_EPOCH
           python3 - "apps/extension/src" "release/hirzla-extension-$VERSION.zip" <<'EOF'
           # Deterministic zip of the extension: sorted names, fixed time and permissions.
           import os, sys, time, zipfile
@@ -783,7 +854,7 @@ jobs:
       # extension.
       - name: Bills of materials (CycloneDX)
         run: |
-          export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"; export SOURCE_DATE_EPOCH
           for m in release/hirzla-clients-*.manifest; do
             p="${m#release/hirzla-clients-}"; p="${p%.manifest}"
             case "$p" in
@@ -814,36 +885,56 @@ jobs:
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: release/*
-      - name: Attach to the draft release
+      # One draft per tag. A re-run replaces every file of an existing draft; a published
+      # release is never touched (a published version is never rebuilt). A dry run (tag
+      # vX.Y.Z-essai.N) is a pre-release draft titled "Essai ...", with a visible warning in
+      # its notes: it carries the test keys and is never published.
+      - name: Draft release
         run: |
-          essai=() prerelease=()
+          notes=() title="Hirzla $VERSION" prerelease=()
           if [ "$ESSAI" = "true" ]; then
-            essai=(--essai) prerelease=(--prerelease)
+            notes+=(--essai) title="Essai Hirzla $LABEL (ne pas publier)" prerelease=(--prerelease)
           fi
-          python3 .github/scripts/release-notes.py --version "$VERSION" --stage 2 \
-            --run-id "${{ needs.manifests.outputs.run_id }}" --sha "$(git rev-parse HEAD)" \
-            ${essai[@]+"${essai[@]}"} --output notes.md
-          if [ "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" != "true" ]; then
-            echo "::error::Release $GITHUB_REF_NAME is no longer a draft: nothing attached."
-            exit 1
+          if [ "$AUTHENTICODE" = "true" ]; then
+            notes+=(--authenticode)
+          fi
+          python3 .github/scripts/release-notes.py --version "$VERSION" \
+            ${notes[@]+"${notes[@]}"} --output notes.md
+          if state="$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [ "$state" != "true" ]; then
+              echo "::error::Release $GITHUB_REF_NAME is already published: a published version is never rebuilt. If it was published by mistake, delete it (keep the tag) and re-run this workflow (docs/guide-signature.md)."
+              exit 1
+            fi
+            gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --title "$title" \
+              --draft=true ${prerelease[@]+"${prerelease[@]}"}
+            for a in $(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name'); do
+              echo "Removing stale asset $a"
+              gh release delete-asset "$GITHUB_REF_NAME" "$a" --yes
+            done
+          else
+            gh release create "$GITHUB_REF_NAME" --draft --verify-tag \
+              ${prerelease[@]+"${prerelease[@]}"} --title "$title" --notes-file notes.md
           fi
           gh release upload "$GITHUB_REF_NAME" release/* --clobber
-          gh release edit "$GITHUB_REF_NAME" --notes-file notes.md --draft=true \
-            ${prerelease[@]+"${prerelease[@]}"}
           if [ "$ESSAI" = "true" ]; then
             {
               echo "### Essai à blanc terminé : brouillon complet, À NE JAMAIS PUBLIER"
               echo
               echo "1. Examinez le brouillon $GITHUB_REF_NAME et ses fichiers (clés d'éditeur de test)."
               echo "2. Supprimez-le avec son étiquette : \`gh release delete $GITHUB_REF_NAME --cleanup-tag --yes\`."
-              echo "3. Détruisez la clé d'éditeur jetable (\`docs/livraison.md\` § 2.1)."
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           {
-            echo "### Étape 2 terminée : brouillon complet"
+            echo "### Brouillon complet : Hirzla $VERSION"
+            echo
+            if [ "$AUTHENTICODE" = "true" ]; then
+              echo "Fichiers Windows signés Authenticode (SignPath)."
+            else
+              echo "Fichiers Windows sans signature Authenticode (SignPath non configuré)."
+            fi
             echo
             echo "1. Téléchargez \`SHA256SUMS\` du brouillon $GITHUB_REF_NAME."
-            echo "2. Sur le poste de signature : \`gpg --detach-sign --armor SHA256SUMS\`."
-            echo "3. Joignez \`SHA256SUMS.asc\` au brouillon, relisez les notes, puis publiez."
+            echo "2. \`gpg --detach-sign --armor SHA256SUMS\`, puis \`gpg --verify SHA256SUMS.asc SHA256SUMS\`."
+            echo "3. Joignez \`SHA256SUMS.asc\` au brouillon, relisez les notes, puis **Publish release**."
           } >> "$GITHUB_STEP_SUMMARY"

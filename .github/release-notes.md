@@ -1,7 +1,7 @@
 <!--
-Modèle des notes de version (ADR 0064). Le flux « Livraison » remplace {{ETAT}} (étape du
-flux), {{VERSION}}, {{NOTES}} (section de CHANGELOG.md pour cette version) et {{MARQUE}}
-(numéro de l'exécution de l'étape 1, relu par l'étape 2 : ne pas le retirer du brouillon).
+Modèle des notes de version (ADR 0064, 0073). Le flux « Livraison » remplace {{ETAT}} (ce
+qui reste à faire à l'éditeur avant de publier), {{VERSION}}, {{NOTES}} (section de
+CHANGELOG.md pour cette version) et {{WINDOWS}} (signature Authenticode présente ou non).
 Ce commentaire n'est pas recopié.
 -->
 {{ETAT}}
@@ -27,7 +27,7 @@ Coffre-fort de mots de passe post-quantique pour Windows, macOS et Linux, seul s
 
 Chaque installeur dépose côte à côte le noyau `hirzla-core`, l'application, la ligne de
 commande `hirzla` et l'hôte natif de l'extension, avec le manifeste des clients
-`hirzla-clients.manifest`, signé hors ligne par la clé d'éditeur hybride (ECDSA P-384 +
+`hirzla-clients.manifest`, signé par la clé d'éditeur hybride (ECDSA P-384 +
 ML-DSA-87). Le noyau refuse de démarrer sans lui. Sous macOS, le paquet `.pkg` installe
 `Hirzla.app` dans `/Applications` et le manifeste, hors de l'application, dans
 `/Library/Application Support/Hirzla/` (propriété de root). Les manifestes de chaque plateforme
@@ -46,11 +46,14 @@ ML-DSA-87). Le noyau refuse de démarrer sans lui. Sous macOS, le paquet `.pkg` 
 
 ## Avertissements à l'installation
 
-Les installeurs ne portent pas de signature de système (ADR 0063) : Windows affiche
-« Windows a protégé votre ordinateur » (*Informations complémentaires* › *Exécuter quand
-même*) ; macOS refuse d'ouvrir un paquet d'un développeur non identifié (clic droit sur le
-`.pkg` › *Ouvrir*, ou `sudo installer -pkg Hirzla_{{VERSION}}_aarch64.pkg -target /`).
-L'installation sous macOS demande les droits d'administrateur. Le produit vérifie quand même ses propres exécutables par la clé d'éditeur. Aucun
+{{WINDOWS}}
+
+Le paquet macOS ne porte pas de signature Apple (ADR 0063) : macOS refuse d'ouvrir un paquet
+d'un développeur non identifié (clic droit sur le `.pkg` › *Ouvrir*, ou
+`sudo installer -pkg Hirzla_{{VERSION}}_aarch64.pkg -target /`). L'installation sous macOS
+demande les droits d'administrateur.
+
+Le produit vérifie dans tous les cas ses propres exécutables par la clé d'éditeur. Aucun
 installeur ne télécharge quoi que ce soit ; l'application fonctionne en réseau isolé.
 
 ## Limites
@@ -61,5 +64,3 @@ installeur ne télécharge quoi que ce soit ; l'application fonctionne en résea
 - **Pas d'AppImage** : son outil de fabrication (linuxdeploy) réécrit les exécutables, qui ne
   seraient plus ceux du manifeste signé ; le flux l'écarte. Sur une autre distribution, seule la
   ligne de commande est proposée, en archive.
-
-{{MARQUE}}

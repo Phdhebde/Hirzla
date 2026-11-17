@@ -1,133 +1,205 @@
-# Guide de l'éditeur : signer une livraison sans certificat payant
+# Guide de l'éditeur : signer et publier une livraison
 
-Ce guide décrit, pas à pas, ce que l'éditeur fait lui-même pour signer les livraisons de
-Hirzla. Les raisons des choix sont dans l'ADR 0063 ; les détails techniques dans
-`docs/livraison.md`. Rien ici ne coûte d'argent, sauf le compte Apple Developer, facultatif
-(étape 6).
+Ce guide décrit ce que l'éditeur fait lui-même pour livrer Hirzla. Le flux GitHub
+« Livraison » fait tout le reste : compilation, signature des manifestes des clients,
+installeurs, brouillon de version (ADR 0064, 0073 ; détails techniques dans
+`docs/livraison.md` § 2.1). Rien ici ne coûte d'argent.
 
-Vue d'ensemble :
+- **Une fois** : clé d'éditeur, réglages GitHub, clé GPG (§ 1). SignPath, si vous voulez des
+  fichiers Windows signés (§ 2).
+- **À chaque version** : une étiquette, un clic d'approbation, une signature GPG, *Publish
+  release* (§ 3).
 
-| Étape | Quand | Ce que ça protège |
-| --- | --- | --- |
-| 1. Poste de signature | une fois | l'endroit où vivent les clés |
-| 2. Clé d'éditeur hybride | une fois | les exécutables installés et les mises à jour (post-quantique, hors ligne) |
-| 3. Clé GPG de livraison | une fois | les téléchargements et les dépôts APT/RPM |
-| 4. Provenance Sigstore | rien à faire | le lien entre un installeur et sa compilation sur GitHub |
-| 5. Windows : SignPath Foundation | une demande | l'avertissement SmartScreen |
-| 6. macOS | plus tard | l'avertissement Gatekeeper |
-| 7. Publier une version | à chaque version | — |
+> **Risque accepté (ADR 0073).** La clé d'éditeur est gardée dans un secret GitHub pour que
+> la CI signe les manifestes. Qui prend le contrôle de votre compte GitHub ou du dépôt peut
+> faire signer des exécutables piégés : activez la double authentification, protégez les
+> étiquettes `v*` et n'approuvez un déploiement « editeur » que pour une étiquette que vous
+> venez de poser.
 
-## 1. Préparer le poste de signature
+## 1. Mise en place (une fois)
 
-La clé d'éditeur ne doit jamais toucher un agent de CI, le dépôt ni un poste de travail
-courant.
+### 1.1 Créer la clé d'éditeur
 
-1. Prenez un ordinateur dédié, ou à défaut un système Linux démarré depuis une clé USB
-   (par exemple Debian « live ») sur votre ordinateur habituel, **réseau débranché**.
-2. Préparez **deux clés USB chiffrées** (LUKS sous Linux, BitLocker To Go sous Windows),
-   rangées dans deux lieux différents : elles porteront la sauvegarde de la clé d'éditeur.
-3. Compilez l'outil de l'éditeur sur une machine connectée, depuis une étiquette du dépôt,
-   puis copiez l'exécutable sur le poste de signature :
-
-   ```sh
-   cargo build --release --locked -p hirzla-release-signer
-   # exécutable : target/release/hirzla-signer
-   ```
-
-## 2. Créer la clé d'éditeur hybride (une fois)
-
-Sur le poste de signature, réseau débranché :
+Sur une machine de confiance, depuis une étiquette du dépôt :
 
 ```sh
+cargo build --release --locked -p hirzla-release-signer   # target/release/hirzla-signer
 hirzla-signer cle-generer --prive editeur.cle --publique editeur.pub
 hirzla-signer cle-hex --publique editeur.pub
 ```
 
-1. `editeur.cle` est la clé privée (créée en lecture seule pour vous, jamais écrasée).
-   Copiez-la sur les deux clés USB chiffrées, puis effacez toute autre copie.
-2. `editeur.pub` est publique. La seconde commande affiche sa valeur en hexadécimal.
-3. Sur GitHub, dépôt Hirzla › *Settings* › *Secrets and variables* › *Actions* › onglet
-   *Variables* › *New repository variable* : nom `HIRZLA_PUBLISHER_KEYS`, valeur
-   l'hexadécimal affiché. Ce n'est pas un secret : c'est la clé publique que chaque noyau
-   compilé emportera pour vérifier vos signatures.
-4. Envoyez-moi aussi `editeur.pub` (ou collez l'hexadécimal dans le fil) : je l'ajoute à
-   `SECURITY.md` pour que chacun puisse la comparer.
+`editeur.cle` est la clé privée (environ 2,7 Kio, binaire, non chiffrée) ; `editeur.pub`
+est publique ; la dernière commande affiche la clé publique en hexadécimal.
 
-Si la clé privée est perdue, aucune mise à jour ne pourra plus être signée pour les postes
-installés : c'est pour cela qu'il y a deux sauvegardes. Si elle est volée, il faut publier au
-plus vite une version qui admet une nouvelle clé (`livraison.md` § 7, rotation).
+### 1.2 Variable `HIRZLA_PUBLISHER_KEYS` (clé publique)
 
-## 3. Créer la clé GPG de livraison (une fois)
+Dépôt Hirzla › *Settings* › *Secrets and variables* › *Actions* › onglet *Variables* ›
+*New repository variable* :
 
-GnuPG est libre et gratuit (Linux : paquet `gnupg` ; Windows : Gpg4win ; macOS : GPG Suite
-ou `brew install gnupg`). Sur le poste de signature :
+- nom `HIRZLA_PUBLISHER_KEYS` ;
+- valeur : la sortie de `hirzla-signer cle-hex --publique editeur.pub`.
+
+Ce n'est pas un secret : c'est la clé publique que chaque noyau compilé emporte.
+
+### 1.3 Environnement `editeur` et secret `HIRZLA_PUBLISHER_KEY` (clé privée)
+
+1. *Settings* › *Environments* › *New environment* › nom **`editeur`** › *Configure
+   environment*.
+2. *Deployment protection rules* : cochez **Required reviewers** et ajoutez-vous. Laissez
+   *Prevent self-review* décoché (c'est vous qui poserez l'étiquette). *Save protection
+   rules*.
+3. *Deployment branches and tags* : **Selected branches and tags** › *Add deployment branch
+   or tag rule* › *Ref type* : **Tag** › motif **`v*`** › *Add rule*.
+4. *Environment secrets* › *Add environment secret* : nom **`HIRZLA_PUBLISHER_KEY`**,
+   valeur : le base64 de `editeur.cle`, sur une seule ligne :
+
+   ```sh
+   base64 -w0 editeur.cle                 # Linux
+   base64 -i editeur.cle                  # macOS
+   ```
+
+   ```powershell
+   [Convert]::ToBase64String([IO.File]::ReadAllBytes("editeur.cle"))   # PowerShell
+   ```
+
+   Collez la sortie directement dans le champ, sans l'enregistrer dans un fichier.
+5. Facultatif, pour les essais à blanc (`livraison.md` § 2.1) : dans le même environnement,
+   le secret `HIRZLA_PUBLISHER_KEY_ESSAI` (base64 d'une clé **jetable**), et dans les
+   variables du dépôt `HIRZLA_PUBLISHER_KEYS_ESSAI` (sa clé publique). Jamais la vraie clé.
+
+Attention aux noms : `HIRZLA_PUBLISHER_KEYS` (avec un S) est la variable publique,
+`HIRZLA_PUBLISHER_KEY` (sans S) le secret privé.
+
+### 1.4 Garder une copie hors ligne
+
+Copiez `editeur.cle` et `editeur.pub` sur **deux clés USB chiffrées** (LUKS, BitLocker To
+Go, ou image chiffrée macOS), rangées dans deux lieux différents, puis effacez toute autre
+copie de `editeur.cle`. Cette copie sert à la rotation, aux paquets de mise à jour hors ligne
+(`livraison.md` § 8) et à une signature de secours hors de GitHub
+(`.github/scripts/signer-manifestes.sh`).
+
+### 1.5 Créer la clé GPG de livraison
+
+GnuPG est libre (Linux : `gnupg` ; Windows : Gpg4win ; macOS : GPG Suite ou
+`brew install gnupg`) :
 
 ```sh
 gpg --full-generate-key
-#   type : (9) ECC (sign and encrypt) puis Curve 25519, ou (1) RSA 4096
-#   expiration : 2y (on prolonge avant l'échéance)
+#   type : ECC (Curve 25519) ou RSA 4096 ; expiration : 2y
 #   nom : Hirzla Release Signing ; adresse : votre adresse de contact sécurité
 gpg --list-secret-keys --keyid-format long     # relevez l'empreinte
 gpg --armor --export <EMPREINTE> > hirzla-livraison.asc
 gpg --armor --export-secret-keys <EMPREINTE> > sauvegarde-gpg.asc   # sur les clés USB seulement
 ```
 
-1. Rangez `sauvegarde-gpg.asc` sur les deux clés USB chiffrées, puis effacez-le du disque.
-2. Envoyez-moi `hirzla-livraison.asc` et l'empreinte : je les publie dans `SECURITY.md`.
-3. Si vous avez une clé matérielle (YubiKey, Nitrokey), `gpg --edit-key <EMPREINTE>` puis
-   `keytocard` y place la clé : elle ne peut alors plus être copiée.
+Rangez `sauvegarde-gpg.asc` sur les deux clés USB chiffrées puis effacez-le du disque. Avec
+une clé matérielle (YubiKey, Nitrokey), `gpg --edit-key <EMPREINTE>` puis `keytocard`.
 
-## 4. Provenance Sigstore : rien à faire
+### 1.6 Remplir `SECURITY.md`
 
-Le flux GitHub `Livraison` produit automatiquement, pour chaque fichier joint à la version
-(installeurs, archives, nomenclatures) et pour les exécutables à signer, une attestation
-signée sans clé par Sigstore. Pour vérifier un fichier
-téléchargé :
+Envoyez-moi l'hexadécimal de `editeur.pub`, `hirzla-livraison.asc` et l'empreinte GPG : je
+les publie dans `SECURITY.md` pour que chacun puisse les comparer.
 
-```sh
-gh attestation verify Hirzla_1.0.0_x64.msi --repo Phdhebde/Hirzla
-```
+### 1.7 Protéger le dépôt (recommandé)
 
-## 5. Windows : demander un certificat gratuit à la SignPath Foundation
+*Settings* › *Rules* › *Rulesets* : une règle sur les étiquettes `v*` qui réserve leur
+création et leur suppression aux administrateurs, et une règle sur `main` (demande de
+fusion obligatoire). Activez la double authentification sur votre compte GitHub.
 
-La SignPath Foundation signe gratuitement les projets open source (licence approuvée OSI,
-dépôt public, compilation en CI) ; la clé reste dans son HSM, vous n'avez rien à garder.
+## 2. Windows : SignPath Foundation (facultatif)
 
-1. Sur le site de SignPath (signpath.org), section *Open Source*, remplissez la demande :
-   projet Hirzla, dépôt `https://github.com/Phdhebde/Hirzla`, licence Apache 2.0, éditeur
-   vous-même.
-2. Une fois le projet accepté, vous recevez un identifiant d'organisation et de projet.
-   Transmettez-les-moi : je branche la signature dans le flux `Livraison` (secret
-   `SIGNPATH_API_TOKEN` que vous créerez dans *Settings* › *Secrets*).
-3. Sans réponse ou en cas de refus, rien ne bloque : l'installeur n'est pas signé et Windows
-   affiche « Windows a protégé votre ordinateur » ; l'utilisateur clique sur
-   *Informations complémentaires* › *Exécuter quand même*. Le produit vérifie quand même ses
-   propres exécutables par la clé d'éditeur (ADR 0063, point 1).
+La SignPath Foundation signe gratuitement en Authenticode les projets libres ; la clé reste
+dans son HSM. Sans elle, tout fonctionne : les fichiers Windows ne sont pas signés et
+SmartScreen avertit (« Windows a protégé votre ordinateur » › *Informations
+complémentaires* › *Exécuter quand même*) ; le produit vérifie quand même ses exécutables
+par la clé d'éditeur.
 
-## 6. macOS : plus tard, si besoin
+### 2.1 Demander l'admission
 
-Apple ne propose aucune signature gratuite reconnue par Gatekeeper. D'ici là, l'application
-est signée « ad hoc » et l'utilisateur l'autorise une fois : Réglages Système ›
-Confidentialité et sécurité › *Ouvrir quand même*. Si vous voulez une installation sans
-avertissement, il faut un compte Apple Developer (99 USD par an), puis suivre
-`livraison.md` § 3.
+Formulaire : <https://signpath.org/apply>. Les conditions, selon ce qui est affiché par
+SignPath au moment de la demande, portent notamment sur : une licence approuvée par l'OSI
+(Apache 2.0 : oui), un dépôt public, des compilations faites sur les agents hébergés par
+GitHub (c'est le cas), et une **politique de signature de code** publiée dans le
+`README` ou sur le site (qui signe, qui approuve, ce qui est signé). Reprenez le texte exact
+que SignPath demande ; je l'ajoute au site et au `README` si besoin.
 
-## 7. Publier une version
+### 2.2 Une fois accepté, dans l'organisation SignPath
 
-Le flux GitHub « Livraison » travaille en deux temps autour d'un **brouillon** de version
-(ADR 0064, `livraison.md` § 2.1) : il compile, vous signez hors ligne, il empaquette, vous
-publiez. Il ne publie jamais seul. Il faut, une fois pour toutes, la variable
-`HIRZLA_PUBLISHER_KEYS` (étape 2) et l'outil `hirzla-signer` d'une version au moins égale
-à 1.0.0 sur le poste de signature (étape 1, point 3).
+1. **Projet** : créez-le (ou complétez celui créé par la fondation) avec le *slug*
+   **`hirzla`** et l'adresse du dépôt.
+2. **Trusted build system** : reliez le système de compilation de confiance *GitHub.com* à
+   l'organisation, puis au projet `hirzla`.
+3. **Artifact configurations** : deux configurations.
+   - Slug **`executables`** : l'artefact est un zip contenant les quatre `.exe` à sa racine ;
+     chaque fichier PE est signé en Authenticode.
+   - Slug **`msi`** : l'artefact est un zip contenant le seul MSI ; le MSI est signé en
+     Authenticode, sans rien signer à l'intérieur.
 
-Avant la première vraie version, faites un **essai à blanc** avec une clé d'éditeur jetable
-et une étiquette `v1.0.0-essai.1` (`livraison.md` § 2.1, « Essai à blanc ») : même flux,
-brouillon marqué « Essai », à supprimer ensuite. Ne publiez jamais un essai, et ne signez
-jamais ses manifestes avec la vraie clé d'éditeur.
+   Contenu proposé (format `artifact-configuration` v1, **à vérifier dans l'interface
+   SignPath**, qui valide le fichier à l'enregistrement) :
 
-1. **Je prépare la version sur `dev`** : versions relevées partout (Cargo, application,
-   extension), `CHANGELOG.md` complété. Vous fusionnez vers `main`.
-2. **Posez l'étiquette** sur le commit fusionné de `main`, puis poussez-la :
+   ```xml
+   <?xml version="1.0" encoding="utf-8"?>
+   <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+     <zip-file>
+       <pe-file-set>
+         <include path="hirzla.exe" />
+         <include path="hirzla-core.exe" />
+         <include path="hirzla-desktop.exe" />
+         <include path="hirzla-native-host.exe" />
+         <for-each>
+           <authenticode-sign />
+         </for-each>
+       </pe-file-set>
+     </zip-file>
+   </artifact-configuration>
+   ```
+
+   ```xml
+   <?xml version="1.0" encoding="utf-8"?>
+   <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+     <zip-file>
+       <msi-file path="*.msi">
+         <authenticode-sign />
+       </msi-file>
+     </zip-file>
+   </artifact-configuration>
+   ```
+
+   Ne déclarez aucun fichier à l'intérieur du `<msi-file>` : les exécutables du MSI sont
+   déjà signés et figurent tels quels dans le manifeste des clients.
+4. **Signing policies** : **`release-signing`** (certificat de la fondation, pour les
+   étiquettes `vX.Y.Z`) et **`test-signing`** (certificat de test, pour les essais à blanc).
+   Si l'interface le permet, limitez-les aux références `refs/tags/v*`. Une approbation
+   manuelle dans SignPath fait attendre le flux jusqu'à une heure.
+5. **Utilisateur CI** : créez un utilisateur de type CI, ajoutez-le comme *submitter* des
+   deux politiques, et générez son **API token** (affiché une seule fois).
+6. Relevez l'**Organization ID** (*Settings* de l'organisation).
+
+### 2.3 Dans GitHub
+
+1. *Settings* › *Environments* › *New environment* › **`signpath`** ; *Deployment branches
+   and tags* : **Selected branches and tags** › règle **Tag** `v*`. Pas de relecteur
+   obligatoire. *Environment secrets* : **`SIGNPATH_API_TOKEN`** = le jeton de l'étape
+   2.2, point 5.
+2. *Settings* › *Secrets and variables* › *Actions* › *Variables* :
+   - **`SIGNPATH_ORGANIZATION_ID`** = l'identifiant d'organisation (c'est cette variable qui
+     active la signature) ;
+   - **`SIGNPATH_PROJECT_SLUG`** = `hirzla` ;
+   - facultatives, seulement si vos noms diffèrent : `SIGNPATH_POLICY_SLUG`
+     (défaut `release-signing`), `SIGNPATH_TEST_POLICY_SLUG` (défaut `test-signing`),
+     `SIGNPATH_EXE_CONFIG_SLUG` (défaut `executables`), `SIGNPATH_MSI_CONFIG_SLUG`
+     (défaut `msi`).
+
+Pour couper SignPath, videz ou supprimez `SIGNPATH_ORGANIZATION_ID`.
+
+## 3. Publier une version
+
+Avant la première vraie version, faites un **essai à blanc** (`livraison.md` § 2.1, étiquette
+`v1.0.0-essai.1`, clé jetable) : même flux, brouillon marqué « Essai », à supprimer ensuite.
+
+1. **Posez l'étiquette.** Je prépare la version sur `dev` (versions relevées partout,
+   `CHANGELOG.md` complété) ; vous fusionnez vers `main`, puis :
 
    ```sh
    git checkout main && git pull
@@ -135,74 +207,66 @@ jamais ses manifestes avec la vraie clé d'éditeur.
    git push origin v1.0.0
    ```
 
-   Ne créez pas la version vous-même depuis la page *Releases* : le flux crée le brouillon à
-   partir de l'étiquette poussée.
-3. **Attendez l'étape 1** : *Actions* › *Livraison*, l'exécution de l'étiquette (environ une
-   demi-heure). Si elle échoue sur « version and publisher keys », le message dit quoi
-   corriger (étiquette différente de la version, variable `HIRZLA_PUBLISHER_KEYS` vide).
-   À la fin, un brouillon « Hirzla 1.0.0 » apparaît dans *Releases*.
-4. **Téléchargez l'artefact** `hirzla-1.0.0-a-signer` en bas de la page de l'exécution
-   (fichier zip). Facultatif, sur la machine connectée : vérifiez qu'un exécutable vient bien
-   du flux, `gh attestation verify linux-x86_64/hirzla-core --repo Phdhebde/Hirzla`.
-   Copiez le dossier décompressé sur une clé USB **non chiffrée de transfert** (les
-   exécutables sont publics).
-5. **Sur le poste de signature, réseau débranché**, montez la clé USB de la clé d'éditeur et
-   la clé de transfert, puis, dans le dossier `hirzla-1.0.0-a-signer` :
-
-   ```sh
-   sh signer-manifestes.sh /media/usb/editeur.cle /media/usb/editeur.pub
-   ```
-
-   Le script contrôle d'abord le transfert (`sha256sum -c SHA256SUMS`), puis signe et vérifie
-   un manifeste par système : `hirzla-clients-linux-x86_64.manifest`,
-   `hirzla-clients-windows-x86_64.manifest`, `hirzla-clients-macos-aarch64.manifest`. Les
-   commandes exactes qu'il exécute sont dans `LISEZMOI.txt`, si vous préférez les taper. Si
-   `hirzla-signer` n'est pas dans le `PATH` : `HIRZLA_SIGNER=/chemin/hirzla-signer sh
-   signer-manifestes.sh …`. Ne modifiez, ne renommez et ne signez aucun exécutable : le
-   manifeste porte leurs empreintes exactes.
-
-   **macOS** (ADR 0065) : le dossier contient l'application entière,
-   `macos-aarch64/Hirzla.app.zip`, **déjà signée ad hoc** par le flux. Le script la
-   décompresse dans `macos-aarch64/app` (avec `ditto`, `unzip` ou Python) et signe le
-   manifeste des exécutables de `Hirzla.app/Contents/MacOS/` tels qu'ils sont dans ce paquet
-   signé. Ne rouvrez pas et ne modifiez pas `Hirzla.app`. Le manifeste ne va pas dans
-   `Hirzla.app` : l'étape 2 construit un paquet d'installation `.pkg` qui pose l'application
-   dans `/Applications` et le manifeste dans `/Library/Application Support/Hirzla/`.
-6. **Démontez la clé d'éditeur.** Copiez les trois fichiers `hirzla-clients-*.manifest` sur
-   la clé de transfert (ils sont publics), puis, sur la machine connectée : *Releases* ›
-   brouillon « Hirzla 1.0.0 » › crayon (*Edit*) › faites glisser les trois fichiers dans
-   « Attach binaries » › **Save draft** (surtout pas *Publish release*). Ne touchez pas au
-   texte du brouillon : la dernière ligne, invisible, relie le brouillon à l'étape 1.
-   En ligne de commande, équivalent : `gh release upload v1.0.0 hirzla-clients-*.manifest`.
-   **Publiée par erreur ?** Ne la repassez pas en brouillon : GitHub la détache alors de son
-   étiquette et l'étape 2 ne la retrouve plus. Supprimez la version (en gardant l'étiquette),
-   relancez l'étape 1 (*Actions* › exécution de l'étape 1 › *Re-run all jobs*), puis
-   reprenez la signature avec le nouvel artefact : les exécutables ont été recompilés.
-7. **Lancez l'étape 2** : *Actions* › *Livraison* › *Run workflow* › *Use workflow from* :
-   onglet *Tags* › `v1.0.0` › *Run workflow*. Elle vérifie vos manifestes (bonne clé, bonne
-   version, bons exécutables ; les trois systèmes sont exigés), construit les installeurs
-   (MSI, deb, rpm, AppImage, et le `.pkg` macOS), vérifie qu'ils contiennent exactement les
-   exécutables signés, et joint au brouillon les installeurs, les archives, l'extension, les
-   SBOM et `SHA256SUMS`. Si elle refuse un manifeste, le message dit
-   lequel et pourquoi : supprimez-le du brouillon, recommencez au point 5.
-8. **Signez les empreintes** : téléchargez `SHA256SUMS` depuis le brouillon, puis, sur le
-   poste de signature (la clé GPG y vit, étape 3) :
+   Ne créez pas la version vous-même depuis la page *Releases* : le flux crée le brouillon.
+2. **Approuvez le déploiement « editeur ».** *Actions* › *Livraison* › l'exécution de
+   l'étiquette. Après la compilation (environ une demi-heure, plus l'attente de SignPath
+   s'il est configuré), le job « client manifests » affiche *Waiting for review* : vérifiez
+   que l'étiquette est bien celle que vous venez de poser, puis *Review deployments* ›
+   cochez `editeur` › **Approve and deploy**. GitHub vous prévient aussi par courriel.
+3. **Attendez le brouillon.** Le flux construit et contrôle les installeurs, puis crée le
+   brouillon « Hirzla 1.0.0 » dans *Releases*, avec tous les fichiers. S'il échoue, le
+   message dit pourquoi ; une fois corrigé, *Re-run all jobs* recommence tout (et redemande
+   l'approbation).
+4. **Signez les empreintes et publiez.** Téléchargez `SHA256SUMS` depuis le brouillon, puis :
 
    ```sh
    gpg --detach-sign --armor SHA256SUMS        # produit SHA256SUMS.asc
    gpg --verify SHA256SUMS.asc SHA256SUMS      # « Bonne signature »
    ```
 
-9. **Publiez** : joignez `SHA256SUMS.asc` au brouillon, relisez les notes (elles viennent de
-   `CHANGELOG.md`), vérifiez la liste des fichiers (`livraison.md` § 2.1 : macOS y figure
-   en `Hirzla_1.0.0_aarch64.pkg`, sans image disque), puis **Publish release**. Démontez
-   les clés USB et rangez-les.
+   *Releases* › brouillon › crayon (*Edit*) › joignez `SHA256SUMS.asc`, relisez les notes,
+   puis **Publish release**.
 
-Une version publiée n'est jamais reconstruite : pour corriger, on publie `1.0.1`. Si
-l'étape 2 n'a pas été lancée dans les 90 jours qui suivent l'étape 1 (durée de conservation
-des artefacts), supprimez l'étiquette distante et reposez-la : l'étape 1 recompile, remet le
-brouillon à zéro, et il faut signer de nouveau.
+Une version publiée n'est jamais reconstruite : pour corriger, on publie `1.0.1`.
 
-Plus tard, pour une version suivante, vous pourrez joindre aussi au brouillon, au point 6,
-des paquets de mise à jour hors ligne `hirzla-X.Y.Z-<plateforme>.hirzla-maj`
-(`livraison.md` § 8) : l'étape 2 les vérifie et les publie avec le reste.
+**Publiée par erreur** (avant `SHA256SUMS.asc`, ou un essai) : supprimez la version
+(*Delete*, en gardant l'étiquette ; pour un essai, `gh release delete v1.0.0-essai.1
+--cleanup-tag --yes`), puis relancez l'exécution (*Re-run all jobs*) : le flux recrée un
+brouillon neuf. Ne la repassez pas en brouillon à la main.
+
+**Paquets de mise à jour hors ligne** (`hirzla-X.Y.Z-<plateforme>.hirzla-maj`,
+`livraison.md` § 8) : la CI ne les produit pas. Vous les signez avec la copie hors ligne de
+la clé, les joignez au brouillon, et ajoutez leurs empreintes avant de signer :
+`sha256sum hirzla-*.hirzla-maj >> SHA256SUMS`.
+
+## 4. Rotation et compromission de la clé d'éditeur
+
+- **Rotation prévue** : créez une nouvelle clé (§ 1.1). Publiez d'abord une version dont
+  `HIRZLA_PUBLISHER_KEYS` contient l'ancienne et la nouvelle clé publique, séparées par une
+  virgule (signée avec l'ancienne). Remplacez ensuite le secret `HIRZLA_PUBLISHER_KEY` par
+  la nouvelle clé, puis retirez l'ancienne clé publique de la variable à la version
+  suivante (`livraison.md` § 7).
+- **Compromission soupçonnée** (compte GitHub, dépôt, exécution inattendue du job « client
+  manifests ») : supprimez aussitôt le secret `HIRZLA_PUBLISHER_KEY`, changez le mot de
+  passe et les jetons du compte, examinez les exécutions et les étiquettes récentes. Avec
+  la copie hors ligne, publiez au plus vite une version qui n'admet plus que la nouvelle
+  clé, et prévenez les utilisateurs (`SECURITY.md`) : les postes installés font confiance
+  à l'ancienne clé jusqu'à leur mise à jour.
+- **Clé perdue** : la copie hors ligne la remplace ; sans elle, aucune mise à jour ne peut
+  plus être signée pour les postes installés.
+
+## 5. macOS
+
+Apple ne propose aucune signature gratuite reconnue par Gatekeeper : l'application est
+signée « ad hoc » par le flux, et l'utilisateur l'autorise une fois (Réglages Système ›
+Confidentialité et sécurité › *Ouvrir quand même*). Une installation sans avertissement
+demande un compte Apple Developer (99 USD par an), puis `livraison.md` § 3.
+
+## 6. Provenance Sigstore : rien à faire
+
+Le flux publie, pour chaque fichier de la version et pour les exécutables, une attestation
+signée sans clé par Sigstore :
+
+```sh
+gh attestation verify Hirzla_1.0.0_x64_fr-FR.msi --repo Phdhebde/Hirzla
+```

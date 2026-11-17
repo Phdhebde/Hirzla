@@ -31,7 +31,7 @@ description: Le vocabulaire de Hirzla - coffre, casier, secret, scellé, descell
 | Kit de recouvrement | Parts de secours dont un nombre choisi rouvre le coffre |
 | Sceau | Ce qui protège la clé racine du serveur, partagé entre des dépositaires |
 | Dépositaire | Détenteur d'une part |
-| Clé d'éditeur | Clé hybride hors ligne qui signe le manifeste des exécutables et les mises à jour |
+| Clé d'éditeur | Clé hybride de l'éditeur qui signe le manifeste des exécutables et les mises à jour |
 | Manifeste des clients | Empreintes signées des exécutables installés, vérifiées par le noyau |
 | Hybride | Qui combine un algorithme classique et un algorithme post-quantique |
 | Post-quantique | Qui résiste à un ordinateur quantique |

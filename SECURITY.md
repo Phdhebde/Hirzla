@@ -17,6 +17,9 @@ Vérifiez les livraisons avec ces clés (marche à suivre : `docs/guide-signatur
 - Clé GPG de livraison, empreinte : [À COMPLÉTER]
 - Provenance de compilation : `gh attestation verify FICHIER --repo Phdhebde/Hirzla`
 
+La clé d'éditeur signe les manifestes des clients dans le flux de livraison GitHub, après
+approbation de l'éditeur (ADR 0073) ; une copie est gardée hors ligne.
+
 ## Périmètre
 
 Tout ce qui permet de lire un secret sans y être autorisé, d'usurper un rôle, de falsifier
