@@ -123,6 +123,11 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("ArrowDown");
   await p.keyboard.press("ArrowDown");
   await shot(p, "05-recherche", theme);
+  // A secret without notes: no "Notes" row, so nothing to reveal or copy there.
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : mot de passe']");
+  if (await p.$("#fiche-champs button[aria-label^='Révéler : notes']")) {
+    errors.push(`${theme} : la fiche d'un secret sans notes propose de les révéler`);
+  }
   await p.fill("#recherche", "");
 
   // Command palette: secrets and actions from the keyboard.

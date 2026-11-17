@@ -194,6 +194,19 @@
     [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
     [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
   };
+  // Fields each secret holds (what `secret_history` lists, never a value): only the bank
+  // account and the GitLab note have notes, only the backup server key has a passphrase.
+  const fieldsOf = (sid) => {
+    const e = entries.find((x) => x.id === sid);
+    if (!e) return [];
+    const f = ["title"];
+    if (e.username) f.push("username");
+    if (e.kind === "password") f.push("password");
+    if (e.kind === "ssh_key") f.push("ssh_public_key");
+    if (sid === id(6)) f.push("ssh_passphrase");
+    if (sid === id(1) || sid === id(3)) f.push("notes");
+    return f;
+  };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
   const handlers = {
@@ -213,7 +226,7 @@
       return { entries: entries.filter((e) => shown(e) && (a.trash || !e.trash) && hit(e)), lockers };
     },
     reveal_field: (a) => {
-      if (a.field === "notes" && a.target.id !== id(1) && a.target.id !== id(3)) return refuse("not_found", "Secret ou champ introuvable.");
+      if (!fieldsOf(a.target.id).includes(a.field)) return refuse("not_found", "Secret ou champ introuvable.");
       return values[a.field] || "";
     },
     copy_field: () => 30,
@@ -353,7 +366,12 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e) e.trash = false;
     },
-    secret_history: () => history,
+    secret_history: (a) => {
+      if (a.target.id === id(1)) return history;
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e) return refuse("not_found", "Secret ou champ introuvable.");
+      return [{ version: v(1), wall_ms: Date.UTC(2026, 0, 12, 9, 30), state: e.trash ? "trash" : "active", title: e.title, username: e.username, fields: fieldsOf(e.id), changed: fieldsOf(e.id), custom: 0 }];
+    },
     reveal_version: (a) => (a.field === "password" ? "ancien-Mot-de-passe-2025" : "Ancienne note."),
     copy_version: () => 30,
     restore_version: () => {},
