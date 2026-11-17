@@ -12,6 +12,7 @@
 //! | --- | --- | --- |
 //! | [`KdfLabel::Unlock`] | `hirzla/v1/unlock` | method index (1 byte), method kind (1 byte) |
 //! | [`KdfLabel::DeviceWrap`] | `hirzla/v1/device-wrap` | none |
+//! | [`KdfLabel::LockerExport`] | `hirzla/v1/locker-export-key` | none |
 //!
 //! The output is always a 32-byte [`SymmetricKey`].
 
@@ -37,6 +38,9 @@ pub enum KdfLabel {
     },
     /// `K_dev_wrap`, the local key-encryption key derived from the device key (§ 4.3).
     DeviceWrap,
+    /// `K_export`, the key of an encrypted locker export, derived from the Argon2id output of
+    /// the export password (`docs/format.md` § 16, ADR 0077).
+    LockerExport,
 }
 
 impl KdfLabel {
@@ -44,6 +48,7 @@ impl KdfLabel {
         match self {
             KdfLabel::Unlock { .. } => b"hirzla/v1/unlock",
             KdfLabel::DeviceWrap => b"hirzla/v1/device-wrap",
+            KdfLabel::LockerExport => b"hirzla/v1/locker-export-key",
         }
     }
 
@@ -53,7 +58,7 @@ impl KdfLabel {
                 method_index,
                 method_kind,
             } => vec![vec![method_index], vec![method_kind]],
-            KdfLabel::DeviceWrap => Vec::new(),
+            KdfLabel::DeviceWrap | KdfLabel::LockerExport => Vec::new(),
         }
     }
 
