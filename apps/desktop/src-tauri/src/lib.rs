@@ -12,6 +12,7 @@
 //! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
 //!   ADR 0067);
 //! - [`folders`]: folders inside lockers (local API version 11, ADR 0076);
+//! - [`totp`]: TOTP codes shown, copied, set and removed (local API version 13, ADR 0078);
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
@@ -44,6 +45,7 @@ pub mod locker_export;
 pub mod prefs;
 pub mod selfmode;
 pub mod servermode;
+pub mod totp;
 pub mod tray;
 
 use commands::AppState;
@@ -115,6 +117,11 @@ pub fn run() -> Result<(), tauri::Error> {
             folders::move_folder,
             folders::delete_folder,
             folders::move_secret,
+            totp::totp_code,
+            totp::totp_copy,
+            totp::totp_set,
+            totp::totp_clear,
+            totp::totp_create,
             generator::generator_profiles,
             generator::generate_with,
             generator::copy_generated_at,

@@ -665,3 +665,122 @@ fn connections_are_refused_to_the_browser_profile() {
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
     assert!(log.contains("event=connection_request op=connection_read result=unauthorized"));
 }
+
+#[test]
+fn totp_codes_answer_over_the_real_channel() {
+    use hirzla_core::totp::proto::{TotpReply, TotpRequest};
+    // RFC 6238 appendix B, SHA-1 seed in base32.
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "totp");
+    let me = std::env::current_exe().unwrap();
+    let _core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: hirzla_crypto::password::MIN_M_KIB,
+            t: hirzla_crypto::password::MIN_T,
+            p: 1,
+        }),
+    })
+    .unwrap();
+    let Ok(TotpReply::Created { locker, id }) = c
+        .call_totp(&TotpRequest::Create {
+            locker: None,
+            title: z(TITLE),
+            input: z(&format!("otpauth://totp/{TITLE}?secret={SEED}&digits=8")),
+            username: None,
+            tags: Vec::new(),
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let now = || {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    };
+    let before = now();
+    let Ok(TotpReply::Code(info)) = c
+        .call_totp(&TotpRequest::Code {
+            locker,
+            id,
+            next: true,
+        })
+        .unwrap()
+    else {
+        panic!()
+    };
+    let after = now();
+    // The code of the system clock, computed on this side from the RFC seed.
+    let params = hirzla_crypto::totp::TotpParams {
+        algorithm: hirzla_crypto::totp::TotpAlgorithm::Sha1,
+        digits: 8,
+        period: 30,
+    };
+    let expected: Vec<String> = [before, after]
+        .iter()
+        .map(|t| {
+            hirzla_crypto::totp::totp(b"12345678901234567890", &params, *t)
+                .unwrap()
+                .as_str()
+                .to_owned()
+        })
+        .collect();
+    assert!(expected.iter().any(|e| e == info.code.as_str()));
+    assert_eq!((info.digits, info.period), (8, 30));
+    assert!((1..=30).contains(&info.seconds_left));
+    assert_eq!(info.next.as_ref().unwrap().len(), 8);
+    // The general `Read` of the TOTP field stays refused.
+    assert_eq!(
+        refused(c.call(&Request::Read {
+            selector: Selector::Id { locker, id },
+            field: Field::Totp,
+        })),
+        ErrorCode::Unsupported
+    );
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=totp_request op=totp_create result=ok"),
+        "{log}"
+    );
+    assert!(log.contains("event=totp_request op=totp_code result=ok"));
+    for secret in [PASSWORD, TITLE, SEED, info.code.as_str()] {
+        assert!(!log.contains(secret));
+    }
+}
+
+#[test]
+fn totp_codes_are_refused_to_the_browser_profile() {
+    use hirzla_core::totp::proto::TotpRequest;
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "totp-browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    let id: hirzla_vault::model::Id16 = [7; 16];
+    for r in [
+        TotpRequest::Code {
+            locker: id,
+            id,
+            next: false,
+        },
+        TotpRequest::Clear { locker: id, id },
+    ] {
+        assert_eq!(
+            c.call_totp(&r).unwrap().err(),
+            Some(ErrorCode::Unauthorized)
+        );
+    }
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=totp_request op=totp_code result=unauthorized"));
+}

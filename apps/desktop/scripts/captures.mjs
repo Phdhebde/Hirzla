@@ -164,6 +164,26 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "06-nouveau-secret", theme);
   await p.keyboard.press("Escape");
 
+  // TOTP codes (ADR 0078): the code of a password, the record of a TOTP secret, then a
+  // TOTP refused by the edit form before anything is written.
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("#opt-00000000000000000000000000000002");
+  await p.waitForFunction(() => document.querySelector("#fiche-champs .code-totp")?.textContent === "287 082");
+  if (!(await p.$("#fiche-principales button:has-text('Copier le code TOTP')"))) {
+    errors.push(`${theme} : la fiche d'un mot de passe avec TOTP ne propose pas de copier le code`);
+  }
+  await shot(p, "06h-code-totp", theme);
+  await p.click("#opt-00000000000000000000000000000019");
+  await p.waitForFunction(() => document.querySelector("#fiche-champs .code-totp")?.textContent === "4091 7253");
+  await shot(p, "06i-secret-totp", theme);
+  await p.click("#fiche-modifier");
+  await p.waitForSelector("#dialogue-secret[open] #secret-totp-effacer-case:not([hidden])");
+  await p.fill("#secret-totp", "pas une clé");
+  await p.click("#secret-enregistrer");
+  await p.waitForSelector("#secret-erreur:not([hidden])");
+  await shot(p, "06j-totp-refuse", theme);
+  await p.keyboard.press("Escape");
+
   // Connections: the record of an SSH connection through a jump host, then an RDP one.
   await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
   await p.click("[data-filtre='type:connexion']");

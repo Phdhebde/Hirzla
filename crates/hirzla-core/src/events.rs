@@ -16,6 +16,7 @@ use crate::locker_export::proto::ExportOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
+use crate::totp::proto::TotpOp;
 
 /// Why a connection was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,6 +164,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A TOTP request was answered (`docs/api-locale.md` § 22). `result` is `ok` or the name
+    /// of the error: fixed words only. Never a code.
+    TotpRequest {
+        /// Operation.
+        op: TotpOp,
+        /// Outcome.
+        result: &'static str,
+    },
     /// An export request was answered (`docs/api-locale.md` § 19). `result` is `ok` or the
     /// name of the error: fixed words only. Neither the path nor the locker is written.
     ExportRequest {
@@ -271,6 +280,9 @@ impl Event {
                     "event=connection_request op={} result={result}",
                     op.name()
                 )
+            }
+            Event::TotpRequest { op, result } => {
+                write!(out, "event=totp_request op={} result={result}", op.name())
             }
             Event::ExportRequest { op, result } => {
                 write!(out, "event=export_request op={} result={result}", op.name())
@@ -427,6 +439,11 @@ mod tests {
         for op in ConnectionOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
                 events.push(Event::ConnectionRequest { op, result });
+            }
+        }
+        for op in TotpOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "unauthorized", "locked"] {
+                events.push(Event::TotpRequest { op, result });
             }
         }
         for op in ExportOp::ALL {

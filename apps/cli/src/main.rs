@@ -14,6 +14,7 @@ mod locker_export;
 mod selfmode;
 mod server;
 mod term;
+mod totp;
 mod update;
 
 use std::io::{IsTerminal, Write};
@@ -606,6 +607,7 @@ fn run(args: &Args) -> Result<(), String> {
             id,
             destination,
         } => folders::move_secret(&session, name.as_deref(), id.as_deref(), destination),
+        Command::Totp(command) => totp::run(&session, command),
         Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }

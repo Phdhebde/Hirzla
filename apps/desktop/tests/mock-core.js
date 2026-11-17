@@ -19,6 +19,7 @@
     { locker: L, id: id(21), kind: "ssh_connection", title: "Bastion de l'atelier", username: "marie", hosts: ["bastion.atelier-durand.fr"], tags: ["infra"], favorite: false, trash: false },
     { locker: L, id: id(22), kind: "ssh_connection", title: "Serveur de sauvegarde", username: "sauvegarde", hosts: ["10.20.0.14"], tags: ["infra"], favorite: true, trash: false },
     { locker: L, id: id(23), kind: "rdp_connection", title: "Poste de comptabilité", username: "m.durand", hosts: ["compta-01.atelier.lan"], tags: [], favorite: false, trash: false },
+    { locker: L, id: id(25), kind: "totp", title: "Forge logicielle", username: "marie", hosts: [], tags: ["travail"], favorite: false, trash: false },
     { locker: L, id: id(7), kind: "password", title: "Wi-Fi maison", username: null, hosts: [], tags: [], favorite: false, trash: false },
     { locker: L, id: id(8), kind: "password", title: "Ancien forum", username: "mdurand", hosts: ["forum.example"], tags: [], favorite: false, trash: true },
     { locker: W, id: id(9), kind: "password", title: "Console du NAS", username: "atelier", hosts: ["nas.atelier.lan"], tags: ["infra"], favorite: false, trash: false },
@@ -228,6 +229,8 @@
     if (e.kind === "ssh_key") f.push("ssh_public_key");
     if (sid === id(6)) f.push("ssh_passphrase");
     if (sid === id(1) || sid === id(3) || sid === id(4)) f.push("notes");
+    // TOTP (ADR 0078): the mail account carries one, and the TOTP secret of the forge.
+    if (sid === id(2) || e.kind === "totp") f.push("totp");
     return f;
   };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
@@ -313,6 +316,28 @@
     move_secret: (a) => {
       if (a.folder) placed[a.target.id] = a.folder;
       else delete placed[a.target.id];
+    },
+    // TOTP codes (local API version 13): made-up codes, never a TOTP secret.
+    totp_code: (a) => {
+      if (state !== "unlocked") return refuse("locked", "Le coffre est verrouillé.");
+      if (!fieldsOf(a.target.id).includes("totp")) return refuse("not_found", "Secret ou champ introuvable.");
+      const forge = a.target.id === id(25);
+      return { code: forge ? "40917253" : "287082", seconds_left: 18, period: 30, digits: forge ? 8 : 6, algorithm: forge ? "SHA-256" : "SHA-1", issuer: forge ? "Forge" : "Proton" };
+    },
+    totp_copy: (a) => (fieldsOf(a.target.id).includes("totp") ? 30 : refuse("not_found", "Secret ou champ introuvable.")),
+    totp_set: (a) => {
+      if (!/^otpauth:\/\/totp\//i.test(a.input.trim()) && !/^[A-Za-z2-7\s=-]{16,}$/.test(a.input.trim())) {
+        return refuse("invalid", "TOTP refusé : collez l'adresse otpauth://totp/… donnée par le site (souvent sous le QR code), ou sa clé secrète en base32 (au moins 16 caractères). Ni HOTP, ni code Steam.");
+      }
+      changedFields.set(a.target.id, [...new Set([...fieldsOf(a.target.id), "totp"])]);
+    },
+    totp_clear: (a) => {
+      changedFields.set(a.target.id, fieldsOf(a.target.id).filter((f) => f !== "totp"));
+    },
+    totp_create: (a) => {
+      const e = { locker: a.totp.locker || L, id: id(entries.length + 30), kind: "totp", title: a.totp.title, username: a.totp.username || null, hosts: [], tags: a.totp.tags || [], favorite: false, trash: false };
+      entries.push(e);
+      return { locker: e.locker, id: e.id };
     },
     connection_card: (a) => {
       const e = entries.find((x) => x.id === a.target.id);

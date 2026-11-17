@@ -1014,3 +1014,59 @@ fn folders_from_the_command_line() {
     let refused = fails(&hirzla(&sock, &["mv", "Inconnu", "/"], None));
     assert!(refused.contains("introuvable"), "{refused}");
 }
+
+#[test]
+fn totp_codes_from_the_command_line() {
+    // RFC 6238 appendix B, SHA-1 seed in base32.
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+    ok(&hirzla(&sock, &["set", "Banque e2e"], Some(SECRET)));
+
+    // No TOTP yet.
+    let err = fails(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    assert!(err.contains("sans TOTP"), "{err}");
+    // Not a TOTP: refused, with what is expected.
+    let err = fails(&hirzla(
+        &sock,
+        &["totp", "Banque e2e", "--definir"],
+        Some("https://banque.exemple.test\n"),
+    ));
+    assert!(err.contains("otpauth"), "{err}");
+    let uri = format!("otpauth://totp/Banque:max?secret={SEED}&digits=8&issuer=Banque\n");
+    let out = ok(&hirzla(
+        &sock,
+        &["totp", "Banque e2e", "--definir"],
+        Some(&uri),
+    ));
+    assert!(out.contains("TOTP enregistré"), "{out}");
+    // Standard output is not a terminal: the code is written there, alone.
+    let code = ok(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    let code = code.trim_end();
+    assert_eq!(code.len(), 8, "{code}");
+    assert!(code.bytes().all(|b| b.is_ascii_digit()));
+    let next = ok(&hirzla(&sock, &["totp", "Banque e2e", "--suivant"], None));
+    assert_eq!(next.trim_end().len(), 8);
+
+    // A TOTP secret of its own, from a base32 secret.
+    let out = ok(&hirzla(
+        &sock,
+        &["totp", "Forge e2e", "--creer", "--identifiant", "max"],
+        Some(&format!("{SEED}\n")),
+    ));
+    assert!(out.contains("Code TOTP rangé"), "{out}");
+    let listing = ok(&hirzla(&sock, &["ls"], None));
+    assert!(listing.contains("code TOTP"), "{listing}");
+    let code = ok(&hirzla(&sock, &["totp", "Forge e2e", "--stdout"], None));
+    assert_eq!(code.trim_end().len(), 6);
+
+    // Removed: no more code; the password stays.
+    ok(&hirzla(&sock, &["totp", "Banque e2e", "--retirer"], None));
+    fails(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    let pw = ok(&hirzla(&sock, &["get", "Banque e2e"], None));
+    assert_eq!(pw.trim_end(), SECRET);
+}

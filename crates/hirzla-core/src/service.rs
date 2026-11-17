@@ -69,6 +69,8 @@ pub struct Core {
     server_clock: Option<fn() -> u64>,
     /// The call for the desktop application's window (ADR 0071).
     app_window: AppWindow,
+    /// Clock of the TOTP codes, replaced by tests that need a fixed time (ADR 0078).
+    pub(crate) totp_clock: Option<fn() -> Option<u64>>,
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -202,6 +204,7 @@ impl Core {
             last_tick: None,
             server_clock: None,
             app_window: AppWindow::default(),
+            totp_clock: None,
         }
     }
 
