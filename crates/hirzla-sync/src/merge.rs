@@ -1,6 +1,7 @@
 //! Checks of a new version against its parents (§ 8.1, `format.md` § 7.3) and the merged
 //! data state (§ 8.2). The merge rules themselves are those of `hirzla-vault`.
 
+use hirzla_vault::folder::folders_written_by;
 use hirzla_vault::model::{OpId, OpRef, Stamp};
 use hirzla_vault::secret::{self, LockerBody, OrSet, SecretBody, SecretState};
 
@@ -136,11 +137,13 @@ pub(crate) fn check_meta(
         member: opref.member,
         device: opref.device,
     };
-    match merged {
+    let fields = match merged {
         None => body.fields.values().all(|e| e.stamp == own),
         Some(m) => body
             .fields
             .iter()
             .all(|(k, e)| e.stamp == own || m.fields.get(k) == Some(e)),
-    }
+    };
+    // Folders (ADR 0076): none dropped, none attributed to another write.
+    fields && folders_written_by(&body.folders, merged.map(|m| &m.folders), own)
 }
