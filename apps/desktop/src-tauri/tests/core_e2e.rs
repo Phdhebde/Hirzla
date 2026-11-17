@@ -358,6 +358,47 @@ fn the_self_mode_commands_drive_a_real_core() {
         locker: bank["locker"].as_str().unwrap().to_owned(),
         id: bank["id"].as_str().unwrap().to_owned(),
     };
+
+    // Encrypted export of the locker (ADR 0077): a drawn passphrase, then the import of the
+    // file into a new locker of the same vault.
+    let file = dir.path().join("perso.hirzla-export");
+    let exported = state
+        .export_locker_to(&target.locker, &file, Some(z("court")))
+        .unwrap_err();
+    assert_eq!(exported.code(), "export_password_weak");
+    let exported =
+        serde_json::to_value(state.export_locker_to(&target.locker, &file, None).unwrap()).unwrap();
+    assert_eq!(exported["secrets"], 5);
+    let phrase = exported["password"].as_str().unwrap().to_owned();
+    assert_eq!(phrase.split('-').count(), 8);
+    assert_eq!(
+        state
+            .export_locker_to(&target.locker, &file, None)
+            .unwrap_err()
+            .code(),
+        "export_file_exists"
+    );
+    // Kept for the copy button; no clipboard on a build machine without a display.
+    assert!(state
+        .copy_export_password()
+        .map_or_else(|e| e.code() == "clipboard", |_| true));
+    let refused = state
+        .import_locker_from(&file, z("une autre phrase assez longue"), None)
+        .unwrap_err();
+    assert_eq!(refused.code(), "export_key_rejected");
+    let imported = serde_json::to_value(
+        state
+            .import_locker_from(&file, z(&phrase), Some(z("Copie")))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(imported["secrets"], 5);
+    let lockers = serde_json::to_value(state.list(None, false).unwrap()).unwrap();
+    assert!(lockers["lockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["name"] == "Copie"));
     let field = |name: &str| serde_json::from_value(serde_json::json!(name)).unwrap();
 
     // History: a new password, then back to the imported version.
@@ -487,6 +528,7 @@ fn the_self_mode_commands_drive_a_real_core() {
     ] {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
+    assert!(!log.contains(&phrase), "the core log holds the passphrase");
 }
 
 /// The server mode commands (local API version 4) against a real core, without a server:

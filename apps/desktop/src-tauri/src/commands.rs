@@ -35,6 +35,10 @@ pub struct AppState {
     pub(crate) generated_batch: Mutex<Vec<Zeroizing<String>>>,
     /// KeePass database chosen with the file picker, waiting for its password.
     pub(crate) pending_kdbx: Mutex<Option<PathBuf>>,
+    /// Locker export file chosen with the file picker, waiting for its password (ADR 0077).
+    pub(crate) pending_export: Mutex<Option<PathBuf>>,
+    /// Passphrase drawn by the core for the last export, for the copy button.
+    pub(crate) export_password: Mutex<Option<Zeroizing<String>>>,
     /// SSH private key file chosen with the file picker, waiting for its title.
     pub(crate) pending_ssh_key: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
@@ -63,6 +67,8 @@ impl AppState {
             generated: Mutex::new(None),
             generated_batch: Mutex::new(Vec::new()),
             pending_kdbx: Mutex::new(None),
+            pending_export: Mutex::new(None),
+            export_password: Mutex::new(None),
             pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
@@ -92,6 +98,7 @@ impl AppState {
         self.clipboard.clear_now();
         *guard(&self.pending_auto_type) = None;
         *guard(&self.generated) = None;
+        *guard(&self.export_password) = None;
         guard(&self.generated_batch).clear();
     }
 
