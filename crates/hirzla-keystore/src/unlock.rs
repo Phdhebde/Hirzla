@@ -312,6 +312,6 @@ mod tests {
             credential_id: vec![1, 2, 3],
             salt: [9; 32],
         };
-        assert_eq!(format!("{k:?}"), "KeyRef(fido2)");
+        assert_eq!(format!("{k:?}"), "KeyRef(fido)");
     }
 }
