@@ -1,4 +1,7 @@
 /target
+# Any Cargo target directory, wherever a build put it (target/, target-*/).
+target/
+target-*/
 **/node_modules
 **/dist
 *.hirzla
