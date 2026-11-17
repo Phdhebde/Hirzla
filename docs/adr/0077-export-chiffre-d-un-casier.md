@@ -158,7 +158,8 @@ Un fichier scellé par l'enveloppe hybride (ECDH P-384 + ML-KEM-1024, `crypto.md
 
 ### 8. Interface et ligne de commande
 
-- **Application** : menu du casier « Exporter (chiffré)… » et « Importer un export… ».
+- **Application** : dans les réglages, une carte « Export chiffré d'un casier » et un bouton
+  « Importer un export de casier… ».
   L'export choisit le fichier par le sélecteur du système (processus Rust), propose la phrase
   tirée par défaut (ou un mot de passe choisi, saisi deux fois), puis **affiche le mot de passe
   une seule fois** avec un bouton de copie et trois avertissements : transmettre le mot de
@@ -171,15 +172,15 @@ Un fichier scellé par l'enveloppe hybride (ECDH P-384 + ML-KEM-1024, `crypto.md
 
 ### 9. API locale version 9
 
-Opérations **140** `LockerExport` et **141** `LockerImport`, erreurs **140 à 144**, plage
+Opérations **140** `LockerExport` et **141** `LockerImport`, erreurs **140 à 145**, plage
 **140–149** réservée à cet ADR (`api-locale.md` § 19). Profil complet seulement. D'autres
 branches en cours (déverrouillage matériel, dossiers) peuvent aussi prendre la version 9 :
 les numéros seront renumérotés à la fusion, la spécification d'abord.
 
 Le noyau lit et écrit **lui-même** le fichier, au chemin absolu donné par le client : un fichier
 de plusieurs centaines de Mio ne tient pas dans une trame de 8 Mio. Écriture en `0600`, sans
-remplacer un fichier existant (`ExportFileExists`), dans un fichier temporaire du même
-répertoire renommé à la fin. Le noyau n'écrit que ce que l'utilisateur peut écrire lui-même.
+remplacer un fichier existant (`ExportFileExists`) : création exclusive, puis effacement du
+fichier si l'écriture échoue. Le noyau n'écrit que ce que l'utilisateur peut écrire lui-même.
 
 ### 10. Limites
 

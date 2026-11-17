@@ -60,6 +60,17 @@ hirzla settings --veille oui --session oui
 hirzla import-kdbx ancienne-base.kdbx
 ```
 
+## Export chiffré d'un casier
+
+```sh
+hirzla casier exporter CASIER FICHIER            # phrase de passe tirée, sur la sortie d'erreur
+hirzla casier exporter CASIER FICHIER --mot-de-passe
+hirzla casier importer FICHIER [--nom NOM]       # crée un nouveau casier
+```
+
+CASIER est un casier du coffre (nom ou début de l'identifiant). Voir
+[Remettre un casier à un collègue](exporter-un-casier.md).
+
 ## Kit de recouvrement
 
 ```sh

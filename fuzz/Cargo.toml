@@ -140,3 +140,10 @@ path = "fuzz_targets/decode_hornn_grant.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "decode_locker_export"
+path = "fuzz_targets/decode_locker_export.rs"
+test = false
+doc = false
+bench = false

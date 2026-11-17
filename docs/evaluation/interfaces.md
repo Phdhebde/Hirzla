@@ -49,6 +49,7 @@ authentification (constat R1 de la revue interne).
 | Part de recouvrement `.hirzla-part` | Part forgée ou volée | `format.md` § 4.4, ADR 0034 | `hirzla_vault::RecoveryShare::decode`, `hirzla_crypto::shamir` | `decode_recovery_share` |
 | Paquet de mise à jour `.hirzla-maj` | Paquet piégé, ancien, d'un autre éditeur | `livraison.md` § 8, ADR 0043 | `hirzla_core::release::{read_signed, update::verify_package}` | `decode_release` |
 | Manifeste des clients | Manifeste remplacé | `livraison.md` § 7, ADR 0042 | `hirzla_core::release::verify_client_manifest` | `decode_release` |
+| Export de casier `.hirzla-export` | Fichier piégé ou altéré remis par un collègue, mot de passe connu ou non | `format.md` § 16, ADR 0077 | `hirzla_vault::export::open` (en-tête et paramètres Argon2id bornés avant toute dérivation, manifeste et morceaux authentifiés, contenu vérifié avant la première écriture) | `decode_locker_export` |
 | Base KeePass KDBX 4 | Base piégée donnée à importer | ADR 0025 | `hirzla_vault::kdbx::read`, `hirzla_crypto::kdbx` | `read_kdbx`, `read_kdbx_payload` |
 | CSV d'import | Fichier piégé | ADR 0025 | `apps/desktop/src-tauri/src/csv.rs` | `parse_csv` |
 | Journal d'audit | Journal falsifié remis à l'auditeur | `evenements.md`, ADR 0021 | `hirzla_audit::verify::{parse_file, verify_records}` | `decode_audit_log` |
@@ -83,7 +84,7 @@ tournent 60 secondes chacune dans le travail informatif `fuzz` de la CI.
 | `decode_locker_body` | Métadonnées de casier | Coffre, opérations |
 | `read_kdbx` | Lecteur KDBX complet (enveloppe, KDF, HMAC) | Base KeePass |
 | `read_kdbx_payload` | Étapes après déchiffrement (gzip, XML) | Base KeePass |
-| `decode_local_request` | Trames et requêtes des cinq profils de l'API locale | Tout processus du compte |
+| `decode_local_request` | Trames et requêtes des profils de l'API locale, export de casier compris (version 9) | Tout processus du compte |
 | `decode_sync_message` | Trames et corps de tous les messages du protocole et de l'administration ; en-tête et contenu d'un paquet du courrier des accords (ADR 0070) | Serveur, postes, réseau |
 | `decode_operation` | `Operation` (réencodage identique exigé), `SealedPayload`, `ControlBody`, `SyncState`, `OpItem`, `Stub`, `Vector`, `PrunedPast`, `PeerHello`, révocations, enveloppes d'époque, accords | Serveur, autres postes |
 | `decode_server_annex` | Contenu descellé de l'annexe (registre réingéré, opérations revalidées) | Fichier sur le disque |
@@ -92,6 +93,7 @@ tournent 60 secondes chacune dans le travail informatif `fuzz` de la CI.
 | `decode_recovery_share` | Fichier de part, colis de recouvrement | Support d'un dépositaire |
 | `decode_keylog` | Entrées, têtes, preuves du registre ; profils de membre (ADR 0069) ; preuves de bifurcation et alertes | Serveur |
 | `decode_hornn_grant` | Autorisations Hornn, inscription d'un membre machine | Hornn, administrateur |
+| `decode_locker_export` | En-tête et paramètres Argon2id d'un export de casier, manifeste lu comme s'il était descellé, contrôles de chaque secret avant écriture | Fichier d'export reçu |
 | `parse_csv` | Lecteur CSV de l'import (bornes vérifiées) | Fichier importé |
 | `parse_native_json` | Lecteur JSON de l'hôte natif | Extension, page web |
 

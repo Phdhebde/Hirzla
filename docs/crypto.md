@@ -134,6 +134,7 @@ info = len(nom) ‖ nom ‖ len(p1) ‖ p1 ‖ len(p2) ‖ p2 ‖ …
 | --- | --- | --- | --- |
 | Déverrouillage | `hirzla/v1/unlock` | rang de la méthode (1 octet), type de méthode (1 octet) | `0010` ‖ nom ‖ `0001` ‖ rang ‖ `0001` ‖ type |
 | Clé d'emballage locale | `hirzla/v1/device-wrap` | aucun | `0015` ‖ nom |
+| Clé d'export de casier | `hirzla/v1/locker-export-key` | aucun ; sel = `export_id` (ADR 0077) | `001b` ‖ nom |
 
 Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en publie pas pour
 HKDF seul), test croisé avec RustCrypto `hkdf`, vecteurs figés des étiquettes
