@@ -26,6 +26,10 @@
  * @typedef {{ kit: string, threshold: number, count: number, folder: string, files: string[] }} CreatedKit
  * @typedef {{ imported: number, empty: number, recycled: number, attachments: number, history: number,
  *   custom_skipped: number, totp: number, refused: number }} KdbxReport
+ * @typedef {{ password: string | null, file: string, secrets: number, trashed: number, attachments: number,
+ *   links_dropped: number }} LockerExported
+ * @typedef {{ locker: string, secrets: number, attachments: number, folders_as_tags: number,
+ *   refused: number }} LockerImported
  * @typedef {"owner" | "manager" | "editor" | "reader" | "blind_user" | "auditor"} RoleName
  * @typedef {"role" | "quorum" | "last_owner" | "access_lost"} Refusal
  * @typedef {{ id: string, name: string | null, role: RoleName | null, unsent: number, pending: number,
@@ -258,6 +262,19 @@ export const api = {
   clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
+
+  // Encrypted export of a locker (local API version 10, ADR 0077).
+  /**
+   * @param {string} locker @param {string} name  Suggests the file name.
+   * @param {string | null} password  Null: the core draws a passphrase. @returns {Promise<LockerExported>}
+   */
+  exportLocker: (locker, name, password) => call("export_locker", { locker, name, password }),
+  /** @returns {Promise<number>} */
+  copyExportPassword: () => call("copy_export_password"),
+  /** @returns {Promise<string>} */
+  chooseExportFile: () => call("choose_export_file"),
+  /** @param {string} password @param {string | null} name @returns {Promise<LockerImported>} */
+  importLocker: (password, name) => call("import_locker", { password, name }),
 
   // Server mode (local API version 4).
   /** @returns {Promise<ServerStatus>} */

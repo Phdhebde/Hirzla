@@ -39,7 +39,7 @@ hostiles, et tout trafic chiffré aujourd'hui sera enregistré pour être déchi
 | Propriétaire malveillant ou compromis | Retirer les autres, détourner un casier | Seul un propriétaire plus ancien agit seul ; retirer un plus ancien exige un quorum (2 par défaut) (F2) |
 | Mise à jour piégée ou ancienne | Installer un binaire modifié, revenir à une version vulnérable | Paquet signé en hybride par la clé d'éditeur, signature vérifiée avant décodage, noms fermés, empreintes à temps constant, version strictement supérieure, mise en place atomique (F7, ADR 0043) |
 | Attaque sur la chaîne d'approvisionnement | Binaire ou dépendance piégés | Dépendances figées (`Cargo.lock`), `cargo deny` (licences, avis, sources), aucune dépendance git, signatures des installeurs ; compilation reproductible et SBOM **à faire** |
-| Auteur d'un fichier piégé : KDBX, CSV, coffre, annexe, part, paquet, journal | Planter ou épuiser le noyau, injecter des données | Décodeurs stricts et bornés avant tout calcul coûteux, HMAC KDBX vérifiés avant déchiffrement, SQLite en mode défensif, seize cibles de fuzzing (F11) |
+| Auteur d'un fichier piégé : KDBX, CSV, export de casier, coffre, annexe, part, paquet, journal | Planter ou épuiser le noyau, injecter des données | Décodeurs stricts et bornés avant tout calcul coûteux, HMAC KDBX vérifiés avant déchiffrement, SQLite en mode défensif, dix-sept cibles de fuzzing (F11) |
 | Voleur d'une ou plusieurs parts | Ouvrir un coffre ou desceller le serveur | Seuil `t` ; moins de `t` parts ne révèlent rien (Shamir) ; parts signées, vérifiées contre la clé épinglée dans l'en-tête ou le sceau ; parts forgées refusées ; recouvrement freiné comme un déverrouillage et suivi d'un nouveau mot de passe ; refaire le kit invalide les anciennes parts (F3, F14, F16) |
 | Rupture d'un algorithme | Casser ML-KEM, ML-DSA ou les courbes | L'hybride tient tant que l'un tient, agilité par identifiant de suite (F12) |
 
@@ -82,6 +82,7 @@ hostiles, et tout trafic chiffré aujourd'hui sera enregistré pour être déchi
 | Un logiciel du compte pilote un vrai client signé | Aucune parade sans confirmation de présence (FIDO2, non branchée) | Verrouillage automatique ; profil navigateur restreint |
 | Certificat d'éditeur révoqué encore accepté | Aucune vérification en ligne (règle 7) | Mise à jour suivante qui change d'éditeur ou de clé |
 | TLS en ML-KEM-768 au lieu de ML-KEM-1024 | Groupe P-384 hybride absent des bibliothèques publiées (ADR 0028) | Contenu chiffré de bout en bout en ML-KEM-1024 hybride ; le canal ne protège que les métadonnées |
+| Export de casier (ADR 0077) : qui détient le fichier et son mot de passe lit tout le casier, sans limite de temps | Besoin exprimé de remettre un casier sans mode Serveur ; une copie remise ne se reprend pas | Mot de passe tiré de 88 bits par défaut ou 16 caractères au moins, Argon2id à 256 Mio, consignes de transmission par un autre canal ; casiers partagés du serveur refusés en 1.1 ; corbeille, historique et clés jamais exportés |
 | `hirzlad` : un fil par connexion sans plafond | Constat de la revue interne, à corriger | Délai de poignée de main de 10 s, inactivité de 15 min, quotas par casier |
 
 ## Exceptions déclarées

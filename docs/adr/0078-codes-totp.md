@@ -73,9 +73,9 @@ Le détail est dans `api-locale.md` § 22. Points de décision :
 - Profil complet seulement ; le profil navigateur reçoit `Unauthorized` (voir § 6).
 - Aucun code d'erreur nouveau : les codes généraux suffisent (`InvalidInput`, `NotFound`,
   `Locked`, `Internal`…). La plage 170 à 179 est réservée pour les suites.
-- Numéros pris en tenant compte des branches en cours : version 10 et codes 140 à 149
-  (export), version 11 (dossiers), version 12 (déverrouillage matériel). Si l'ordre de fusion
-  change, le mainteneur renumérote à la fusion.
+- Numéros pris après l'export de casier (version 10, codes 140 à 149, fusionné) et les
+  branches en cours : version 11 (dossiers), version 12 (déverrouillage matériel). Si l'ordre
+  de fusion change, le mainteneur renumérote à la fusion.
 
 ### 3. Saisie d'un TOTP
 

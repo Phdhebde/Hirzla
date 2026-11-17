@@ -2,6 +2,7 @@
 //! the user; none carries a secret, a path or a cryptographic cause.
 
 use hirzla_core::client::ClientError;
+use hirzla_core::locker_export::proto::ExportCode;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
 use hirzla_core::selfmode::proto::SelfCode;
 use hirzla_core::server_mode::proto::ServerCode;
@@ -47,6 +48,9 @@ pub enum DesktopError {
     /// The core refused a server mode request (`docs/api-locale.md` § 15.5).
     #[error("the core refused the server mode request: {}", .0.name())]
     Server(ServerCode),
+    /// The core refused an export request (`docs/api-locale.md` § 19.4).
+    #[error("the core refused the export request: {}", .0.name())]
+    Export(ExportCode),
 }
 
 impl DesktopError {
@@ -68,6 +72,7 @@ impl DesktopError {
             // "access_lost" for the refusal of a locker: the interface shows it apart.
             DesktopError::Server(ServerCode::ServerRefused(4)) => "access_lost",
             DesktopError::Server(c) => c.name(),
+            DesktopError::Export(c) => c.name(),
         }
     }
 
@@ -94,6 +99,7 @@ impl DesktopError {
             DesktopError::Import(what) => (*what).to_owned(),
             DesktopError::Cancelled => "Opération annulée.".into(),
             DesktopError::Server(c) => server_message(*c),
+            DesktopError::Export(c) => crate::locker_export::message(*c),
         }
     }
 

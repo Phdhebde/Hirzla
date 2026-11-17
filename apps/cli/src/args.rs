@@ -106,6 +106,14 @@ Mode Serveur :
                           Donne un rôle à un membre (ou change son rôle).
   casier retirer CASIER MEMBRE
                           Retire un membre du casier.
+  casier exporter CASIER FICHIER [--mot-de-passe]
+                          Écrit une copie chiffrée d'un casier du coffre (sans serveur).
+                          Sans --mot-de-passe, une phrase de passe est tirée et affichée
+                          une fois : transmettez-la par un autre canal que le fichier.
+                          --mot-de-passe : choisir le mot de passe (16 caractères au moins).
+  casier importer FICHIER [--nom NOM]
+                          Importe un export dans un nouveau casier du coffre (mot de passe
+                          demandé). --nom : nom du nouveau casier.
   accord preparer CASIER retrait MEMBRE | role MEMBRE ROLE | quorum N
                           Prépare une action qui demande l'accord d'autres propriétaires
                           et écrit la demande (hirzla-demande:…) à leur transmettre.
@@ -150,8 +158,8 @@ Champs : titre, identifiant, mot-de-passe, notes.
 CLÉ, REBOND : titre d'une clé SSH, d'une connexion SSH du coffre. --effacer accepte port,
 identifiant, domaine, mot-de-passe, cle, rebond, empreinte, notes.
 Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
-CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
-moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
+CASIER : nom d'un casier partagé (d'un casier du coffre pour « casier exporter ») ou
+début de son identifiant (4 chiffres hexadécimaux au moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
 DEMANDE, ACCORD, LIEN : le texte lui-même, ou @FICHIER. ID : début de l'identifiant de la
 demande (4 chiffres hexadécimaux au moins). OP : début de l'identifiant d'une opération
 (8 chiffres hexadécimaux au moins). APPAREIL : identifiant de l'appareil (32 chiffres
@@ -270,6 +278,18 @@ pub enum LockerCommand {
     Remove {
         locker: String,
         member: String,
+    },
+    /// Encrypted export of a locker of the vault (ADR 0077).
+    Export {
+        locker: String,
+        file: PathBuf,
+        /// The user chooses the password instead of a drawn passphrase.
+        choose_password: bool,
+    },
+    /// Import of an export into a new locker (ADR 0077).
+    Import {
+        file: PathBuf,
+        name: Option<String>,
     },
 }
 
@@ -718,6 +738,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--separateur",
         "--chiffres",
         "--modele",
+        "--nom",
         "--fichier-cle",
     ];
     while let Some(arg) = it.next() {
@@ -780,7 +801,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--tag",
         ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
-        "casier" => &["--empreinte"],
+        "casier" => &["--empreinte", "--mot-de-passe", "--nom"],
         "appareil" => &["--oui"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
@@ -1289,10 +1310,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     .cloned()
                     .ok_or_else(|| format!("« casier {sub} » attend {what}."))
             };
-            if sub != "ajouter" && has("--empreinte") {
-                return Err(format!(
-                    "option inconnue pour « casier {sub} » : --empreinte"
-                ));
+            for (option, owner) in [
+                ("--empreinte", "ajouter"),
+                ("--mot-de-passe", "exporter"),
+                ("--nom", "importer"),
+            ] {
+                if sub != owner && has(option) {
+                    return Err(format!("option inconnue pour « casier {sub} » : {option}"));
+                }
             }
             let sub_command = match sub {
                 "creer" => {
@@ -1321,6 +1346,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     LockerCommand::Remove {
                         locker: arg(1, "le CASIER et le MEMBRE")?,
                         member: arg(2, "le CASIER et le MEMBRE")?,
+                    }
+                }
+                "exporter" => {
+                    max_positional(3)?;
+                    LockerCommand::Export {
+                        locker: arg(1, "le CASIER et le FICHIER")?,
+                        file: PathBuf::from(arg(2, "le CASIER et le FICHIER")?),
+                        choose_password: has("--mot-de-passe"),
+                    }
+                }
+                "importer" => {
+                    max_positional(2)?;
+                    LockerCommand::Import {
+                        file: PathBuf::from(arg(1, "le FICHIER")?),
+                        name: one("--nom")?,
                     }
                 }
                 _ => return Err(format!("sous-commande de « casier » inconnue.\n\n{USAGE}")),
@@ -1663,6 +1703,40 @@ mod tests {
                 fingerprint: Some("E".into()),
             })
         );
+        assert_eq!(
+            p(&["casier", "exporter", "Perso", "/tmp/x.hirzla-export"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Export {
+                locker: "Perso".into(),
+                file: PathBuf::from("/tmp/x.hirzla-export"),
+                choose_password: false,
+            })
+        );
+        assert_eq!(
+            p(&["casier", "exporter", "Perso", "x", "--mot-de-passe"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Export {
+                locker: "Perso".into(),
+                file: PathBuf::from("x"),
+                choose_password: true,
+            })
+        );
+        assert_eq!(
+            p(&["casier", "importer", "x", "--nom", "Reçu"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Import {
+                file: PathBuf::from("x"),
+                name: Some("Reçu".into()),
+            })
+        );
+        assert!(p(&["casier", "exporter", "Perso"]).is_err());
+        assert!(p(&["casier", "importer"]).is_err());
+        assert!(p(&["casier", "importer", "x", "--mot-de-passe"]).is_err());
+        assert!(p(&["casier", "exporter", "P", "x", "--nom", "N"]).is_err());
+        assert!(p(&["casier", "creer", "P", "--nom", "N"]).is_err());
         assert!(matches!(
             p(&["set", "x", "--casier", "Ops"]).unwrap().command,
             Command::Set {

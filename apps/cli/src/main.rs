@@ -9,6 +9,7 @@
 mod args;
 mod clipboard;
 mod connections;
+mod locker_export;
 mod selfmode;
 mod server;
 mod term;
@@ -569,6 +570,9 @@ fn run(args: &Args) -> Result<(), String> {
         }
         command @ Command::Set { .. } => set(&session, command),
         Command::Server(command) => server::run_server(&session, command),
+        Command::Locker(
+            command @ (args::LockerCommand::Export { .. } | args::LockerCommand::Import { .. }),
+        ) => locker_export::run(&session, command),
         Command::Locker(command) => server::run_locker(&session, command),
         Command::Quorum(command) => server::run_quorum(&session, command),
         Command::Quarantine(command) => server::run_quarantine(&session, command),
