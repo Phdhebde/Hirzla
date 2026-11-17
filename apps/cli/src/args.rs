@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use hirzla_core::generator::{rules, Profile, Spec};
 use hirzla_core::proto::classes;
 
+use crate::methods::{kind_from_name, MethodsCommand};
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -15,6 +16,8 @@ Usage : hirzla [OPTIONS GLOBALES] COMMANDE [ARGUMENTS]
 Commandes :
   init                    Crée le coffre. Le mot de passe maître est demandé deux fois.
   unlock                  Ouvre le coffre (démarre le noyau si besoin).
+                          --materiel [RANG] : avec Windows Hello, Touch ID ou une clé de
+                          sécurité FIDO2 (la première méthode utilisable, ou celle du RANG).
   lock                    Verrouille le coffre.
   ls [RECHERCHE]          Liste les secrets. --corbeille : inclut la corbeille.
   get NOM                 Copie un secret dans le presse-papiers (effacement différé),
@@ -62,6 +65,12 @@ Commandes :
                           Range une clé SSH privée existante (format OpenSSH).
                           --publique FICHIER, --identifiant U, --phrase (demandée),
                           --casier CASIER, --tag T.
+  methods                 Méthodes de déverrouillage du coffre et celles qu'on peut ajouter
+                          sur ce poste. Le mot de passe maître reste toujours valable.
+  methods add hello|touchid|fido2
+                          Ajoute Windows Hello, Touch ID ou une clé de sécurité FIDO2
+                          (coffre ouvert ; le mot de passe maître est redemandé).
+  methods remove RANG     Retire la méthode matérielle du RANG (la dernière seulement).
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
                           Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
@@ -335,6 +344,11 @@ pub enum Command {
         kdf: Option<(u32, u32, u32)>,
     },
     Unlock,
+    /// `unlock --materiel [RANG]` (ADR 0075).
+    UnlockHardware {
+        rank: Option<u8>,
+    },
+    Methods(MethodsCommand),
     Lock,
     Ls {
         query: Option<String>,
@@ -711,6 +725,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
     let allowed: &[&str] = match command.as_str() {
         "init" => &["--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "ls" => &["--corbeille"],
+        "unlock" => &["--materiel"],
         "get" => &["--champ", "--id", "--stdout"],
         "set" => &[
             "--identifiant",
@@ -807,9 +822,31 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             };
             Command::Init { kdf }
         }
+        "unlock" if has("--materiel") => {
+            max_positional(1)?;
+            Command::UnlockHardware {
+                rank: positional
+                    .first()
+                    .map(|r| number::<u8>(r, "RANG"))
+                    .transpose()?,
+            }
+        }
         "unlock" => {
             max_positional(0)?;
             Command::Unlock
+        }
+        "methods" => {
+            let usage = "« methods » attend rien, add hello|touchid|fido2 ou remove RANG.";
+            Command::Methods(match positional.as_slice() {
+                [] => MethodsCommand::List,
+                [a, k] if a == "add" => MethodsCommand::Add {
+                    kind: kind_from_name(k).ok_or_else(|| usage.to_owned())?,
+                },
+                [a, r] if a == "remove" => MethodsCommand::Remove {
+                    rank: number(r, "RANG")?,
+                },
+                _ => return Err(usage.to_owned()),
+            })
         }
         "lock" => {
             max_positional(0)?;
@@ -1453,6 +1490,35 @@ mod tests {
     #[test]
     fn parses_commands() {
         assert_eq!(p(&["unlock"]).unwrap().command, Command::Unlock);
+        assert_eq!(
+            p(&["unlock", "--materiel"]).unwrap().command,
+            Command::UnlockHardware { rank: None }
+        );
+        assert_eq!(
+            p(&["unlock", "--materiel", "2"]).unwrap().command,
+            Command::UnlockHardware { rank: Some(2) }
+        );
+        assert!(p(&["unlock", "2"]).is_err());
+        assert!(p(&["unlock", "--materiel", "x"]).is_err());
+        assert_eq!(
+            p(&["methods"]).unwrap().command,
+            Command::Methods(MethodsCommand::List)
+        );
+        assert_eq!(
+            p(&["methods", "add", "fido2"]).unwrap().command,
+            Command::Methods(MethodsCommand::Add { kind: 4 })
+        );
+        assert_eq!(
+            p(&["methods", "add", "hello"]).unwrap().command,
+            Command::Methods(MethodsCommand::Add { kind: 5 })
+        );
+        assert_eq!(
+            p(&["methods", "remove", "3"]).unwrap().command,
+            Command::Methods(MethodsCommand::Remove { rank: 3 })
+        );
+        assert!(p(&["methods", "add", "tpm"]).is_err());
+        assert!(p(&["methods", "remove"]).is_err());
+        assert!(p(&["methods", "add", "fido2", "--materiel"]).is_err());
         let a = p(&["--socket", "/s", "get", "GitHub", "--champ", "identifiant"]).unwrap();
         assert_eq!(a.socket, Some(OsString::from("/s")));
         assert_eq!(
