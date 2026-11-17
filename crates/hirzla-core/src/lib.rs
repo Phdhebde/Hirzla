@@ -15,6 +15,7 @@
 //! - [`selfmode`]: the Self-mode operations (version 5): settings, history, recovery, import;
 //! - [`connections`]: SSH and RDP connections (version 6, ADR 0067);
 //! - [`locker_export`]: encrypted export and import of a locker (version 9, ADR 0077);
+//! - [`totp`]: TOTP codes (version 13, ADR 0078);
 //! - [`codesign`]: the signature of the core's clients (ADR 0042);
 //! - [`release`]: documents signed by the publisher key, client manifest and offline update
 //!   package (ADR 0042, 0043).
@@ -36,4 +37,5 @@ pub mod release;
 pub mod selfmode;
 pub mod server_mode;
 pub mod service;
+pub mod totp;
 pub mod transport;

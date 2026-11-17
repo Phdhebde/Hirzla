@@ -15,6 +15,7 @@ pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod test_support;
+pub mod totp;
 mod vault;
 
 pub use error::{ExportRefusal, VaultError};

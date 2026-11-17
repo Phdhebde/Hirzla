@@ -846,6 +846,7 @@
         <label class="case"><input type="radio" name="secret-type" value="ssh"> Connexion SSH</label>
         <label class="case"><input type="radio" name="secret-type" value="rdp"> Connexion RDP</label>
         <label class="case"><input type="radio" name="secret-type" value="ssh_key"> Clé SSH</label>
+        <label class="case"><input type="radio" name="secret-type" value="totp"> Code TOTP</label>
       </fieldset>
       <label class="champ">
         <span class="champ-libelle">Titre</span>
@@ -879,7 +880,7 @@
         <span class="champ-libelle">Phrase de passe de la clé (si elle en a une)</span>
         <input id="secret-phrase" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
-      <label class="champ" data-pour="password ssh rdp ssh_key">
+      <label class="champ" data-pour="password ssh rdp ssh_key totp">
         <span class="champ-libelle">Identifiant</span>
         <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
@@ -896,6 +897,13 @@
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
         <label id="secret-mdp-effacer-case" class="case" hidden><input type="checkbox" id="secret-mdp-effacer"> Effacer le mot de passe actuel</label>
+      </div>
+      <div class="champ" data-pour="password totp">
+        <label class="champ-libelle" for="secret-totp" id="secret-totp-libelle">Double authentification (TOTP)</label>
+        <input id="secret-totp" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false" aria-describedby="secret-totp-explication">
+        <p id="secret-totp-explication" class="aide">Collez l'adresse « otpauth://totp/… » donnée par le site (souvent sous le QR code, « saisie manuelle »), ou sa clé secrète en base32. Hirzla calcule ensuite le code ; la clé reste scellée.</p>
+        <p id="secret-totp-aide" class="aide" hidden>Laissez vide pour garder le TOTP actuel.</p>
+        <label id="secret-totp-effacer-case" class="case" hidden><input type="checkbox" id="secret-totp-effacer"> Retirer le TOTP actuel</label>
       </div>
       <label class="champ" data-pour="ssh">
         <span class="champ-libelle">Clé SSH du coffre</span>
@@ -918,13 +926,13 @@
         <span class="champ-libelle">Étiquettes (séparées par des virgules)</span>
         <input id="secret-etiquettes" class="saisie" type="text" maxlength="2048" autocomplete="off">
       </label>
-      <label class="champ" data-pour="password note ssh rdp">
+      <label class="champ" data-pour="password note ssh rdp totp">
         <span class="champ-libelle">Notes</span>
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
       <label id="secret-notes-effacer-case" class="case" hidden><input type="checkbox" id="secret-notes-effacer"> Effacer les notes actuelles</label>
-      <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
+      <label class="case" data-pour="password note ssh rdp totp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>

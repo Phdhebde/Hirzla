@@ -18,6 +18,7 @@ use hirzla_core::locker_export::proto::{ExportCode, ExportReply, ExportRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
+use hirzla_core::totp::proto::{TotpReply, TotpRequest};
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningReport;
 
@@ -295,6 +296,40 @@ impl CoreLink {
                 }
                 Err(ClientError::Io(_))
                     if !retried && matches!(request, ConnectionRequest::Read { .. }) =>
+                {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one TOTP request (`docs/api-locale.md` § 22, version 13), with the same
+    /// reconnection rule as [`CoreLink::call`]: only a code, which changes nothing, is asked
+    /// again.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::totp::refusal`].
+    pub fn call_totp(&mut self, request: &TotpRequest) -> Result<TotpReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_totp(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::totp::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, TotpRequest::Code { .. }) =>
                 {
                     retried = true;
                 }
