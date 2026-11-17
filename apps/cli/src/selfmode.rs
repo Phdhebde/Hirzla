@@ -31,7 +31,7 @@ fn self_message(code: SelfCode, retry_after_s: Option<u64>) -> String {
              un mot de passe sont importées."
             .into(),
         SelfCode::ImportKeyRejected => {
-            "mot de passe de la base KeePass incorrect, ou base altérée.".into()
+            "mot de passe ou fichier clé de la base KeePass incorrect, ou base altérée.".into()
         }
         SelfCode::ImportMalformed => "fichier refusé : ce n'est pas une base KeePass lisible, \
              ou elle est altérée ou trop grande."
@@ -82,7 +82,7 @@ fn report_lines(r: &ImportReport) -> Vec<String> {
     note(r.history, "version(s) antérieure(s) non importée(s).");
     note(
         r.totp,
-        "configuration(s) TOTP gardée(s) en champ masqué, pas encore convertie(s).",
+        "configuration(s) TOTP non convertible(s) (HOTP, Steam, hors limites…), gardée(s) en champ masqué.",
     );
     note(
         r.custom_skipped,
@@ -91,15 +91,30 @@ fn report_lines(r: &ImportReport) -> Vec<String> {
     lines
 }
 
-/// `import-kdbx FICHIER`.
-pub fn import_kdbx(session: &Session<'_>, file: &Path) -> Result<(), String> {
-    let path = std::fs::canonicalize(file).map_err(|_| "fichier introuvable.".to_owned())?;
-    let path = path
-        .to_str()
-        .ok_or_else(|| "chemin non valide (UTF-8 attendu).".to_owned())?
-        .to_owned();
+/// `import-kdbx FICHIER [--fichier-cle FICHIER]`.
+pub fn import_kdbx(
+    session: &Session<'_>,
+    file: &Path,
+    key_file: Option<&Path>,
+) -> Result<(), String> {
+    // The core reads both files itself: only their absolute paths travel.
+    let absolute = |f: &Path, what: &str| -> Result<String, String> {
+        let path = std::fs::canonicalize(f).map_err(|_| format!("{what} introuvable."))?;
+        path.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| "chemin non valide (UTF-8 attendu).".to_owned())
+    };
+    let path = absolute(file, "fichier")?;
+    let key_file = key_file.map(|k| absolute(k, "fichier clé")).transpose()?;
     let mut c = session.connect(false)?;
-    let password = term::read_secret("Mot de passe de la base KeePass : ", false, MAX_PASSWORD)?;
+    let password = if key_file.is_some() {
+        term::read_optional_secret(
+            "Mot de passe de la base KeePass (vide s'il n'y en a pas) : ",
+            MAX_PASSWORD,
+        )?
+    } else {
+        term::read_secret("Mot de passe de la base KeePass : ", false, MAX_PASSWORD)?
+    };
     eprintln!("Déchiffrement de la base… (cela peut prendre quelques secondes)");
     let SelfReply::Imported(r) = call(
         &mut c,
@@ -107,6 +122,7 @@ pub fn import_kdbx(session: &Session<'_>, file: &Path) -> Result<(), String> {
             path,
             password,
             locker: None,
+            key_file,
         },
     )?
     else {

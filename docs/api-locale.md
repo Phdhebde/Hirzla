@@ -476,7 +476,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -1118,21 +1119,22 @@ Détails :
    l'initiateur, et ce poste a pu être volé. La ligne de commande affiche le rappel et demande
    « oui ».
 
-## 16. Mode Self (version 5)
+## 16. Mode Self (versions 5 et 9)
 
 Décisions : ADR 0025 (import KeePass, option 2), ADR 0033 (verrouillage à la mise en veille et
 au verrouillage de session), ADR 0034 (kit de recouvrement à quorum). Le noyau parle en plus la
 **version 5**, qui porte ce dont l'application de poste et la ligne de commande ont besoin pour
 tenir un coffre seules, au-delà des versions 1 et 2 : réglages, changement du mot de passe
 maître, corbeille, historique des versions, recouvrement, import KeePass, événements du
-système. Codes : opérations **60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du
-mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
+système. La **version 9** n'ajoute que le fichier clé d'`ImportKdbx` (§ 10). Codes : opérations
+**60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
 
 ### 16.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-60 à 79 va au mode Self ; elle doit porter `v = 5`, sinon `UnsupportedVersion` avec `{2: [5]}`.
-Un code de la plage sans opération : `UnknownOperation`. Les réponses portent `v = 5`. Ces
+60 à 79 va au mode Self ; elle doit porter `v = 5` ou `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [5, 9]}`. Un code de la plage sans opération : `UnknownOperation`. Une réponse porte la
+version de sa requête (5 quand la requête n'en porte aucune d'acceptée). Ces
 opérations sont réservées au profil complet : le profil navigateur reçoit `Unauthorized`, et le
 refus est journalisé. `Status` (§ 6) n'annonce pas la version 5 : un client la découvre en
 l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
@@ -1168,7 +1170,7 @@ d'une version par `ReadVersion`.
 | 69 | `RecoveryCreate` | ouvert | `{1: seuil uint, 2: parts uint}`, 2 ≤ seuil ≤ parts ≤ 16 | `{1: kit_id bstr(16), 2: [fichier de part]}` |
 | 70 | `RecoveryUnlock` | verrouillé | `{1: [fichier de part] (1 à 16), 2: nouveau mot de passe tstr}` | — |
 | 71 | `RecoveryRemove` | ouvert | — | — |
-| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier}` | compte rendu d'import |
+| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier, 4?: chemin absolu du fichier clé tstr (≤ 4 096 octets, version 9)}` | compte rendu d'import |
 
 Détails :
 
@@ -1212,7 +1214,12 @@ Détails :
 11. **`ImportKdbx`** — le noyau lit le fichier lui-même (le client n'en transmet que le chemin),
     le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
     défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
-    `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
+    `NotFound`. **Fichier clé** (clé 4, version 9 ; inconnue en version 5 : `Malformed`) : lu
+    par le noyau comme la base, mêmes refus (chemin vide ou relatif : `InvalidInput`,
+    illisible : `NotFound`) ; formats XML 1.0 et 2.0, 32 octets, 64 chiffres hexadécimaux,
+    sinon empreinte du fichier. Avec un fichier clé et un mot de passe vide, le noyau essaie
+    le fichier seul (KeePassXC), puis le fichier avec le mot de passe vide (KeePass 2) ; un
+    refus des deux : `ImportKeyRejected`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
     clients et le verrouillage automatique ne l'attendent pas. Bases KDBX 3.1 et 4, AES-KDF ou
     Argon2 (ADR 0025). Correspondance (détail dans l'ADR 0025) : entrée qui n'a qu'un titre :
     ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
@@ -1220,9 +1227,10 @@ Détails :
     puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
     remplacées par la valeur visée ; chemin du groupe (sans la racine) en étiquette, plus les
     étiquettes KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans
-    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP de KeePass 2 en
-    base64 ou en texte converti, les autres gardés tels quels en champs sensibles et comptés
-    dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
+    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP convertis (KeePassXC `otp`,
+    KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP), les autres
+    (HOTP, Steam, hors bornes, plusieurs secrets) gardés tels quels en champs sensibles et
+    comptés dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
     champs personnalisés ; corbeille KeePass et historique comptés, non importés ; entrée
     refusée par le coffre comptée dans « refusés ».
 
@@ -1248,7 +1256,7 @@ cryptographique ; le journal du noyau n'écrit que l'opération et le nom du ré
 | `history NOM \| --id ID --version N --champ C [--stdout]` | `List`, `History`, `ReadVersion`, `Status` (presse-papiers comme `get`) |
 | `restore NOM \| --id ID` | `List` (corbeille comprise), `RestoreSecret` |
 | `restore NOM \| --id ID --version N` | `List`, `History`, `RestoreVersion` |
-| `import-kdbx FICHIER` | `ImportKdbx` (mot de passe de la base demandé sans écho) |
+| `import-kdbx FICHIER [--fichier-cle FICHIER]` | `ImportKdbx` (mot de passe de la base demandé sans écho, vide permis avec un fichier clé ; version 9 avec un fichier clé) |
 | `passwd` | `ChangePassword` (actuel, puis nouveau deux fois en terminal) |
 | `settings [--verrouillage S] [--presse-papiers S] [--veille oui\|non] [--session oui\|non]` | `GetSettings`, (`SetSettings`) |
 | `recovery status` | `RecoveryStatus` |
@@ -1268,10 +1276,9 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
-4. Le noyau sait ouvrir une base protégée par un **fichier clé** (seul ou avec le mot de
-   passe), mais `ImportKdbx` n'a pas de clé pour le chemin de ce fichier : l'ajouter, ainsi
-   que de nouveaux compteurs au compte rendu (références non résolues, réglages de saisie
-   automatique), demande une nouvelle version du mode Self (§ 10), à spécifier ici d'abord.
+4. De nouveaux compteurs au compte rendu d'import (références non résolues, réglages de
+   saisie automatique) demanderaient une nouvelle version du mode Self (§ 10), à spécifier
+   ici d'abord.
 
 ## 17. Connexions SSH et RDP (version 6)
 

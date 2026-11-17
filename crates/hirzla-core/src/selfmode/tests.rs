@@ -525,6 +525,62 @@ fn import(path: &str, password: &str) -> SelfRequest {
         path: path.to_owned(),
         password: z(password),
         locker: None,
+        key_file: None,
+    }
+}
+
+fn import_with_key(path: &str, password: &str, key_file: &str) -> SelfRequest {
+    SelfRequest::ImportKdbx {
+        path: path.to_owned(),
+        password: z(password),
+        locker: None,
+        key_file: Some(key_file.to_owned()),
+    }
+}
+
+#[test]
+fn kdbx_import_with_a_key_file() {
+    let dir = tempdir();
+    let (mut c, sink) = open_core(dir.path());
+    let both = fixture("pykeepass-keyfile.kdbx");
+    let xml_key = fixture("keyfile-v2.keyx");
+    let only = fixture("pykeepass-keyfile-only.kdbx");
+    let raw_key = fixture("keyfile-raw.bin");
+    // The password alone, or the wrong key file, do not open it.
+    assert_eq!(
+        refused(&mut c, import(&both, KDBX_PASSWORD)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert_eq!(
+        refused(&mut c, import_with_key(&both, KDBX_PASSWORD, &raw_key)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert_eq!(
+        refused(&mut c, import_with_key(&both, "", &xml_key)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert!(matches!(
+        ok(&mut c, import_with_key(&both, KDBX_PASSWORD, &xml_key)),
+        SelfReply::Imported(ImportReport { imported: 1.., .. })
+    ));
+    // Key file alone: an empty password.
+    assert!(matches!(
+        ok(&mut c, import_with_key(&only, "", &raw_key)),
+        SelfReply::Imported(ImportReport { imported: 1.., .. })
+    ));
+    // The key file is read by the core: relative or missing, refused like the database.
+    assert_eq!(
+        refused(&mut c, import_with_key(&only, "", "relatif.keyx")),
+        general(ErrorCode::InvalidInput)
+    );
+    let missing = dir.path().join("absente.keyx").display().to_string();
+    assert_eq!(
+        refused(&mut c, import_with_key(&only, "", &missing)),
+        general(ErrorCode::NotFound)
+    );
+    let log = sink.text();
+    for leak in [KDBX_PASSWORD, ".keyx", "keyfile"] {
+        assert!(!log.contains(leak), "{leak} in {log}");
     }
 }
 
@@ -542,11 +598,28 @@ fn kdbx_import() {
             attachments: 0,
             history: 1,
             custom_skipped: 0,
-            totp: 1,
+            totp: 0,
             refused: 0,
         })
     );
     let entries = list(&mut c, false);
+    // The KeePassXC `otp` URI: converted, issuer included.
+    {
+        let vault = c.vault().unwrap();
+        let mail = entries
+            .iter()
+            .find(|e| e.title.as_str() == "Messagerie")
+            .unwrap();
+        let body = vault.read_secret(vault.personal_locker(), mail.id).unwrap();
+        match &body.fields.get(&Field::Totp).unwrap().value {
+            hirzla_vault::secret::FieldValue::Totp(t) => {
+                assert_eq!(t.secret.as_slice(), b"Hello!\xde\xad\xbe\xef");
+                assert_eq!(t.issuer.as_deref(), Some("Exemple"));
+            }
+            _ => panic!(),
+        }
+        assert!(!custom_fields(&body).iter().any(|f| f.0 == "otp"));
+    }
     let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
     assert_eq!(
         titles,
@@ -606,6 +679,7 @@ fn kdbx_import() {
                 path: path.clone(),
                 password: z(KDBX_PASSWORD),
                 locker: Some([5; 16]),
+                key_file: None,
             }
         ),
         general(ErrorCode::NotFound)
@@ -650,7 +724,7 @@ fn kdbx_import_keepass2() {
                 attachments: 0,
                 history: 0,
                 custom_skipped: 0,
-                totp: 1,
+                totp: 0,
                 refused: 0,
             }),
             "{name}"
@@ -717,7 +791,7 @@ fn kdbx_import_keepass2() {
                 ),
             ]
         );
-        // TOTP of KeePass 2 in base64: converted. In base32: kept, sensitive.
+        // TOTP of KeePass 2 in base64 and in base32: converted.
         match &body("TOTP KeePass").fields.get(&Field::Totp).unwrap().value {
             hirzla_vault::secret::FieldValue::Totp(t) => {
                 assert_eq!(t.secret.as_slice(), b"12345678901234567890");
@@ -726,15 +800,14 @@ fn kdbx_import_keepass2() {
             _ => panic!(),
         }
         assert!(custom_fields(&body("TOTP KeePass")).is_empty());
-        assert_eq!(
-            custom_fields(&body("TOTP base32")),
-            [(
-                "TimeOtp-Secret-Base32".to_owned(),
-                "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ".to_owned(),
-                true
-            )]
-        );
-        assert!(!body("TOTP base32").fields.contains_key(&Field::Totp));
+        assert!(custom_fields(&body("TOTP base32")).is_empty());
+        match &body("TOTP base32").fields.get(&Field::Totp).unwrap().value {
+            hirzla_vault::secret::FieldValue::Totp(t) => {
+                assert_eq!(t.secret.as_slice(), b"12345678901234567890");
+                assert_eq!((t.algorithm, t.digits, t.period), (1, 6, 30));
+            }
+            _ => panic!(),
+        }
         // HOTP: custom fields as KeePass holds them.
         let hotp = custom_fields(&body("HOTP"));
         assert_eq!(hotp.len(), 2);

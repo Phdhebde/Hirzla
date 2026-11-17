@@ -47,30 +47,12 @@ pub fn key_file_key(data: &[u8]) -> Result<Zeroizing<[u8; 32]>, KdbxRefusal> {
     Ok(Zeroizing::new(kc::sha256(data)))
 }
 
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        _ => None,
-    }
-}
-
 /// 64 hexadecimal digits (whitespace ignored) into 32 bytes; `None` otherwise.
 fn hex32(text: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
+    let bytes = super::otp::decode(&super::otp::hex()?, text)?;
     let mut out = Zeroizing::new([0u8; 32]);
-    let mut n = 0usize;
-    for b in text.iter().copied().filter(|b| !b.is_ascii_whitespace()) {
-        let d = hex_digit(b)?;
-        let slot = out.get_mut(n / 2)?;
-        *slot = if n.is_multiple_of(2) {
-            d << 4
-        } else {
-            *slot | d
-        };
-        n += 1;
-    }
-    (n == 64).then_some(out)
+    (bytes.len() == 32).then(|| out.copy_from_slice(&bytes))?;
+    Some(out)
 }
 
 /// The XML forms: `None` when the file is not an XML key file.

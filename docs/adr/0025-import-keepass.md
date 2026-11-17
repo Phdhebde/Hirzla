@@ -108,9 +108,13 @@ AES-KDF, réglage par défaut de KeePass 2) était refusée.
 - **Fichier clé** dans le noyau (`hirzla_vault::kdbx::key_file_key`) : XML version 1.0
   (base64) et 2.0 (hexadécimal, empreinte de 4 octets vérifiée), 32 octets bruts, 64 chiffres
   hexadécimaux, sinon SHA-256 du fichier ; clé composite SHA-256(SHA-256(mot de passe) ‖ clé
-  du fichier), mot de passe et fichier facultatifs chacun. **Non exposé** par l'API locale :
-  `ImportKdbx` n'a pas de clé pour le chemin du fichier, en ajouter une demande une nouvelle
-  version du mode Self (`docs/api-locale.md` § 16.6), à décider.
+  du fichier), mot de passe et fichier facultatifs chacun. Exposé par l'API locale en
+  **version 9** du mode Self : clé 4 d'`ImportKdbx`, le chemin absolu du fichier, que le noyau
+  lit lui-même comme la base (`docs/api-locale.md` § 10 et § 16.3). Avec un mot de passe vide,
+  le noyau essaie le fichier seul (KeePassXC), puis le fichier avec le mot de passe vide
+  (KeePass 2, case « mot de passe » cochée). Ligne de commande : `import-kdbx FICHIER
+  --fichier-cle FICHIER` ; application de poste : bouton « Fichier clé… » du dialogue d'import,
+  dont seul le chemin part vers le noyau.
 - Toujours refusés : KDBX 2 et antérieurs, Twofish, flux interne ArcFour ou absent.
 
 ### Dépendance nouvelle : `salsa20`
@@ -122,8 +126,23 @@ transitive nouvelle, `cfg-if`. Le crate ne contient **aucun bloc `unsafe`** (vé
 version figée). Il n'a pas d'audit propre : le rapport NCC Group de 2020 porte sur
 `chacha20poly1305`/`chacha20`. Usage limité à démasquer les valeurs protégées d'une base
 KDBX 3.1 pendant l'import, jamais à protéger une donnée Hirzla. Vecteur officiel : eSTREAM,
-Salsa20/20 clé de 256 bits, ensemble 1, vecteur 0. Décision demandée par le mainteneur
+Salsa20/20 clé de 256 bits, ensemble 1, vecteur 0. Acceptée par le mainteneur (par délégation
 (2026-11-17).
+
+### Dépendance nouvelle : `data-encoding`
+
+**`data-encoding` =2.11.1** (MIT), ajoutée à `hirzla-vault` sans ses fonctions par défaut
+(`alloc` seulement), pour décoder les secrets TOTP en base32 (le cas courant : KeePassXC
+`otp`, KeePass 2 `TimeOtp-Secret-Base32`, KeeTrayTOTP) et en hexadécimal, ainsi que les clés
+hexadécimales des fichiers clés, jusque-là décodées à la main. Décision du mainteneur (par
+délégation pour les choix techniques, 2026-11-17), le décodage à la main étant exclu par la
+règle 1 de `CLAUDE.md`. Justification : crate très utilisé, `no_std`, sans dépendance, déjà
+présent dans `Cargo.lock` (dépendance facultative de `rcgen`) ; son `unsafe` se limite aux
+chemins rapides de l'encodage et du décodage (découpage de tranches, chaînes déjà validées
+ASCII). Base32 de la RFC 4648, alphabet en majuscules, minuscules traduites, espaces, tirets et
+`=` ignorés, bits de fin non vérifiés (des générateurs tirent des caractères base32 au hasard) ;
+hexadécimal en majuscules ou minuscules. La sortie est décodée dans un tampon effacé
+(`decode_mut` dans un `Zeroizing`), sortie partielle comprise en cas de refus.
 
 ### Correspondance
 
@@ -144,8 +163,10 @@ champs personnalisés ; ce qui ne peut pas être gardé du tout est compté. Rie
 | `Tags` | Étiquettes ; au-delà de 64 ou de 128 octets, champ « Étiquettes KeePass » |
 | Champs personnalisés | Gardés, sensibles s'ils sont protégés ; au-delà de 64 champs ou de 64 Kio : comptés |
 | Pièces jointes | Fichiers joints du secret, contenu chiffré dans le casier ; type déduit de l'extension ; une pièce partagée par plusieurs entrées est copiée pour chacune ; au-delà de 64 par entrée, de 100 Mio ou d'un nom de 512 octets : comptées |
-| `TimeOtp-Secret` ou `TimeOtp-Secret-Base64` avec `TimeOtp-Algorithm`, `-Length`, `-Period` | Configuration TOTP du secret (`format.md` § 8.3), dans ses bornes |
-| `otp` (KeePassXC), `TimeOtp-Secret-Base32`, `TimeOtp-Secret-Hex`, `TOTP Seed`, `TOTP Settings` | Gardés tels quels en champs personnalisés, sensibles pour les secrets ; comptés « TOTP » |
+| `TimeOtp-Secret` (texte), `-Base32`, `-Hex` ou `-Base64` avec `TimeOtp-Algorithm`, `-Length`, `-Period` | Configuration TOTP du secret (`format.md` § 8.3), dans ses bornes |
+| `otp` (KeePassXC) : `otpauth://totp/Émetteur:compte?secret=…&algorithm=…&digits=…&period=…&issuer=…` | Configuration TOTP ; émetteur de `issuer`, à défaut le préfixe du libellé |
+| `TOTP Seed` (base32) et `TOTP Settings` (`période;chiffres`) de KeeTrayTOTP | Configuration TOTP, SHA-1 |
+| TOTP non convertible : HOTP (`otpauth://hotp`), Steam (`encoder=steam`, `;S`), plusieurs secrets, hors bornes, encodage invalide | Gardés tels quels en champs personnalisés, sensibles pour les secrets ; comptés « TOTP » |
 | `HmacOtp-*` (HOTP) | Champs personnalisés (le coffre n'a pas de HOTP) |
 | `Times/Expires` vrai | Champ « Expiration » (ISO 8601, UTC) : le coffre n'a pas de date d'expiration |
 | Saisie automatique hors réglages par défaut | Champ sensible « Saisie automatique KeePass » (désactivée, séquence, associations de fenêtres) |
@@ -159,13 +180,8 @@ ouvert.
 
 ### Ce qui n'est pas encore converti
 
-- **TOTP en base32** (le cas courant : KeePassXC, `TimeOtp-Secret-Base32`) et en
-  hexadécimal : le décodage base32 d'un secret demande une bibliothèque. Aucune n'est compilée
-  dans le graphe : `data-encoding` ne figure dans `Cargo.lock` que comme dépendance
-  facultative non activée de `rcgen`, et contient du code `unsafe`. Écrire le décodage à la
-  main contredirait la consigne de ne pas coder d'encodage manipulant un secret. Décision à
-  prendre (dépendance, ou décodage dans une bibliothèque déjà retenue) ; d'ici là la valeur
-  est gardée telle quelle et rien n'est perdu.
+- **TOTP Steam et HOTP** : le coffre n'a ni l'alphabet de Steam ni de compteur HOTP ; gardés
+  tels quels en champs sensibles, comptés.
 - Le **compte rendu** garde ses huit compteurs : en ajouter (références non résolues,
   réglages de saisie automatique) changerait l'API CBOR et demanderait une nouvelle version
   du mode Self. Ces éléments ne sont pas perdus (références gardées en texte, saisie
@@ -180,15 +196,21 @@ Vecteurs FIPS 197 (AES-256), eSTREAM (Salsa20), valeurs croisées avec pycryptod
 AES-KDF et le flux Salsa20 de KeePass ; refus des blocs hachés altérés, d'une empreinte
 d'en-tête fausse, de tours hors bornes, d'un fichier clé faux ou manquant ; une cible de
 fuzzing couvre aussi le chemin KDBX 3.1 (`read_kdbx_payload`, octet de tête bit 1).
+TOTP : vecteur de la RFC 6238 (annexe B) en base32 (majuscules, minuscules espacées, avec
+bourrage, `%3D` dans une URI), en hexadécimal et en base64 ; URI KeePassXC avec et sans
+paramètres ; refus des HOTP, Steam, secrets doubles et valeurs hors bornes. Fichier clé par
+l'API (version 9) : refus du mot de passe seul, d'un autre fichier, d'un chemin relatif ou
+absent ; ligne de commande `--fichier-cle` de bout en bout.
 
 ## Conséquences
 
 - Pendant l'export, un fichier CSV en clair existe sur le disque : l'interface le rappelle
   après l'import. C'est le principal défaut de l'option 3, que l'option 2 évite.
-- L'historique des entrées KeePass n'est pas importé, ni les TOTP en base32 convertis (ils
-  sont gardés en champs) ; le rapport d'import les compte (section « Import fidèle »).
+- L'historique des entrées KeePass n'est pas importé, ni les TOTP Steam ou HOTP convertis
+  (ils sont gardés en champs) ; le rapport d'import les compte (section « Import fidèle »).
 - Aucune dépendance cryptographique nouvelle n'entre à l'étape 7 ; l'option 2 ajoute
-  `chacha20` (voir plus haut), l'import fidèle ajoute `salsa20` (voir plus bas).
+  `chacha20` (voir plus haut), l'import fidèle ajoute `salsa20` et `data-encoding` (section
+  « Import fidèle »).
 
 ## Alternatives écartées
 

@@ -258,12 +258,27 @@ fn totp_converted_or_kept() {
         .any(|(f, v)| *f == Field::Totp && matches!(v, FieldValue::Totp(t) if t.period == 60)));
     assert!(p.edit.set_custom.is_empty());
     assert_eq!(r.totp, 0);
-    // Base32 (KeePassXC): kept as written, sensitive, counted.
+    // Base32 in a KeePassXC URI: converted, issuer included.
+    let (p, r) = planned(KdbxEntry {
+        title: z("TOTP"),
+        password: z("x"),
+        otp: vec![kf(
+            "otp",
+            "otpauth://totp/Forge:x?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+            true,
+        )],
+        ..KdbxEntry::default()
+    });
+    assert!(p.edit.set.iter().any(|(f, v)| *f == Field::Totp
+        && matches!(v, FieldValue::Totp(t) if t.issuer.as_deref() == Some("Forge"))));
+    assert!(p.edit.set_custom.is_empty());
+    assert_eq!(r.totp, 0);
+    // Not convertible (HOTP URI): kept as written, sensitive, counted.
     let (p, r) = planned(KdbxEntry {
         title: z("TOTP"),
         password: z("x"),
         otp: vec![
-            kf("otp", "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ", false),
+            kf("otp", "otpauth://hotp/x?secret=GEZDGNBVGY3TQOJQ", false),
             kf("TimeOtp-Length", "6", false),
         ],
         ..KdbxEntry::default()
@@ -272,7 +287,7 @@ fn totp_converted_or_kept() {
     assert_eq!(
         customs(&p.edit),
         [
-            ("otp", "otpauth://totp/x?secret=GEZDGNBVGY3TQOJQ", true),
+            ("otp", "otpauth://hotp/x?secret=GEZDGNBVGY3TQOJQ", true),
             ("TimeOtp-Length", "6", false)
         ]
     );

@@ -901,8 +901,8 @@
       <h2 id="kdbx-titre" class="titre-carte">Importer depuis KeePass (KDBX)</h2>
       <p class="texte-secondaire">Bases KDBX 3.1 et 4 (KeePass 2, KeePassXC) protégées par un mot de passe,
         chiffrées en AES-256 ou ChaCha20 (AES-KDF ou Argon2). Le noyau lit la base et crée les entrées dans votre
-        casier personnel, avec leurs pièces jointes. Les bases ouvertes par un fichier clé ne sont pas encore
-        acceptées ici.</p>
+        casier personnel, avec leurs pièces jointes. Une base protégée aussi, ou seulement, par un fichier clé
+        s'ouvre avec ce fichier ; seul son chemin est transmis au noyau, qui le lit.</p>
       <div class="ligne-actions">
         <button id="kdbx-choisir" class="bouton bouton-secondaire" type="button">Choisir la base…</button>
         <span id="kdbx-fichier" class="mono"></span>
@@ -912,8 +912,13 @@
         <input id="kdbx-mdp" class="saisie saisie-mono" type="password" autocomplete="off" spellcheck="false"
                maxlength="1024">
       </label>
-      <p class="aide">Les pièces jointes, l'historique des entrées et les codes TOTP ne sont pas importés ;
-        le compte rendu les signale.</p>
+      <div class="ligne-actions">
+        <button id="kdbx-cle-choisir" class="bouton bouton-secondaire" type="button">Fichier clé…</button>
+        <span id="kdbx-cle" class="mono"></span>
+        <button id="kdbx-cle-retirer" class="bouton bouton-secondaire" type="button" hidden>Retirer</button>
+      </div>
+      <p class="aide">Avec un fichier clé, laissez le mot de passe vide si la base n'en a pas. L'historique des
+        entrées n'est pas importé ; le compte rendu signale ce qui n'a pas pu l'être.</p>
       <div id="kdbx-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>

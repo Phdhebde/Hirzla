@@ -490,8 +490,9 @@ impl AppState {
         self.call_self(&SelfRequest::RecoveryRemove).map(drop)
     }
 
-    /// Imports the KeePass database at `path` into the personal locker. The core reads and
-    /// decrypts the file itself (ADR 0025, option 2).
+    /// Imports the KeePass database at `path` into the personal locker, opened by `password`
+    /// and, if given, a key file. The core reads and decrypts both files itself (ADR 0025,
+    /// option 2): only their paths travel.
     ///
     /// # Errors
     /// [`DesktopError`].
@@ -499,21 +500,32 @@ impl AppState {
         &self,
         path: &Path,
         password: Zeroizing<String>,
+        key_file: Option<&Path>,
     ) -> Result<KdbxReportDto, DesktopError> {
         if password.len() > MAX_PASSWORD {
             return Err(DesktopError::Invalid("Mot de passe trop long."));
         }
-        let path = std::path::absolute(path)
-            .ok()
-            .and_then(|p| p.to_str().map(str::to_owned))
-            .filter(|p| p.len() <= MAX_PATH)
-            .ok_or(DesktopError::Import(
-                "Le chemin de ce fichier ne peut pas être transmis au noyau.",
-            ))?;
+        if password.is_empty() && key_file.is_none() {
+            return Err(DesktopError::Invalid(
+                "Saisissez le mot de passe de la base, ou choisissez son fichier clé.",
+            ));
+        }
+        let absolute = |p: &Path| {
+            std::path::absolute(p)
+                .ok()
+                .and_then(|p| p.to_str().map(str::to_owned))
+                .filter(|p| p.len() <= MAX_PATH)
+                .ok_or(DesktopError::Import(
+                    "Le chemin de ce fichier ne peut pas être transmis au noyau.",
+                ))
+        };
+        let path = absolute(path)?;
+        let key_file = key_file.map(absolute).transpose()?;
         match self.call_self(&SelfRequest::ImportKdbx {
             path,
             password,
             locker: None,
+            key_file,
         })? {
             SelfReply::Imported(r) => Ok(r.into()),
             _ => Err(DesktopError::Protocol),
@@ -706,7 +718,35 @@ pub fn choose_kdbx_file(
     })?;
     let name = file_name(&path);
     *guard(&state.pending_kdbx) = Some(path);
+    // Another database: the key file chosen for the previous one no longer applies.
+    *guard(&state.pending_kdbx_key) = None;
     Ok(name)
+}
+
+/// Asks for the key file of the KeePass database with the system's picker and keeps it for
+/// [`import_kdbx`]; returns its name. Only its path goes to the core, which reads it.
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn choose_kdbx_key_file(
+    state: State<'_>,
+    window: tauri::WebviewWindow,
+) -> Result<String, DesktopError> {
+    let path = on_main_thread(&window, |parent| {
+        rfd::FileDialog::new()
+            .set_title("Fichier clé de la base KeePass")
+            .add_filter("Fichier clé KeePass", &["keyx", "key"])
+            .add_filter("Tous les fichiers", &["*"])
+            .set_parent(parent)
+            .pick_file()
+    })?;
+    let name = file_name(&path);
+    *guard(&state.pending_kdbx_key) = Some(path);
+    Ok(name)
+}
+
+/// Forgets the key file chosen by [`choose_kdbx_key_file`].
+#[tauri::command(rename_all = "snake_case")]
+pub fn clear_kdbx_key_file(state: State<'_>) {
+    *guard(&state.pending_kdbx_key) = None;
 }
 
 /// Imports the database chosen by [`choose_kdbx_file`]. See [`AppState::import_kdbx_file`].
@@ -718,8 +758,10 @@ pub fn import_kdbx(
     let path = guard(&state.pending_kdbx)
         .clone()
         .ok_or(DesktopError::Invalid("Choisissez d'abord la base KeePass."))?;
-    let report = state.import_kdbx_file(&path, password)?;
+    let key_file = guard(&state.pending_kdbx_key).clone();
+    let report = state.import_kdbx_file(&path, password, key_file.as_deref())?;
     *guard(&state.pending_kdbx) = None;
+    *guard(&state.pending_kdbx_key) = None;
     Ok(report)
 }
 

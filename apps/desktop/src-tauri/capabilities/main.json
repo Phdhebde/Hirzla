@@ -41,6 +41,8 @@
     "allow-recovery-unlock",
     "allow-remove-recovery-kit",
     "allow-choose-kdbx-file",
+    "allow-choose-kdbx-key-file",
+    "allow-clear-kdbx-key-file",
     "allow-import-kdbx",
     "allow-server-status",
     "allow-server-identity",

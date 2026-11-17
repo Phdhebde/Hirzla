@@ -2028,6 +2028,7 @@ version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "cbor4ii",
+ "data-encoding",
  "flate2",
  "hirzla-crypto",
  "icu_normalizer",

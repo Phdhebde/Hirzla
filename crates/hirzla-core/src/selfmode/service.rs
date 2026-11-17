@@ -187,9 +187,11 @@ impl Core {
                 path,
                 password,
                 locker,
+                key_file,
             } => {
                 self.vault().map_err(general)?;
-                let db = import::read_database(&path, &password).map_err(|c| (c, None))?;
+                let db = import::read_database(&path, &password, key_file.as_deref())
+                    .map_err(|c| (c, None))?;
                 drop(password);
                 self.import_database(db, locker)
             }

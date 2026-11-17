@@ -77,17 +77,33 @@ fn read_file(path: &str) -> Result<Zeroizing<Vec<u8>>, SelfCode> {
     Ok(bytes)
 }
 
-/// Reads and decrypts the database at `path` (absolute), with `password`.
+/// Reads and decrypts the database at `path` (absolute), with `password` and, if given, a key
+/// file (absolute path, `docs/api-locale.md` § 16.3, version 9).
+///
+/// With a key file, an empty password is ambiguous: KeePassXC then leaves the password out of
+/// the composite key, KeePass 2 may keep an empty one. The key file alone is tried first, then
+/// with the empty password if the key is rejected.
 ///
 /// # Errors
 /// `InvalidInput` for a relative path, `NotFound` for a file that cannot be read, or the
 /// import codes (60 to 62).
-pub fn read_database(path: &str, password: &str) -> Result<KdbxDatabase, SelfCode> {
-    read_database_with(path, Some(password), None)
+pub fn read_database(
+    path: &str,
+    password: &str,
+    key_file: Option<&str>,
+) -> Result<KdbxDatabase, SelfCode> {
+    match key_file {
+        None => read_database_with(path, Some(password), None),
+        Some(k) if password.is_empty() => match read_database_with(path, None, Some(k)) {
+            Err(SelfCode::ImportKeyRejected) => read_database_with(path, Some(""), Some(k)),
+            other => other,
+        },
+        Some(k) => read_database_with(path, Some(password), Some(k)),
+    }
 }
 
 /// Reads and decrypts the database at `path` (absolute) with a password, a key file (absolute
-/// path), or both. The local API does not carry a key file yet (`docs/api-locale.md` § 16.6).
+/// path), or both.
 ///
 /// # Errors
 /// As [`read_database`]; a key file that cannot be read is `NotFound`.
