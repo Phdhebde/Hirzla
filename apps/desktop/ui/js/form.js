@@ -57,6 +57,10 @@ export class SecretForm {
     this.jump = /** @type {HTMLSelectElement} */ (byId("secret-rebond"));
     this.hostKey = /** @type {HTMLInputElement} */ (byId("secret-empreinte"));
     this.passphrase = /** @type {HTMLInputElement} */ (byId("secret-phrase"));
+    /** Ticked: the current password is cleared, not kept. */
+    this.clearPassword = /** @type {HTMLInputElement} */ (byId("secret-mdp-effacer"));
+    /** Ticked: the current notes are cleared, not kept. */
+    this.clearNotes = /** @type {HTMLInputElement} */ (byId("secret-notes-effacer"));
     /** @type {import("./api.js").ConnectionCard | null} Card of the connection being changed. */
     this.card = null;
     /** True once a private key file was chosen for this form. */
@@ -85,6 +89,16 @@ export class SecretForm {
       show.setAttribute("aria-pressed", visible ? "false" : "true");
     });
     byId("secret-mdp-generer").addEventListener("click", () => void this.generate());
+    // An empty input keeps the current value: clearing it takes an explicit choice.
+    for (const [box, input] of /** @type {[HTMLInputElement, HTMLInputElement | HTMLTextAreaElement][]} */ ([
+      [this.clearPassword, this.password],
+      [this.clearNotes, this.notes],
+    ])) {
+      box.addEventListener("change", () => {
+        if (box.checked) input.value = "";
+        input.disabled = box.checked;
+      });
+    }
     byId("secret-fichier-choisir").addEventListener("click", () => void this.chooseKey());
   }
 
@@ -168,6 +182,20 @@ export class SecretForm {
         return;
       }
     }
+    /** @type {Set<string> | null} Fields the secret holds, as far as the core tells. */
+    let present = null;
+    if (this.card) {
+      present = new Set();
+      if (this.card.has_password) present.add("password");
+      if (this.card.has_notes) present.add("notes");
+    } else if (entry) {
+      try {
+        const versions = await api.history({ locker: entry.locker, id: entry.id });
+        if (versions.length) present = new Set(versions[0].fields);
+      } catch {
+        // Unknown: no clearing offered, an empty input keeps the value as before.
+      }
+    }
     if (!(await this.loadLinks())) return;
     this.locker.replaceChildren(
       ...this.lockers.map((l) =>
@@ -196,6 +224,9 @@ export class SecretForm {
       this.hostKey.value = this.card.host_key ?? "";
     }
     this.syncType();
+    // Clearing is offered only for a field the secret holds; the content of a note stays.
+    byId("secret-mdp-effacer-case").hidden = !present?.has("password");
+    byId("secret-notes-effacer-case").hidden = kind === "note" || !present?.has("notes");
     this.dialog.showModal();
     this.title.focus();
   }
@@ -210,6 +241,11 @@ export class SecretForm {
     }
     this.card = null;
     this.keyChosen = false;
+    for (const box of [this.clearPassword, this.clearNotes]) box.checked = false;
+    this.password.disabled = false;
+    this.notes.disabled = false;
+    byId("secret-mdp-effacer-case").hidden = true;
+    byId("secret-notes-effacer-case").hidden = true;
     const file = byId("secret-fichier-nom");
     file.textContent = "Aucun fichier choisi";
     file.classList.remove("choisi");
@@ -308,8 +344,10 @@ export class SecretForm {
     text("host_key", this.hostKey.value.trim());
     if (kind === "ssh") link("ssh_key", this.sshKey.value, c?.ssh_key ?? null);
     link("jump", this.jump.value, c?.jumps[0] ?? null);
-    if (this.password.value) set.password = this.password.value;
-    if (this.notes.value) set.notes = this.notes.value;
+    if (this.clearPassword.checked) clear.push("password");
+    else if (this.password.value) set.password = this.password.value;
+    if (this.clearNotes.checked) clear.push("notes");
+    else if (this.notes.value) set.notes = this.notes.value;
     if (this.favorite.checked !== (c?.favorite ?? false)) set.favorite = this.favorite.checked;
     return { set, clear };
   }
@@ -371,9 +409,11 @@ export class SecretForm {
             if (u) changes.username = u;
             else clear.push("username");
           }
-          if (this.password.value) changes.password = this.password.value;
+          if (this.clearPassword.checked) clear.push("password");
+          else if (this.password.value) changes.password = this.password.value;
         }
-        if (this.notes.value) changes.notes = this.notes.value;
+        if (this.clearNotes.checked) clear.push("notes");
+        else if (this.notes.value) changes.notes = this.notes.value;
         if (this.favorite.checked !== e.favorite) changes.favorite = this.favorite.checked;
         if (clear.length) changes.clear = clear;
         if (Object.keys(changes).length === 0) {

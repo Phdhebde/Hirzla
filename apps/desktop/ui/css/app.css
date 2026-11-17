@@ -362,6 +362,7 @@ button.touche:hover { color: var(--hz-texte); border-color: var(--hz-texte-secon
 .version .actions-champ { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .valeur-secrete { font-family: var(--hz-font-mono); font-size: 13.5px; letter-spacing: 0.02em; white-space: pre-wrap; }
 .valeur-masquee { letter-spacing: 0.15em; color: var(--hz-texte-secondaire); white-space: nowrap; }
+.valeur-vide { color: var(--hz-texte-secondaire); }
 .valeur-grande { font-size: 20px; min-height: 32px; display: block; overflow-wrap: anywhere; }
 .decompte { display: block; font-family: var(--hz-font-texte); font-size: 12px; color: var(--hz-texte-secondaire); letter-spacing: 0; margin-top: 4px; }
 .etiquette {
