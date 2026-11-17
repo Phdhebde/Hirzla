@@ -583,3 +583,26 @@ Vk83Xgz+gJqOWhcSegKX485IMqnibTUCMHVUfZhnI/haugLJx2PwOGp8Qz0T7GP9\n\
 r62SVJqDcufcgXZY7rsiQYxB762fYktrWA==\n\
 -----END CERTIFICATE-----\n\
 ";
+
+/// ADR 0071: a second start reaches the first application through the core, exactly once;
+/// without an application, or without a core, it has nobody to hand over to.
+#[test]
+fn a_second_start_calls_the_window_of_the_first() {
+    use hirzla_desktop::link::another_instance_shown;
+
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    // No core: the second start becomes the application.
+    assert!(!another_instance_shown(&config(&sock)));
+    let _core = start_core(dir.path(), &sock, true);
+    // A core, but no application polling it. This also tests the retry: the next call
+    // comes within the second.
+    assert!(!another_instance_shown(&config(&sock)));
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    assert!(!state.app_poll().unwrap());
+    assert!(another_instance_shown(&config(&sock)));
+    assert!(state.app_poll().unwrap());
+    assert!(!state.app_poll().unwrap());
+    // The call is not activity and works with no vault at all.
+    assert_eq!(state.status().unwrap().state(), "absent");
+}

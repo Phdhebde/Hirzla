@@ -153,6 +153,11 @@ export async function generate(length, symbols) {
   return r;
 }
 
+/** Asks the desktop application to bring its window to the front (ADR 0071). */
+export function showApp() {
+  return ask({ type: 'show' });
+}
+
 /** Locks the vault. */
 export function lockVault() {
   return ask({ type: 'lock' });

@@ -33,7 +33,20 @@ Dans **Réglages › Coffre** :
   gardez-les cochés.
 
 Cliquez sur **Enregistrer les réglages**. Le bouton **Verrouiller**, en haut de la fenêtre,
-verrouille le coffre à tout moment. Fermer l'application le verrouille aussi.
+verrouille le coffre à tout moment.
+
+### Fermer la fenêtre sans verrouiller
+
+Hirzla reste dans la zone de notification quand vous fermez sa fenêtre : le coffre n'est pas
+verrouillé pour autant. Il le sera au délai d'inactivité, à la veille, au verrouillage de
+votre session, ou quand vous choisissez **Verrouiller** dans le menu de l'icône. Ce menu ne
+contient que **Ouvrir Hirzla**, **Verrouiller** et **Quitter** : aucun titre de secret n'y
+apparaît. L'icône est grise quand le coffre est verrouillé.
+
+**Quitter** verrouille le coffre et arrête Hirzla. Pour retrouver ce comportement à chaque
+fermeture de fenêtre, décochez « Garder Hirzla dans la zone de notification » dans
+**Réglages**, carte « Sur ce poste ». Sur un bureau sans zone de notification (GNOME sans
+extension), fermer la fenêtre verrouille et arrête toujours Hirzla.
 
 ![Réglages du coffre Hirzla](../assets/captures/reglages-clair.webp){ .capture .clair width="1600" height="1030" loading="lazy" }
 ![Réglages du coffre Hirzla](../assets/captures/reglages-sombre.webp){ .capture .sombre width="1600" height="1030" loading="lazy" }

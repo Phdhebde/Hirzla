@@ -75,6 +75,8 @@ pub enum HostRequest {
     },
     /// Lock the vault.
     Lock,
+    /// Ask the desktop application to bring its window to the front (ADR 0071).
+    Show,
 }
 
 impl std::fmt::Debug for HostRequest {
@@ -87,6 +89,7 @@ impl std::fmt::Debug for HostRequest {
             HostRequest::Save { .. } => "HostRequest::Save",
             HostRequest::Generate { .. } => "HostRequest::Generate",
             HostRequest::Lock => "HostRequest::Lock",
+            HostRequest::Show => "HostRequest::Show",
         })
     }
 }
@@ -164,7 +167,7 @@ pub fn parse_request(input: &[u8]) -> Result<HostRequest, HostError> {
     let o = parse_object(input).map_err(|_| HostError::BadRequest)?;
     let kind = text(&o, "type")?.ok_or(HostError::BadRequest)?;
     let keys: &[&str] = match kind.as_str() {
-        "status" | "lock" => &["type"],
+        "status" | "lock" | "show" => &["type"],
         "match" => &["type", "origin"],
         "fill" => &["type", "origin", "locker", "id"],
         "save" => &["type", "origin", "title", "username", "password"],
@@ -177,6 +180,7 @@ pub fn parse_request(input: &[u8]) -> Result<HostRequest, HostError> {
     Ok(match kind.as_str() {
         "status" => HostRequest::Status,
         "lock" => HostRequest::Lock,
+        "show" => HostRequest::Show,
         "match" => HostRequest::Match {
             origin: origin(&o)?,
         },
@@ -306,6 +310,13 @@ pub fn respond(core: &mut impl CoreLink, input: &[u8]) -> Zeroizing<String> {
         },
         HostRequest::Lock => match core.call(&Request::Lock) {
             Ok(_) => ok_json(),
+            Err(e) => client_error(&e),
+        },
+        // The host starts nothing: without a listening application the answer says so.
+        HostRequest::Show => match core.call(&Request::ShowApp) {
+            Ok(Reply::Flag(true)) => ok_json(),
+            Ok(Reply::Flag(false)) => error_json("no_app"),
+            Ok(_) => error_json("core_error"),
             Err(e) => client_error(&e),
         },
         HostRequest::Match { origin } => match core.call(&Request::Match { origin }) {

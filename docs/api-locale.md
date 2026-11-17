@@ -91,7 +91,7 @@ noyau d'après son exécutable, jamais d'après un message :
 | Profil | Exécutables | Opérations permises |
 | --- | --- | --- |
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
-| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
+| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `ShowApp`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
 **Signature du client** (ADR 0042, 0063). En plus du chemin, le noyau peut exiger que
 l'exécutable du client soit signé. Ce qui est vérifié est **fixé à la compilation**, jamais
@@ -475,7 +475,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **7** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
@@ -574,7 +575,14 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
 - Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
   `ActiveChanged` de l'économiseur d'écran sur D-Bus, et envoie `SystemEvent` (ADR 0033).
-- Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers à sa fermeture.
+- Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers quand elle
+  s'arrête (« Quitter »). **Fermer sa fenêtre ne l'arrête plus** quand elle tient une icône
+  dans la zone de notification (§ 18, ADR 0071) : la fenêtre est masquée, sa page rechargée,
+  la copie du presse-papiers effacée, et le coffre reste ouvert jusqu'à l'un des
+  verrouillages du noyau (inactivité, veille, session) ou à « Verrouiller ». Sans zone de
+  notification, ou préférence désactivée, fermer la fenêtre arrête l'application.
+- Elle envoie `AppPoll` (§ 18) toutes les deux secondes, et `ShowApp` à son démarrage : si
+  une autre instance écoute, elle s'arrête aussitôt.
 
 ## 14. Points ouverts
 
@@ -1414,3 +1422,43 @@ le nom du résultat : `event=connection_request op=<nom> result=<ok|nom>`, avec 
    Une liste de connexions avec leurs rebonds coûte un appel par connexion.
 4. **`connexion modifier` ne change pas les étiquettes** : l'API n'a pas encore d'opération
    sur les ensembles d'un secret existant, quel que soit son type.
+
+## 18. Appel de la fenêtre de l'application (version 8)
+
+Décisions : ADR 0071. Code : `crates/hirzla-core/src/service.rs` (`AppWindow`),
+`apps/desktop/src-tauri/src/tray.rs`.
+
+Deux opérations générales, de codes 130 et 131 (plage 130–139 réservée aux ADR 0071 et
+0072). Elles ne portent **aucun argument** (un argument : `Malformed`), ne touchent pas au
+coffre, répondent coffre absent, verrouillé ou ouvert, et **ne comptent pas comme activité** :
+elles ne repoussent pas le verrouillage automatique.
+
+| Code | Nom | Profils | Réponse |
+| --- | --- | --- | --- |
+| 130 | `ShowApp` | complet, navigateur | `{1: bool}` : une application écoute |
+| 131 | `AppPoll` | complet | `{1: bool}` : la fenêtre a été appelée |
+
+- Le noyau garde un drapeau volatil, sans donnée. `AppPoll` le rend puis l'efface : un appel
+  n'est remis qu'une fois.
+- Une application « écoute » si son dernier `AppPoll` date de moins de 10 secondes.
+  `ShowApp` sans application à l'écoute répond `false` **et abandonne l'appel** : une fenêtre
+  ne doit pas surgir plusieurs minutes plus tard. Le noyau ne lance aucun exécutable.
+- `ShowApp` est bornée à une par seconde ; au-delà : `Throttled`.
+- `AppPoll` est refusée au profil navigateur (`Unauthorized`).
+- Journal : `event=request op=show_app` et `op=app_poll`, comme toute requête.
+
+Utilisations :
+
+- **Extension** : le message `{"type":"show"}` de l'hôte natif devient `ShowApp`. Réponse
+  `false` : l'hôte répond `no_app` et l'extension affiche « Ouvrez Hirzla sur ce poste. ».
+- **Instance unique** : `hirzla-desktop` envoie `ShowApp` à son démarrage, sur une connexion
+  à part, sans démarrer de noyau ni se durcir. Réponse `true` : il s'arrête, la première
+  instance montre sa fenêtre. Sur `Throttled`, il réessaie une fois après 1,1 s.
+
+### 18.1 Points ouverts
+
+1. **Fenêtre réduite pour le déverrouillage** (ADR 0071, décision 3) : pas encore faite ; la
+   fenêtre revient à sa taille habituelle sur l'écran de déverrouillage.
+2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
+   `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
+

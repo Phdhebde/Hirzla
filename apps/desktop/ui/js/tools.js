@@ -384,6 +384,7 @@ export class SettingsView {
     byId("dialogue-kdbx").addEventListener("close", () => {
       /** @type {HTMLInputElement} */ (byId("kdbx-mdp")).value = "";
     });
+    byId("reglage-zone").addEventListener("change", () => void this.saveTray());
     byId("form-reglages-coffre").addEventListener("submit", (e) => {
       e.preventDefault();
       void this.saveVaultSettings();
@@ -401,11 +402,36 @@ export class SettingsView {
     this.kit = null;
   }
 
+  /** @param {import("./api.js").LocalPreferences} p */
+  renderTray(p) {
+    const box = /** @type {HTMLInputElement} */ (byId("reglage-zone"));
+    box.checked = p.keep_in_tray && p.tray_available;
+    box.disabled = !p.tray_available;
+    byId("reglage-zone-aide").hidden = !p.tray_available;
+    byId("reglage-zone-absente").hidden = p.tray_available;
+  }
+
+  /** The notification area preference applies at once: it belongs to this workstation. */
+  async saveTray() {
+    const error = byId("reglages-poste-erreur");
+    const box = /** @type {HTMLInputElement} */ (byId("reglage-zone"));
+    showError(error, null);
+    try {
+      this.renderTray(await api.setPreferences(box.checked));
+      announce(box.checked ? "Hirzla reste dans la zone de notification." : "Fermer la fenêtre arrêtera Hirzla.");
+    } catch (e) {
+      box.checked = !box.checked;
+      showError(error, /** @type {import("./api.js").ApiError} */ (e).message);
+    }
+  }
+
   /** Reads the vault's settings and recovery kit: when the settings view opens. */
   async load() {
     showError(byId("reglages-coffre-erreur"), null);
     showError(byId("recouvrement-erreur"), null);
+    showError(byId("reglages-poste-erreur"), null);
     try {
+      this.renderTray(await api.getPreferences());
       const s = await api.getSettings();
       this.choose("reglage-auto", s.auto_lock_s);
       this.choose("reglage-pp", s.clipboard_clear_s);

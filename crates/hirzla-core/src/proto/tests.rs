@@ -25,6 +25,8 @@ fn every_request_round_trips() {
         Request::Status,
         Request::Lock,
         Request::Shutdown,
+        Request::ShowApp,
+        Request::AppPoll,
         Request::Init {
             password: z("mot de passe"),
             kdf: None,
@@ -754,4 +756,35 @@ fn debug_hides_content() {
         password: z("hunter2-very-secret"),
     };
     assert!(!format!("{f:?}").contains("hunter2"));
+}
+
+/// `ShowApp` and `AppPoll` (version 8, ADR 0071): sent in version 8, unknown below, and
+/// refused with arguments.
+#[test]
+fn window_call_is_version_8_and_carries_nothing() {
+    for (r, op) in [
+        (Request::ShowApp, Op::ShowApp),
+        (Request::AppPoll, Op::AppPoll),
+    ] {
+        let b = r.encode(3).unwrap();
+        assert!(Request::decode_versioned(&b).unwrap() == (3, 8, r));
+        for v in [1, 2, 7] {
+            let b = encode_map(vec![
+                (1, Value::Uint(v)),
+                (2, Value::Uint(3)),
+                (3, Value::Uint(op as u64)),
+            ]);
+            assert_eq!(refused(&b), (3, ErrorCode::UnknownOperation));
+        }
+        let b = encode_map(vec![
+            (1, Value::Uint(8)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(op as u64)),
+            (4, Value::map(vec![(1, Value::Bool(true))])),
+        ]);
+        assert_eq!(refused(&b), (3, ErrorCode::Malformed));
+        for flag in [false, true] {
+            reply_round_trip(op, Ok(Reply::Flag(flag)));
+        }
+    }
 }

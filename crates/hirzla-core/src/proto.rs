@@ -16,10 +16,10 @@ use zeroize::Zeroizing;
 use crate::generator::{self, Estimate, Generated, Spec};
 
 /// Latest version of the protocol spoken by this build.
-pub const PROTOCOL_VERSION: u64 = 7;
+pub const PROTOCOL_VERSION: u64 = 8;
 /// Versions this build accepts for the general operations. Versions 3 to 6 belong to the
 /// agent, server, Self and connection operations, which have their own code ranges.
-pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7];
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8];
 /// Largest frame accepted, in bytes (length prefix excluded).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Longest master password, in bytes.
@@ -164,10 +164,14 @@ pub enum Op {
     Fill = 13,
     /// Generate a password, a passphrase, a PIN… from full settings (version 7, ADR 0068).
     GenerateWith = 14,
+    /// Ask the desktop application to bring its window to the front (version 8, ADR 0071).
+    ShowApp = 130,
+    /// The desktop application asks whether its window was called for (version 8, ADR 0071).
+    AppPoll = 131,
 }
 
 impl Op {
-    const ALL: [Op; 14] = [
+    const ALL: [Op; 16] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -182,6 +186,8 @@ impl Op {
         Op::Match,
         Op::Fill,
         Op::GenerateWith,
+        Op::ShowApp,
+        Op::AppPoll,
     ];
 
     /// The operation from its number.
@@ -208,6 +214,8 @@ impl Op {
             Op::Match => "match",
             Op::Fill => "fill",
             Op::GenerateWith => "generate_with",
+            Op::ShowApp => "show_app",
+            Op::AppPoll => "app_poll",
         }
     }
 
@@ -218,6 +226,7 @@ impl Op {
         match self {
             Op::Match | Op::Fill => 2,
             Op::GenerateWith => 7,
+            Op::ShowApp | Op::AppPoll => 8,
             _ => 1,
         }
     }
@@ -459,6 +468,10 @@ pub enum Request {
         /// The settings.
         spec: Spec,
     },
+    /// Ask the desktop application to bring its window to the front; carries nothing (v8).
+    ShowApp,
+    /// The desktop application asks whether its window was called for (v8).
+    AppPoll,
 }
 
 impl std::fmt::Debug for Request {
@@ -487,6 +500,8 @@ impl Request {
             Request::Match { .. } => Op::Match,
             Request::Fill { .. } => Op::Fill,
             Request::GenerateWith { .. } => Op::GenerateWith,
+            Request::ShowApp => Op::ShowApp,
+            Request::AppPoll => Op::AppPoll,
         }
     }
 
@@ -503,7 +518,11 @@ impl Request {
             Value::Array(items.iter().map(|t| Value::text(t)).collect())
         };
         match self {
-            Request::Status | Request::Lock | Request::Shutdown => None,
+            Request::Status
+            | Request::Lock
+            | Request::Shutdown
+            | Request::ShowApp
+            | Request::AppPoll => None,
             Request::Init { password, kdf } => {
                 let mut m = vec![(1, Value::text(password))];
                 if let Some(k) = kdf {
@@ -663,6 +682,8 @@ impl Request {
             Op::Status => none(Request::Status),
             Op::Lock => none(Request::Lock),
             Op::Shutdown => none(Request::Shutdown),
+            Op::ShowApp => none(Request::ShowApp),
+            Op::AppPoll => none(Request::AppPoll),
             Op::Init => {
                 let f = fields(args()?, &[1, 2])?;
                 let password = password(f.req(1).map_err(|_| ErrorCode::Malformed)?)?;
@@ -901,6 +922,9 @@ pub enum Reply {
     },
     /// Generated value with its entropy (v7).
     GeneratedWith(Generated),
+    /// Answer of `ShowApp` (an application is listening) and of `AppPoll` (the window was
+    /// called for) (v8).
+    Flag(bool),
 }
 
 impl std::fmt::Debug for Reply {
@@ -915,6 +939,7 @@ impl std::fmt::Debug for Reply {
             Reply::Matches(_) => "Reply::Matches",
             Reply::Filled { .. } => "Reply::Filled",
             Reply::GeneratedWith(_) => "Reply::GeneratedWith",
+            Reply::Flag(_) => "Reply::Flag",
         })
     }
 }
@@ -1083,6 +1108,7 @@ impl Reply {
                 }
                 Some(Value::map(m))
             }
+            Reply::Flag(b) => Some(Value::map(vec![(1, Value::Bool(*b))])),
         }
     }
 
@@ -1091,6 +1117,7 @@ impl Reply {
         match self {
             Reply::Matches(_) | Reply::Filled { .. } => 2,
             Reply::GeneratedWith(_) => 7,
+            Reply::Flag(_) => 8,
             _ => 1,
         }
     }
@@ -1265,6 +1292,13 @@ impl Reply {
             Op::Generate => {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
                 Reply::Generated(text(b.req(1).map_err(|_| ErrorCode::Malformed)?, 1024)?)
+            }
+            Op::ShowApp | Op::AppPoll => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1])?;
+                Reply::Flag(
+                    boolean(b.req(1).map_err(|_| ErrorCode::Malformed)?)
+                        .map_err(|_| ErrorCode::Malformed)?,
+                )
             }
             Op::GenerateWith => {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2, 3])?;

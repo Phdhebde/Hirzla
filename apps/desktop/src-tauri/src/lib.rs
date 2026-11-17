@@ -17,6 +17,9 @@
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
 //!   state of the key transparency log (local API version 4, ADR 0041);
+//! - [`prefs`]: what belongs to this workstation, in a local file (ADR 0071);
+//! - [`tray`]: notification area icon, window that closes without locking, and the call
+//!   for the window through the core (local API version 8, ADR 0071);
 //! - `events` (Linux): sleep and session lock reported to the core (ADR 0033).
 
 #![forbid(unsafe_code)]
@@ -31,8 +34,10 @@ pub mod events;
 pub mod generator;
 pub mod import;
 pub mod link;
+pub mod prefs;
 pub mod selfmode;
 pub mod servermode;
+pub mod tray;
 
 use commands::AppState;
 use link::{CoreLink, LinkConfig};
@@ -61,10 +66,24 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// # Errors
 /// A failure of the window system or of the web view.
 pub fn run() -> Result<(), tauri::Error> {
-    let link = LinkConfig::for_this_process().map(CoreLink::new);
+    let config = LinkConfig::for_this_process();
+    // A second start only brings the first one's window to the front (ADR 0071).
+    if config.as_ref().is_ok_and(link::another_instance_shown) {
+        return Ok(());
+    }
+    let link = config.map(CoreLink::new);
     let app = tauri::Builder::default()
         .plugin(navigation_guard())
         .manage(AppState::new(link))
+        .manage(tray::TrayState::default())
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                use tauri::Manager;
+                if tray::on_close_requested(window.app_handle()) {
+                    api.prevent_close();
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
             commands::create_vault,
@@ -130,19 +149,25 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::quorum_send,
             servermode::quorum_inbox,
             servermode::quorum_respond,
+            tray::get_preferences,
+            tray::set_preferences,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]
             events::start(app.handle());
-            let _ = app;
+            tray::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())?;
-    app.run(|handle, event| {
-        if let tauri::RunEvent::Exit = event {
+    app.run(|handle, event| match event {
+        tauri::RunEvent::Exit => {
             use tauri::Manager;
             handle.state::<AppState>().shutdown();
         }
+        // The dock icon, while the window is hidden.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => tray::show_window(handle),
+        _ => {}
     });
     Ok(())
 }

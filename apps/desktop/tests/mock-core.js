@@ -175,6 +175,7 @@
     app_hardening: { memory_locked: "not_attempted", dumps_disabled: "applied", tracing_blocked: "applied" },
     app_version: "0.0.0",
   });
+  let local = { keep_in_tray: true, tray_available: true };
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
   const v = (n) => n.toString(16).padStart(96, "0");
@@ -310,6 +311,11 @@
     },
     copy_generated_at: () => 30,
     import_csv: () => ({ imported: 42, empty: 1, refused_lines: [17], totp_skipped: 2 }),
+    get_preferences: () => ({ ...local }),
+    set_preferences: (a) => {
+      local = { ...local, keep_in_tray: a.keep_in_tray };
+      return { ...local };
+    },
     get_settings: () => ({ ...settings }),
     set_settings: (a) => {
       const s = a.settings;

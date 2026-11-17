@@ -116,11 +116,12 @@ d'un autre type : `bad_request` (ADR 0027).
 | `{"type":"save","origin":O,"password":P,"username"?,"title"?}` | `{"ok":true}` | `Create` (type mot de passe, URL = `O`, casier personnel, titre par défaut : l'hôte) |
 | `{"type":"generate","length"?:8..128,"symbols"?:bool}` | `{"ok":true,"password"}` | `Generate` (20 caractères, toutes classes par défaut) |
 | `{"type":"lock"}` | `{"ok":true}` | `Lock` |
+| `{"type":"show"}` | `{"ok":true}`, ou `no_app` si aucune application n'écoute | `ShowApp` (ADR 0071) : l'hôte ne lance aucun exécutable |
 
 `O` est une origine `https` canonique (`https://hôte[:port]`) ; `L` et `I` sont 32 chiffres
 hexadécimaux minuscules. Refus : `{"ok":false,"error":CODE}`, où `CODE` est un code de
 l'hôte (`bad_request`, `invalid_origin`, `invalid_input`, `core_not_running`,
-`untrusted_core`, `core_error`, `too_large`) ou le nom d'une erreur du noyau
+`untrusted_core`, `core_error`, `too_large`, `no_app`) ou le nom d'une erreur du noyau
 (`docs/api-locale.md` § 7 : `locked`, `no_vault`, `not_found`, `unauthorized`…). Un refus ne
 contient jamais de détail.
 

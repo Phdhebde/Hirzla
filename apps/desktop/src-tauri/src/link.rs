@@ -65,6 +65,27 @@ impl LinkConfig {
     }
 }
 
+/// Asks a running core to bring the window of the application already started to the front
+/// (`ShowApp`, ADR 0071): `true` if one is listening, and this process has nothing to do but
+/// stop. It starts no core and does not harden this process: a second start must leave no
+/// trace. One more try after a second if the core had just received the same call.
+#[must_use]
+pub fn another_instance_shown(config: &LinkConfig) -> bool {
+    let Ok(mut client) = Client::connect(&config.endpoint, Some(&config.core)) else {
+        return false;
+    };
+    for attempt in 0..2 {
+        match client.call(&Request::ShowApp) {
+            Ok(Reply::Flag(listening)) => return listening,
+            Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
+                std::thread::sleep(Duration::from_millis(1100));
+            }
+            _ => return false,
+        }
+    }
+    false
+}
+
 /// A link to the core, connected on demand.
 pub struct CoreLink {
     config: LinkConfig,
@@ -77,7 +98,7 @@ pub struct CoreLink {
 fn is_idempotent(op: Op) -> bool {
     matches!(
         op,
-        Op::Status | Op::List | Op::Read | Op::Generate | Op::Lock
+        Op::Status | Op::List | Op::Read | Op::Generate | Op::Lock | Op::AppPoll
     )
 }
 

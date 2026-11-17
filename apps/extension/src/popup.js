@@ -9,6 +9,7 @@ import {
   generate,
   listForTab,
   lockVault,
+  showApp,
   readLoginForTab,
   saveLogin,
   useGeneratedForTab,
@@ -119,9 +120,12 @@ async function refresh() {
     show('logins', false);
     show('actions', false);
     show('lock', r.error !== 'locked' && r.error !== 'no_vault' && origin !== null);
+    // The application is where the vault is created and unlocked.
+    show('open-app', ['locked', 'no_vault', 'unsupported_page'].includes(r.error));
     return;
   }
   say(null);
+  show('open-app', false);
   show('lock');
   show('actions');
   renderEntries(r.entries);
@@ -171,6 +175,13 @@ async function main() {
     const r = await useGeneratedForTab(tab, password);
     if (!r.ok) return say(r.error);
     openSaveForm({ ...r, password });
+  });
+
+  $('open-app').addEventListener('click', async () => {
+    const r = await showApp();
+    if (!r.ok) return say(r.error);
+    // The window of the application takes the focus; nothing more to do here.
+    window.close();
   });
 
   $('lock').addEventListener('click', async () => {

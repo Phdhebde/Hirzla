@@ -17,6 +17,7 @@
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
  * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
  *   lock_on_session_lock: boolean }} VaultSettings
+ * @typedef {{ keep_in_tray: boolean, tray_available: boolean }} LocalPreferences
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
  *   username: string | null, fields: string[], changed: string[], custom: number }} Version
  * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
@@ -180,6 +181,12 @@ export const api = {
    * @returns {Promise<SecretRef>}
    */
   createSshKey: (key) => call("create_ssh_key", { key }),
+
+  // This workstation (ADR 0071).
+  /** @returns {Promise<LocalPreferences>} */
+  getPreferences: () => call("get_preferences"),
+  /** @param {boolean} keepInTray @returns {Promise<LocalPreferences>} */
+  setPreferences: (keepInTray) => call("set_preferences", { keep_in_tray: keepInTray }),
 
   // Self mode (local API version 5).
   /** @returns {Promise<VaultSettings>} */
