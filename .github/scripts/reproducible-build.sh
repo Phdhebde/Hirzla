@@ -12,6 +12,9 @@
 # - Cargo.lock (--locked), the toolchain of rust-toolchain.toml, release profile with one
 #   codegen unit and LTO (Cargo.toml).
 #
+# The core is built as shipped on Linux, with `fido2-hid` (ADR 0075), in a cargo invocation of
+# its own so that the feature does not reach the other executables. Needs libudev.
+#
 # Usage: .github/scripts/reproducible-build.sh [WORK_DIR]
 # Needs the crates of Cargo.lock already fetched (`cargo fetch --locked`): nothing is
 # downloaded during the builds (--offline). Prints the SHA-256 of each executable.
@@ -22,7 +25,7 @@ work="${1:-$(mktemp -d)}"
 mkdir -p "$work"
 cargo_home="${CARGO_HOME:-$HOME/.cargo}"
 rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
-packages=(-p hirzla-core -p hirzla-cli -p hirzla-server)
+packages=(-p hirzla-cli -p hirzla-server)
 bins=(hirzla-core hirzla hirzlad)
 
 SOURCE_DATE_EPOCH="$(git -C "$root" log -1 --format=%ct)"
@@ -42,6 +45,9 @@ for n in 1 2; do
   cmaps="$cmaps -ffile-prefix-map=$cargo_home=/cargo"
   (
     cd "$src"
+    RUSTFLAGS="$maps" CFLAGS="$cmaps" CXXFLAGS="$cmaps" CARGO_TARGET_DIR="$target" \
+      CARGO_INCREMENTAL=0 \
+      cargo build --release --locked --offline -p hirzla-core --features fido2-hid
     RUSTFLAGS="$maps" CFLAGS="$cmaps" CXXFLAGS="$cmaps" CARGO_TARGET_DIR="$target" \
       CARGO_INCREMENTAL=0 \
       cargo build --release --locked --offline "${packages[@]}"

@@ -218,8 +218,9 @@ présentée donne « n'existe plus » ; une clé sans `hmac-secret` est refusée
 
 ### F2 — Clé FIDO2 sous Linux et macOS (`fido2-hid`)
 
-Construire le noyau avec la fonctionnalité : `cargo build -p hirzla-core --features fido2-hid`
-(Linux : `libudev-dev` ; accès au périphérique `hidraw` par une règle udev). Puis, comme F1 :
+Avec le noyau livré (il porte la fonctionnalité), ou construit comme lui :
+`cargo build -p hirzla-core --features fido2-hid` (Linux : `libudev-dev` ; accès au
+périphérique `hidraw` par une règle udev). Puis, comme F1 :
 la ligne de commande demande le PIN sans écho. Vérifier : un PIN faux donne « code PIN … requis
 ou incorrect » ; après le nombre d'essais de la clé, « bloquée » ; **une même clé enrôlée sous
 Windows ouvre le coffre sous Linux** (sémantique PRF identique, à vérifier en copiant le

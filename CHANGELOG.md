@@ -25,8 +25,10 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 - Format : contenu du `keystore_blob` des méthodes 3, 4 et 5 et étiquette
   `hirzla/v1/hardware-secret` (`docs/format.md` § 4.2.1). Pas de nouvelle version du format :
   un noyau 1.0.0 ouvre toujours le coffre avec le mot de passe.
-- FIDO2 sous Linux et macOS : fonctionnalité Cargo `fido2-hid` (`ctap-hid-fido2`), désactivée
-  par défaut. Sous Windows, FIDO2 passe par `webauthn.dll`.
+- FIDO2 sous Linux et macOS : fonctionnalité Cargo `fido2-hid` (`ctap-hid-fido2`), activée dans
+  le noyau livré sur ces deux systèmes (la ligne de commande, l'hôte natif et l'application ne
+  l'embarquent pas). Sous Windows, FIDO2 passe par `webauthn.dll`. Le paquet Linux dépend de
+  `libudev`.
 - À vérifier sur du vrai matériel avant livraison : tests H1, H2, M2, F1 et F2 de
   `docs/keystore-prototypes.md`.
 

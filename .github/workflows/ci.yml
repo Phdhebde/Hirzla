@@ -214,7 +214,7 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: sudo apt-get update && sudo apt-get install -y cmake libudev-dev
       - name: Crates of Cargo.lock
         run: cargo fetch --locked
       - name: Two builds, compared
@@ -224,7 +224,9 @@ jobs:
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           mkdir -p sbom
           for p in hirzla-core hirzla-cli hirzla-server hirzla-native-host hirzla-desktop; do
-            .github/scripts/sbom.py "$p" --target x86_64-unknown-linux-gnu --output "sbom/$p.cdx.json"
+            f=(); if [ "$p" = hirzla-core ]; then f=(--features fido2-hid); fi
+            .github/scripts/sbom.py "$p" --target x86_64-unknown-linux-gnu "${f[@]}" \
+              --output "sbom/$p.cdx.json"
           done
           # npm packages of the desktop interface and of the extension (ADR 0061): read from
           # package-lock.json alone, nothing installed; regenerated once to check determinism.

@@ -1680,6 +1680,6 @@ ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
 
 ### 20.6 Points ouverts
 
-Voir l'ADR 0075 : FIDO2 sous Linux et macOS derrière la fonctionnalité `fido2-hid`, désactivée
-par défaut ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
+Voir l'ADR 0075 : FIDO2 sous Linux et macOS par la fonctionnalité `fido2-hid`, activée dans le
+noyau livré (une compilation sans elle répond `MethodUnavailable` pour FIDO2) ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
 fenêtre ; place de Windows Hello et Touch ID dans la configuration évaluée.

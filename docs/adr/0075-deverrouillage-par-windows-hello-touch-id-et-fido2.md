@@ -239,13 +239,21 @@ restants n'est pas donné), 154 `PinBlocked` (clé FIDO2 bloquée). Détail dans
 | Windows Hello | `windows` 0.62.2 (Microsoft), **déjà dans `Cargo.lock`** par Tauri ; fonctionnalités `Foundation`, `Security_Credentials`, `Security_Cryptography`, `Storage_Streams` | MIT OR Apache-2.0 | Dans les liaisons générées ; **aucun bloc à nous** | API WinRT sûre, éditeur du système |
 | FIDO2 sous Windows | `windows-sys` 0.61.2, déjà direct ; fonctionnalité `Win32_Networking_WindowsWebServices` en plus | MIT OR Apache-2.0 | Nos appels à `webauthn.dll`, bloc par bloc avec `// SAFETY:` | API du système, seule voie sans droits d'administration |
 | Touch ID | `security-framework`, `security-framework-sys`, `core-foundation`, déjà directs | MIT OR Apache-2.0 | `SecKeyCreateWithData`, `SecKeyCopyAttributes` (comme le prototype) | Aucune dépendance nouvelle |
-| FIDO2 sous Linux et macOS | `ctap-hid-fido2` 3.6.1, `default-features = false`, `aws-lc-rs` ; fonctionnalité Cargo **`fido2-hid`**, **désactivée par défaut** | MIT ; dépendances MIT ou Apache-2.0 | `hidapi` 2.6.7 (bibliothèque C compilée depuis ses sources vendues, sans téléchargement ; `libudev` sous Linux) | Le protocole PIN de CTAP 2 est de la cryptographie que la règle 1 interdit d'écrire ; cette caisse l'assemble à partir d'AWS-LC et de RustCrypto. 420 000 téléchargements, publiée le 2026-11-02 |
+| FIDO2 sous Linux et macOS | `ctap-hid-fido2` 3.6.1, `default-features = false`, `aws-lc-rs` ; fonctionnalité Cargo **`fido2-hid`**, désactivée par défaut dans l'espace de travail, **activée pour le seul noyau livré sous Linux et macOS** | MIT ; dépendances MIT ou Apache-2.0 | `hidapi` 2.6.7 (bibliothèque C compilée depuis ses sources vendues, sans téléchargement ; `libudev` sous Linux) | Le protocole PIN de CTAP 2 est de la cryptographie que la règle 1 interdit d'écrire ; cette caisse l'assemble à partir d'AWS-LC et de RustCrypto. 420 000 téléchargements, publiée le 2026-11-02 |
 
 Limites déclarées de `ctap-hid-fido2` : elle garde le PIN et la sortie `hmac-secret` dans des
 tampons qu'elle n'efface pas (comme `flate2` dans l'ADR 0025) ; elle tire `x509-parser`,
-`anyhow` et deux versions de `aes`. D'où la fonctionnalité désactivée par défaut : **l'activer
-dans les binaires livrés Linux et macOS est une décision du mainteneur** (point ouvert 1). Elle
-est construite et vérifiée par un job de CI dédié.
+`anyhow` et deux versions de `aes`. D'où une fonctionnalité Cargo plutôt qu'une dépendance
+ordinaire.
+
+**Décision du mainteneur (2026-11-17, point ouvert 1)** : `fido2-hid` est **activée dans le noyau
+livré sous Linux et macOS**, et seulement là. Le flux de livraison compile `hirzla-core` avec
+`--features livraison,fido2-hid` dans une invocation de Cargo à part, pour que `hidapi`
+n'atteigne ni la ligne de commande, ni l'hôte natif, ni l'application (qui embarque ce même
+noyau) ; Windows passe par `webauthn.dll`. La compilation reproductible vérifie ce noyau-là, et
+sa nomenclature (SBOM) liste `ctap-hid-fido2` et `hidapi`. Le reste de l'espace de travail se
+compile sans la fonctionnalité ; le job de CI « FIDO2 HID » la construit et la teste. Les
+tampons non effacés de la caisse restent un risque résiduel déclaré (`modele-de-menace.md`).
 
 ### 9. Tests
 
@@ -280,8 +288,8 @@ est construite et vérifiée par un job de CI dédié.
 
 ## Points ouverts
 
-1. Activer `fido2-hid` dans les binaires livrés Linux et macOS (dépendance C `hidapi`,
-   `libudev`, tampons non effacés).
+1. ~~Activer `fido2-hid` dans les binaires livrés Linux et macOS~~ : **tranché le
+   2026-11-17**, activée dans le noyau livré sous Linux et macOS (§ 8).
 2. Fenêtre de Windows Hello et de `webauthn.dll` appelée par un noyau sans fenêtre : premier
    plan à vérifier (H1, H2) ; repli prévu : passer le handle de la fenêtre du client.
 3. Windows Hello et Touch ID dans la configuration évaluée.

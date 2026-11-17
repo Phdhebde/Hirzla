@@ -24,7 +24,8 @@ signature-systeme = []
 # Never enabled in a shipped binary.
 fuzzing = []
 # FIDO2 security keys over USB HID on Linux and macOS (ADR 0075 § 8): `ctap-hid-fido2`, which
-# needs libudev on Linux. Windows always goes through webauthn.dll.
+# needs libudev on Linux. Windows always goes through webauthn.dll. Enabled in the shipped core
+# on Linux and macOS (release workflow, reproducible build), never in the other executables.
 fido2-hid = ["hirzla-keystore/fido2-hid"]
 
 [dependencies]

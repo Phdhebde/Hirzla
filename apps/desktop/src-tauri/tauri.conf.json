@@ -56,10 +56,12 @@
     "longDescription": "Hirzla garde vos mots de passe et vos secrets dans un coffre chiffré par une suite hybride, classique et post-quantique. Les clés ne quittent jamais le noyau local.",
     "linux": {
       "deb": {
-        "section": "utils"
+        "section": "utils",
+        "depends": ["libudev1"]
       },
       "rpm": {
-        "release": "1"
+        "release": "1",
+        "depends": ["libudev.so.1()(64bit)"]
       },
       "appimage": {
         "bundleMediaFramework": false

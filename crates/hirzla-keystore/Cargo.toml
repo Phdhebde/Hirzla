@@ -18,8 +18,8 @@ tpm2-prototype = ["dep:tss-esapi", "dep:hirzla-crypto", "dep:thiserror"]
 # `dev-dependencies` enable it; never a shipped binary.
 test-software = ["dep:hirzla-crypto"]
 # ADR 0075: FIDO2 over HID on Linux and macOS (`ctap-hid-fido2`, hence the C library hidapi and,
-# on Linux, libudev). Off by default: enabling it in shipped binaries is the maintainer's
-# decision (ADR 0075, open point 1). Windows uses webauthn.dll and does not need it.
+# on Linux, libudev). Off in the workspace; on in the shipped core on Linux and macOS, built
+# alone with it by the release workflow (ADR 0075 § 8). Windows uses webauthn.dll.
 fido2-hid = ["dep:ctap-hid-fido2", "dep:anyhow", "dep:hirzla-crypto"]
 
 [dependencies]
