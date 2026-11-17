@@ -118,7 +118,7 @@ par la clé d'éditeur.
 
 Formulaire : <https://signpath.org/apply>. Les conditions, selon ce qui est affiché par
 SignPath au moment de la demande, portent notamment sur : une licence approuvée par l'OSI
-(Apache 2.0 : oui), un dépôt public, des compilations faites sur les agents hébergés par
+(AGPL-3.0-or-later : oui), un dépôt public, des compilations faites sur les agents hébergés par
 GitHub (c'est le cas), et une **politique de signature de code** publiée dans le
 `README` ou sur le site (qui signe, qui approuve, ce qui est signé). Reprenez le texte exact
 que SignPath demande ; je l'ajoute au site et au `README` si besoin.

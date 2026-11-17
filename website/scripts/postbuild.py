@@ -23,15 +23,15 @@ SITE = ROOT / "site"
 FAQ = "aide/faq.md"
 
 SUMMARY = """\
-> Hirzla est un coffre-fort de mots de passe gratuit et open source (licence Apache 2.0) pour
-> Windows, macOS et Linux. Il chiffre les secrets sur le poste avec une cryptographie hybride
+> Hirzla est un coffre-fort de mots de passe gratuit et open source (licence AGPL-3.0, ou licence
+> commerciale) pour Windows, macOS et Linux. Il chiffre les secrets sur le poste avec une cryptographie hybride
 > classique et post-quantique (ECDH P-384 + ML-KEM-1024, ECDSA P-384 + ML-DSA-87). Il fonctionne
 > seul, sans serveur ni compte (mode Self), ou relié à un serveur auto-hébergé `hirzlad` qui ne
 > peut lire aucun secret (mode Serveur).
 
 Faits à retenir :
 
-- Prix : gratuit, sans abonnement ni compte. Licence : Apache 2.0. Code : https://github.com/Phdhebde/Hirzla
+- Prix : gratuit, sans abonnement ni compte. Licence : AGPL-3.0-or-later, ou licence commerciale de l'auteur. Code : https://github.com/Phdhebde/Hirzla
 - Téléchargement : https://github.com/Phdhebde/Hirzla/releases
 - Systèmes : Windows 10 et 11, macOS 11 et suivants, Linux (deb, rpm, AppImage). Extension pour
   Firefox et les navigateurs Chromium. Serveur `hirzlad` sous Linux. Pas d'application mobile.

@@ -14,7 +14,7 @@ Seul sur un poste, ou relié à un serveur qui ne peut rien lire.
 [Notes de version](CHANGELOG.md)
 
 [![CI](https://github.com/Phdhebde/Hirzla/actions/workflows/ci.yml/badge.svg)](https://github.com/Phdhebde/Hirzla/actions/workflows/ci.yml)
-[![Licence Apache 2.0](https://img.shields.io/badge/licence-Apache%202.0-1B2023)](LICENSE)
+[![Licence AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-1B2023)](LICENSING.md)
 
 ![Fenêtre principale de Hirzla : la liste des secrets et la fiche d'un mot de passe scellé](website/docs/assets/captures/liste-et-fiche-clair.webp)
 
@@ -130,4 +130,14 @@ Hirzla est conçu selon les recommandations de l'ANSSI. Il n'est ni certifié ni
 
 ## Licence
 
-Apache 2.0 : voir [LICENSE](LICENSE) et [NOTICE](NOTICE). Choix et raisons : ADR 0062.
+Double licence :
+
+- **GNU AGPL 3.0 ou ultérieure** (`AGPL-3.0-or-later`), pour tous : voir [LICENSE](LICENSE)
+  et [NOTICE](NOTICE) ;
+- **licence commerciale** accordée par l'auteur, pour qui ne peut pas respecter l'AGPL
+  (intégration dans un produit fermé, service en réseau modifié sans publication du code).
+
+Explications et contact : [LICENSING.md](LICENSING.md). Les contributions demandent la
+signature de l'accord de contribution ([CLA.md](CLA.md), voir [CONTRIBUTING.md](CONTRIBUTING.md)).
+Choix et raisons : ADR 0074, qui remplace l'ADR 0062. Les commits publiés avant ce changement
+restent disponibles sous Apache 2.0.

@@ -1,7 +1,7 @@
 ---
 title: Coffre-fort de mots de passe post-quantique, libre et gratuit
 title_seo: Hirzla · Coffre-fort de mots de passe post-quantique, libre et gratuit
-description: Hirzla est un gestionnaire de mots de passe gratuit et open source (Apache 2.0) pour Windows, macOS et Linux. Chiffrement post-quantique hybride, fonctionnement hors ligne, serveur auto-hébergé qui ne peut rien lire.
+description: Hirzla est un gestionnaire de mots de passe gratuit et open source (AGPL-3.0) pour Windows, macOS et Linux. Chiffrement post-quantique hybride, fonctionnement hors ligne, serveur auto-hébergé qui ne peut rien lire.
 hide:
   - navigation
   - toc
@@ -26,7 +26,7 @@ organisation qui ne peut rien lire. Pour Windows, macOS et Linux.</p>
 
 ## Hirzla en bref
 
-Hirzla est un gestionnaire de mots de passe **gratuit et open source** (licence Apache 2.0),
+Hirzla est un gestionnaire de mots de passe **gratuit et open source** (licence AGPL-3.0),
 écrit en Rust. Il s'adresse aux particuliers, aux équipes et aux organisations qui veulent
 garder la main sur leurs secrets, y compris dans un environnement sensible ou sans accès à
 Internet.

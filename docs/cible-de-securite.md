@@ -23,7 +23,7 @@
 | Nom commercial | Hirzla |
 | Version évaluée | `À COMPLÉTER (Max)` — à figer au gel de la phase 5 ; l'espace de travail Cargo porte aujourd'hui `0.0.0` |
 | Éditeur (raison sociale) | Max, éditeur en nom propre (décision du 2026-11-15) ; dénomination exacte `À COMPLÉTER (Max)` — l'identifiant d'application `app.hirzla.desktop` et l'éditeur « Hirzla » des installeurs sont provisoires (`livraison.md` § 9) |
-| Licence du produit | Apache 2.0 (ADR 0062) |
+| Licence du produit | Double licence : AGPL-3.0-or-later ou licence commerciale de l'auteur (ADR 0074, remplace l'ADR 0062) |
 | Gamme | Hornn (bastion de gestion des accès à privilèges) |
 | Catégorie CSPN visée | `À COMPLÉTER (Max)` — évaluation reportée (décision du 2026-11-15) ; la v1 proposait « Stockage sécurisé », secondaire « Identification, authentification et contrôle d'accès » ; à confirmer avec le CESTI |
 | Composants livrés | Noyau `hirzla-core`, ligne de commande `hirzla`, serveur `hirzlad`, application de poste `hirzla-desktop`, hôte natif `hirzla-native-host`, extension navigateur. `hirzla-signer` reste chez l'éditeur (jamais livré aux postes) |
@@ -668,8 +668,8 @@ l'IPC) ; aucun installeur ne télécharge ; mises à jour par fichier.
 
 ## 9. Points ouverts
 
-1. **Catégorie CSPN, plateforme de référence, éditeur, version, licence** :
-   `À COMPLÉTER (Max)` (§ 1). Recommandation de périmètre et de plateforme : ADR 0050.
+1. **Catégorie CSPN, plateforme de référence, éditeur, version** :
+   `À COMPLÉTER (Max)` (§ 1) ; la licence est fixée par l'ADR 0074. Recommandation de périmètre et de plateforme : ADR 0050.
 2. **Écarts entre la v1 et le code** (garde matérielle, F15, TLS P-384, HSM, journal local du
    noyau, syslog TLS) : à trancher par l'ADR 0050 ; la v2 ne promet que ce qui est codé.
    SBOM et compilation reproductible sont désormais produites (ADR 0056).

@@ -1,7 +1,18 @@
 Hirzla
-Copyright 2026 The Hirzla authors
+Copyright (C) 2026 Max
 
-This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+Hirzla is dual-licensed. You may use it under the terms of the GNU Affero General
+Public License, version 3 or (at your option) any later version (AGPL-3.0-or-later,
+see LICENSE), or under a separate commercial licence granted by the author (see
+LICENSING.md).
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+Versions of this repository published before 2026-11-17 were made available under the
+Apache License, Version 2.0; copies obtained under those terms keep them (ADR 0074).
+
 Third-party components keep their own licences, listed in the software bill of
 materials published with each release (docs/livraison.md).
 

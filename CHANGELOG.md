@@ -128,4 +128,12 @@ pour Linux, extension Firefox et Chromium.
 - Prototypes de déverrouillage matériel hors des binaires livrés (ADR 0052).
 - Produit ni certifié ni qualifié à ce jour ; dossier CSPN en préparation.
 
+### Licence
+
+- Double licence : GNU AGPL 3.0 ou ultérieure (`AGPL-3.0-or-later`), ou licence commerciale
+  accordée par l'auteur (`LICENSING.md`, ADR 0074, qui remplace l'ADR 0062). Les commits
+  publiés auparavant sous Apache 2.0 le restent pour qui les a obtenus.
+- Contributions reçues après signature de l'accord de contribution (`CLA.md`) et avec une
+  ligne `Signed-off-by` (`CONTRIBUTING.md`).
+
 [1.0.0]: https://github.com/Phdhebde/Hirzla/releases/tag/v1.0.0
