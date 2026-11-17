@@ -844,6 +844,7 @@
           <button id="secret-mdp-generer" class="bouton bouton-secondaire" type="button">Générer</button>
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
+        <label id="secret-mdp-effacer-case" class="case" hidden><input type="checkbox" id="secret-mdp-effacer"> Effacer le mot de passe actuel</label>
       </div>
       <label class="champ" data-pour="ssh">
         <span class="champ-libelle">Clé SSH du coffre</span>
@@ -871,6 +872,7 @@
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
+      <label id="secret-notes-effacer-case" class="case" hidden><input type="checkbox" id="secret-notes-effacer"> Effacer les notes actuelles</label>
       <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>

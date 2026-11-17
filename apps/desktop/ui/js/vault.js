@@ -454,10 +454,52 @@ export class VaultView {
     byId("fiche-supprimer-texte").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
     byId("fiche-restaurer").hidden = !entry.trash;
 
-    const ref = { locker: entry.locker, id: entry.id };
-    // The most frequent action of each type comes first, above the fields.
     const main = byId("fiche-principales");
     main.replaceChildren();
+    main.hidden = true;
+    if (entry.trash) {
+      fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
+    }
+    if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
+      void this.renderConnection(entry, this.recordToken);
+    } else if (["password", "note", "ssh_key"].includes(entry.kind)) {
+      void this.renderFields(entry, this.recordToken);
+    } else {
+      fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
+    }
+  }
+
+  /**
+   * Names of the fields the current version of a secret holds, read from its history: the
+   * core lists the fields present, never a value (`docs/api-locale.md` § 16.2). `null` when
+   * the core does not tell (older core, refusal): every field is then drawn as before.
+   * @param {import("./api.js").SecretRef} ref
+   * @returns {Promise<Set<string> | null>}
+   */
+  async presentFields(ref) {
+    try {
+      const versions = await api.history(ref);
+      return versions.length ? new Set(versions[0].fields) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The fields of a password, a note or an SSH key. An empty optional field (notes,
+   * passphrase) is left out; an empty main field says so, without reveal or copy buttons.
+   * @param {Entry} entry
+   * @param {number} token  Drawing this record belongs to; a later one cancels it.
+   */
+  async renderFields(entry, token) {
+    const ref = { locker: entry.locker, id: entry.id };
+    const present = await this.presentFields(ref);
+    if (token !== this.recordToken) return;
+    /** @param {FieldName} f */
+    const has = (f) => present === null || present.has(f);
+    const fields = byId("fiche-champs");
+    // The most frequent action of each type comes first, above the fields.
+    const main = byId("fiche-principales");
     const quick = /** @type {Record<string, [FieldName, string]>} */ ({
       password: ["password", "Mot de passe"],
       note: ["notes", "Contenu"],
@@ -465,55 +507,56 @@ export class VaultView {
     })[entry.kind];
     if (quick && !entry.trash) {
       const [field, label] = quick;
-      const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
-        icon("copier"),
-        `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
-      ]);
-      b.addEventListener("click", () => void this.copy(ref, field, label));
-      main.append(b);
+      if (has(field)) {
+        const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
+          icon("copier"),
+          `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
+        ]);
+        b.addEventListener("click", () => void this.copy(ref, field, label));
+        main.append(b);
+      }
       if (entry.kind === "password" && entry.username) {
-        const u = h("button", { class: "bouton bouton-secondaire", type: "button" }, [icon("copier"), "Copier l'identifiant"]);
+        const u = h("button", { class: `bouton ${has("password") ? "bouton-secondaire" : "bouton-principal"}`, type: "button" }, [
+          icon("copier"),
+          "Copier l'identifiant",
+        ]);
         u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
         main.append(u);
       }
     }
-    if (!entry.trash && entry.kind !== "ssh_connection" && entry.kind !== "rdp_connection") {
+    if (!entry.trash) {
       /** @type {import("./api.js").TypedWhat[]} */
-      const offered =
-        entry.kind === "password"
-          ? entry.username
-            ? ["username_password", "password", "username", "notes"]
-            : ["password", "notes"]
-          : entry.kind === "note"
-            ? ["notes"]
-            : entry.kind === "ssh_key"
-              ? ["ssh_passphrase"]
-              : [];
+      const offered = [];
+      if (entry.kind === "password") {
+        if (entry.username && has("password")) offered.push("username_password");
+        if (has("password")) offered.push("password");
+        if (entry.username) offered.push("username");
+      }
+      if ((entry.kind === "password" || entry.kind === "note") && has("notes")) offered.push("notes");
+      if (entry.kind === "ssh_key" && has("ssh_passphrase")) offered.push("ssh_passphrase");
       const type = this.hooks.autoType.button(ref, entry.title, offered);
       if (type) main.append(type);
     }
     main.hidden = main.childElementCount === 0;
-    if (entry.trash) {
-      fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
-    }
+    /**
+     * @param {string} label
+     * @param {FieldName} field
+     */
+    const required = (label, field) => (has(field) ? this.secretField(label, ref, field) : emptyField(label));
     if (entry.kind === "password") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
-      fields.append(this.secretField("Mot de passe", ref, "password"));
+      fields.append(required("Mot de passe", "password"));
       if (entry.hosts.length) fields.append(listField("Sites", entry.hosts, "mono"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-      fields.append(this.secretField("Notes", ref, "notes"));
+      if (has("notes")) fields.append(this.secretField("Notes", ref, "notes"));
     } else if (entry.kind === "note") {
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-      fields.append(this.secretField("Contenu", ref, "notes"));
+      fields.append(required("Contenu", "notes"));
     } else if (entry.kind === "ssh_key") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
-      fields.append(this.secretField("Clé publique", ref, "ssh_public_key"));
-      fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
+      fields.append(required("Clé publique", "ssh_public_key"));
+      if (has("ssh_passphrase")) fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-    } else if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
-      void this.renderConnection(entry, this.recordToken);
-    } else {
-      fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
     }
   }
 
@@ -700,13 +743,15 @@ export class VaultView {
       } catch (e) {
         const err = /** @type {import("./api.js").ApiError} */ (e);
         if (err.code === "not_found") {
-          value.textContent = "Vide";
-          value.classList.add("valeur-masquee");
-          reveal.disabled = true;
-          copy.disabled = true;
+          row.replaceWith(emptyField(label));
           return;
         }
         this.hooks.onError(err);
+        return;
+      }
+      if (text === "") {
+        // Present but empty (written by an older client or an import): nothing to show.
+        row.replaceWith(emptyField(label));
         return;
       }
       value.textContent = text;
@@ -726,11 +771,12 @@ export class VaultView {
       }, 1000);
     });
     copy.addEventListener("click", () => void this.copy(ref, field, label));
-    return h("div", { class: "champ-fiche" }, [
+    const row = h("div", { class: "champ-fiche" }, [
       h("dt", { text: label }),
       h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, countdown]), shape]),
       h("dd", { class: "actions-champ" }, [reveal, copy]),
     ]);
+    return row;
   }
 
   /**
@@ -958,6 +1004,14 @@ function subtitle(e) {
     return where ? `${e.kind === "rdp_connection" ? "RDP" : "SSH"} · ${where}` : TYPE_NAMES[e.kind];
   }
   return TYPE_NAMES[e.kind] ?? TYPE_NAMES.unknown;
+}
+
+/**
+ * A field the secret does not hold: its name and "Vide", with nothing to reveal or copy.
+ * @param {string} label
+ */
+function emptyField(label) {
+  return h("div", { class: "champ-fiche" }, [h("dt", { text: label }), h("dd", { class: "valeur-vide", text: "Vide" })]);
 }
 
 /**

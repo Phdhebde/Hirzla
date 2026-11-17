@@ -571,7 +571,15 @@ Décisions : ADR 0024. Code : `apps/desktop`.
 - Mode Self (§ 16) : `GetSettings`, `SetSettings`, `ChangePassword`, `RestoreSecret`,
   `History`, `ReadVersion` (révélation ou copie), `RestoreVersion`, `RecoveryStatus` (aussi sur
   l'écran de déverrouillage), `RecoveryCreate`, `RecoveryUnlock`, `RecoveryRemove`,
-  `ImportKdbx`. La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
+  `ImportKdbx`. La fiche d'un mot de passe, d'une note ou d'une clé SSH lit `History` pour
+  savoir quels champs la version actuelle contient (numéros des champs, § 16.2, jamais une
+  valeur) : un champ facultatif absent (notes, phrase de passe) n'est pas affiché, un champ
+  principal absent est marqué « Vide », sans bouton de révélation ni de copie. Si `History`
+  est refusé, la fiche affiche tous les champs comme avant. Le formulaire de modification
+  s'en sert aussi (et de `has_password`, `has_notes` pour une connexion) pour proposer
+  « Effacer le mot de passe actuel » et « Effacer les notes actuelles » : le champ part alors
+  dans les champs à effacer d'`Update` (§ 6, clé 3). Aucun changement du protocole.
+  La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
 - Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
