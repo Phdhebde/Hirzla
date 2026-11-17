@@ -125,6 +125,34 @@ jobs:
           cargo test -p hirzla-keystore --features tpm2-prototype --test tpm2_prototype --
           --ignored --nocapture --test-threads=1
 
+  # FIDO2 over USB HID on Linux and macOS (ADR 0075 § 8): `ctap-hid-fido2` behind the
+  # `fido2-hid` feature, off by default. Built and checked here; real keys are tested by hand
+  # (docs/keystore-prototypes.md, test F2).
+  fido2-hid:
+    name: FIDO2 HID (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install
+      - name: CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: "3.31.x"
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libclang-dev
+      - name: Clippy
+        run: >-
+          cargo clippy -p hirzla-keystore -p hirzla-core --all-targets --features
+          hirzla-keystore/fido2-hid,hirzla-keystore/test-software -- -D warnings
+      - name: Tests
+        run: cargo test -p hirzla-keystore --features fido2-hid,test-software --lib
+
   # Interface of the desktop application: type check of the JavaScript (no build step, the
   # checked files are the shipped ones) and fingerprints of the embedded fonts.
   desktop-ui:
