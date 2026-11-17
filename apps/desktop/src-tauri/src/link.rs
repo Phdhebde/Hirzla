@@ -303,7 +303,7 @@ impl CoreLink {
         }
     }
 
-    /// Sends one folder request (`docs/api-locale.md` § 19, version 9). Only the tree, which
+    /// Sends one folder request (`docs/api-locale.md` § 20, version 11). Only the tree, which
     /// changes nothing, is sent again on a new connection.
     ///
     /// # Errors

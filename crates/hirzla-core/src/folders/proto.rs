@@ -1,5 +1,5 @@
-//! Folder operations of the local API (`docs/api-locale.md` § 19): version 9, operation codes
-//! 140 to 149. Same frames, same CBOR profile and same strict decoding as the rest of the API
+//! Folder operations of the local API (`docs/api-locale.md` § 20): version 11, operation codes
+//! 150 to 159. Same frames, same CBOR profile and same strict decoding as the rest of the API
 //! (`crate::proto`). The general error codes of § 7 are the only ones used.
 
 use hirzla_vault::cbor::{self, array_max, fixed, text_max, uint, Fields, Value};
@@ -9,9 +9,9 @@ use zeroize::Zeroizing;
 use crate::proto::ErrorCode;
 
 /// Version of the protocol that carries the folder operations.
-pub const FOLDER_VERSION: u64 = 9;
+pub const FOLDER_VERSION: u64 = 11;
 /// Operation codes reserved for folders.
-pub const FOLDER_OPS: std::ops::RangeInclusive<u64> = 140..=149;
+pub const FOLDER_OPS: std::ops::RangeInclusive<u64> = 150..=159;
 /// Longest folder name on the wire; the vault refuses more than 255 bytes.
 const MAX_NAME: usize = 4096;
 /// Most folders and placements in one locker of a reply.
@@ -23,17 +23,17 @@ const MAX_LOCKERS: usize = 1 << 16;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FolderOp {
     /// The shown tree of each locker, and where its secrets are.
-    FolderTree = 140,
+    FolderTree = 150,
     /// Create a folder.
-    FolderCreate = 141,
+    FolderCreate = 151,
     /// Rename a folder.
-    FolderRename = 142,
+    FolderRename = 152,
     /// Move a folder.
-    FolderMove = 143,
+    FolderMove = 153,
     /// Delete a folder and its sub-folders; their active secrets go to the trash.
-    FolderDelete = 144,
+    FolderDelete = 154,
     /// Put a secret in a folder of its locker, or at its root.
-    SecretMove = 145,
+    SecretMove = 155,
 }
 
 impl FolderOp {
@@ -67,7 +67,7 @@ impl FolderOp {
     }
 }
 
-/// An active folder of a shown tree (§ 19.2).
+/// An active folder of a shown tree (§ 20.2).
 #[derive(Clone, PartialEq, Eq)]
 pub struct WireFolder {
     /// Identifier.
@@ -174,7 +174,7 @@ impl std::fmt::Debug for FolderReply {
     }
 }
 
-/// Whether a frame carries a folder operation (code 140 to 149), whatever its version.
+/// Whether a frame carries a folder operation (code 150 to 159), whatever its version.
 #[must_use]
 pub fn is_folder_request(frame: &[u8]) -> bool {
     let Ok(v) = cbor::decode(frame) else {

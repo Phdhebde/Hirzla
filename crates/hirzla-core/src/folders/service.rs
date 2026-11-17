@@ -1,4 +1,4 @@
-//! What the core does with a folder request (`docs/api-locale.md` § 19, ADR 0076), for the
+//! What the core does with a folder request (`docs/api-locale.md` § 20, ADR 0076), for the
 //! lockers of the vault and for the shared lockers of the server mode alike.
 
 use hirzla_vault::folder::{FolderEdit, FolderTree};

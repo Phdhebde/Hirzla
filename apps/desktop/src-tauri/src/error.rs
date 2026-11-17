@@ -124,9 +124,9 @@ impl DesktopError {
                  Argon2id, AES-256 ou ChaCha20) protégées par un mot de passe seul sont \
                  importées.",
             ),
-            SelfCode::ImportKeyRejected => {
-                DesktopError::Import("Mot de passe de la base KeePass incorrect, ou base altérée.")
-            }
+            SelfCode::ImportKeyRejected => DesktopError::Import(
+                "Mot de passe ou fichier clé de la base KeePass incorrect, ou base altérée.",
+            ),
             SelfCode::ImportMalformed => DesktopError::Import(
                 "Fichier refusé : ce n'est pas une base KeePass lisible, ou elle est altérée ou \
                  trop grande.",

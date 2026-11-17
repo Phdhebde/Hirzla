@@ -1418,3 +1418,31 @@ fn device_revocation_refusals() {
         Err(VaultError::Unsupported)
     );
 }
+
+#[test]
+fn discarded_attachment_leaves_no_chunk() {
+    let (_dir, _path, mut v) = new_vault();
+    let locker = v.personal_locker();
+    let count = |v: &Vault| -> i64 {
+        v.connection()
+            .query_row("SELECT count(*) FROM attachment_chunks", [], |r| r.get(0))
+            .unwrap()
+    };
+    let kept = v
+        .add_attachment(locker, "garde.bin", "application/octet-stream", &[1u8; 10])
+        .unwrap();
+    let dropped = v
+        .add_attachment(locker, "jete.bin", "application/octet-stream", &[2u8; 10])
+        .unwrap();
+    assert_eq!(count(&v), 2);
+    v.discard_attachment(locker, &dropped).unwrap();
+    assert_eq!(count(&v), 1);
+    assert_eq!(
+        v.read_attachment(locker, &kept).unwrap().as_slice(),
+        &[1u8; 10]
+    );
+    assert_eq!(
+        v.read_attachment(locker, &dropped).err(),
+        Some(VaultError::NotFound)
+    );
+}

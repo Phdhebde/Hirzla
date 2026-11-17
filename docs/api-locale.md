@@ -476,8 +476,9 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16), les connexions (version 6, § 17) et les dossiers (version 9, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
-- La version 9 ajoute les opérations de dossiers 140 à 145 (§ 19, ADR 0076). Elle ne change rien aux autres opérations.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) et les dossiers (version 11, § 20) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
+- La version 11 ajoute les opérations de dossiers 150 à 155 (§ 20, ADR 0076). Elle ne change rien aux autres opérations.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -1127,21 +1128,22 @@ Détails :
    l'initiateur, et ce poste a pu être volé. La ligne de commande affiche le rappel et demande
    « oui ».
 
-## 16. Mode Self (version 5)
+## 16. Mode Self (versions 5 et 9)
 
 Décisions : ADR 0025 (import KeePass, option 2), ADR 0033 (verrouillage à la mise en veille et
 au verrouillage de session), ADR 0034 (kit de recouvrement à quorum). Le noyau parle en plus la
 **version 5**, qui porte ce dont l'application de poste et la ligne de commande ont besoin pour
 tenir un coffre seules, au-delà des versions 1 et 2 : réglages, changement du mot de passe
 maître, corbeille, historique des versions, recouvrement, import KeePass, événements du
-système. Codes : opérations **60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du
-mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
+système. La **version 9** n'ajoute que le fichier clé d'`ImportKdbx` (§ 10). Codes : opérations
+**60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
 
 ### 16.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-60 à 79 va au mode Self ; elle doit porter `v = 5`, sinon `UnsupportedVersion` avec `{2: [5]}`.
-Un code de la plage sans opération : `UnknownOperation`. Les réponses portent `v = 5`. Ces
+60 à 79 va au mode Self ; elle doit porter `v = 5` ou `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [5, 9]}`. Un code de la plage sans opération : `UnknownOperation`. Une réponse porte la
+version de sa requête (5 quand la requête n'en porte aucune d'acceptée). Ces
 opérations sont réservées au profil complet : le profil navigateur reçoit `Unauthorized`, et le
 refus est journalisé. `Status` (§ 6) n'annonce pas la version 5 : un client la découvre en
 l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
@@ -1153,7 +1155,7 @@ l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
 | Réglages | `{1: auto_lock_s uint, 2: clipboard_clear_s uint, 3: lock_on_sleep bool, 4: lock_on_session_lock bool}`, les quatre clés toujours présentes |
 | Version | `{1: op_id bstr(48), 2: lamport uint, 3: wall_ms uint, 4: état uint (0 actif, 1 corbeille, 2 purgé), 5: titre tstr, 6?: identifiant tstr, 7: [champ uint], 8: [champ uint], 9: champs personnalisés uint}` ; titre et identifiant de 4 096 octets au plus |
 | Fichier de part | `bstr` (≤ 16 Kio), le fichier `.hirzla-part` tel quel (`format.md` § 4.4) |
-| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP, 8: refusés}`, tous `uint` |
+| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes non importées, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP non convertis, 8: refusés}`, tous `uint` |
 
 Une version liste les **numéros** des champs présents (clé 7, `format.md` § 8) et ceux qui ont
 changé depuis la version précédente (clé 8) : un champ compte comme changé quand l'écriture qui
@@ -1177,7 +1179,7 @@ d'une version par `ReadVersion`.
 | 69 | `RecoveryCreate` | ouvert | `{1: seuil uint, 2: parts uint}`, 2 ≤ seuil ≤ parts ≤ 16 | `{1: kit_id bstr(16), 2: [fichier de part]}` |
 | 70 | `RecoveryUnlock` | verrouillé | `{1: [fichier de part] (1 à 16), 2: nouveau mot de passe tstr}` | — |
 | 71 | `RecoveryRemove` | ouvert | — | — |
-| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier}` | compte rendu d'import |
+| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier, 4?: chemin absolu du fichier clé tstr (≤ 4 096 octets, version 9)}` | compte rendu d'import |
 
 Détails :
 
@@ -1221,22 +1223,33 @@ Détails :
 11. **`ImportKdbx`** — le noyau lit le fichier lui-même (le client n'en transmet que le chemin),
     le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
     défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
-    `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
-    clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
-    de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
-    identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
-    « Sans titre » ; chaque groupe devient un dossier du casier (le groupe racine en est la
-    racine), créés en une écriture avant les entrées, chaque entrée rangée dans le sien
-    (ADR 0076 § 11 : au-delà de 32 niveaux ou de 2 048 groupes, fondus dans un ancêtre ; noms
-    nettoyés) ; étiquettes KeePass gardées comme étiquettes ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
-    KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
-    coffre (valeur trop longue) comptée dans « refusés ».
+    `NotFound`. **Fichier clé** (clé 4, version 9 ; inconnue en version 5 : `Malformed`) : lu
+    par le noyau comme la base, mêmes refus (chemin vide ou relatif : `InvalidInput`,
+    illisible : `NotFound`) ; formats XML 1.0 et 2.0, 32 octets, 64 chiffres hexadécimaux,
+    sinon empreinte du fichier. Avec un fichier clé et un mot de passe vide, le noyau essaie
+    le fichier seul (KeePassXC), puis le fichier avec le mot de passe vide (KeePass 2) ; un
+    refus des deux : `ImportKeyRejected`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
+    clients et le verrouillage automatique ne l'attendent pas. Bases KDBX 3.1 et 4, AES-KDF ou
+    Argon2 (ADR 0025). Correspondance (détail dans l'ADR 0025) : entrée qui n'a qu'un titre :
+    ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
+    même sans mot de passe ; sinon : note ; titre absent : hôte de l'adresse, puis identifiant,
+    puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
+    remplacées par la valeur visée ; chaque groupe devient un dossier du casier (le groupe
+    racine en est la racine), créés en une écriture avant les entrées, chaque entrée rangée dans
+    le sien (ADR 0076 § 11 : au-delà de 32 niveaux ou de 2 048 groupes, fondus dans un ancêtre ;
+    noms nettoyés) ; étiquettes KeePass gardées comme étiquettes ; champs personnalisés gardés, sensibles s'ils sont protégés dans
+    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP convertis (KeePassXC `otp`,
+    KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP), les autres
+    (HOTP, Steam, hors bornes, plusieurs secrets) gardés tels quels en champs sensibles et
+    comptés dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
+    champs personnalisés ; corbeille KeePass et historique comptés, non importés ; entrée
+    refusée par le coffre comptée dans « refusés ».
 
 ### 16.4 Erreurs
 
 | Code | Nom | Sens | Détails |
 | --- | --- | --- | --- |
-| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 3 ou antérieur, AES-KDF, Twofish, Salsa20, fichier clé | — |
+| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 2 ou antérieur, Twofish, flux interne ArcFour, coût de dérivation au-delà des bornes | — |
 | 61 | `ImportKeyRejected` | Mot de passe de la base faux, ou en-tête altéré | — |
 | 62 | `ImportMalformed` | Pas une base KeePass, ou base malformée, altérée ou trop grande | — |
 
@@ -1254,7 +1267,7 @@ cryptographique ; le journal du noyau n'écrit que l'opération et le nom du ré
 | `history NOM \| --id ID --version N --champ C [--stdout]` | `List`, `History`, `ReadVersion`, `Status` (presse-papiers comme `get`) |
 | `restore NOM \| --id ID` | `List` (corbeille comprise), `RestoreSecret` |
 | `restore NOM \| --id ID --version N` | `List`, `History`, `RestoreVersion` |
-| `import-kdbx FICHIER` | `ImportKdbx` (mot de passe de la base demandé sans écho) |
+| `import-kdbx FICHIER [--fichier-cle FICHIER]` | `ImportKdbx` (mot de passe de la base demandé sans écho, vide permis avec un fichier clé ; version 9 avec un fichier clé) |
 | `passwd` | `ChangePassword` (actuel, puis nouveau deux fois en terminal) |
 | `settings [--verrouillage S] [--presse-papiers S] [--veille oui\|non] [--session oui\|non]` | `GetSettings`, (`SetSettings`) |
 | `recovery status` | `RecoveryStatus` |
@@ -1274,6 +1287,9 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
+4. De nouveaux compteurs au compte rendu d'import (références non résolues, réglages de
+   saisie automatique) demanderaient une nouvelle version du mode Self (§ 10), à spécifier
+   ici d'abord.
 
 ## 17. Connexions SSH et RDP (version 6)
 
@@ -1495,28 +1511,28 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
 
-## 19. Dossiers dans les casiers (version 9)
+## 20. Dossiers dans les casiers (version 11)
 
 Décision : ADR 0076. Format : `format.md` § 7.5 (dossiers d'un casier, champ `folder` d'un
-secret, format du coffre v3). Le noyau parle en plus la **version 9**, qui lit l'arbre des
+secret, format du coffre v3). Le noyau parle en plus la **version 11**, qui lit l'arbre des
 dossiers de chaque casier, crée, renomme, déplace et supprime un dossier, et range un secret.
-Codes : opérations **140 à 149**, erreurs **140 à 149** réservées (aucune n'est définie : les
+Codes : opérations **150 à 159**, erreurs **150 à 159** réservées (aucune n'est définie : les
 codes généraux du § 7 suffisent). Code : `crates/hirzla-core/src/folders`.
 
 Un dossier range les secrets d'un casier ; il ne porte ni clé ni droit. Les mêmes opérations
 valent pour les casiers du coffre et pour les casiers partagés du mode Serveur.
 
-### 19.1 Aiguillage
+### 20.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-140 à 149 va aux dossiers ; elle doit porter `v = 9`, sinon `UnsupportedVersion` avec
-`{2: [9]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
-`v = 9`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
-`Unauthorized`, et le refus est journalisé. `Status` n'annonce pas la version 9 : un client la
+150 à 159 va aux dossiers ; elle doit porter `v = 11`, sinon `UnsupportedVersion` avec
+`{2: [11]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 11`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé. `Status` n'annonce pas la version 11 : un client la
 découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
 `UnsupportedVersion`, et le client montre le coffre sans dossiers).
 
-### 19.2 Types
+### 20.2 Types
 
 **Dossier** : `{1: id bstr(16), 2: nom tstr, 3?: parent bstr(16)}`. Clé 3 absente : à la
 racine du casier. C'est le dossier tel que l'**arbre affiché** le place (`format.md` § 7.5 :
@@ -1529,16 +1545,16 @@ puis par identifiant. La clé 3 donne, pour chaque secret non purgé qui ne s'af
 racine, le dossier où il s'affiche ; triée par secret. Un secret absent de la clé 3 est à la
 racine.
 
-### 19.3 Opérations
+### 20.3 Opérations
 
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
-| 140 | `FolderTree` | ouvert | `{1?: casier}` | `{1: [arbre]}` |
-| 141 | `FolderCreate` | ouvert | `{1: casier, 2: nom, 3?: parent}` | `{1: dossier}` |
-| 142 | `FolderRename` | ouvert | `{1: casier, 2: dossier, 3: nom}` | — |
-| 143 | `FolderMove` | ouvert | `{1: casier, 2: dossier, 3?: parent}` | — |
-| 144 | `FolderDelete` | ouvert | `{1: casier, 2: dossier}` | `{1: secrets mis à la corbeille uint}` |
-| 145 | `SecretMove` | ouvert | `{1: casier, 2: secret, 3?: dossier}` | — |
+| 150 | `FolderTree` | ouvert | `{1?: casier}` | `{1: [arbre]}` |
+| 151 | `FolderCreate` | ouvert | `{1: casier, 2: nom, 3?: parent}` | `{1: dossier}` |
+| 152 | `FolderRename` | ouvert | `{1: casier, 2: dossier, 3: nom}` | — |
+| 153 | `FolderMove` | ouvert | `{1: casier, 2: dossier, 3?: parent}` | — |
+| 154 | `FolderDelete` | ouvert | `{1: casier, 2: dossier}` | `{1: secrets mis à la corbeille uint}` |
+| 155 | `SecretMove` | ouvert | `{1: casier, 2: secret, 3?: dossier}` | — |
 
 Détails :
 
@@ -1571,14 +1587,14 @@ Détails :
    (67) garde le dossier **actuel** du secret. `History` compte un rangement comme un changement
    du champ 4.
 
-### 19.4 Erreurs et journal
+### 20.4 Erreurs et journal
 
 Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
 de nom de dossier ni d'identifiant. Le journal du noyau n'écrit que l'opération et le nom du
 résultat : `event=folder_request op=<nom> result=<ok|nom>`, avec les noms `folder_tree`,
 `folder_create`, `folder_rename`, `folder_move`, `folder_delete`, `secret_move`.
 
-### 19.5 Ligne de commande
+### 20.5 Ligne de commande
 
 | Commande | Requêtes |
 | --- | --- |
@@ -1602,9 +1618,11 @@ résultat : `event=folder_request op=<nom> result=<ok|nom>`, avec les noms `fold
   terminal, `--oui` est obligatoire.
 - `mv` range le secret dans un dossier de **son** casier.
 
-### 19.6 Points ouverts
+### 20.6 Points ouverts
 
 1. **Création dans un dossier en une écriture** : `Create` ne prend pas de dossier ; créer un
    secret dans un dossier en écrit deux versions. Une clé de `Create` demanderait une nouvelle
    version de l'opération 7.
 2. **Glisser-déposer** dans l'application de poste : hors de ce lot (ADR 0076 § 10).
+3. **Export de casier** (ADR 0077) : son chemin de dossier optionnel sera relié aux dossiers
+   (ADR 0076 § 8) quand les deux seront réunis ; il devient pour l'instant une étiquette.

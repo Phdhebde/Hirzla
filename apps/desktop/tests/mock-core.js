@@ -180,6 +180,8 @@
   let trusted = ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"];
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
+  /** @type {string | null} */
+  let kdbxKey = null;
   const v = (n) => n.toString(16).padStart(96, "0");
   const history = [
     { version: v(3), wall_ms: Date.UTC(2026, 9, 2, 8, 14), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["password"], custom: 0 },
@@ -455,9 +457,13 @@
     choose_recovery_shares: () => ["hirzla-part-3fa2c901-1.hirzla-part", "hirzla-part-3fa2c901-3.hirzla-part"],
     recovery_unlock: () => { state = "unlocked"; },
     remove_recovery_kit: () => { kit = null; },
-    choose_kdbx_file: () => "Personnel.kdbx",
+    choose_kdbx_file: () => { kdbxKey = null; return "Personnel.kdbx"; },
+    choose_kdbx_key_file: () => { kdbxKey = "Personnel.keyx"; return kdbxKey; },
+    clear_kdbx_key_file: () => { kdbxKey = null; },
     import_kdbx: (a) => {
-      if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
+      const ok = kdbxKey ? a.password === "" || a.password === "keepass" : a.password === "keepass";
+      if (!ok) return refuse("import", "Mot de passe ou fichier clé de la base KeePass incorrect, ou base altérée.");
+      kdbxKey = null;
       return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
     },
     server_status: () => {

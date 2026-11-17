@@ -237,7 +237,7 @@ impl Client {
         Ok(result)
     }
 
-    /// Sends one folder request (`docs/api-locale.md` § 19) and waits for its reply. The inner
+    /// Sends one folder request (`docs/api-locale.md` § 20) and waits for its reply. The inner
     /// result carries the core's refusal.
     ///
     /// # Errors

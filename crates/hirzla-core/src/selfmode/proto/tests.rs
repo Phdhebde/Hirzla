@@ -60,13 +60,78 @@ fn requests() -> Vec<SelfRequest> {
             path: "/tmp/base.kdbx".to_owned(),
             password: z("hirzla-test"),
             locker: Some(L),
+            key_file: None,
         },
         SelfRequest::ImportKdbx {
             path: "C:\\base.kdbx".to_owned(),
             password: z(""),
             locker: None,
+            key_file: None,
+        },
+        SelfRequest::ImportKdbx {
+            path: "/tmp/base.kdbx".to_owned(),
+            password: z(""),
+            locker: Some(L),
+            key_file: Some("/tmp/base.keyx".to_owned()),
         },
     ]
+}
+
+#[test]
+fn the_key_file_needs_version_9() {
+    // Sent in the smallest version that knows it: 9 with a key file, 5 otherwise.
+    for r in requests() {
+        let frame = r.encode(1).unwrap();
+        let (_, version, back) = SelfRequest::decode_versioned(&frame).unwrap();
+        let with_key = matches!(
+            &r,
+            SelfRequest::ImportKdbx {
+                key_file: Some(_),
+                ..
+            }
+        );
+        assert_eq!(version, if with_key { 9 } else { 5 });
+        assert!(back == r);
+    }
+    let args = |key: bool| {
+        let mut e = vec![(1, Value::text("/tmp/base.kdbx")), (2, Value::text(""))];
+        if key {
+            e.push((4, Value::text("/tmp/base.keyx")));
+        }
+        Some(Value::map(e))
+    };
+    // Key 4 is unknown in version 5.
+    assert_eq!(
+        refusal(&frame(5, 72, args(true))),
+        SelfCode::General(ErrorCode::Malformed)
+    );
+    // Version 9 accepts every Self-mode operation, with or without a key file.
+    assert!(SelfRequest::decode(&frame(9, 72, args(false))).is_ok());
+    assert!(SelfRequest::decode(&frame(9, 61, None)).is_ok());
+    // An empty key file path is refused like an empty database path.
+    let empty = Some(Value::map(vec![
+        (1, Value::text("/tmp/base.kdbx")),
+        (2, Value::text("")),
+        (4, Value::text("")),
+    ]));
+    assert_eq!(
+        refusal(&frame(9, 72, empty)),
+        SelfCode::General(ErrorCode::InvalidInput)
+    );
+    // Neither 6 nor 8: other profiles.
+    for v in [6, 8] {
+        assert_eq!(
+            refusal(&frame(v, 61, None)),
+            SelfCode::General(ErrorCode::UnsupportedVersion)
+        );
+    }
+    // A reply carries the version of its request.
+    let frame = SelfReply::encode_versioned(9, 4, Ok(&SelfReply::Done)).unwrap();
+    let v = cbor::decode(&frame).unwrap();
+    let f = Fields::new(&v, &[1, 2, 3, 4]).unwrap();
+    assert_eq!(f.req(1).unwrap(), &Value::Uint(9));
+    assert!(SelfReply::decode(SelfOp::RecoveryRemove, &frame).is_ok());
+    assert!(SelfReply::encode_versioned(6, 4, Ok(&SelfReply::Done)).is_err());
 }
 
 #[test]
@@ -339,7 +404,10 @@ fn refusals_round_trip() {
     let v = cbor::decode(&frame).unwrap();
     let f = Fields::new(&v, &[1, 2, 3, 4]).unwrap();
     let d = Fields::new(f.req(4).unwrap(), &[2]).unwrap();
-    assert_eq!(array_max(d.req(2).unwrap(), 4).unwrap(), &[Value::Uint(5)]);
+    assert_eq!(
+        array_max(d.req(2).unwrap(), 4).unwrap(),
+        &[Value::Uint(5), Value::Uint(9)]
+    );
 }
 
 #[test]

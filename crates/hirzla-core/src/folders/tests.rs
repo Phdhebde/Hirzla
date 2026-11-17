@@ -233,19 +233,19 @@ fn frame(version: u64, op: u64, args: Option<Value>) -> Zeroizing<Vec<u8>> {
 fn strict_decoding_refusals() {
     let refused = |v, op, args| FolderRequest::decode(&frame(v, op, args)).err().unwrap().1;
     let empty = || Some(Value::map(Vec::new()));
-    assert_eq!(refused(8, 140, empty()), ErrorCode::UnsupportedVersion);
+    assert_eq!(refused(8, 150, empty()), ErrorCode::UnsupportedVersion);
     assert_eq!(
-        refused(FOLDER_VERSION, 149, empty()),
+        refused(FOLDER_VERSION, 159, empty()),
         ErrorCode::UnknownOperation
     );
-    assert_eq!(refused(FOLDER_VERSION, 140, None), ErrorCode::Malformed);
+    assert_eq!(refused(FOLDER_VERSION, 150, None), ErrorCode::Malformed);
     // Unknown key, short identifier, missing name.
     let unknown = Some(Value::map(vec![(9, Value::Uint(1))]));
-    assert_eq!(refused(FOLDER_VERSION, 140, unknown), ErrorCode::Malformed);
+    assert_eq!(refused(FOLDER_VERSION, 150, unknown), ErrorCode::Malformed);
     let short = Some(Value::map(vec![(1, Value::bytes(&[1; 15]))]));
-    assert_eq!(refused(FOLDER_VERSION, 140, short), ErrorCode::Malformed);
+    assert_eq!(refused(FOLDER_VERSION, 150, short), ErrorCode::Malformed);
     let no_name = Some(Value::map(vec![(1, Value::bytes(&[1; 16]))]));
-    assert_eq!(refused(FOLDER_VERSION, 141, no_name), ErrorCode::Malformed);
+    assert_eq!(refused(FOLDER_VERSION, 151, no_name), ErrorCode::Malformed);
     // An unsupported version is answered with the version spoken.
     let bytes = FolderReply::encode(5, &Err(ErrorCode::UnsupportedVersion)).unwrap();
     let v = cbor::decode(&bytes).unwrap();

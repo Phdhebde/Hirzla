@@ -186,7 +186,7 @@ export const api = {
    */
   createSshKey: (key) => call("create_ssh_key", { key }),
 
-  // Folders inside lockers (local API version 9, ADR 0076).
+  // Folders inside lockers (local API version 11, ADR 0076).
   /** @returns {Promise<FolderTree[]>} */
   folderTrees: () => call("folder_trees"),
   /** @param {string} locker @param {string} name @param {string | null} parent @returns {Promise<string>} */
@@ -249,6 +249,8 @@ export const api = {
   removeRecoveryKit: () => call("remove_recovery_kit"),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
+  chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),
+  clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
 

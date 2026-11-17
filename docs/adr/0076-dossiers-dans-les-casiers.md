@@ -1,4 +1,4 @@
-# ADR 0076 — Dossiers dans les casiers : format du coffre v3 et API locale v9
+# ADR 0076 — Dossiers dans les casiers : format du coffre v3 et API locale v11
 
 - Statut : accepté (2026-11-17, décision de principe de Max ; modalités ci-dessous)
 - Date : 2026-11-17
@@ -167,19 +167,25 @@ Le serveur ne voit rien : noms, parents et rangement sont dans le chiffré (règ
 comme pour toute opération, la taille arrondie d'une `LockerMetaPut`, qui grandit avec le
 nombre de dossiers (`sync-protocol.md` § 12).
 
-### 8. API locale version 9 (`api-locale.md` § 19)
+### 8. API locale version 11 (`api-locale.md` § 20)
 
-Opérations **140 à 149**, profil complet seulement, version 9 ; erreurs 140 à 149 réservées
-(aucune n'est définie : les codes généraux suffisent).
+Opérations **150 à 159**, profil complet seulement, version 11 ; erreurs 150 à 159 réservées
+(aucune n'est définie : les codes généraux suffisent). La version 9 est celle du fichier clé du
+mode Self (ADR 0025), la version 10 et la plage 140 à 149 celles de l'export de casier
+(ADR 0077).
+
+L'export de casier (ADR 0077) porte un chemin de dossier optionnel par secret. Tant que les deux
+ne sont pas réunis, il le convertit en étiquette ; une fois réunis, l'import d'un export range
+chaque secret dans le dossier de ce chemin, créé au besoin comme pour KeePass (§ 11).
 
 | Code | Nom | Rôle |
 | --- | --- | --- |
-| 140 | `FolderTree` | Arbre affiché de chaque casier (ou d'un seul) et rangement des secrets hors racine |
-| 141 | `FolderCreate` | Crée un dossier |
-| 142 | `FolderRename` | Renomme un dossier |
-| 143 | `FolderMove` | Déplace un dossier (sous un autre, ou à la racine) |
-| 144 | `FolderDelete` | Supprime un dossier et ses sous-dossiers, met leurs secrets actifs à la corbeille |
-| 145 | `SecretMove` | Range un secret dans un dossier du même casier, ou à la racine |
+| 150 | `FolderTree` | Arbre affiché de chaque casier (ou d'un seul) et rangement des secrets hors racine |
+| 151 | `FolderCreate` | Crée un dossier |
+| 152 | `FolderRename` | Renomme un dossier |
+| 153 | `FolderMove` | Déplace un dossier (sous un autre, ou à la racine) |
+| 154 | `FolderDelete` | Supprime un dossier et ses sous-dossiers, met leurs secrets actifs à la corbeille |
+| 155 | `SecretMove` | Range un secret dans un dossier du même casier, ou à la racine |
 
 `List` (5) et `Create` (7) ne changent pas : l'interface combine `List` et `FolderTree`, et crée
 un secret dans un dossier par `Create` puis `SecretMove`.
@@ -234,7 +240,7 @@ par `dossier liste`).
   `Field::Folder`, index (clés 6 et 11), montée en v3, `Vault::edit_folders`.
 - `hirzla-sync` : contrôle étendu des `LockerMetaPut`, `Replica::put_folders` ; tests par
   propriétés de convergence (déplacements concurrents, cycles, suppressions).
-- `hirzla-core` : module `folders` (version 9), import KeePass en dossiers.
+- `hirzla-core` : module `folders` (version 11), import KeePass en dossiers.
 - `apps/cli` : `dossier …`, `mv`. `apps/desktop` : arbre dans la barre latérale.
 - Le serveur `hirzlad`, l'extension, l'hôte natif et le SDK Go ne changent pas.
 - Chaque modification de l'arbre réécrit tous les dossiers du casier dans une `LockerMetaPut` :

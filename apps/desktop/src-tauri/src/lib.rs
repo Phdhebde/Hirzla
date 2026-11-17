@@ -11,7 +11,7 @@
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
 //! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
 //!   ADR 0067);
-//! - [`folders`]: folders inside lockers (local API version 9, ADR 0076);
+//! - [`folders`]: folders inside lockers (local API version 11, ADR 0076);
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
@@ -130,6 +130,8 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::recovery_unlock,
             selfmode::remove_recovery_kit,
             selfmode::choose_kdbx_file,
+            selfmode::choose_kdbx_key_file,
+            selfmode::clear_kdbx_key_file,
             selfmode::import_kdbx,
             servermode::server_status,
             servermode::server_identity,

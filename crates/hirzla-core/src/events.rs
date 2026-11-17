@@ -162,7 +162,7 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
-    /// A folder request was answered (`docs/api-locale.md` § 19). `result` is `ok` or the
+    /// A folder request was answered (`docs/api-locale.md` § 20). `result` is `ok` or the
     /// name of the error: fixed words only.
     FolderRequest {
         /// Operation.

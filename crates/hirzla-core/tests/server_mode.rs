@@ -2428,7 +2428,7 @@ fn connections_are_shared_and_a_link_gives_no_right() {
 }
 
 // -----------------------------------------------------------------------------------------
-// Folders in a shared locker (ADR 0076, `docs/api-locale.md` § 19)
+// Folders in a shared locker (ADR 0076, `docs/api-locale.md` § 20)
 // -----------------------------------------------------------------------------------------
 
 fn folder(m: &mut Member, r: FolderRequest) -> Result<FolderReply, ErrorCode> {

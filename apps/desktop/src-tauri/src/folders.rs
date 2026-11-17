@@ -1,4 +1,4 @@
-//! Folders inside lockers (`docs/api-locale.md` § 19, local API version 9, ADR 0076).
+//! Folders inside lockers (`docs/api-locale.md` § 20, local API version 11, ADR 0076).
 //!
 //! A folder only arranges the secrets of its locker: it carries no key and no right. Its name
 //! is not a secret of the user's accounts, but it is sealed in the vault like the rest and

@@ -20,7 +20,7 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   visible dans le dossier parent.
 - Format du coffre v3, sur-ensemble du v2 : un coffre v1 ou v2 s'ouvre sans changement et ne
   passe en v3 qu'à l'écriture de son premier dossier, dans la même transaction.
-- API locale version 9 (`docs/api-locale.md` § 19) : `FolderTree`, `FolderCreate`,
+- API locale version 11 (`docs/api-locale.md` § 20) : `FolderTree`, `FolderCreate`,
   `FolderRename`, `FolderMove`, `FolderDelete`, `SecretMove`, profil complet seulement.
 - Ligne de commande : `dossier liste|creer|renommer|deplacer|supprimer`, `mv`.
 - Application de poste : arbre des dossiers sous chaque casier, actions sur un dossier,

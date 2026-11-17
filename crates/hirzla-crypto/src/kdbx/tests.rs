@@ -1,4 +1,5 @@
-//! Official vectors for each primitive of the KDBX 4 reader (RFC 8439, NIST SP 800-38A,
+//! Official vectors for each primitive of the KDBX reader (RFC 8439, NIST SP 800-38A, FIPS 197,
+//! eSTREAM Salsa20,
 //! RFC 4231, FIPS 180-4), the C reference for Argon2d and Argon2id, and negative tests.
 //! Whole databases are covered by the reader of `hirzla-vault` on reference files.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -193,7 +194,7 @@ fn argon2_matches_the_c_reference() {
 fn keys_authenticate_header_and_blocks_by_index() {
     let keys = derive_keys(
         &composite_key(b"password"),
-        &params(Argon2Variant::Id, 64, 1, 1),
+        &KdfParams::Argon2(params(Argon2Variant::Id, 64, 1, 1)),
         &[7; 32],
     )
     .unwrap();
@@ -225,7 +226,7 @@ fn keys_authenticate_header_and_blocks_by_index() {
     // Another password gives other keys.
     let other = derive_keys(
         &composite_key(b"passwore"),
-        &params(Argon2Variant::Id, 64, 1, 1),
+        &KdfParams::Argon2(params(Argon2Variant::Id, 64, 1, 1)),
         &[7; 32],
     )
     .unwrap();
@@ -249,4 +250,101 @@ fn inner_stream_is_chacha20_keyed_by_sha_512() {
     chacha20_xor(&key, &h[32..44], &mut expected).unwrap();
     assert_eq!([first, second].concat(), expected);
     assert!(InnerStream::new(&[]).is_err());
+}
+
+#[test]
+fn aes_256_ecb_matches_fips_197() {
+    // FIPS 197, C.3: AES-256 of 00112233…ff under 000102…1f. Both halves of the AES-KDF
+    // block are encrypted on their own (ECB).
+    let key: [u8; 32] = hex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+        .try_into()
+        .unwrap();
+    let ecb = EncryptingKey::ecb(UnboundCipherKey::new(&AES_256, &key).unwrap()).unwrap();
+    let mut two = [
+        hex("00112233445566778899aabbccddeeff"),
+        hex("00112233445566778899aabbccddeeff"),
+    ]
+    .concat();
+    ecb.encrypt(&mut two).unwrap();
+    assert_eq!(
+        to_hex(&two),
+        "8ea2b7ca516745bfeafc49904b4960898ea2b7ca516745bfeafc49904b496089"
+    );
+}
+
+#[test]
+fn aes_kdf_matches_an_independent_implementation() {
+    // Computed with pycryptodome: SHA-256 of 3 rounds of AES-256-ECB, seed 07…07, of the
+    // composite key of "password".
+    let composite = composite_key(b"password");
+    assert_eq!(
+        to_hex(composite.0.as_ref()),
+        "73641c99f7719f57d8f4beb11a303afcd190243a51ced8782ca6d3dbe014d146"
+    );
+    let params = AesKdfParams {
+        seed: [7; 32],
+        rounds: 3,
+    };
+    assert_eq!(
+        to_hex(aes_kdf(&composite.0, &params).unwrap().as_ref()),
+        "dfd23a8036b3c1bf84205dadc18264df46338b6837902904175ebfd8cf47ebe6"
+    );
+    // Bounds, before any computation.
+    for rounds in [0, MAX_AES_ROUNDS + 1, u64::MAX] {
+        let p = KdfParams::Aes(AesKdfParams {
+            seed: [7; 32],
+            rounds,
+        });
+        assert_eq!(p.check(), Err(Error::InvalidParameters), "{rounds}");
+        assert!(derive_keys(&composite, &p, &[0; 32]).is_err(), "{rounds}");
+    }
+}
+
+#[test]
+fn composite_key_with_key_file() {
+    let kf: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).unwrap());
+    // SHA-256(SHA-256("password") ‖ key) and SHA-256(key), computed with Python's hashlib.
+    let both = composite_key_with(Some(b"password"), Some(&kf)).unwrap();
+    assert_eq!(
+        to_hex(both.0.as_ref()),
+        "38527710e7683da8248471e4fa3a3087a3e5156bcf784ad7bc45582a025742e7"
+    );
+    let only_file = composite_key_with(None, Some(&kf)).unwrap();
+    assert_eq!(
+        to_hex(only_file.0.as_ref()),
+        "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd"
+    );
+    assert!(composite_key_with(None, None).is_none());
+    let only_password = composite_key_with(Some(b"password"), None).unwrap();
+    assert_eq!(only_password.0, composite_key(b"password").0);
+}
+
+#[test]
+fn salsa20_matches_estream() {
+    // eSTREAM, Salsa20/20 256-bit key, set 1, vector 0: key 80 00…00, IV 0, stream[0..63].
+    let mut key = [0u8; 32];
+    key[0] = 0x80;
+    let mut c = Salsa20::new_from_slices(&key, &[0u8; 8]).unwrap();
+    let mut data = [0u8; 64];
+    c.apply_keystream(&mut data);
+    assert_eq!(
+        to_hex(&data),
+        "e3be8fdd8beca2e3ea8ef9475b29a6e7003951e1097a5c38d23b7a5fad9f6844\
+         b22c97559e2723c7cbbd3fe4fc8d9a0744652a83e72a9c461876af4d7ef1a117"
+    );
+}
+
+#[test]
+fn inner_stream_salsa20_is_keyed_by_sha_256_with_fixed_nonce() {
+    // Computed with pycryptodome: Salsa20(SHA-256(09…09), E830094B97205D2A), 10 bytes.
+    let mut s = InnerStream::salsa20(&[9u8; 32]).unwrap();
+    let mut first = [0u8; 4];
+    let mut second = [0u8; 6];
+    s.apply(&mut first).unwrap();
+    s.apply(&mut second).unwrap();
+    assert_eq!(
+        to_hex(&[first.as_slice(), &second].concat()),
+        "08a0ecbec027b7572093"
+    );
+    assert!(InnerStream::salsa20(&[]).is_err());
 }

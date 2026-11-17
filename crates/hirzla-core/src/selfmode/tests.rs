@@ -525,6 +525,62 @@ fn import(path: &str, password: &str) -> SelfRequest {
         path: path.to_owned(),
         password: z(password),
         locker: None,
+        key_file: None,
+    }
+}
+
+fn import_with_key(path: &str, password: &str, key_file: &str) -> SelfRequest {
+    SelfRequest::ImportKdbx {
+        path: path.to_owned(),
+        password: z(password),
+        locker: None,
+        key_file: Some(key_file.to_owned()),
+    }
+}
+
+#[test]
+fn kdbx_import_with_a_key_file() {
+    let dir = tempdir();
+    let (mut c, sink) = open_core(dir.path());
+    let both = fixture("pykeepass-keyfile.kdbx");
+    let xml_key = fixture("keyfile-v2.keyx");
+    let only = fixture("pykeepass-keyfile-only.kdbx");
+    let raw_key = fixture("keyfile-raw.bin");
+    // The password alone, or the wrong key file, do not open it.
+    assert_eq!(
+        refused(&mut c, import(&both, KDBX_PASSWORD)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert_eq!(
+        refused(&mut c, import_with_key(&both, KDBX_PASSWORD, &raw_key)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert_eq!(
+        refused(&mut c, import_with_key(&both, "", &xml_key)),
+        (SelfCode::ImportKeyRejected, None)
+    );
+    assert!(matches!(
+        ok(&mut c, import_with_key(&both, KDBX_PASSWORD, &xml_key)),
+        SelfReply::Imported(ImportReport { imported: 1.., .. })
+    ));
+    // Key file alone: an empty password.
+    assert!(matches!(
+        ok(&mut c, import_with_key(&only, "", &raw_key)),
+        SelfReply::Imported(ImportReport { imported: 1.., .. })
+    ));
+    // The key file is read by the core: relative or missing, refused like the database.
+    assert_eq!(
+        refused(&mut c, import_with_key(&only, "", "relatif.keyx")),
+        general(ErrorCode::InvalidInput)
+    );
+    let missing = dir.path().join("absente.keyx").display().to_string();
+    assert_eq!(
+        refused(&mut c, import_with_key(&only, "", &missing)),
+        general(ErrorCode::NotFound)
+    );
+    let log = sink.text();
+    for leak in [KDBX_PASSWORD, ".keyx", "keyfile"] {
+        assert!(!log.contains(leak), "{leak} in {log}");
     }
 }
 
@@ -539,14 +595,31 @@ fn kdbx_import() {
             imported: 4,
             empty: 1,
             recycled: 1,
-            attachments: 1,
+            attachments: 0,
             history: 1,
             custom_skipped: 0,
-            totp: 1,
+            totp: 0,
             refused: 0,
         })
     );
     let entries = list(&mut c, false);
+    // The KeePassXC `otp` URI: converted, issuer included.
+    {
+        let vault = c.vault().unwrap();
+        let mail = entries
+            .iter()
+            .find(|e| e.title.as_str() == "Messagerie")
+            .unwrap();
+        let body = vault.read_secret(vault.personal_locker(), mail.id).unwrap();
+        match &body.fields.get(&Field::Totp).unwrap().value {
+            hirzla_vault::secret::FieldValue::Totp(t) => {
+                assert_eq!(t.secret.as_slice(), b"Hello!\xde\xad\xbe\xef");
+                assert_eq!(t.issuer.as_deref(), Some("Exemple"));
+            }
+            _ => panic!(),
+        }
+        assert!(!custom_fields(&body).iter().any(|f| f.0 == "otp"));
+    }
     let titles: Vec<&str> = entries.iter().map(|e| e.title.as_str()).collect();
     assert_eq!(
         titles,
@@ -594,10 +667,15 @@ fn kdbx_import() {
         refused(&mut c, import(&path, "pas-le-bon")),
         (SelfCode::ImportKeyRejected, None)
     );
+    // KDBX 2 (major version 2): out of scope.
+    let mut old = std::fs::read(&path).unwrap();
+    old[10..12].copy_from_slice(&2u16.to_le_bytes());
+    let old_path = dir.path().join("ancienne.kdbx");
+    std::fs::write(&old_path, &old).unwrap();
     assert_eq!(
         refused(
             &mut c,
-            import(&fixture("keepassxc-kdbx3-aeskdf.kdbx"), KDBX_PASSWORD)
+            import(&old_path.display().to_string(), KDBX_PASSWORD)
         ),
         (SelfCode::ImportUnsupported, None)
     );
@@ -621,6 +699,7 @@ fn kdbx_import() {
                 path: path.clone(),
                 password: z(KDBX_PASSWORD),
                 locker: Some([5; 16]),
+                key_file: None,
             }
         ),
         general(ErrorCode::NotFound)
@@ -635,4 +714,179 @@ fn kdbx_import() {
         assert!(!log.contains(leak), "{leak} in {log}");
     }
     assert!(log.contains("event=self_request op=import_kdbx result=import_key_rejected"));
+}
+
+fn custom_fields(body: &hirzla_vault::secret::SecretBody) -> Vec<(String, String, bool)> {
+    let mut out: Vec<(String, String, bool)> = body
+        .custom
+        .values()
+        .filter_map(|c| c.value.as_ref())
+        .map(|c| (c.label.clone(), c.value.as_str().to_owned(), c.sensitive))
+        .collect();
+    out.sort();
+    out
+}
+
+/// A database in the style of KeePass 2 (KDBX 3.1, AES-KDF, Salsa20), and the same in KDBX 4:
+/// user names, folders, references, TOTP, attachments, expiry and auto-type all arrive.
+#[test]
+fn kdbx_import_keepass2() {
+    use hirzla_vault::secret::{SetKind, SetValue};
+    for name in ["pykeepass-kdbx3-aeskdf.kdbx", "pykeepass-kdbx4-aeskdf.kdbx"] {
+        let dir = tempdir();
+        let (mut c, sink) = open_core(dir.path());
+        assert_eq!(
+            ok(&mut c, import(&fixture(name), KDBX_PASSWORD)),
+            SelfReply::Imported(ImportReport {
+                imported: 13,
+                empty: 1,
+                recycled: 0,
+                attachments: 0,
+                history: 0,
+                custom_skipped: 0,
+                totp: 0,
+                refused: 0,
+            }),
+            "{name}"
+        );
+        let entries = list(&mut c, false);
+        let by_title = |t: &str| {
+            entries
+                .iter()
+                .find(|e| e.title.as_str() == t)
+                .unwrap_or_else(|| panic!("{name}: {t}"))
+        };
+        let user = |t: &str| by_title(t).username.as_ref().map(|u| u.as_str().to_owned());
+        // User names, with or without a password, protected or not, by reference.
+        assert_eq!(user("Messagerie").as_deref(), Some("alice@example.org"));
+        assert_eq!(user("Forum").as_deref(), Some("alice"));
+        assert_eq!(by_title("Forum").secret_type, SecretType::Password as u64);
+        assert_eq!(user("Protégé").as_deref(), Some("utilisateur-protégé"));
+        assert_eq!(user("Référence").as_deref(), Some("alice@example.org"));
+        assert_eq!(user("Espaces"), None);
+        assert_eq!(
+            by_title("adresse-seule.example").hosts,
+            ["adresse-seule.example"]
+        );
+        // Groups are folders (ADR 0076 § 11), not tags, whatever their length.
+        assert!(by_title("Forum").tags.is_empty());
+        assert!(by_title("Profond").tags.is_empty());
+        let crate::folders::proto::FolderReply::Trees(trees) = c
+            .handle_folder(crate::folders::proto::FolderRequest::Tree { locker: None })
+            .unwrap()
+        else {
+            panic!("trees expected");
+        };
+        let tree = &trees[0];
+        let folder_of = |t: &str| {
+            let id = by_title(t).id;
+            tree.placements.iter().find(|(s, _)| *s == id).map(|p| p.1)
+        };
+        let path_of = |mut f: Option<[u8; 16]>| {
+            let mut names = Vec::new();
+            while let Some(id) = f {
+                let w = tree.folders.iter().find(|x| x.id == id).unwrap();
+                names.insert(0, w.name.as_str().to_owned());
+                f = w.parent;
+            }
+            names
+        };
+        assert_eq!(path_of(folder_of("Forum")), ["Internet"], "{name}");
+        let deep_path = path_of(folder_of("Profond"));
+        assert_eq!(deep_path.len(), 6, "{name}");
+        assert!(deep_path[0].starts_with("Groupe de niveau 0 avec un nom assez long"));
+
+        let vault = c.vault().unwrap();
+        let locker = vault.personal_locker();
+        let body = |t: &str| vault.read_secret(locker, by_title(t).id).unwrap();
+        let reference = body("Référence");
+        match &reference.fields.get(&Field::Password).unwrap().value {
+            hirzla_vault::secret::FieldValue::Text(p) => {
+                assert_eq!(p.as_str(), "mot-de-passe-très-secret");
+            }
+            _ => panic!(),
+        }
+        match &reference.fields.get(&Field::Notes).unwrap().value {
+            hirzla_vault::secret::FieldValue::Text(n) => assert_eq!(
+                n.as_str(),
+                "Voir Messagerie ; inconnue {REF:U@I:FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF} ; {REF:U@T:Messagerie}"
+            ),
+            _ => panic!(),
+        }
+        assert!(custom_fields(&body("Profond"))
+            .iter()
+            .all(|f| f.0 != "Groupe KeePass"));
+        // Expiry and auto-type, in custom fields.
+        assert_eq!(
+            custom_fields(&body("Expire")),
+            [
+                (
+                    "Expiration".to_owned(),
+                    "2027-03-01T12:30:00Z".to_owned(),
+                    false
+                ),
+                (
+                    "Saisie automatique KeePass".to_owned(),
+                    "Séquence : {USERNAME}{TAB}{PASSWORD}{ENTER}\nFenêtre : Connexion - Navigateur"
+                        .to_owned(),
+                    true
+                ),
+            ]
+        );
+        // TOTP of KeePass 2 in base64 and in base32: converted.
+        match &body("TOTP KeePass").fields.get(&Field::Totp).unwrap().value {
+            hirzla_vault::secret::FieldValue::Totp(t) => {
+                assert_eq!(t.secret.as_slice(), b"12345678901234567890");
+                assert_eq!((t.algorithm, t.digits, t.period), (2, 8, 60));
+            }
+            _ => panic!(),
+        }
+        assert!(custom_fields(&body("TOTP KeePass")).is_empty());
+        assert!(custom_fields(&body("TOTP base32")).is_empty());
+        match &body("TOTP base32").fields.get(&Field::Totp).unwrap().value {
+            hirzla_vault::secret::FieldValue::Totp(t) => {
+                assert_eq!(t.secret.as_slice(), b"12345678901234567890");
+                assert_eq!((t.algorithm, t.digits, t.period), (1, 6, 30));
+            }
+            _ => panic!(),
+        }
+        // HOTP: custom fields as KeePass holds them.
+        let hotp = custom_fields(&body("HOTP"));
+        assert_eq!(hotp.len(), 2);
+        assert!(hotp.iter().any(|f| f.0 == "HmacOtp-Secret" && f.2));
+        // Attachments, with their content; the shared one copied for each entry.
+        let contract = body("Contrat");
+        let atts: Vec<_> = contract
+            .sets
+            .get(&SetKind::Attachments)
+            .unwrap()
+            .visible()
+            .filter_map(|v| match v {
+                SetValue::Attachment(a) => Some(a.clone()),
+                SetValue::Text(_) => None,
+            })
+            .collect();
+        let mut names: Vec<&str> = atts.iter().map(|a| a.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["contrat.pdf", "donnees.bin"]);
+        for a in &atts {
+            let data = vault.read_attachment(locker, a).unwrap();
+            if a.name == "contrat.pdf" {
+                assert_eq!(data.as_slice(), b"contenu partage\n");
+                assert_eq!(a.media_type, "application/pdf");
+            } else {
+                assert_eq!(data.len(), 256);
+            }
+        }
+        assert_eq!(
+            body("Copie")
+                .sets
+                .get(&SetKind::Attachments)
+                .unwrap()
+                .visible()
+                .count(),
+            1
+        );
+        assert!(!sink.text().contains("très-secret"));
+    }
 }

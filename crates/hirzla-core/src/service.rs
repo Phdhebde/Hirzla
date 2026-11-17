@@ -414,7 +414,7 @@ impl Core {
         }
     }
 
-    /// Changes the folders of a shared locker (`docs/api-locale.md` § 19, ADR 0076).
+    /// Changes the folders of a shared locker (`docs/api-locale.md` § 20, ADR 0076).
     pub(crate) fn edit_shared_folders(
         &mut self,
         locker: &Id16,

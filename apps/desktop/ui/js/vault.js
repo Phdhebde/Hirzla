@@ -292,7 +292,7 @@ export class VaultView {
     try {
       this.trees.set(await api.folderTrees());
     } catch (e) {
-      // A core older than version 9 has no folders: the vault is shown without them.
+      // A core older than version 11 has no folders: the vault is shown without them.
       this.trees.clear();
       if (/** @type {any} */ (e).code !== "unsupported_version") this.hooks.onError(/** @type {any} */ (e));
     }

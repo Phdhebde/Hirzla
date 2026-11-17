@@ -1,4 +1,4 @@
-//! Folders inside lockers (local API version 9, `docs/api-locale.md` § 19, ADR 0076). A
+//! Folders inside lockers (local API version 11, `docs/api-locale.md` § 20, ADR 0076). A
 //! CHEMIN separates names with `/`; `#` followed by at least 4 hexadecimal digits designates
 //! a folder by identifier, as `dossier liste` shows it; `/` alone is the root of the locker.
 

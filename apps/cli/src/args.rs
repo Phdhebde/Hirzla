@@ -43,7 +43,9 @@ Commandes :
                           --version N --champ CHAMP : un champ d'une version (comme get).
   restore NOM             Sort un secret de la corbeille. --id ID.
                           --version N : rétablit la version N (voir history).
-  import-kdbx FICHIER     Importe une base KeePass KDBX 4 ; son mot de passe est demandé.
+  import-kdbx FICHIER     Importe une base KeePass KDBX 3.1 ou 4 ; son mot de passe est demandé.
+                          --fichier-cle FICHIER : fichier clé de la base (mot de passe vide
+                          permis).
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.
@@ -418,6 +420,7 @@ pub enum Command {
     },
     ImportKdbx {
         file: PathBuf,
+        key_file: Option<PathBuf>,
     },
     Passwd,
     Settings(SettingsChange),
@@ -729,6 +732,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--separateur",
         "--chiffres",
         "--modele",
+        "--fichier-cle",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -798,6 +802,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "rm" => &["--purger", "--id"],
         "history" => &["--id", "--version", "--champ", "--stdout"],
         "restore" => &["--id", "--version"],
+        "import-kdbx" => &["--fichier-cle"],
         "settings" => &[
             "--verrouillage",
             "--presse-papiers",
@@ -917,6 +922,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             })?;
             Command::ImportKdbx {
                 file: PathBuf::from(file),
+                key_file: one("--fichier-cle")?.map(PathBuf::from),
             }
         }
         "passwd" => {
@@ -2175,9 +2181,20 @@ mod tests {
         assert_eq!(
             p(&["import-kdbx", "base.kdbx"]).unwrap().command,
             Command::ImportKdbx {
-                file: "base.kdbx".into()
+                file: "base.kdbx".into(),
+                key_file: None,
             }
         );
+        assert_eq!(
+            p(&["import-kdbx", "base.kdbx", "--fichier-cle", "base.keyx"])
+                .unwrap()
+                .command,
+            Command::ImportKdbx {
+                file: "base.kdbx".into(),
+                key_file: Some("base.keyx".into()),
+            }
+        );
+        assert!(p(&["import-kdbx", "base.kdbx", "--fichier-cle"]).is_err());
         assert_eq!(
             p(&["settings", "--veille", "non", "--verrouillage", "600"])
                 .unwrap()
