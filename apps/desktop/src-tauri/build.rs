@@ -43,6 +43,8 @@ const COMMANDS: &[&str] = &[
     "unlock_with_method",
     "remove_unlock_method",
     "choose_kdbx_file",
+    "choose_kdbx_key_file",
+    "clear_kdbx_key_file",
     "import_kdbx",
     "server_status",
     "server_identity",

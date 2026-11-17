@@ -14,7 +14,7 @@
 //! - [`server_mode`]: the client of `hirzlad` and the local API version 4 (ADR 0032);
 //! - [`selfmode`]: the Self-mode operations (version 5): settings, history, recovery, import;
 //! - [`connections`]: SSH and RDP connections (version 6, ADR 0067);
-//! - [`methods`]: hardware unlock methods (version 9, ADR 0075): Windows Hello, Touch ID,
+//! - [`methods`]: hardware unlock methods (version 12, ADR 0075): Windows Hello, Touch ID,
 //!   FIDO2;
 //! - [`codesign`]: the signature of the core's clients (ADR 0042);
 //! - [`release`]: documents signed by the publisher key, client manifest and offline update

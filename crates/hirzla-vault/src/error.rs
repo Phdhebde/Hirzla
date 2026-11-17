@@ -48,10 +48,11 @@ pub enum VaultError {
 pub enum KdbxRefusal {
     /// Not a KeePass database (no KeePass signature).
     NotKdbx,
-    /// A KeePass database this reader does not handle (KDBX 3, AES-KDF, Twofish, Salsa20,
-    /// key file, unknown field).
+    /// A KeePass database this reader does not handle (KDBX 2 or earlier, Twofish, ArcFour
+    /// inner stream, cost beyond the bounds, unknown field).
     Unsupported,
-    /// The password is wrong, or the header was altered (the cause is not given).
+    /// The password or key file is wrong, or the header was altered (the cause is not
+    /// given).
     WrongKey,
     /// The database is malformed or was altered after its header.
     Malformed,

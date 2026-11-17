@@ -197,26 +197,26 @@ voient le matériau ou le secret.
 - Le noyau ne réessaie jamais une méthode de lui-même et ne passe jamais seul au mot de passe :
   c'est le client qui propose le recours.
 
-### 6. API locale, version 9
+### 6. API locale, version 12
 
-Nouvelle famille, comme le mode Self (§ 16) : **version 9**, opérations **140 à 149**, erreurs
-**140 à 149**, profil complet seulement (le profil navigateur reçoit `Unauthorized`).
+Nouvelle famille, comme le mode Self (§ 16) : **version 12** (les versions 9 à 11 et les codes 140 à 149 sont pris par d'autres changements en cours), opérations **150 à 159**, erreurs
+**150 à 159**, profil complet seulement (le profil navigateur reçoit `Unauthorized`).
 `Status` ne l'annonce pas : un client la découvre en l'essayant.
 
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
-| 140 | `UnlockMethods` | existant | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 141 | `EnrollMethod` | ouvert | `{1: kind, 2: mot de passe maître, 3?: PIN}` | `{1: rang}` |
-| 142 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
-| 143 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+| 150 | `UnlockMethods` | existant | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 151 | `EnrollMethod` | ouvert | `{1: kind, 2: mot de passe maître, 3?: PIN}` | `{1: rang}` |
+| 152 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
+| 153 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
 Méthode : `{1: rang, 2: kind, 3: utilisable ici bool, 4: PIN à demander bool}`.
 
-Erreurs : 140 `MethodUnavailable` (pas de matériel, système trop ancien, fonction non compilée),
-141 `MethodCancelled` (annulé par l'utilisateur ou délai dépassé), 142 `MethodInvalidated`
+Erreurs : 150 `MethodUnavailable` (pas de matériel, système trop ancien, fonction non compilée),
+151 `MethodCancelled` (annulé par l'utilisateur ou délai dépassé), 152 `MethodInvalidated`
 (clé supprimée, empreintes changées, clé FIDO2 réinitialisée : le client propose le mot de
-passe puis le réenrôlement), 143 `PinRequired` (PIN absent ou faux ; le nombre d'essais
-restants n'est pas donné), 144 `PinBlocked` (clé FIDO2 bloquée). Détail dans
+passe puis le réenrôlement), 153 `PinRequired` (PIN absent ou faux ; le nombre d'essais
+restants n'est pas donné), 154 `PinBlocked` (clé FIDO2 bloquée). Détail dans
 `api-locale.md` § 19.
 
 ### 7. Interfaces

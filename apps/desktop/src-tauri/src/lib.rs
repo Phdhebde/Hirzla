@@ -15,7 +15,7 @@
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
 //! - [`methods`]: unlock with Windows Hello, Touch ID or a FIDO2 security key (local API
-//!   version 9, ADR 0075);
+//!   version 12, ADR 0075);
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
@@ -129,6 +129,8 @@ pub fn run() -> Result<(), tauri::Error> {
             methods::unlock_with_method,
             methods::remove_unlock_method,
             selfmode::choose_kdbx_file,
+            selfmode::choose_kdbx_key_file,
+            selfmode::clear_kdbx_key_file,
             selfmode::import_kdbx,
             servermode::server_status,
             servermode::server_identity,

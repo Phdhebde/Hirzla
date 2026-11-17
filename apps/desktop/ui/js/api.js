@@ -234,7 +234,7 @@ export const api = {
   recoveryUnlock: (password, confirmation) => call("recovery_unlock", { password, confirmation }),
   /** @returns {Promise<void>} */
   removeRecoveryKit: () => call("remove_recovery_kit"),
-  // Hardware unlock methods (local API version 9, ADR 0075).
+  // Hardware unlock methods (local API version 12, ADR 0075).
   /** @returns {Promise<UnlockMethods>} */
   unlockMethods: () => call("list_unlock_methods"),
   /** @param {MethodKind} kind @param {string} password @param {string | null} pin @returns {Promise<number>} */
@@ -245,6 +245,8 @@ export const api = {
   removeMethod: (rank) => call("remove_unlock_method", { rank }),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
+  chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),
+  clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
 

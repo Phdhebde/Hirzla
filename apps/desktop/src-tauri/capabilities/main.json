@@ -45,6 +45,8 @@
     "allow-unlock-with-method",
     "allow-remove-unlock-method",
     "allow-choose-kdbx-file",
+    "allow-choose-kdbx-key-file",
+    "allow-clear-kdbx-key-file",
     "allow-import-kdbx",
     "allow-server-status",
     "allow-server-identity",

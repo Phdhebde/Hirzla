@@ -503,8 +503,8 @@ fn wire_format_round_trips_and_refuses() {
     );
     // Another version.
     let mut frame = MethodRequest::UnlockMethods.encode(4).unwrap().to_vec();
-    // Version is the first value of the map: 0xa3 0x01 0x09.
-    assert_eq!(&frame[..3], &[0xa3, 0x01, 0x09]);
+    // Version is the first value of the map: 0xa3 0x01 0x0c.
+    assert_eq!(&frame[..3], &[0xa3, 0x01, 0x0c]);
     frame[2] = 0x05;
     assert_eq!(
         MethodRequest::decode(&frame).unwrap_err(),

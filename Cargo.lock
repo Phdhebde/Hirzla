@@ -378,6 +378,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2f6c7dbe95a6ed67ad9f18e57daf93a2f034c524b99fd2b76d18fdfeb6660aa"
 dependencies = [
  "hybrid-array",
+ "zeroize",
 ]
 
 [[package]]
@@ -683,6 +684,7 @@ dependencies = [
  "block-buffer 0.12.1",
  "crypto-common 0.2.2",
  "inout",
+ "zeroize",
 ]
 
 [[package]]
@@ -2022,6 +2024,7 @@ dependencies = [
  "ml-kem",
  "p384",
  "rand_core",
+ "salsa20",
  "sha2 0.11.1",
  "thiserror 2.0.21",
  "vsss-rs",
@@ -2126,6 +2129,7 @@ version = "1.0.0"
 dependencies = [
  "base64 0.23.1",
  "cbor4ii",
+ "data-encoding",
  "flate2",
  "hirzla-crypto",
  "icu_normalizer",
@@ -4132,6 +4136,16 @@ dependencies = [
  "quick-error",
  "tempfile",
  "wait-timeout",
+]
+
+[[package]]
+name = "salsa20"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
+dependencies = [
+ "cfg-if",
+ "cipher",
 ]
 
 [[package]]

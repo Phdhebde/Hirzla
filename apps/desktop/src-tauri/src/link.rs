@@ -267,7 +267,7 @@ impl CoreLink {
         }
     }
 
-    /// Sends one hardware unlock method request (`docs/api-locale.md` § 19, version 9). Only
+    /// Sends one hardware unlock method request (`docs/api-locale.md` § 19, version 12). Only
     /// the list is sent again on a new connection: a gesture is never asked for twice.
     ///
     /// # Errors

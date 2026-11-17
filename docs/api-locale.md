@@ -476,7 +476,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16), les connexions (version 6, § 17) et les méthodes de déverrouillage matérielles (version 9, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) et les méthodes de déverrouillage matérielles (version 12, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -571,7 +572,15 @@ Décisions : ADR 0024. Code : `apps/desktop`.
 - Mode Self (§ 16) : `GetSettings`, `SetSettings`, `ChangePassword`, `RestoreSecret`,
   `History`, `ReadVersion` (révélation ou copie), `RestoreVersion`, `RecoveryStatus` (aussi sur
   l'écran de déverrouillage), `RecoveryCreate`, `RecoveryUnlock`, `RecoveryRemove`,
-  `ImportKdbx`. La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
+  `ImportKdbx`. La fiche d'un mot de passe, d'une note ou d'une clé SSH lit `History` pour
+  savoir quels champs la version actuelle contient (numéros des champs, § 16.2, jamais une
+  valeur) : un champ facultatif absent (notes, phrase de passe) n'est pas affiché, un champ
+  principal absent est marqué « Vide », sans bouton de révélation ni de copie. Si `History`
+  est refusé, la fiche affiche tous les champs comme avant. Le formulaire de modification
+  s'en sert aussi (et de `has_password`, `has_notes` pour une connexion) pour proposer
+  « Effacer le mot de passe actuel » et « Effacer les notes actuelles » : le champ part alors
+  dans les champs à effacer d'`Update` (§ 6, clé 3). Aucun changement du protocole.
+  La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
 - Méthodes de déverrouillage (§ 19) : `UnlockMethods` (écran de déverrouillage et Réglages ›
@@ -1123,21 +1132,22 @@ Détails :
    l'initiateur, et ce poste a pu être volé. La ligne de commande affiche le rappel et demande
    « oui ».
 
-## 16. Mode Self (version 5)
+## 16. Mode Self (versions 5 et 9)
 
 Décisions : ADR 0025 (import KeePass, option 2), ADR 0033 (verrouillage à la mise en veille et
 au verrouillage de session), ADR 0034 (kit de recouvrement à quorum). Le noyau parle en plus la
 **version 5**, qui porte ce dont l'application de poste et la ligne de commande ont besoin pour
 tenir un coffre seules, au-delà des versions 1 et 2 : réglages, changement du mot de passe
 maître, corbeille, historique des versions, recouvrement, import KeePass, événements du
-système. Codes : opérations **60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du
-mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
+système. La **version 9** n'ajoute que le fichier clé d'`ImportKdbx` (§ 10). Codes : opérations
+**60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
 
 ### 16.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-60 à 79 va au mode Self ; elle doit porter `v = 5`, sinon `UnsupportedVersion` avec `{2: [5]}`.
-Un code de la plage sans opération : `UnknownOperation`. Les réponses portent `v = 5`. Ces
+60 à 79 va au mode Self ; elle doit porter `v = 5` ou `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [5, 9]}`. Un code de la plage sans opération : `UnknownOperation`. Une réponse porte la
+version de sa requête (5 quand la requête n'en porte aucune d'acceptée). Ces
 opérations sont réservées au profil complet : le profil navigateur reçoit `Unauthorized`, et le
 refus est journalisé. `Status` (§ 6) n'annonce pas la version 5 : un client la découvre en
 l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
@@ -1149,7 +1159,7 @@ l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
 | Réglages | `{1: auto_lock_s uint, 2: clipboard_clear_s uint, 3: lock_on_sleep bool, 4: lock_on_session_lock bool}`, les quatre clés toujours présentes |
 | Version | `{1: op_id bstr(48), 2: lamport uint, 3: wall_ms uint, 4: état uint (0 actif, 1 corbeille, 2 purgé), 5: titre tstr, 6?: identifiant tstr, 7: [champ uint], 8: [champ uint], 9: champs personnalisés uint}` ; titre et identifiant de 4 096 octets au plus |
 | Fichier de part | `bstr` (≤ 16 Kio), le fichier `.hirzla-part` tel quel (`format.md` § 4.4) |
-| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP, 8: refusés}`, tous `uint` |
+| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes non importées, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP non convertis, 8: refusés}`, tous `uint` |
 
 Une version liste les **numéros** des champs présents (clé 7, `format.md` § 8) et ceux qui ont
 changé depuis la version précédente (clé 8) : un champ compte comme changé quand l'écriture qui
@@ -1173,7 +1183,7 @@ d'une version par `ReadVersion`.
 | 69 | `RecoveryCreate` | ouvert | `{1: seuil uint, 2: parts uint}`, 2 ≤ seuil ≤ parts ≤ 16 | `{1: kit_id bstr(16), 2: [fichier de part]}` |
 | 70 | `RecoveryUnlock` | verrouillé | `{1: [fichier de part] (1 à 16), 2: nouveau mot de passe tstr}` | — |
 | 71 | `RecoveryRemove` | ouvert | — | — |
-| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier}` | compte rendu d'import |
+| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier, 4?: chemin absolu du fichier clé tstr (≤ 4 096 octets, version 9)}` | compte rendu d'import |
 
 Détails :
 
@@ -1217,20 +1227,31 @@ Détails :
 11. **`ImportKdbx`** — le noyau lit le fichier lui-même (le client n'en transmet que le chemin),
     le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
     défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
-    `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
-    clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
-    de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
-    identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
-    « Sans titre » ; chemin du groupe (sans la racine) en étiquette, plus les étiquettes
-    KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
-    KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
-    coffre (valeur trop longue) comptée dans « refusés ».
+    `NotFound`. **Fichier clé** (clé 4, version 9 ; inconnue en version 5 : `Malformed`) : lu
+    par le noyau comme la base, mêmes refus (chemin vide ou relatif : `InvalidInput`,
+    illisible : `NotFound`) ; formats XML 1.0 et 2.0, 32 octets, 64 chiffres hexadécimaux,
+    sinon empreinte du fichier. Avec un fichier clé et un mot de passe vide, le noyau essaie
+    le fichier seul (KeePassXC), puis le fichier avec le mot de passe vide (KeePass 2) ; un
+    refus des deux : `ImportKeyRejected`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
+    clients et le verrouillage automatique ne l'attendent pas. Bases KDBX 3.1 et 4, AES-KDF ou
+    Argon2 (ADR 0025). Correspondance (détail dans l'ADR 0025) : entrée qui n'a qu'un titre :
+    ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
+    même sans mot de passe ; sinon : note ; titre absent : hôte de l'adresse, puis identifiant,
+    puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
+    remplacées par la valeur visée ; chemin du groupe (sans la racine) en étiquette, plus les
+    étiquettes KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans
+    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP convertis (KeePassXC `otp`,
+    KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP), les autres
+    (HOTP, Steam, hors bornes, plusieurs secrets) gardés tels quels en champs sensibles et
+    comptés dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
+    champs personnalisés ; corbeille KeePass et historique comptés, non importés ; entrée
+    refusée par le coffre comptée dans « refusés ».
 
 ### 16.4 Erreurs
 
 | Code | Nom | Sens | Détails |
 | --- | --- | --- | --- |
-| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 3 ou antérieur, AES-KDF, Twofish, Salsa20, fichier clé | — |
+| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 2 ou antérieur, Twofish, flux interne ArcFour, coût de dérivation au-delà des bornes | — |
 | 61 | `ImportKeyRejected` | Mot de passe de la base faux, ou en-tête altéré | — |
 | 62 | `ImportMalformed` | Pas une base KeePass, ou base malformée, altérée ou trop grande | — |
 
@@ -1248,7 +1269,7 @@ cryptographique ; le journal du noyau n'écrit que l'opération et le nom du ré
 | `history NOM \| --id ID --version N --champ C [--stdout]` | `List`, `History`, `ReadVersion`, `Status` (presse-papiers comme `get`) |
 | `restore NOM \| --id ID` | `List` (corbeille comprise), `RestoreSecret` |
 | `restore NOM \| --id ID --version N` | `List`, `History`, `RestoreVersion` |
-| `import-kdbx FICHIER` | `ImportKdbx` (mot de passe de la base demandé sans écho) |
+| `import-kdbx FICHIER [--fichier-cle FICHIER]` | `ImportKdbx` (mot de passe de la base demandé sans écho, vide permis avec un fichier clé ; version 9 avec un fichier clé) |
 | `passwd` | `ChangePassword` (actuel, puis nouveau deux fois en terminal) |
 | `settings [--verrouillage S] [--presse-papiers S] [--veille oui\|non] [--session oui\|non]` | `GetSettings`, (`SetSettings`) |
 | `recovery status` | `RecoveryStatus` |
@@ -1268,6 +1289,9 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
+4. De nouveaux compteurs au compte rendu d'import (références non résolues, réglages de
+   saisie automatique) demanderaient une nouvelle version du mode Self (§ 10), à spécifier
+   ici d'abord.
 
 ## 17. Connexions SSH et RDP (version 6)
 
@@ -1488,21 +1512,21 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
-## 19. Méthodes de déverrouillage matérielles (version 9)
+## 19. Méthodes de déverrouillage matérielles (version 12)
 
 Décision : ADR 0075. Le coffre s'ouvre avec Windows Hello, Touch ID (clé de la Secure Enclave)
 ou une clé de sécurité FIDO2 (`hmac-secret`, sémantique WebAuthn PRF), **à côté** du mot de
 passe maître, qui reste toujours. Le format est au `format.md` § 4.2.1. Codes : opérations
-**140 à 149**, erreurs **140 à 149**. Code : `crates/hirzla-core/src/methods`, facteurs
+**150 à 159**, erreurs **150 à 159**. Code : `crates/hirzla-core/src/methods`, facteurs
 matériels dans `crates/hirzla-keystore/src/unlock`.
 
 ### 19.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-140 à 149 va à cette famille ; elle doit porter `v = 9`, sinon `UnsupportedVersion` avec
-`{2: [9]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
-`v = 9`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
-journalisé. `Status` n'annonce pas la version 9 : un client la découvre en l'essayant.
+150 à 159 va à cette famille ; elle doit porter `v = 12`, sinon `UnsupportedVersion` avec
+`{2: [12]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 12`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
+journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'essayant.
 
 ### 19.2 Types
 
@@ -1521,10 +1545,10 @@ macOS) ; sous Windows, le système le demande lui-même.
 
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
-| 140 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 141 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN}` | `{1: rang}` |
-| 142 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
-| 143 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+| 150 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 151 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN}` | `{1: rang}` |
+| 152 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
+| 153 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
 - `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
 - `EnrollMethod` : frein (§ 6) ; vérification du mot de passe maître (un mot de passe faux
@@ -1547,11 +1571,11 @@ macOS) ; sous Windows, le système le demande lui-même.
 
 | Code | Nom | Sens |
 | --- | --- | --- |
-| 140 | `MethodUnavailable` | Pas de matériel, système trop ancien, prise en charge non compilée, ou `keystore_blob` illisible par ce poste |
-| 141 | `MethodCancelled` | Annulé par l'utilisateur, ou délai du système dépassé |
-| 142 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
-| 143 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
-| 144 | `PinBlocked` | Clé de sécurité bloquée |
+| 150 | `MethodUnavailable` | Pas de matériel, système trop ancien, prise en charge non compilée, ou `keystore_blob` illisible par ce poste |
+| 151 | `MethodCancelled` | Annulé par l'utilisateur, ou délai du système dépassé |
+| 152 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
+| 153 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
+| 154 | `PinBlocked` | Clé de sécurité bloquée |
 
 Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
 matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,

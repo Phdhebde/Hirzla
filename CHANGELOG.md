@@ -19,7 +19,7 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   propose la méthode matérielle en premier, le mot de passe dessous.
 - Ligne de commande : `hirzla methods`, `hirzla methods add hello|touchid|fido2`,
   `hirzla methods remove RANG`, `hirzla unlock --materiel [RANG]`.
-- API locale version 9 (`docs/api-locale.md` § 19) : `UnlockMethods`, `EnrollMethod`,
+- API locale version 12 (`docs/api-locale.md` § 19) : `UnlockMethods`, `EnrollMethod`,
   `UnlockWithMethod`, `RemoveMethod` ; profil complet seulement ; le geste se fait hors du
   verrou du noyau.
 - Format : contenu du `keystore_blob` des méthodes 3, 4 et 5 et étiquette

@@ -1,4 +1,4 @@
-//! Hardware unlock methods (local API version 9, `docs/api-locale.md` § 19, ADR 0075):
+//! Hardware unlock methods (local API version 12, `docs/api-locale.md` § 19, ADR 0075):
 //! Windows Hello, Touch ID and FIDO2 security keys, beside the master password that always
 //! stays.
 //!

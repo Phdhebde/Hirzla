@@ -183,6 +183,8 @@
   // Hardware unlock methods (ADR 0075): the master password, then those enrolled.
   const methods = [{ rank: 0, kind: "password", usable: true, needs_pin: false }, ...(cfg.methods || [])];
   const enrollable = cfg.enrollable || ["hello", "fido2"];
+  /** @type {string | null} */
+  let kdbxKey = null;
   const v = (n) => n.toString(16).padStart(96, "0");
   const history = [
     { version: v(3), wall_ms: Date.UTC(2026, 9, 2, 8, 14), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["password"], custom: 0 },
@@ -196,6 +198,22 @@
     [id(21)]: { kind: "ssh", port: 2222, effective_port: 2222, domain: null, host_key: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", has_password: false, has_notes: true, ssh_key: keyLink, jumps: [] },
     [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
     [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
+  };
+  // Fields each secret holds (what `secret_history` lists, never a value): only the bank
+  // account, the tax account and the GitLab note have notes, only the backup server key has
+  // a passphrase. `update_secret` changes them.
+  const changedFields = new Map();
+  const fieldsOf = (sid) => {
+    if (changedFields.has(sid)) return changedFields.get(sid);
+    const e = entries.find((x) => x.id === sid);
+    if (!e) return [];
+    const f = ["title"];
+    if (e.username) f.push("username");
+    if (e.kind === "password") f.push("password");
+    if (e.kind === "ssh_key") f.push("ssh_public_key");
+    if (sid === id(6)) f.push("ssh_passphrase");
+    if (sid === id(1) || sid === id(3) || sid === id(4)) f.push("notes");
+    return f;
   };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
@@ -216,7 +234,7 @@
       return { entries: entries.filter((e) => shown(e) && (a.trash || !e.trash) && hit(e)), lockers };
     },
     reveal_field: (a) => {
-      if (a.field === "notes" && a.target.id !== id(1) && a.target.id !== id(3)) return refuse("not_found", "Secret ou champ introuvable.");
+      if (!fieldsOf(a.target.id).includes(a.field)) return refuse("not_found", "Secret ou champ introuvable.");
       return values[a.field] || "";
     },
     copy_field: () => 30,
@@ -229,6 +247,12 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e && "favorite" in a.changes) e.favorite = a.changes.favorite;
       if (e && a.changes.title) e.title = a.changes.title;
+      if (e) {
+        const f = new Set(fieldsOf(e.id));
+        for (const k of ["username", "password", "notes"]) if (a.changes[k]) f.add(k);
+        for (const k of a.changes.clear || []) f.delete(k);
+        changedFields.set(e.id, [...f]);
+      }
     },
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);
@@ -266,12 +290,15 @@
       if (a.set.port) { c.port = a.set.port; c.effective_port = a.set.port; }
       if (a.set.host_key) c.host_key = a.set.host_key;
       if (a.set.password) c.has_password = true;
+      if (a.set.notes) c.has_notes = true;
       for (const k of a.clear) {
         if (k === "port") { c.port = null; c.effective_port = c.kind === "rdp" ? 3389 : 22; }
         if (k === "username") e.username = null;
         if (k === "host_key") c.host_key = null;
         if (k === "ssh_key") c.ssh_key = null;
         if (k === "jump") c.jumps = [];
+        if (k === "password") c.has_password = false;
+        if (k === "notes") c.has_notes = false;
       }
     },
     choose_ssh_key_file: () => "id_ed25519",
@@ -356,7 +383,12 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e) e.trash = false;
     },
-    secret_history: () => history,
+    secret_history: (a) => {
+      if (a.target.id === id(1)) return history.map((x, i) => (i === 0 ? { ...x, fields: fieldsOf(id(1)) } : x));
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e) return refuse("not_found", "Secret ou champ introuvable.");
+      return [{ version: v(1), wall_ms: Date.UTC(2026, 0, 12, 9, 30), state: e.trash ? "trash" : "active", title: e.title, username: e.username, fields: fieldsOf(e.id), changed: fieldsOf(e.id), custom: 0 }];
+    },
     reveal_version: (a) => (a.field === "password" ? "ancien-Mot-de-passe-2025" : "Ancienne note."),
     copy_version: () => 30,
     restore_version: () => {},
@@ -378,9 +410,13 @@
     },
     unlock_with_method: () => delay(undefined).then(() => { state = "unlocked"; }),
     remove_unlock_method: (a) => { methods.splice(a.rank, 1); },
-    choose_kdbx_file: () => "Personnel.kdbx",
+    choose_kdbx_file: () => { kdbxKey = null; return "Personnel.kdbx"; },
+    choose_kdbx_key_file: () => { kdbxKey = "Personnel.keyx"; return kdbxKey; },
+    clear_kdbx_key_file: () => { kdbxKey = null; },
     import_kdbx: (a) => {
-      if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
+      const ok = kdbxKey ? a.password === "" || a.password === "keepass" : a.password === "keepass";
+      if (!ok) return refuse("import", "Mot de passe ou fichier clé de la base KeePass incorrect, ou base altérée.");
+      kdbxKey = null;
       return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
     },
     server_status: () => {

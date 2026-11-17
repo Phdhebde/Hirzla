@@ -123,7 +123,25 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("ArrowDown");
   await p.keyboard.press("ArrowDown");
   await shot(p, "05-recherche", theme);
+  // A secret without notes: no "Notes" row, so nothing to reveal or copy there.
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : mot de passe']");
+  if (await p.$("#fiche-champs button[aria-label^='Révéler : notes']")) {
+    errors.push(`${theme} : la fiche d'un secret sans notes propose de les révéler`);
+  }
   await p.fill("#recherche", "");
+
+  // Clearing the notes of a secret in edit mode: an explicit choice, then no "Notes" row.
+  await p.click("#opt-00000000000000000000000000000004");
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : notes']");
+  await p.click("#fiche-modifier");
+  await p.waitForSelector("#dialogue-secret[open] #secret-notes-effacer-case:not([hidden])");
+  await p.check("#secret-notes-effacer");
+  await p.click("#secret-enregistrer");
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.waitForFunction(
+    () => document.getElementById("fiche-champs")?.textContent?.includes("Identifiant") &&
+      !document.querySelector("#fiche-champs button[aria-label^='Révéler : notes']"),
+  );
 
   // Command palette: secrets and actions from the keyboard.
   await p.keyboard.press("Control+k");
