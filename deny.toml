@@ -54,8 +54,9 @@ allow = ["MPL-2.0"]
 crate = "option-ext"
 allow = ["MPL-2.0"]
 
-# Workspace crates are `publish = false` and the project licence is not chosen yet:
-# only third-party crates are subject to the allow list above.
+# Workspace crates are `publish = false` and carry the project's own licence
+# (AGPL-3.0-or-later, ADR 0074), which is not a dependency licence: only third-party crates
+# are subject to the allow list above. Every licence allowed above is AGPL-3.0 compatible.
 [licenses.private]
 ignore = true
 

@@ -17,13 +17,14 @@ serveur auto-hébergé qui ne peut lire aucun secret.
 ### Hirzla est-il gratuit ?
 
 Oui. Hirzla est gratuit, sans abonnement, sans compte et sans version payante. C'est un
-logiciel libre sous licence Apache 2.0, utilisable par les particuliers comme par les
-entreprises et les administrations.
+logiciel libre sous licence AGPL-3.0, utilisable par les particuliers comme par les
+entreprises et les administrations. Une licence commerciale existe pour les seules
+organisations qui intègrent Hirzla dans un produit fermé et ne peuvent pas respecter l'AGPL.
 
 ### Hirzla est-il open source ?
 
 Oui. Tout le code, l'application, le serveur, l'extension et la ligne de commande, est publié
-sur [GitHub](https://github.com/Phdhebde/Hirzla) sous licence Apache 2.0, avec les
+sur [GitHub](https://github.com/Phdhebde/Hirzla) sous licence AGPL-3.0, avec les
 spécifications du format du coffre et du protocole de synchronisation.
 
 ### Sur quels systèmes Hirzla fonctionne-t-il ?

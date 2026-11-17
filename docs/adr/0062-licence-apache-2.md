@@ -1,6 +1,6 @@
 # ADR 0062 — Licence du produit : Apache 2.0
 
-- Statut : accepté (2026-11-15, décision du mainteneur, sur demande de l'éditeur)
+- Statut : remplacé par l'ADR 0074 (2026-11-17) ; accepté le 2026-11-15 (décision du mainteneur, sur demande de l'éditeur)
 - Date : 2026-11-15
 
 ## Contexte

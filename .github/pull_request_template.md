@@ -8,6 +8,8 @@
 
 ## Vérifications
 
+- [ ] J'ai signé l'accord de contribution (`CLA.md`, via CLA Assistant) et chaque commit
+      porte une ligne `Signed-off-by` (`git commit -s`).
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] `cargo test --workspace`

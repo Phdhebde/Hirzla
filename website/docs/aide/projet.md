@@ -1,6 +1,6 @@
 ---
 title: Sécurité et projet
-description: Le projet Hirzla - licence Apache 2.0, état de la certification, signalement d'une vulnérabilité, documentation technique, feuille de route et contribution.
+description: Le projet Hirzla - licence AGPL-3.0 ou commerciale, état de la certification, signalement d'une vulnérabilité, documentation technique, feuille de route et contribution.
 ---
 
 # Sécurité et projet
@@ -8,8 +8,14 @@ description: Le projet Hirzla - licence Apache 2.0, état de la certification, s
 ## Licence
 
 Hirzla est un logiciel libre sous licence
-[Apache 2.0](https://github.com/Phdhebde/Hirzla/blob/main/LICENSE). Vous pouvez l'utiliser,
-l'étudier, le modifier et le redistribuer, y compris dans un cadre professionnel.
+[GNU AGPL 3.0 ou ultérieure](https://github.com/Phdhebde/Hirzla/blob/main/LICENSE). Vous
+pouvez l'utiliser, l'étudier, le modifier et le redistribuer, y compris dans un cadre
+professionnel. Si vous distribuez une version modifiée, ou la proposez comme service en
+réseau, vous en publiez le code source sous la même licence.
+
+Une organisation qui ne peut pas respecter ces conditions, par exemple pour intégrer Hirzla
+dans un produit fermé, peut demander une licence commerciale à l'auteur. Les détails sont dans
+[LICENSING.md](https://github.com/Phdhebde/Hirzla/blob/main/LICENSING.md).
 
 ## État de l'évaluation
 

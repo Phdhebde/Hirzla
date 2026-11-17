@@ -7,7 +7,7 @@ description: Ce qu'est Hirzla, à qui il s'adresse et ce qui le distingue des au
 
 Hirzla est un **coffre-fort de mots de passe** : une application qui garde vos identifiants,
 mots de passe et notes dans un fichier chiffré, et qui vous les rend quand vous en avez
-besoin. Il est gratuit, open source sous licence Apache 2.0, et fonctionne sous Windows, macOS
+besoin. Il est gratuit, open source sous licence AGPL-3.0, et fonctionne sous Windows, macOS
 et Linux.
 
 ## Ce que Hirzla fait

@@ -64,3 +64,8 @@ installeur ne télécharge quoi que ce soit ; l'application fonctionne en résea
 - **Pas d'AppImage** : son outil de fabrication (linuxdeploy) réécrit les exécutables, qui ne
   seraient plus ceux du manifeste signé ; le flux l'écarte. Sur une autre distribution, seule la
   ligne de commande est proposée, en archive.
+
+## Licence
+
+Hirzla est distribué sous GNU AGPL 3.0 ou ultérieure (`LICENSE`), ou sous licence commerciale
+accordée par l'auteur pour qui ne peut pas respecter l'AGPL (`LICENSING.md`).
