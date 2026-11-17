@@ -1,6 +1,6 @@
 # ADR 0072 — Saisie automatique dans les applications du poste
 
-- Statut : proposé
+- Statut : accepté (2026-11-17, décision de Max)
 - Date : 2026-11-16
 
 ## Contexte

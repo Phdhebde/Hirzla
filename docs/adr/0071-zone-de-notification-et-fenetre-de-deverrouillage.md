@@ -1,6 +1,6 @@
 # ADR 0071 — Zone de notification et fenêtre de déverrouillage
 
-- Statut : proposé
+- Statut : accepté (2026-11-17, décision de Max)
 - Date : 2026-11-16
 
 ## Contexte
