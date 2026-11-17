@@ -14,9 +14,18 @@ workspace = true
 # ADR 0052: the TPM 2.0 prototype (tss-esapi, hence the C library tpm2-tss) is built only on
 # request, by its dedicated CI job « TPM prototype (swtpm) ». Off in every shipped binary.
 tpm2-prototype = ["dep:tss-esapi", "dep:hirzla-crypto", "dep:thiserror"]
+# ADR 0075: a software stand-in for the hardware unlock factors, for tests. Only
+# `dev-dependencies` enable it; never a shipped binary.
+test-software = ["dep:hirzla-crypto"]
+# ADR 0075: FIDO2 over HID on Linux and macOS (`ctap-hid-fido2`, hence the C library hidapi and,
+# on Linux, libudev). Off by default: enabling it in shipped binaries is the maintainer's
+# decision (ADR 0075, open point 1). Windows uses webauthn.dll and does not need it.
+fido2-hid = ["dep:ctap-hid-fido2", "dep:anyhow", "dep:hirzla-crypto"]
 
 [dependencies]
-# Only the TPM prototype uses it (`tpm2-prototype`).
+# The TPM prototype; the simulated unlock factor and the WebAuthn PRF salt of the HID path
+# (ADR 0075). Optional: the crate stays free of C code otherwise, so that it type-checks for
+# every target from any host. Random bytes come from the caller (the core).
 hirzla-crypto = { path = "../hirzla-crypto", optional = true }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 
@@ -30,6 +39,12 @@ libc = "0.2.191"
 # source download at build time). Windows is not built yet: no released tss-esapi opens the
 # TBS TCTI (see docs/keystore-prototypes.md). Optional (feature `tpm2-prototype`, ADR 0052):
 # the prototype is not wired to the core, so the C library is not linked into it.
+[target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
+# ADR 0075: CTAP 2 over HID, with AWS-LC for its PIN protocol. Optional (`fido2-hid`).
+ctap-hid-fido2 = { version = "=3.6.1", default-features = false, features = ["aws-lc-rs"], optional = true }
+# Its error type, to map CTAP status codes.
+anyhow = { version = "1.0", optional = true }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 tss-esapi = { version = "=7.7.0", optional = true }
 # ADR 0072: typing into the active window through XTEST. Already in the graph (clipboard of
@@ -61,6 +76,7 @@ security-framework-sys = "2.17.0"
 windows-sys = { version = "0.61.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Networking_WindowsWebServices",
     "Win32_Security",
     "Win32_Security_Authorization",
     "Win32_Security_Cryptography",
@@ -68,6 +84,7 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_Security_Cryptography_Sip",
     "Win32_Security_WinTrust",
     "Win32_Storage_FileSystem",
+    "Win32_System_Com",
     "Win32_System_Console",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
@@ -77,4 +94,14 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
+] }
+# Constant-time comparison (`CLAUDE.md`): the determinism check of Windows Hello (ADR 0075).
+subtle = "2.6.1"
+# ADR 0075: Windows Hello through KeyCredentialManager (WinRT), a safe API. Already in the
+# graph (Tauri); a direct dependency of this crate on Windows only.
+windows = { version = "0.62.2", features = [
+    "Foundation",
+    "Security_Credentials",
+    "Security_Cryptography",
+    "Storage_Streams",
 ] }

@@ -12,6 +12,7 @@
 //! | --- | --- | --- |
 //! | [`KdfLabel::Unlock`] | `hirzla/v1/unlock` | method index (1 byte), method kind (1 byte) |
 //! | [`KdfLabel::DeviceWrap`] | `hirzla/v1/device-wrap` | none |
+//! | [`KdfLabel::HardwareSecret`] | `hirzla/v1/hardware-secret` | method kind (1 byte) |
 //!
 //! The output is always a 32-byte [`SymmetricKey`].
 
@@ -37,6 +38,12 @@ pub enum KdfLabel {
     },
     /// `K_dev_wrap`, the local key-encryption key derived from the device key (§ 4.3).
     DeviceWrap,
+    /// Method secret of a hardware unlock method, from the material released by the system
+    /// (`docs/format.md` § 4.2.1, ADR 0075).
+    HardwareSecret {
+        /// Kind of the method (3 Secure Enclave, 4 FIDO2, 5 Windows Hello).
+        method_kind: u8,
+    },
 }
 
 impl KdfLabel {
@@ -44,6 +51,7 @@ impl KdfLabel {
         match self {
             KdfLabel::Unlock { .. } => b"hirzla/v1/unlock",
             KdfLabel::DeviceWrap => b"hirzla/v1/device-wrap",
+            KdfLabel::HardwareSecret { .. } => b"hirzla/v1/hardware-secret",
         }
     }
 
@@ -54,6 +62,7 @@ impl KdfLabel {
                 method_kind,
             } => vec![vec![method_index], vec![method_kind]],
             KdfLabel::DeviceWrap => Vec::new(),
+            KdfLabel::HardwareSecret { method_kind } => vec![vec![method_kind]],
         }
     }
 
@@ -81,6 +90,34 @@ pub fn derive_key(ikm: &SymmetricKey, salt: &[u8], label: KdfLabel) -> Result<Sy
         return Err(Error::InvalidContext);
     }
     let okm = hkdf_sha512(ikm.as_bytes(), salt, &label.info(), KEY_LEN)?;
+    SymmetricKey::from_bytes(&okm).map_err(|_| Error::Internal)
+}
+
+/// Shortest material accepted by [`derive_key_from_material`].
+pub const MIN_MATERIAL_LEN: usize = 32;
+/// Longest material accepted by [`derive_key_from_material`].
+pub const MAX_MATERIAL_LEN: usize = 1024;
+
+/// Derives a 32-byte key from variable-length key material released by a hardware keystore
+/// (a signature, an ECDH output, an `hmac-secret` output), for the purpose `label`, salted
+/// with `salt` (ADR 0075).
+///
+/// # Errors
+/// [`Error::InvalidContext`] if `salt` is empty, [`Error::InvalidEncoding`] if the material is
+/// shorter than [`MIN_MATERIAL_LEN`] or longer than [`MAX_MATERIAL_LEN`], [`Error::Internal`]
+/// if the library fails.
+pub fn derive_key_from_material(
+    material: &[u8],
+    salt: &[u8],
+    label: KdfLabel,
+) -> Result<SymmetricKey, Error> {
+    if salt.is_empty() {
+        return Err(Error::InvalidContext);
+    }
+    if !(MIN_MATERIAL_LEN..=MAX_MATERIAL_LEN).contains(&material.len()) {
+        return Err(Error::InvalidEncoding);
+    }
+    let okm = hkdf_sha512(material, salt, &label.info(), KEY_LEN)?;
     SymmetricKey::from_bytes(&okm).map_err(|_| Error::Internal)
 }
 
