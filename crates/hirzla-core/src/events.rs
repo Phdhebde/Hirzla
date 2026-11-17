@@ -11,6 +11,7 @@ use hirzla_keystore::platform::HardeningReport;
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
 use crate::connections::proto::ConnectionOp;
+use crate::locker_export::proto::ExportOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -161,6 +162,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// An export request was answered (`docs/api-locale.md` § 19). `result` is `ok` or the
+    /// name of the error: fixed words only. Neither the path nor the locker is written.
+    ExportRequest {
+        /// Operation.
+        op: ExportOp,
+        /// Outcome.
+        result: &'static str,
+    },
     /// A server mode request was answered (`docs/api-locale.md` § 15). `result` is `ok` or
     /// the name of the error: fixed words only.
     ServerRequest {
@@ -253,6 +262,9 @@ impl Event {
                     "event=connection_request op={} result={result}",
                     op.name()
                 )
+            }
+            Event::ExportRequest { op, result } => {
+                write!(out, "event=export_request op={} result={result}", op.name())
             }
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
@@ -403,6 +415,11 @@ mod tests {
         for op in ConnectionOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
                 events.push(Event::ConnectionRequest { op, result });
+            }
+        }
+        for op in ExportOp::ALL {
+            for result in ["ok", "export_key_rejected", "export_file_exists", "locked"] {
+                events.push(Event::ExportRequest { op, result });
             }
         }
         for n in 40..=48 {
