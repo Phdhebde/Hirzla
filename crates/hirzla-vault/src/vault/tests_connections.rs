@@ -78,10 +78,10 @@ fn text_of(b: &SecretBody, f: Field) -> Option<String> {
 }
 
 #[test]
-fn a_new_vault_is_version_2_and_stores_connections() {
+fn a_new_vault_is_of_the_current_version_and_stores_connections() {
     let (_dir, path, mut v) = new_vault();
-    assert_eq!(v.format_version(), 2);
-    assert_eq!(stored_versions(&path), (2, 2));
+    assert_eq!(v.format_version(), crate::FORMAT_VERSION);
+    assert_eq!(stored_versions(&path), (3, 3));
     let l = v.personal_locker();
 
     let key = v
@@ -403,7 +403,7 @@ fn inconsistent_or_unknown_versions_are_refused() {
     v.close();
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 3)
+        .pragma_update(None, "user_version", 4)
         .unwrap();
     assert_eq!(
         Vault::open(&path, PASSWORD).err(),
@@ -412,7 +412,8 @@ fn inconsistent_or_unknown_versions_are_refused() {
     assert!(!crate::reads_format_version(0));
     assert!(crate::reads_format_version(1));
     assert!(crate::reads_format_version(2));
-    assert!(!crate::reads_format_version(3));
+    assert!(crate::reads_format_version(3));
+    assert!(!crate::reads_format_version(4));
 }
 
 #[test]

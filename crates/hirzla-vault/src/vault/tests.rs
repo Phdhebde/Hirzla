@@ -671,8 +671,8 @@ fn format_and_structure_checks() {
     rewrite_header(&p, |h| {
         let mut body = h.encode().unwrap();
         // key 2 (format_version) is the byte after "02" following the magic text.
-        let at = body.windows(2).position(|w| w == [0x02, 0x02]).unwrap();
-        body[at + 1] = 0x03;
+        let at = body.windows(2).position(|w| w == [0x02, 0x03]).unwrap();
+        body[at + 1] = 0x04;
         body
     });
     assert_eq!(
@@ -680,7 +680,7 @@ fn format_and_structure_checks() {
         Some(VaultError::UnsupportedVersion)
     );
     let (_d, p) = make();
-    tamper(&p, "PRAGMA user_version = 3;");
+    tamper(&p, "PRAGMA user_version = 4;");
     assert_eq!(
         Vault::open(&p, PASSWORD).err(),
         Some(VaultError::UnsupportedVersion)

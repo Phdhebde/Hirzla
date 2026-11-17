@@ -7,6 +7,7 @@
 
 pub mod cbor;
 mod error;
+pub mod folder;
 pub mod kdbx;
 pub mod model;
 pub mod pad;
@@ -24,9 +25,9 @@ pub use vault::{
 };
 
 /// Version of the on-disk vault format written for a new vault (`docs/format.md` § 5.3).
-pub const FORMAT_VERSION: u16 = 2;
+pub const FORMAT_VERSION: u16 = 3;
 /// Oldest format version this build reads. A vault of that version stays so until an object
-/// of a later version is written to it (ADR 0067).
+/// of a later version is written to it (ADR 0067, ADR 0076).
 pub const MIN_FORMAT_VERSION: u16 = 1;
 
 /// Whether this build reads format version `v`.
