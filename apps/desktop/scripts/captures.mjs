@@ -262,6 +262,17 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.click("#fiche-restaurer");
   await p.waitForSelector("#liste-vide:not([hidden])");
 
+  // Folders of a locker (ADR 0076): a folder shown, its actions, then moving it.
+  await p.click("[data-filtre^='dossier:'][data-filtre$=':" + "65".padStart(32, "0") + "']");
+  await p.waitForFunction(() => document.querySelector("#liste-titre").textContent === "Finances");
+  await p.waitForSelector("#liste-dossier:not([hidden]) #dossier-renommer:not([hidden])");
+  await p.click("#liste-secrets li");
+  await shot(p, "15b-dossier", theme);
+  await p.click("#dossier-deplacer");
+  await p.waitForSelector("#dialogue-dossier[open] #dossier-destination");
+  await shot(p, "15c-deplacer-un-dossier", theme);
+  await p.keyboard.press("Escape");
+
   // Lock: everything shown is wiped.
   await p.keyboard.press("Control+l");
   await p.waitForSelector("#ecran-deverrouillage:not([hidden])");

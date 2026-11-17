@@ -591,3 +591,17 @@ button.lien:hover { color: var(--hz-texte); }
 .liste-simple { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
 .ligne-application { display: flex; align-items: center; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; }
 #reglage-saisie { margin-top: 16px; }
+
+/* Folders of a locker (ADR 0076): a nested list under the locker, foldable. */
+.nav-dossiers { list-style: none; margin: 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 2px; }
+.nav-dossiers[hidden] { display: none; }
+.nav-ligne { display: flex; align-items: center; gap: 2px; }
+.nav-ligne > .nav-lien { flex: 1; min-width: 0; }
+.nav-replier {
+  flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--hz-rayon-petit);
+  background: transparent; color: var(--hz-texte-secondaire); cursor: pointer; font: inherit; font-size: 11px; line-height: 1;
+}
+.nav-replier:hover { background: var(--hz-survol); }
+.nav-replier-vide { visibility: hidden; }
+.entete-dossier { flex-direction: column; align-items: flex-start; }
+.entete-dossier p { margin: 0; }

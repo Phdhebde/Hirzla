@@ -28,6 +28,7 @@
     <symbol id="i-totp" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2"/></symbol>
     <symbol id="i-secret" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
     <symbol id="i-casier" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></symbol>
+    <symbol id="i-dossier" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
     <symbol id="i-generateur" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></symbol>
     <symbol id="i-serveur" viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4zM7.5 7h.01M7.5 17h.01"/></symbol>
     <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
@@ -190,6 +191,15 @@
           <p id="liste-casier-role" class="texte-secondaire"></p>
           <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-membres"/></svg>Membres et rôles</button>
         </div>
+        <div id="liste-dossier" class="entete-casier entete-dossier" hidden>
+          <p id="liste-dossier-chemin" class="texte-secondaire"></p>
+          <div class="ligne-actions">
+            <button id="dossier-nouveau" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Nouveau dossier</button>
+            <button id="dossier-renommer" class="bouton bouton-secondaire bouton-petit" type="button">Renommer</button>
+            <button id="dossier-deplacer" class="bouton bouton-secondaire bouton-petit" type="button">Déplacer…</button>
+            <button id="dossier-supprimer" class="bouton bouton-secondaire bouton-petit" type="button">Supprimer…</button>
+          </div>
+        </div>
         <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
         <p id="liste-vide" class="vide" hidden></p>
       </section>
@@ -212,6 +222,7 @@
               <details id="fiche-menu" class="menu">
                 <summary class="bouton bouton-icone" aria-label="Autres actions"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg></summary>
                 <div class="menu-liste">
+                  <button id="fiche-deplacer" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-dossier"/></svg>Déplacer…</button>
                   <button id="fiche-historique" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-historique"/></svg>Historique</button>
                   <button id="fiche-supprimer" class="menu-action menu-danger" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span id="fiche-supprimer-texte">Mettre à la corbeille</span></button>
                 </div>
@@ -891,6 +902,30 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" value="non" autofocus>Annuler</button>
         <button id="confirmation-oui" class="bouton bouton-principal" value="oui"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Folder actions (ADR 0076): a name, a destination, or both. -->
+  <dialog id="dialogue-dossier" class="dialogue dialogue-etroit" aria-labelledby="dossier-titre" aria-describedby="dossier-texte">
+    <form id="form-dossier" method="dialog" novalidate>
+      <h2 id="dossier-titre" class="titre-carte"></h2>
+      <p id="dossier-texte" class="texte-secondaire"></p>
+      <label id="dossier-champ-nom" class="champ">
+        <span class="champ-libelle">Nom du dossier</span>
+        <input id="dossier-nom" class="saisie" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="dossier-champ-destination" class="champ">
+        <span class="champ-libelle">Destination</span>
+        <select id="dossier-destination" class="saisie"></select>
+      </label>
+      <div id="dossier-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="dossier-valider" class="bouton bouton-principal" type="submit"></button>
       </div>
     </form>
   </dialog>

@@ -60,12 +60,19 @@ function onGlobalError(e) {
   return false;
 }
 
+/** @type {{ locker: string, folder: string } | null} Folder where the secret being created goes (ADR 0076). */
+let createIn = null;
+
 const vault = new VaultView({
   onError: (e) => {
     if (!onGlobalError(e)) announce(e.message, 6000);
   },
+  handles: (e) => onGlobalError(e),
   revealSeconds: () => prefs.reveal_s,
-  onEdit: (entry) => void form.open(entry),
+  onEdit: (entry) => {
+    createIn = null;
+    void form.open(entry);
+  },
   onMembers: (locker, name) => void server.members.open(locker, name),
   onFilter: (filter) => markNav("secrets", filter),
   autoType: new AutoType((e) => onGlobalError(e)),
@@ -75,6 +82,17 @@ void loadAutoType();
 const form = new SecretForm({
   onError: onGlobalError,
   onSaved: async (ref) => {
+    // A secret created while a folder is shown goes into it.
+    const target = createIn;
+    createIn = null;
+    if (ref && target && ref.locker === target.locker) {
+      try {
+        await api.moveSecret(ref, target.folder);
+      } catch (e) {
+        const err = /** @type {ApiError} */ (e);
+        if (!onGlobalError(err)) announce(err.message, 6000);
+      }
+    }
     await vault.refresh();
     if (ref) vault.select(ref.id, false);
   },
@@ -112,10 +130,12 @@ function newSecret() {
       return !!s && s.access && !!s.role && WRITING_ROLES.includes(s.role);
     }),
   );
+  createIn = vault.folderFilter();
   void form.open(null, vault.lockerFilter());
 }
 
 const generator = new GeneratorView(onGlobalError, (value) => {
+  createIn = vault.folderFilter();
   void form.open(null, vault.lockerFilter()).then(() => {
     form.password.value = value;
   });
