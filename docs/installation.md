@@ -186,7 +186,7 @@ que rien ne sort : tout ce qui suit fonctionne hors ligne.
      Remettez chaque part à une personne de confiance différente, sur un support hors ligne,
      puis effacez le dossier du poste ;
    - **Importer** : **Importer depuis KeePass (KDBX)…** lit et déchiffre la base dans le noyau
-     (KDBX 4). Un import CSV laisse un fichier en clair : supprimez-le aussitôt.
+     (KDBX 3.1 et 4). Un import CSV laisse un fichier en clair : supprimez-le aussitôt.
 4. **Verrouiller** (en haut de la fenêtre) scelle le coffre ; fermer l'application le verrouille
    aussi.
 

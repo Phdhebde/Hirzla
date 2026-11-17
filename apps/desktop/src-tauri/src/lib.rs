@@ -122,6 +122,8 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::recovery_unlock,
             selfmode::remove_recovery_kit,
             selfmode::choose_kdbx_file,
+            selfmode::choose_kdbx_key_file,
+            selfmode::clear_kdbx_key_file,
             selfmode::import_kdbx,
             servermode::server_status,
             servermode::server_identity,

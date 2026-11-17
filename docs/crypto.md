@@ -191,13 +191,18 @@ refusées. Test de temps constant de type dudect (test t de Welch, deux classes 
 lancé à la demande en mode release : |t| ≤ 2,4 sur trois passes de 50 000 mesures (seuil
 d'alerte 4,5).
 
-### Lecture des bases KeePass (KDBX 4)
+### Lecture des bases KeePass (KDBX 3.1 et 4)
 
 Module `kdbx` (ADR 0025), utilisé **uniquement pour l'import**, jamais pour sceller un coffre
-Hirzla. AES-256-CBC, HMAC-SHA-256 et SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de
-`argon2` ; ChaCha20 brut (RFC 8439) de RustCrypto `chacha20` (version figée `=0.10.2`), faute
-d'un ChaCha20 sans authentification dans AWS-LC. Les HMAC d'en-tête et de blocs sont comparés
-en temps constant avant tout déchiffrement. Risque résiduel accepté par le mainteneur
+Hirzla. AES-256-CBC, AES-256-ECB (dérivation AES-KDF, bornée à 10⁹ tours), HMAC-SHA-256 et
+SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de `argon2` ; ChaCha20 brut (RFC 8439) de
+RustCrypto `chacha20` (version figée `=0.10.2`), faute d'un ChaCha20 sans authentification dans
+AWS-LC ; Salsa20 (flux interne des bases KDBX 3.1) de RustCrypto `salsa20` (version figée
+`=0.11.0`, sans `unsafe`), absent d'AWS-LC. Les secrets TOTP en base32 et les clés de
+fichier clé en hexadécimal sont décodés par `data-encoding` (version figée `=2.11.1`, ADR 0025)
+dans une mémoire effacée. Les HMAC d'en-tête et de blocs (KDBX 4) sont
+comparés en temps constant avant tout déchiffrement ; en KDBX 3.1, qui n'a pas de HMAC, les
+octets de départ, le SHA-256 de chaque bloc et l'empreinte d'en-tête du document le sont. Risque résiduel accepté par le mainteneur
 (2026-11-15) : `chacha20` contient du code SIMD `unsafe` ; c'est la base auditée par NCC Group
 en 2020 avec `chacha20poly1305`.
 

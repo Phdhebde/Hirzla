@@ -575,17 +575,19 @@ fn serve_agent(
 /// Argon2 does not stop the other clients nor the automatic lock.
 fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]) -> bool {
     let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
-    let (id, result) = match SelfRequest::decode(frame) {
+    let (id, version, result) = match SelfRequest::decode_versioned(frame) {
         Ok((
             id,
+            version,
             SelfRequest::ImportKdbx {
                 path,
                 password,
                 locker,
+                key_file,
             },
         )) => {
             let result = if lock().is_unlocked() {
-                import::read_database(&path, &password)
+                import::read_database(&path, &password, key_file.as_deref())
                     .map_err(|c| (c, None))
                     .and_then(|db| lock().import_database(db, locker))
             } else {
@@ -593,17 +595,18 @@ fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]
                     path,
                     password,
                     locker,
+                    key_file,
                 })
             };
-            (id, result)
+            (id, version, result)
         }
-        Ok((id, request)) => (id, lock().handle_self(request)),
-        Err((id, code)) => {
+        Ok((id, version, request)) => (id, version, lock().handle_self(request)),
+        Err((id, version, code)) => {
             log.record(Event::BadMessage);
-            (id, Err((code, None)))
+            (id, version, Err((code, None)))
         }
     };
-    let Ok(body) = SelfReply::encode_with(id, result.as_ref().map_err(|e| *e)) else {
+    let Ok(body) = SelfReply::encode_versioned(version, id, result.as_ref().map_err(|e| *e)) else {
         return false;
     };
     drop(result);
@@ -684,21 +687,21 @@ fn serve_connection(
 
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
-    let (id, code) = match SelfRequest::decode(frame) {
-        Ok((id, request)) => {
+    let (id, version, code) = match SelfRequest::decode_versioned(frame) {
+        Ok((id, version, request)) => {
             let code = SelfCode::General(ErrorCode::Unauthorized);
             log.record(Event::SelfRequest {
                 op: request.op(),
                 result: code.name(),
             });
-            (id, code)
+            (id, version, code)
         }
-        Err((id, code)) => {
+        Err((id, version, code)) => {
             log.record(Event::BadMessage);
-            (id, code)
+            (id, version, code)
         }
     };
-    match SelfReply::encode(id, &Err(code)) {
+    match SelfReply::encode_versioned(version, id, Err((code, None))) {
         Ok(body) => write_frame(conn, &body).is_ok(),
         Err(_) => false,
     }

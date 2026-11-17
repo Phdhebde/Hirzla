@@ -233,6 +233,8 @@ export const api = {
   removeRecoveryKit: () => call("remove_recovery_kit"),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
+  chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),
+  clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
 

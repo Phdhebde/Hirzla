@@ -377,6 +377,8 @@ export class SettingsView {
     byId("import-csv").addEventListener("click", () => void this.importCsv());
     byId("import-kdbx").addEventListener("click", () => this.openKdbx());
     byId("kdbx-choisir").addEventListener("click", () => void this.chooseKdbx());
+    byId("kdbx-cle-choisir").addEventListener("click", () => void this.chooseKdbxKey());
+    byId("kdbx-cle-retirer").addEventListener("click", () => void this.clearKdbxKey());
     byId("form-kdbx").addEventListener("submit", (e) => {
       e.preventDefault();
       void this.importKdbx();
@@ -640,6 +642,7 @@ export class SettingsView {
   openKdbx() {
     showError(byId("kdbx-erreur"), null);
     byId("kdbx-fichier").textContent = "";
+    this.showKdbxKey("");
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
     /** @type {HTMLDialogElement} */ (byId("dialogue-kdbx")).showModal();
     byId("kdbx-choisir").focus();
@@ -650,11 +653,41 @@ export class SettingsView {
     try {
       const name = await api.chooseKdbxFile();
       byId("kdbx-fichier").textContent = name;
+      // The core forgets the key file of another database.
+      this.showKdbxKey("");
       /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = false;
       byId("kdbx-mdp").focus();
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
+    }
+  }
+
+  /** @param {string} name */
+  showKdbxKey(name) {
+    byId("kdbx-cle").textContent = name;
+    byId("kdbx-cle-retirer").hidden = !name;
+  }
+
+  async chooseKdbxKey() {
+    showError(byId("kdbx-erreur"), null);
+    try {
+      this.showKdbxKey(await api.chooseKdbxKeyFile());
+      byId("kdbx-mdp").focus();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
+    }
+  }
+
+  async clearKdbxKey() {
+    try {
+      await api.clearKdbxKeyFile();
+      this.showKdbxKey("");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
     }
   }
@@ -676,13 +709,13 @@ export class SettingsView {
       ];
       /** @type {[number, string][]} */
       const notes = [
-        [r.empty, "entrée(s) vide(s) ignorée(s) (ni mot de passe ni notes)."],
+        [r.empty, "entrée(s) vide(s) ignorée(s) (titre seul : ni identifiant, mot de passe, adresse, notes, champ ni pièce jointe)."],
         [r.recycled, "entrée(s) de la corbeille KeePass ignorée(s)."],
         [r.refused, "entrée(s) refusée(s) par le coffre (valeur trop longue ou non permise)."],
-        [r.attachments, "pièce(s) jointe(s) non importée(s)."],
+        [r.attachments, "pièce(s) jointe(s) non importée(s) (plus de 100 Mio, nom trop long ou au-delà de 64 par entrée)."],
         [r.history, "version(s) antérieure(s) d'entrées non importée(s)."],
         [r.custom_skipped, "champ(s) personnalisé(s) au-delà des limites du coffre, non importé(s)."],
-        [r.totp, "configuration(s) TOTP non importée(s) : ce type arrive dans une prochaine version."],
+        [r.totp, "configuration(s) TOTP non convertible(s) (HOTP, Steam, hors limites…) gardée(s) telle(s) quelle(s) dans un champ masqué."],
       ];
       for (const [n, text] of notes) if (n) lines.push(`${n} ${text}`);
       const box = byId("import-resultat");

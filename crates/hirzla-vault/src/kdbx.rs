@@ -1,19 +1,22 @@
-//! Reader of KeePass KDBX 4 databases, for the import of ADR 0025 (option 2): binary
-//! envelope, block stream, decompression and XML. The cryptography is in `hirzla_crypto::kdbx`;
-//! this module only cuts bytes and checks bounds.
+//! Reader of KeePass KDBX 3.1 and 4 databases, for the import of ADR 0025: binary envelope,
+//! block stream, decompression and XML. The cryptography is in `hirzla_crypto::kdbx`; this
+//! module only cuts bytes and checks bounds.
 //!
-//! Accepted: KDBX 4.0 and 4.1, Argon2d or Argon2id, AES-256-CBC or ChaCha20, no compression or
-//! gzip, inner stream ChaCha20, password only. Everything else is refused before any costly
-//! computation: KDBX 3 and earlier, AES-KDF, Twofish, Salsa20, key files.
+//! Accepted: KDBX 3.1 (and 3.0) and KDBX 4.0 and 4.1; Argon2d, Argon2id or AES-KDF; AES-256-CBC
+//! or ChaCha20; no compression or gzip; inner stream Salsa20 (KDBX 3) or ChaCha20; a password,
+//! a key file, or both. Everything else is refused before any costly computation: KDBX 2 and
+//! earlier, Twofish, the ArcFour inner stream.
 //!
 //! Every size read from the file is bounded before it is used. Decrypted data and decoded
 //! values live in erasing buffers; the decompressor's and the XML reader's own buffers are
 //! outside our control (`docs/adr/0025-import-keepass.md`).
 
+use std::collections::BTreeMap;
 use std::io::Read;
 
 use hirzla_crypto::kdbx::{
-    self as kc, Argon2Params, Argon2Variant, InnerStream, OuterCipher, TAG_LEN,
+    self as kc, AesKdfParams, Argon2Params, Argon2Variant, InnerStream, KdfParams, OuterCipher,
+    TAG_LEN,
 };
 use hirzla_crypto::util::constant_time_eq;
 use zeroize::Zeroizing;
@@ -21,9 +24,13 @@ use zeroize::Zeroizing;
 pub use crate::error::KdbxRefusal;
 use crate::error::VaultError;
 
+mod keyfile;
+mod otp;
 mod xml;
 
-pub use xml::{KdbxEntry, KdbxField};
+pub use keyfile::key_file_key;
+pub use otp::totp_config;
+pub use xml::{KdbxAttachment, KdbxAutoType, KdbxEntry, KdbxField, MAX_BINARIES};
 
 /// Largest database file accepted, in bytes.
 pub const MAX_FILE: usize = 64 * 1024 * 1024;
@@ -49,6 +56,9 @@ const KDF_ARGON2D: [u8; 16] = [
 const KDF_ARGON2ID: [u8; 16] = [
     0x9e, 0x29, 0x8b, 0x19, 0x56, 0xdb, 0x47, 0x73, 0xb2, 0x3d, 0xfc, 0x3e, 0xc6, 0xf0, 0xa1, 0xe6,
 ];
+const KDF_AES: [u8; 16] = [
+    0xc9, 0xd9, 0xf3, 0x9a, 0x62, 0x8a, 0x44, 0x60, 0xbf, 0x74, 0x0d, 0x08, 0xc1, 0x8a, 0x4f, 0xea,
+];
 
 impl From<hirzla_crypto::Error> for KdbxRefusal {
     fn from(e: hirzla_crypto::Error) -> Self {
@@ -59,13 +69,55 @@ impl From<hirzla_crypto::Error> for KdbxRefusal {
     }
 }
 
-/// What a database holds, as read: entries to import and counts of what is left out.
+/// What a database holds, as read: entries to import, attachment contents and counts of what
+/// is left out.
 #[derive(Default)]
 pub struct KdbxDatabase {
     /// Entries outside the recycle bin, in document order.
     pub entries: Vec<KdbxEntry>,
     /// Entries left in the recycle bin.
     pub recycled: usize,
+    /// Attachment contents, by reference number (inner header in KDBX 4, `Meta/Binaries` in
+    /// KDBX 3.1).
+    binaries: BTreeMap<u32, Zeroizing<Vec<u8>>>,
+    /// Total size of `binaries`.
+    binaries_len: usize,
+    /// `Meta/HeaderHash` (KDBX 3.1).
+    header_hash: Option<Vec<u8>>,
+}
+
+impl KdbxDatabase {
+    /// The content of attachment `reference`, if the database holds it.
+    #[must_use]
+    pub fn binary(&self, reference: u32) -> Option<&[u8]> {
+        self.binaries.get(&reference).map(|b| b.as_slice())
+    }
+
+    fn add_binary(&mut self, reference: u32, data: Zeroizing<Vec<u8>>) -> Result<(), KdbxRefusal> {
+        if self.binaries.len() >= MAX_BINARIES || self.binaries.contains_key(&reference) {
+            return Err(if self.binaries.len() >= MAX_BINARIES {
+                KdbxRefusal::TooLarge
+            } else {
+                KdbxRefusal::Malformed
+            });
+        }
+        self.binaries_len = self
+            .binaries_len
+            .checked_add(data.len())
+            .filter(|n| *n <= MAX_PAYLOAD)
+            .ok_or(KdbxRefusal::TooLarge)?;
+        self.binaries.insert(reference, data);
+        Ok(())
+    }
+}
+
+/// What opens a database: a password, the content of a key file, or both.
+#[derive(Clone, Copy)]
+pub struct KdbxKey<'a> {
+    /// The master password.
+    pub password: Option<&'a str>,
+    /// The content of the key file, as read from disk (any of the KeePass formats).
+    pub key_file: Option<&'a [u8]>,
 }
 
 /// A little-endian cursor that refuses to read past the end.
@@ -100,7 +152,7 @@ impl<'a> Cursor<'a> {
         Ok(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
     }
 
-    /// A length prefix (signed 32-bit in KDBX 4), bounded by `max`.
+    /// A length prefix (signed 32-bit), bounded by `max`.
     fn len(&mut self, max: usize) -> Result<usize, KdbxRefusal> {
         let n = i32::from_le_bytes(self.u32()?.to_le_bytes());
         let n = usize::try_from(n).map_err(|_| KdbxRefusal::Malformed)?;
@@ -115,13 +167,21 @@ impl<'a> Cursor<'a> {
     }
 }
 
-/// The outer header of a KDBX 4 file.
+/// The outer header of a KDBX 3.1 or 4 file.
 struct OuterHeader {
     cipher: OuterCipher,
     gzip: bool,
     master_seed: [u8; 32],
     iv: Vec<u8>,
-    kdf: Argon2Params,
+    kdf: KdfParams,
+    /// KDBX 3.1 only: the inner stream, its key and the expected start of the plaintext.
+    v3: Option<Header3>,
+}
+
+struct Header3 {
+    stream_id: u32,
+    stream_key: Zeroizing<Vec<u8>>,
+    start_bytes: [u8; 32],
 }
 
 /// Values of a variant dictionary that matter here.
@@ -172,13 +232,27 @@ fn variant_dictionary(data: &[u8]) -> Result<Vec<(&str, Variant<'_>)>, KdbxRefus
     Ok(out)
 }
 
-fn kdf_params(data: &[u8]) -> Result<Argon2Params, KdbxRefusal> {
+fn kdf_params(data: &[u8]) -> Result<KdfParams, KdbxRefusal> {
     let dict = variant_dictionary(data)?;
     let get = |k: &str| dict.iter().find(|(key, _)| *key == k).map(|(_, v)| v);
     let variant = match get("$UUID") {
         Some(Variant::Bytes(u)) if *u == KDF_ARGON2D => Argon2Variant::D,
         Some(Variant::Bytes(u)) if *u == KDF_ARGON2ID => Argon2Variant::Id,
-        // AES-KDF and anything else.
+        Some(Variant::Bytes(u)) if *u == KDF_AES => {
+            let seed = match get("S") {
+                Some(Variant::Bytes(s)) => {
+                    <[u8; 32]>::try_from(*s).map_err(|_| KdbxRefusal::Malformed)?
+                }
+                _ => return Err(KdbxRefusal::Malformed),
+            };
+            let rounds = match get("R") {
+                Some(Variant::U64(r)) => *r,
+                _ => return Err(KdbxRefusal::Malformed),
+            };
+            let params = KdfParams::Aes(AesKdfParams { seed, rounds });
+            params.check().map_err(|_| KdbxRefusal::Unsupported)?;
+            return Ok(params);
+        }
         Some(Variant::Bytes(_)) => return Err(KdbxRefusal::Unsupported),
         _ => return Err(KdbxRefusal::Malformed),
     };
@@ -219,69 +293,92 @@ fn kdf_params(data: &[u8]) -> Result<Argon2Params, KdbxRefusal> {
         version,
     };
     params.check().map_err(|_| KdbxRefusal::Unsupported)?;
-    Ok(params)
+    Ok(KdfParams::Argon2(params))
 }
 
-/// Reads the outer header; returns it with the exact bytes the header HMAC covers.
-fn outer_header(c: &mut Cursor<'_>) -> Result<OuterHeader, KdbxRefusal> {
-    let sig = (
-        c.u32().map_err(|_| KdbxRefusal::NotKdbx)?,
-        c.u32().map_err(|_| KdbxRefusal::NotKdbx)?,
-    );
-    if sig != (SIG1, SIG2) {
-        return Err(KdbxRefusal::NotKdbx);
+fn cipher_of(data: &[u8]) -> Result<OuterCipher, KdbxRefusal> {
+    if data == CIPHER_AES256 {
+        Ok(OuterCipher::Aes256Cbc)
+    } else if data == CIPHER_CHACHA20 {
+        Ok(OuterCipher::ChaCha20)
+    } else if data.len() == 16 {
+        // Twofish or another cipher.
+        Err(KdbxRefusal::Unsupported)
+    } else {
+        Err(KdbxRefusal::Malformed)
     }
-    let minor = c.u16().map_err(|_| KdbxRefusal::NotKdbx)?;
-    let major = c.u16().map_err(|_| KdbxRefusal::NotKdbx)?;
-    if major != 4 || minor > 1 {
-        return Err(KdbxRefusal::Unsupported);
+}
+
+fn gzip_of(data: &[u8]) -> Result<bool, KdbxRefusal> {
+    match data {
+        [0, 0, 0, 0] => Ok(false),
+        [1, 0, 0, 0] => Ok(true),
+        _ => Err(KdbxRefusal::Unsupported),
     }
+}
+
+/// Reads the outer header (after the signature and version). KDBX 4 fields have a 32-bit
+/// length, KDBX 3.1 fields a 16-bit one.
+fn outer_header(c: &mut Cursor<'_>, major: u16) -> Result<OuterHeader, KdbxRefusal> {
     let mut cipher = None;
     let mut gzip = None;
     let mut master_seed = None;
     let mut iv = None;
     let mut kdf = None;
+    let mut transform_seed = None;
+    let mut rounds = None;
+    let mut stream_key = None;
+    let mut start_bytes = None;
+    let mut stream_id = None;
     let mut seen = Vec::new();
     loop {
         if seen.len() >= MAX_HEADER_FIELDS {
             return Err(KdbxRefusal::Malformed);
         }
         let id = c.u8()?;
-        let len = c.len(MAX_HEADER_FIELD)?;
+        let len = if major == 4 {
+            c.len(MAX_HEADER_FIELD)?
+        } else {
+            usize::from(c.u16()?)
+        };
         let data = c.take(len)?;
         if seen.contains(&id) {
             return Err(KdbxRefusal::Malformed);
         }
         seen.push(id);
-        match id {
-            0 => break,
-            // Comment, public custom data: ignored.
-            1 | 12 => {}
-            2 => {
-                cipher = Some(if data == CIPHER_AES256 {
-                    OuterCipher::Aes256Cbc
-                } else if data == CIPHER_CHACHA20 {
-                    OuterCipher::ChaCha20
-                } else if data.len() == 16 {
-                    // Twofish or another cipher.
-                    return Err(KdbxRefusal::Unsupported);
-                } else {
-                    return Err(KdbxRefusal::Malformed);
-                });
-            }
-            3 => {
-                gzip = Some(match data {
-                    [0, 0, 0, 0] => false,
-                    [1, 0, 0, 0] => true,
-                    _ => return Err(KdbxRefusal::Unsupported),
-                });
-            }
-            4 => {
+        match (major, id) {
+            (_, 0) => break,
+            // Comment, public custom data (KDBX 4): ignored.
+            (_, 1) | (4, 12) => {}
+            (_, 2) => cipher = Some(cipher_of(data)?),
+            (_, 3) => gzip = Some(gzip_of(data)?),
+            (_, 4) => {
                 master_seed = Some(<[u8; 32]>::try_from(data).map_err(|_| KdbxRefusal::Malformed)?)
             }
-            7 => iv = Some(data.to_vec()),
-            11 => kdf = Some(kdf_params(data)?),
-            // Fields of KDBX 3 (transform seed and rounds, inner stream) or unknown.
+            (_, 7) => iv = Some(data.to_vec()),
+            (4, 11) => kdf = Some(kdf_params(data)?),
+            (3, 5) => {
+                transform_seed =
+                    Some(<[u8; 32]>::try_from(data).map_err(|_| KdbxRefusal::Malformed)?)
+            }
+            (3, 6) => {
+                let b = <[u8; 8]>::try_from(data).map_err(|_| KdbxRefusal::Malformed)?;
+                rounds = Some(u64::from_le_bytes(b));
+            }
+            (3, 8) => {
+                if data.is_empty() || data.len() > 256 {
+                    return Err(KdbxRefusal::Malformed);
+                }
+                stream_key = Some(Zeroizing::new(data.to_vec()));
+            }
+            (3, 9) => {
+                start_bytes = Some(<[u8; 32]>::try_from(data).map_err(|_| KdbxRefusal::Malformed)?)
+            }
+            (3, 10) => {
+                let b = <[u8; 4]>::try_from(data).map_err(|_| KdbxRefusal::Malformed)?;
+                stream_id = Some(u32::from_le_bytes(b));
+            }
+            // A field of the other version, or unknown.
             _ => return Err(KdbxRefusal::Unsupported),
         }
     }
@@ -294,16 +391,39 @@ fn outer_header(c: &mut Cursor<'_>) -> Result<OuterHeader, KdbxRefusal> {
     if iv.len() != iv_len {
         return Err(KdbxRefusal::Malformed);
     }
+    let (kdf, v3) = if major == 4 {
+        (kdf.ok_or(KdbxRefusal::Malformed)?, None)
+    } else {
+        let stream_id = stream_id.ok_or(KdbxRefusal::Malformed)?;
+        // 2 Salsa20, 3 ChaCha20; 0 (none) and 1 (ArcFour) are refused.
+        if !matches!(stream_id, 2 | 3) {
+            return Err(KdbxRefusal::Unsupported);
+        }
+        let params = KdfParams::Aes(AesKdfParams {
+            seed: transform_seed.ok_or(KdbxRefusal::Malformed)?,
+            rounds: rounds.ok_or(KdbxRefusal::Malformed)?,
+        });
+        params.check().map_err(|_| KdbxRefusal::Unsupported)?;
+        (
+            params,
+            Some(Header3 {
+                stream_id,
+                stream_key: stream_key.ok_or(KdbxRefusal::Malformed)?,
+                start_bytes: start_bytes.ok_or(KdbxRefusal::Malformed)?,
+            }),
+        )
+    };
     Ok(OuterHeader {
         cipher,
         gzip: gzip.ok_or(KdbxRefusal::Malformed)?,
         master_seed: master_seed.ok_or(KdbxRefusal::Malformed)?,
         iv,
-        kdf: kdf.ok_or(KdbxRefusal::Malformed)?,
+        kdf,
+        v3,
     })
 }
 
-/// Reads the HMAC block stream, checking each block, into one erasing buffer.
+/// Reads the HMAC block stream of KDBX 4, checking each block, into one erasing buffer.
 fn blocks(c: &mut Cursor<'_>, keys: &kc::DatabaseKeys) -> Result<Zeroizing<Vec<u8>>, KdbxRefusal> {
     let mut out = Zeroizing::new(Vec::with_capacity(c.rest().len()));
     for index in 0u64.. {
@@ -316,6 +436,35 @@ fn blocks(c: &mut Cursor<'_>, keys: &kc::DatabaseKeys) -> Result<Zeroizing<Vec<u
             break;
         }
         out.extend_from_slice(data);
+    }
+    if !c.rest().is_empty() {
+        return Err(KdbxRefusal::Malformed);
+    }
+    Ok(out)
+}
+
+/// Reads the hashed block stream of KDBX 3.1 (`LE32(index) ‖ SHA-256(data) ‖ LE32(len) ‖
+/// data`, then an empty block with a zero hash), checking each block, into one erasing buffer.
+fn hashed_blocks(data: &[u8]) -> Result<Zeroizing<Vec<u8>>, KdbxRefusal> {
+    let mut c = Cursor::new(data);
+    let mut out = Zeroizing::new(Vec::with_capacity(data.len()));
+    for index in 0u32.. {
+        if c.u32()? != index {
+            return Err(KdbxRefusal::Malformed);
+        }
+        let hash = c.take(32)?;
+        let len = c.len(MAX_FILE)?;
+        let block = c.take(len)?;
+        if len == 0 {
+            if hash.iter().any(|b| *b != 0) {
+                return Err(KdbxRefusal::Malformed);
+            }
+            break;
+        }
+        if !constant_time_eq(&kc::sha256(block), hash) {
+            return Err(KdbxRefusal::Malformed);
+        }
+        out.extend_from_slice(block);
     }
     if !c.rest().is_empty() {
         return Err(KdbxRefusal::Malformed);
@@ -352,12 +501,16 @@ fn gunzip(data: &[u8]) -> Result<Zeroizing<Vec<u8>>, KdbxRefusal> {
     Ok(out)
 }
 
-/// Reads the inner header; returns the inner stream and the offset of the XML document.
-/// Attachments (field 3) are skipped: they are counted per entry, by reference.
-fn inner_header(payload: &[u8]) -> Result<(InnerStream, usize), KdbxRefusal> {
+/// The inner stream, the offset of the XML document and the attachment contents.
+type InnerHeader = (InnerStream, usize, Vec<Zeroizing<Vec<u8>>>);
+
+/// Reads the inner header of KDBX 4; returns the inner stream, the offset of the XML document
+/// and the attachment contents (field 3: one flag byte, then the content), numbered in order.
+fn inner_header(payload: &[u8]) -> Result<InnerHeader, KdbxRefusal> {
     let mut c = Cursor::new(payload);
     let mut stream_id = None;
     let mut key: Option<&[u8]> = None;
+    let mut binaries = Vec::new();
     loop {
         let id = c.u8()?;
         let len = c.len(MAX_PAYLOAD)?;
@@ -370,7 +523,7 @@ fn inner_header(payload: &[u8]) -> Result<(InnerStream, usize), KdbxRefusal> {
                 }
                 stream_id = Some(match data {
                     [3, 0, 0, 0] => 3,
-                    // Salsa20 (2) or anything else.
+                    // Salsa20 (2) or anything else: not in KDBX 4.
                     _ => return Err(KdbxRefusal::Unsupported),
                 });
             }
@@ -381,9 +534,11 @@ fn inner_header(payload: &[u8]) -> Result<(InnerStream, usize), KdbxRefusal> {
                 key = Some(data);
             }
             3 => {
-                if data.is_empty() {
-                    return Err(KdbxRefusal::Malformed);
+                let (_flags, content) = data.split_first().ok_or(KdbxRefusal::Malformed)?;
+                if binaries.len() >= MAX_BINARIES {
+                    return Err(KdbxRefusal::TooLarge);
                 }
+                binaries.push(Zeroizing::new(content.to_vec()));
             }
             _ => return Err(KdbxRefusal::Malformed),
         }
@@ -392,66 +547,154 @@ fn inner_header(payload: &[u8]) -> Result<(InnerStream, usize), KdbxRefusal> {
         return Err(KdbxRefusal::Unsupported);
     }
     let stream = InnerStream::new(key.ok_or(KdbxRefusal::Malformed)?)?;
-    Ok((stream, c.pos))
+    Ok((stream, c.pos, binaries))
 }
 
-/// Reads a KDBX 4 database protected by `password`.
-///
-/// The header is checked (SHA-256, then HMAC under the derived key) before anything is
-/// decrypted; every block is authenticated before it is used.
+/// Reads a KDBX database protected by `password` only.
 ///
 /// # Errors
 /// [`VaultError::Kdbx`], with the reason.
 pub fn read(file: &[u8], password: &str) -> Result<KdbxDatabase, VaultError> {
-    read_database(file, password).map_err(VaultError::Kdbx)
+    read_with(
+        file,
+        KdbxKey {
+            password: Some(password),
+            key_file: None,
+        },
+    )
 }
 
-fn read_database(file: &[u8], password: &str) -> Result<KdbxDatabase, KdbxRefusal> {
+/// Reads a KDBX database opened by `key` (password, key file, or both).
+///
+/// KDBX 4: the header is checked (SHA-256, then HMAC under the derived key) before anything is
+/// decrypted; every block is authenticated before it is used. KDBX 3.1: the header is checked
+/// against its SHA-256 in the document when there is one, the start of the plaintext must
+/// match the header, and every block against its SHA-256.
+///
+/// # Errors
+/// [`VaultError::Kdbx`], with the reason. A key file that cannot be read is `Malformed`;
+/// neither password nor key file is `WrongKey`.
+pub fn read_with(file: &[u8], key: KdbxKey<'_>) -> Result<KdbxDatabase, VaultError> {
+    read_database(file, key).map_err(VaultError::Kdbx)
+}
+
+fn read_database(file: &[u8], key: KdbxKey<'_>) -> Result<KdbxDatabase, KdbxRefusal> {
     if file.len() > MAX_FILE {
         return Err(KdbxRefusal::TooLarge);
     }
     let mut c = Cursor::new(file);
-    let header = outer_header(&mut c)?;
-    let header_bytes = &file[..c.pos];
-    let hash = c.take(32)?;
-    // Integrity first: a mismatch here is a damaged file, not a wrong password.
-    if !constant_time_eq(&kc::sha256(header_bytes), hash) {
-        return Err(KdbxRefusal::Malformed);
+    let sig = (
+        c.u32().map_err(|_| KdbxRefusal::NotKdbx)?,
+        c.u32().map_err(|_| KdbxRefusal::NotKdbx)?,
+    );
+    if sig != (SIG1, SIG2) {
+        return Err(KdbxRefusal::NotKdbx);
     }
-    let mac = c.take(TAG_LEN)?;
-    let composite = kc::composite_key(password.as_bytes());
-    let keys = kc::derive_keys(&composite, &header.kdf, &header.master_seed)?;
-    drop(composite);
-    keys.verify_header(header_bytes, mac)
-        .map_err(|_| KdbxRefusal::WrongKey)?;
-    let ciphertext = blocks(&mut c, &keys)?;
-    let plaintext = keys
-        .decrypt(header.cipher, &header.iv, ciphertext)
-        .map_err(|_| KdbxRefusal::Malformed)?;
-    drop(keys);
-    read_payload(plaintext, header.gzip)
+    let minor = c.u16().map_err(|_| KdbxRefusal::NotKdbx)?;
+    let major = c.u16().map_err(|_| KdbxRefusal::NotKdbx)?;
+    if !matches!((major, minor), (4, 0 | 1) | (3, 0 | 1)) {
+        return Err(KdbxRefusal::Unsupported);
+    }
+    let header = outer_header(&mut c, major)?;
+    let header_bytes = &file[..c.pos];
+    let key_file = match key.key_file {
+        Some(k) => Some(key_file_key(k)?),
+        None => None,
+    };
+    let composite = kc::composite_key_with(key.password.map(str::as_bytes), key_file.as_deref())
+        .ok_or(KdbxRefusal::WrongKey)?;
+    drop(key_file);
+    match header.v3 {
+        None => {
+            let hash = c.take(32)?;
+            // Integrity first: a mismatch here is a damaged file, not a wrong password.
+            if !constant_time_eq(&kc::sha256(header_bytes), hash) {
+                return Err(KdbxRefusal::Malformed);
+            }
+            let mac = c.take(TAG_LEN)?;
+            let keys = kc::derive_keys(&composite, &header.kdf, &header.master_seed)?;
+            drop(composite);
+            keys.verify_header(header_bytes, mac)
+                .map_err(|_| KdbxRefusal::WrongKey)?;
+            let ciphertext = blocks(&mut c, &keys)?;
+            let plaintext = keys
+                .decrypt(header.cipher, &header.iv, ciphertext)
+                .map_err(|_| KdbxRefusal::Malformed)?;
+            drop(keys);
+            read_payload(plaintext, header.gzip)
+        }
+        Some(v3) => {
+            let keys = kc::derive_keys(&composite, &header.kdf, &header.master_seed)?;
+            drop(composite);
+            let ciphertext = Zeroizing::new(c.rest().to_vec());
+            // Without HMAC, a wrong key shows as bad padding or as other start bytes.
+            let plaintext = keys
+                .decrypt(header.cipher, &header.iv, ciphertext)
+                .map_err(|_| KdbxRefusal::WrongKey)?;
+            drop(keys);
+            let start = plaintext.get(..32).ok_or(KdbxRefusal::WrongKey)?;
+            if !constant_time_eq(start, &v3.start_bytes) {
+                return Err(KdbxRefusal::WrongKey);
+            }
+            let db = read_payload3(&plaintext[32..], header.gzip, &v3)?;
+            if let Some(h) = &db.header_hash {
+                if !constant_time_eq(&kc::sha256(header_bytes), h) {
+                    return Err(KdbxRefusal::Malformed);
+                }
+            }
+            Ok(db)
+        }
+    }
 }
 
-/// What follows decryption: optional gzip, inner header, XML document.
+/// What follows decryption in KDBX 4: optional gzip, inner header, XML document.
 fn read_payload(plaintext: Zeroizing<Vec<u8>>, gzip: bool) -> Result<KdbxDatabase, KdbxRefusal> {
     let payload = if gzip { gunzip(&plaintext)? } else { plaintext };
-    let (mut stream, offset) = inner_header(&payload)?;
+    let (mut stream, offset, binaries) = inner_header(&payload)?;
     let document = payload.get(offset..).ok_or(KdbxRefusal::Malformed)?;
-    xml::parse(document, &mut stream)
+    let mut db = xml::parse(document, &mut stream)?;
+    for (i, b) in binaries.into_iter().enumerate() {
+        let reference = u32::try_from(i).map_err(|_| KdbxRefusal::TooLarge)?;
+        db.add_binary(reference, b)?;
+    }
+    Ok(db)
+}
+
+/// What follows the start bytes in KDBX 3.1: hashed blocks, optional gzip, XML document
+/// (attachments in `Meta/Binaries`).
+fn read_payload3(data: &[u8], gzip: bool, v3: &Header3) -> Result<KdbxDatabase, KdbxRefusal> {
+    let joined = hashed_blocks(data)?;
+    let document = if gzip { gunzip(&joined)? } else { joined };
+    let mut stream = if v3.stream_id == 2 {
+        InnerStream::salsa20(&v3.stream_key)?
+    } else {
+        InnerStream::new(&v3.stream_key)?
+    };
+    xml::parse(&document, &mut stream)
 }
 
 /// Fuzzing entry point (feature `fuzzing`, never in a release build): runs the stages after
 /// decryption, which random input cannot reach through [`read`] since every block is
-/// authenticated. The first byte chooses whether the rest is gzip-compressed.
+/// authenticated. The first byte chooses whether the rest is gzip-compressed (bit 0) and
+/// whether it is read as KDBX 3.1 hashed blocks with a Salsa20 inner stream (bit 1).
 ///
 /// # Errors
 /// [`VaultError::Kdbx`], with the reason.
 #[cfg(feature = "fuzzing")]
 pub fn read_decrypted_payload(data: &[u8]) -> Result<KdbxDatabase, VaultError> {
-    let (gzip, rest) = data
+    let (flags, rest) = data
         .split_first()
         .ok_or(VaultError::Kdbx(KdbxRefusal::Malformed))?;
-    read_payload(Zeroizing::new(rest.to_vec()), gzip & 1 == 1).map_err(VaultError::Kdbx)
+    if flags & 2 == 2 {
+        let v3 = Header3 {
+            stream_id: 2,
+            stream_key: Zeroizing::new(vec![7; 32]),
+            start_bytes: [0; 32],
+        };
+        read_payload3(rest, flags & 1 == 1, &v3).map_err(VaultError::Kdbx)
+    } else {
+        read_payload(Zeroizing::new(rest.to_vec()), flags & 1 == 1).map_err(VaultError::Kdbx)
+    }
 }
 
 #[cfg(test)]
