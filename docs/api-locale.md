@@ -436,6 +436,7 @@ identifiant de secret, ni chemin).
 | `vault_created`, `unlocked`, `stopped` | — |
 | `unlock_failed` | `failures` |
 | `locked` | `reason` (`request`, `inactivity`, `shutdown`) |
+| `auto_type` | `what` (`username`, `password`, `username_and_password`, `other`), `target` (`terminal`, `application`) ; § 18.1 |
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 | `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
 
@@ -476,7 +477,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 ## 10. Versions
 
 - Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
-- La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
+- La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
   (§ 3.1). Elle ne change rien aux opérations 1 à 11 : une requête v1 reçoit la même réponse
@@ -581,6 +582,10 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   la copie du presse-papiers effacée, et le coffre reste ouvert jusqu'à l'un des
   verrouillages du noyau (inactivité, veille, session) ou à « Verrouiller ». Sans zone de
   notification, ou préférence désactivée, fermer la fenêtre arrête l'application.
+- Saisie dans une autre application (§ 18.1, ADR 0072) : elle lit le champ par `Read`, le tape
+  elle-même dans la fenêtre au premier plan, puis envoie `AutoTyped`. La vue web ne reçoit que
+  le nom de l'application cible. La liste « Ne plus m'avertir » est dans son fichier de
+  préférences local, hors du coffre.
 - Elle envoie `AppPoll` (§ 18) toutes les deux secondes, et `ShowApp` à son démarrage : si
   une autre instance écoute, elle s'arrête aussitôt.
 
@@ -1455,7 +1460,23 @@ Utilisations :
   à part, sans démarrer de noyau ni se durcir. Réponse `true` : il s'arrête, la première
   instance montre sa fenêtre. Sur `Throttled`, il réessaie une fois après 1,1 s.
 
-### 18.1 Points ouverts
+### 18.1 Saisie dans une autre application (ADR 0072)
+
+| Code | Nom | Profils | Arguments | Réponse |
+| --- | --- | --- | --- | --- |
+| 132 | `AutoTyped` | complet | `{1: quoi, 2: bool terminal}` | aucune |
+
+`quoi` vaut 1 (identifiant), 2 (mot de passe), 3 (identifiant, Tab, mot de passe) ou 4 (autre
+champ) ; une autre valeur : `InvalidInput`. L'opération n'écrit qu'une ligne du journal,
+`event=auto_type what=<username|password|username_and_password|other>
+target=<terminal|application>` : ni secret, ni identifiant de secret, ni nom d'application
+(§ 8). Elle ne touche pas au coffre et ne compte pas comme activité.
+
+La frappe elle-même est faite par `hirzla-desktop` (`hirzla_keystore::platform::type_into`),
+après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : Windows
+(`SendInput`) et Linux sous X11 (XTEST) ; ni Wayland ni macOS pour l'instant.
+
+### 18.2 Points ouverts
 
 1. **Fenêtre réduite pour le déverrouillage** (ADR 0071, décision 3) : pas encore faite ; la
    fenêtre revient à sa taille habituelle sur l'écran de déverrouillage.

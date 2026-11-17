@@ -70,6 +70,12 @@ const COMMANDS: &[&str] = &[
     "quorum_respond",
     "get_preferences",
     "set_preferences",
+    "auto_type_available",
+    "auto_type_prepare",
+    "auto_type_confirm",
+    "auto_type_cancel",
+    "auto_type_trusted",
+    "auto_type_forget",
 ];
 
 fn main() {

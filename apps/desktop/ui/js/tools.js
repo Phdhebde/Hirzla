@@ -385,6 +385,7 @@ export class SettingsView {
       /** @type {HTMLInputElement} */ (byId("kdbx-mdp")).value = "";
     });
     byId("reglage-zone").addEventListener("change", () => void this.saveTray());
+    byId("reglage-saisie-tout").addEventListener("click", () => void this.forgetTrusted(null));
     byId("form-reglages-coffre").addEventListener("submit", (e) => {
       e.preventDefault();
       void this.saveVaultSettings();
@@ -411,6 +412,34 @@ export class SettingsView {
     byId("reglage-zone-absente").hidden = p.tray_available;
   }
 
+  /**
+   * The applications into which a value is typed without the warning (ADR 0072).
+   * @param {string[]} paths
+   */
+  renderTrusted(paths) {
+    byId("reglage-saisie-vide").hidden = paths.length > 0;
+    byId("reglage-saisie-tout").hidden = paths.length === 0;
+    byId("reglage-saisie-liste").replaceChildren(
+      ...paths.map((path) => {
+        const remove = h("button", { class: "bouton bouton-secondaire bouton-petit", type: "button", text: "Avertir de nouveau" });
+        remove.addEventListener("click", () => void this.forgetTrusted(path));
+        return h("li", { class: "ligne-application" }, [h("span", { class: "mono", text: path }), remove]);
+      }),
+    );
+  }
+
+  /** @param {string | null} path */
+  async forgetTrusted(path) {
+    const error = byId("reglages-poste-erreur");
+    showError(error, null);
+    try {
+      this.renderTrusted(await api.autoTypeForget(path));
+      announce("Hirzla vous avertira de nouveau avant de saisir.");
+    } catch (e) {
+      showError(error, /** @type {import("./api.js").ApiError} */ (e).message);
+    }
+  }
+
   /** The notification area preference applies at once: it belongs to this workstation. */
   async saveTray() {
     const error = byId("reglages-poste-erreur");
@@ -432,6 +461,7 @@ export class SettingsView {
     showError(byId("reglages-poste-erreur"), null);
     try {
       this.renderTray(await api.getPreferences());
+      this.renderTrusted(await api.autoTypeTrusted());
       const s = await api.getSettings();
       this.choose("reglage-auto", s.auto_lock_s);
       this.choose("reglage-pp", s.clipboard_clear_s);

@@ -113,6 +113,7 @@ impl ClientProfile {
                 | Request::Delete { .. }
                 // Only the desktop application takes the call for its window.
                 | Request::AppPoll
+                | Request::AutoTyped { .. }
                 | Request::Shutdown => false,
             },
         }
@@ -361,6 +362,10 @@ mod tests {
         ];
         let refused = [
             Request::AppPoll,
+            Request::AutoTyped {
+                what: crate::proto::Typed::Password,
+                terminal: false,
+            },
             Request::Init {
                 password: z("p"),
                 kdf: None,

@@ -77,6 +77,7 @@ const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
  * @property {(entry: Entry) => void} onEdit  Opens the form on this secret.
  * @property {(locker: string, name: string) => void} onMembers  Opens the members of a shared locker.
  * @property {(filter: string) => void} onFilter  The view changed its filter by itself.
+ * @property {import("./autotype.js").AutoType} autoType  Typing into another application.
  */
 
 /**
@@ -476,6 +477,21 @@ export class VaultView {
         main.append(u);
       }
     }
+    if (!entry.trash && entry.kind !== "ssh_connection" && entry.kind !== "rdp_connection") {
+      /** @type {import("./api.js").TypedWhat[]} */
+      const offered =
+        entry.kind === "password"
+          ? entry.username
+            ? ["username_password", "password", "username", "notes"]
+            : ["password", "notes"]
+          : entry.kind === "note"
+            ? ["notes"]
+            : entry.kind === "ssh_key"
+              ? ["ssh_passphrase"]
+              : [];
+      const type = this.hooks.autoType.button(ref, entry.title, offered);
+      if (type) main.append(type);
+    }
     main.hidden = main.childElementCount === 0;
     if (entry.trash) {
       fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
@@ -538,6 +554,13 @@ export class VaultView {
         u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
         main.append(u);
       }
+      /** @type {import("./api.js").TypedWhat[]} */
+      const offered = [];
+      if (card.username && card.has_password) offered.push("username_password");
+      if (card.has_password) offered.push("password");
+      if (card.username) offered.push("username");
+      const type = this.hooks.autoType.button(ref, entry.title, offered);
+      if (type) main.append(type);
       main.hidden = main.childElementCount === 0;
     }
     const custom = card.port !== null && card.port !== (card.kind === "rdp" ? 3389 : 22);

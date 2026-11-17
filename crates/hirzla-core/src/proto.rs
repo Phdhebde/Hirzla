@@ -168,10 +168,12 @@ pub enum Op {
     ShowApp = 130,
     /// The desktop application asks whether its window was called for (version 8, ADR 0071).
     AppPoll = 131,
+    /// The desktop application typed a value into another application (version 8, ADR 0072).
+    AutoTyped = 132,
 }
 
 impl Op {
-    const ALL: [Op; 16] = [
+    const ALL: [Op; 17] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -188,6 +190,7 @@ impl Op {
         Op::GenerateWith,
         Op::ShowApp,
         Op::AppPoll,
+        Op::AutoTyped,
     ];
 
     /// The operation from its number.
@@ -216,6 +219,7 @@ impl Op {
             Op::GenerateWith => "generate_with",
             Op::ShowApp => "show_app",
             Op::AppPoll => "app_poll",
+            Op::AutoTyped => "auto_typed",
         }
     }
 
@@ -226,7 +230,7 @@ impl Op {
         match self {
             Op::Match | Op::Fill => 2,
             Op::GenerateWith => 7,
-            Op::ShowApp | Op::AppPoll => 8,
+            Op::ShowApp | Op::AppPoll | Op::AutoTyped => 8,
             _ => 1,
         }
     }
@@ -472,6 +476,49 @@ pub enum Request {
     ShowApp,
     /// The desktop application asks whether its window was called for (v8).
     AppPoll,
+    /// The desktop application typed a value into another application: for the log only.
+    /// It names what was typed and the kind of target, never the secret, its identifier
+    /// or the application (v8).
+    AutoTyped {
+        /// What was typed.
+        what: Typed,
+        /// The target is a terminal.
+        terminal: bool,
+    },
+}
+
+/// What the desktop application typed into another application (ADR 0072).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Typed {
+    /// The user name.
+    Username = 1,
+    /// The password.
+    Password = 2,
+    /// The user name, Tab, the password.
+    UsernameAndPassword = 3,
+    /// Another field.
+    Other = 4,
+}
+
+impl Typed {
+    /// All values.
+    pub const ALL: [Typed; 4] = [
+        Typed::Username,
+        Typed::Password,
+        Typed::UsernameAndPassword,
+        Typed::Other,
+    ];
+
+    /// Stable short name, for logs.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Typed::Username => "username",
+            Typed::Password => "password",
+            Typed::UsernameAndPassword => "username_and_password",
+            Typed::Other => "other",
+        }
+    }
 }
 
 impl std::fmt::Debug for Request {
@@ -502,6 +549,7 @@ impl Request {
             Request::GenerateWith { .. } => Op::GenerateWith,
             Request::ShowApp => Op::ShowApp,
             Request::AppPoll => Op::AppPoll,
+            Request::AutoTyped { .. } => Op::AutoTyped,
         }
     }
 
@@ -523,6 +571,10 @@ impl Request {
             | Request::Shutdown
             | Request::ShowApp
             | Request::AppPoll => None,
+            Request::AutoTyped { what, terminal } => Some(Value::map(vec![
+                (1, Value::Uint(*what as u64)),
+                (2, Value::Bool(*terminal)),
+            ])),
             Request::Init { password, kdf } => {
                 let mut m = vec![(1, Value::text(password))];
                 if let Some(k) = kdf {
@@ -684,6 +736,18 @@ impl Request {
             Op::Shutdown => none(Request::Shutdown),
             Op::ShowApp => none(Request::ShowApp),
             Op::AppPoll => none(Request::AppPoll),
+            Op::AutoTyped => {
+                let f = fields(args()?, &[1, 2])?;
+                let req = |k| f.req(k).map_err(|_| ErrorCode::Malformed);
+                let n = uint(req(1)?).map_err(|_| ErrorCode::Malformed)?;
+                Ok(Request::AutoTyped {
+                    what: Typed::ALL
+                        .into_iter()
+                        .find(|t| *t as u64 == n)
+                        .ok_or(ErrorCode::InvalidInput)?,
+                    terminal: boolean(req(2)?).map_err(|_| ErrorCode::Malformed)?,
+                })
+            }
             Op::Init => {
                 let f = fields(args()?, &[1, 2])?;
                 let password = password(f.req(1).map_err(|_| ErrorCode::Malformed)?)?;
@@ -1219,7 +1283,13 @@ impl Reply {
             return Ok((id, Err(e)));
         }
         let reply = match op {
-            Op::Init | Op::Unlock | Op::Lock | Op::Update | Op::Delete | Op::Shutdown => {
+            Op::Init
+            | Op::Unlock
+            | Op::Lock
+            | Op::Update
+            | Op::Delete
+            | Op::Shutdown
+            | Op::AutoTyped => {
                 if body.is_some() {
                     return Err(ErrorCode::Malformed);
                 }

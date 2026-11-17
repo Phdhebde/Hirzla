@@ -1948,6 +1948,7 @@ dependencies = [
  "tauri-build",
  "tempfile",
  "thiserror 2.0.21",
+ "x11rb",
  "zeroize",
 ]
 
@@ -1963,6 +1964,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tss-esapi",
  "windows-sys 0.61.2",
+ "x11rb",
  "zeroize",
 ]
 

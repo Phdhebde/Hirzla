@@ -32,6 +32,9 @@ libc = "0.2.191"
 # the prototype is not wired to the core, so the C library is not linked into it.
 [target.'cfg(target_os = "linux")'.dependencies]
 tss-esapi = { version = "=7.7.0", optional = true }
+# ADR 0072: typing into the active window through XTEST. Already in the graph (clipboard of
+# the command line and of the desktop application); speaks the X protocol in safe Rust.
+x11rb = { version = "0.13.2", default-features = false, features = ["xtest"] }
 thiserror = { version = "2.0", optional = true }
 
 # The error types of the Secure Enclave and DPAPI prototypes.
@@ -72,5 +75,6 @@ windows-sys = { version = "0.61.2", features = [
     "Win32_System_Power",
     "Win32_System_RemoteDesktop",
     "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",
 ] }

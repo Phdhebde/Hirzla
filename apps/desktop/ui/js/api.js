@@ -18,6 +18,8 @@
  * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
  *   lock_on_session_lock: boolean }} VaultSettings
  * @typedef {{ keep_in_tray: boolean, tray_available: boolean }} LocalPreferences
+ * @typedef {"username" | "password" | "username_password" | "notes" | "ssh_passphrase"} TypedWhat
+ * @typedef {{ name: string, path: string, title: string, terminal: boolean, can_remember: boolean }} AutoTypeTarget
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
  *   username: string | null, fields: string[], changed: string[], custom: number }} Version
  * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
@@ -187,6 +189,20 @@ export const api = {
   getPreferences: () => call("get_preferences"),
   /** @param {boolean} keepInTray @returns {Promise<LocalPreferences>} */
   setPreferences: (keepInTray) => call("set_preferences", { keep_in_tray: keepInTray }),
+
+  // Typing into another application (ADR 0072).
+  /** @returns {Promise<boolean>} */
+  autoTypeAvailable: () => call("auto_type_available"),
+  /** @param {SecretRef} target @param {TypedWhat} what @returns {Promise<{ typed: boolean, target: AutoTypeTarget }>} */
+  autoTypePrepare: (target, what) => call("auto_type_prepare", { target, what }),
+  /** @param {boolean} remember @returns {Promise<void>} */
+  autoTypeConfirm: (remember) => call("auto_type_confirm", { remember }),
+  /** @returns {Promise<void>} */
+  autoTypeCancel: () => call("auto_type_cancel"),
+  /** @returns {Promise<string[]>} */
+  autoTypeTrusted: () => call("auto_type_trusted"),
+  /** @param {string | null} path  One application, or all of them. @returns {Promise<string[]>} */
+  autoTypeForget: (path) => call("auto_type_forget", { path }),
 
   // Self mode (local API version 5).
   /** @returns {Promise<VaultSettings>} */

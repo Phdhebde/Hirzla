@@ -176,6 +176,8 @@
     app_version: "0.0.0",
   });
   let local = { keep_in_tray: true, tray_available: true };
+  /** @type {string[]} */
+  let trusted = ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"];
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
   const v = (n) => n.toString(16).padStart(96, "0");
@@ -311,6 +313,26 @@
     },
     copy_generated_at: () => 30,
     import_csv: () => ({ imported: 42, empty: 1, refused_lines: [17], totp_skipped: 2 }),
+    auto_type_available: () => true,
+    auto_type_prepare: () => ({
+      typed: false,
+      target: {
+        name: "mstsc.exe",
+        path: "C:\\Windows\\System32\\mstsc.exe",
+        title: "Connexion Bureau à distance",
+        terminal: false,
+        can_remember: true,
+      },
+    }),
+    auto_type_confirm: (a) => {
+      if (a.remember && !trusted.includes("C:\\Windows\\System32\\mstsc.exe")) trusted.push("C:\\Windows\\System32\\mstsc.exe");
+    },
+    auto_type_cancel: () => {},
+    auto_type_trusted: () => [...trusted],
+    auto_type_forget: (a) => {
+      trusted = a.path === null ? [] : trusted.filter((p) => p !== a.path);
+      return [...trusted];
+    },
     get_preferences: () => ({ ...local }),
     set_preferences: (a) => {
       local = { ...local, keep_in_tray: a.keep_in_tray };

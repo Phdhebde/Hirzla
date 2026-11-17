@@ -89,3 +89,31 @@ n'ouvre plus le coffre.
 Avec l'[extension](../installer/extension.md), ouvrez le coffre, allez sur le site, puis
 cliquez sur l'icône Hirzla ou tapez ++alt+shift+h++. L'identifiant n'est rempli que si l'adresse
 du site est exactement celle enregistrée avec le secret, en `https`.
+
+## Saisir un secret dans une autre application
+
+Pour une application qui n'est pas un navigateur (client lourd, bureau à distance, fenêtre de
+connexion), Hirzla peut taper la valeur à votre place, sans passer par le presse-papiers.
+Disponible sous Windows, et sous Linux avec une session X11 ; pas encore sous macOS ni sous
+Wayland, où le bouton n'apparaît pas.
+
+1. Dans l'autre application, placez le curseur dans le champ à remplir.
+2. Dans Hirzla, ouvrez le secret et cliquez sur **Saisir dans une application…**, puis
+   choisissez quoi saisir : le mot de passe, l'identifiant, ou les deux séparés par Tab.
+3. Hirzla réduit sa fenêtre, repère l'application qui reprend le clavier, puis revient vous
+   la nommer, avec le chemin de son programme. Vérifiez que c'est la bonne et cliquez sur
+   **Saisir**.
+
+Hirzla n'appuie jamais sur Entrée : vous validez vous-même. Si une autre fenêtre prend le
+clavier entre votre accord et la frappe, rien n'est saisi. Un champ de plusieurs lignes ne
+peut pas être saisi : copiez-le.
+
+Cochez **Ne plus m'avertir pour cette application** pour que la saisie parte directement les
+fois suivantes. La case vaut pour une application, sur ce poste ; elle n'est jamais proposée
+pour un terminal, où ce qui est saisi peut rester dans l'historique des commandes. La liste
+se consulte et se vide dans **Réglages**, carte « Sur ce poste ».
+
+!!! warning "Ce que Hirzla ne protège plus"
+    Une fois saisie, la valeur est visible de l'application qui la reçoit et de tout
+    programme qui observe le clavier, comme une frappe à la main.
+

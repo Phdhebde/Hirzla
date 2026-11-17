@@ -19,6 +19,12 @@ use zeroize::{Zeroize, Zeroizing};
 mod events;
 pub use events::{watch_system_events, SystemEvent, SystemWatch};
 
+mod autotype;
+pub use autotype::{
+    auto_type_supported, foreground_window, type_into, AutoTypeError, Piece, TargetWindow,
+    MAX_TITLE_CHARS, MAX_TYPED_CHARS,
+};
+
 mod code_signature;
 pub use code_signature::{
     own_code_signer, process_code_signer, CodeSignatureError, CodeSigner, CODE_SIGNATURE_SUPPORTED,

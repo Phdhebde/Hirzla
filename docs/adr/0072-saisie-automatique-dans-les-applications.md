@@ -95,6 +95,32 @@ jamais la valeur.
 - Ouvrir la session SSH ou RDP (lancer le client, agent SSH tenu par le noyau) : ADR suivant.
 - Raccourci global, saisie depuis l'extension, saisie sous Wayland.
 
+### 8. Précisions apportées au codage (2026-11-17)
+
+Le premier lot de code s'écarte du texte ci-dessus sur ces points, qui font foi :
+
+- **macOS n'est pas pris en charge dans ce lot** : `CGEventPost` et l'autorisation
+  « Accessibilité » n'ont pu être ni compilés ni essayés. L'entrée du menu y est masquée,
+  comme sous Wayland.
+- **Linux X11 passe par la crate `x11rb`** (0.13.2, déjà dans le graphe par le
+  presse-papiers), en Rust sûr, au lieu de `libX11`/`libXtst` chargées à l'exécution : aucun
+  `unsafe` pour ce système. Un caractère est lié à un code de touche libre le temps de sa
+  frappe, puis délié ; il transite donc par la table de clavier du serveur X, visible des
+  autres clients X, comme toute frappe sous X11.
+- **Le journal du noyau ne reçoit que des mots fixes** : son catalogue est fermé et interdit
+  identifiant de secret et texte venu d'un client (`docs/api-locale.md` § 8). L'opération
+  s'appelle `AutoTyped` (132) et porte la nature du champ et « terminal ou application ».
+  La ligne est `event=auto_type what=… target=…`. Ni l'identifiant du secret ni le nom de
+  l'exécutable n'y figurent, contrairement au § 6.
+- **L'avertissement s'affiche dans la fenêtre principale**, pas dans une petite fenêtre à
+  part, et Hirzla se met en retrait en **réduisant** sa fenêtre plutôt qu'en la masquant :
+  elle reste accessible sans zone de notification.
+- **Un champ qui contient un retour à la ligne est refusé en entier** (une note de plusieurs
+  lignes) : le taper enverrait Entrée.
+- **Le titre de la fenêtre cible n'entre pas dans l'identité** retenue pour « Ne plus
+  m'avertir » : seul le chemin de l'exécutable compte. Une application dont le chemin est
+  inconnu est toujours annoncée.
+
 ## Conséquences
 
 - Un secret tapé est visible de tout ce qui observe le clavier ou la fenêtre cible, comme une

@@ -157,6 +157,18 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.waitForFunction(() => document.getElementById("fiche-champs")?.textContent?.includes("ATELIER"));
   await shot(p, "06c-connexion-rdp", theme);
 
+  // Typing the RDP password into another application: the choice, then the warning that
+  // names the application (ADR 0072).
+  await p.click("#fiche-principales button:has-text('Saisir dans une application')");
+  await p.waitForSelector("#dialogue-saisie[open]");
+  await shot(p, "06f-saisie-choix", theme);
+  await p.click("#saisie-valider");
+  await p.waitForSelector("#saisie-etape-avertissement:not([hidden])");
+  await shot(p, "06g-saisie-avertissement", theme);
+  await p.check("#saisie-ne-plus");
+  await p.click("#saisie-valider");
+  await p.waitForSelector("#dialogue-saisie:not([open])", { state: "attached" });
+
   // A new SSH connection, linked to a key of the vault and to a jump host.
   await p.keyboard.press("Control+n");
   await p.waitForSelector("#dialogue-secret[open]");
