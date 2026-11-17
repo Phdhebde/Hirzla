@@ -85,7 +85,7 @@ compilation vérifiable.
   extension pour Firefox et les navigateurs Chromium.
 - Coffre local : casiers, favoris, recherche, historique des versions, corbeille, générateur
   de mots de passe, verrouillage automatique.
-- Import depuis KeePass (KDBX 4) et depuis un fichier CSV.
+- Import depuis KeePass (KDBX 3.1 et 4) et depuis un fichier CSV.
 - Kit de recouvrement : des parts confiées à des personnes de confiance rouvrent le coffre si
   le mot de passe maître est perdu.
 - Mode Serveur : synchronisation, casiers partagés, rôles, accords à plusieurs, registre de

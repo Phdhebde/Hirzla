@@ -19,3 +19,6 @@ for target in keepassxc-aes-argon2d keepassxc-chacha20-argon2id; do
     printf 'hirzla-test\nhirzla-test\n' |
         keepassxc-cli merge -q -s "$here/$target.kdbx" "$here/keepassxc-kdbx3-aeskdf.kdbx"
 done
+# Bases « façon KeePass 2 » (KDBX 3.1 et 4 en AES-KDF, fichiers clés) : après la base KDBX 3.1
+# de KeePassXC, dont pykeepass part.
+"$python" -I "$here/generate_keepass2.py" "$here"

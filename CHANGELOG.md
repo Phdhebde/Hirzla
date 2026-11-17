@@ -20,7 +20,7 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 - Exportés : secrets actifs, champs, fichiers joints, liens internes, description du casier.
   Ni corbeille, ni historique, ni clés, ni identifiants. Les casiers partagés d'un serveur ne
   s'exportent pas encore.
-- Format : `docs/format.md` § 16. API locale version 9 (`docs/api-locale.md` § 19) :
+- Format : `docs/format.md` § 16. API locale version 10 (`docs/api-locale.md` § 19) :
   `LockerExport` (140), `LockerImport` (141), profil complet seulement.
 - Ligne de commande : `casier exporter`, `casier importer`. Application : réglages.
 - Nouvelle cible de fuzzing `decode_locker_export`.

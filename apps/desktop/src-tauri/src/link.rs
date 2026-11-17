@@ -335,7 +335,7 @@ impl CoreLink {
         }
     }
 
-    /// Sends one export request (`docs/api-locale.md` § 19, version 9). Never sent again:
+    /// Sends one export request (`docs/api-locale.md` § 19, version 10). Never sent again:
     /// an export writes a file, an import creates a locker.
     ///
     /// # Errors

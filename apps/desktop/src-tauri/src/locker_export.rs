@@ -1,4 +1,4 @@
-//! Encrypted export of a locker and its import into a new locker (local API version 9,
+//! Encrypted export of a locker and its import into a new locker (local API version 10,
 //! `docs/api-locale.md` § 19, ADR 0077). This process opens the system's file dialogs and
 //! gives the core an absolute path; the core reads, seals and writes the file itself. A
 //! passphrase drawn by the core is shown once and can be copied to the clipboard.

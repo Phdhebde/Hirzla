@@ -1,5 +1,5 @@
-//! Self-mode operations of the local API (`docs/api-locale.md` § 16): version 5, operation
-//! codes 60 to 79, error codes 60 to 69. Same frames, same CBOR profile and same strict
+//! Self-mode operations of the local API (`docs/api-locale.md` § 16): versions 5 and 9,
+//! operation codes 60 to 79, error codes 60 to 69. Same frames, same CBOR profile and same strict
 //! decoding as the rest of the API (`crate::proto`).
 
 use hirzla_vault::cbor::{
@@ -14,6 +14,10 @@ use crate::proto::{field_from_u64, ApiValue, ErrorCode, MAX_PASSWORD, MAX_TEXT};
 
 /// Version of the protocol that carries the Self-mode operations.
 pub const SELF_VERSION: u64 = 5;
+/// Version 9 adds the key file of `ImportKdbx` (key 4, § 16.3); nothing else changes.
+pub const SELF_VERSION_KEY_FILE: u64 = 9;
+/// Versions accepted for a Self-mode request.
+pub const SELF_VERSIONS: [u64; 2] = [SELF_VERSION, SELF_VERSION_KEY_FILE];
 /// Operation codes reserved for the Self mode.
 pub const SELF_OPS: std::ops::RangeInclusive<u64> = 60..=79;
 /// Longest path of a file to import, in bytes.
@@ -218,17 +222,18 @@ pub struct RecoveryInfo {
 pub struct ImportReport {
     /// Secrets created.
     pub imported: u64,
-    /// Entries with nothing to keep (no password, no notes).
+    /// Entries with nothing to keep (a title at most).
     pub empty: u64,
     /// Entries of the recycle bin, skipped.
     pub recycled: u64,
-    /// Attachments not imported.
+    /// Attachments not imported (too large, name too long, beyond 64, missing content, or
+    /// of a refused entry).
     pub attachments: u64,
     /// Earlier versions not imported.
     pub history: u64,
     /// Custom fields left out (beyond the vault's bounds).
     pub custom_skipped: u64,
-    /// One-time password configurations not imported.
+    /// One-time password configurations not converted (kept as custom fields).
     pub totp: u64,
     /// Entries the vault refused.
     pub refused: u64,
@@ -310,6 +315,8 @@ pub enum SelfRequest {
         password: Zeroizing<String>,
         /// Target locker (the personal locker by default).
         locker: Option<Id16>,
+        /// Absolute path of a key file (version 9).
+        key_file: Option<String>,
     },
 }
 
@@ -481,13 +488,29 @@ impl SelfRequest {
                 path,
                 password,
                 locker,
+                key_file,
             } => {
                 let mut e = vec![(1, Value::text(path)), (2, Value::text(password))];
                 if let Some(l) = locker {
                     e.push((3, Value::bytes(l)));
                 }
+                if let Some(k) = key_file {
+                    e.push((4, Value::text(k)));
+                }
                 Some(Value::map(e))
             }
+        }
+    }
+
+    /// The smallest version that knows this request: 9 for an import with a key file, 5
+    /// otherwise (`docs/api-locale.md` § 10).
+    #[must_use]
+    pub fn version(&self) -> u64 {
+        match self {
+            SelfRequest::ImportKdbx {
+                key_file: Some(_), ..
+            } => SELF_VERSION_KEY_FILE,
+            _ => SELF_VERSION,
         }
     }
 
@@ -497,7 +520,7 @@ impl SelfRequest {
     /// [`ErrorCode::Internal`].
     pub fn encode(&self, id: u64) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
         let mut e = vec![
-            (1, Value::Uint(SELF_VERSION)),
+            (1, Value::Uint(self.version())),
             (2, Value::Uint(id)),
             (3, Value::Uint(self.op() as u64)),
         ];
@@ -513,23 +536,46 @@ impl SelfRequest {
     /// # Errors
     /// `(id, code)`.
     pub fn decode(frame: &[u8]) -> Result<(u64, SelfRequest), (u64, SelfCode)> {
-        let malformed = SelfCode::General(ErrorCode::Malformed);
-        let v = cbor::decode(frame).map_err(|_| (0, malformed))?;
-        let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(|_| (0, malformed))?;
-        let id = f.req(2).and_then(uint).map_err(|_| (0, malformed))?;
-        let version = f.req(1).and_then(uint).map_err(|_| (id, malformed))?;
-        if version != SELF_VERSION {
-            return Err((id, SelfCode::General(ErrorCode::UnsupportedVersion)));
-        }
-        let op = f.req(3).and_then(uint).map_err(|_| (id, malformed))?;
-        let op =
-            SelfOp::from_u64(op).ok_or((id, SelfCode::General(ErrorCode::UnknownOperation)))?;
-        Self::decode_args(op, f.opt(4))
-            .map(|r| (id, r))
-            .map_err(|c| (id, c))
+        Self::decode_versioned(frame)
+            .map(|(id, _, r)| (id, r))
+            .map_err(|(id, _, c)| (id, c))
     }
 
-    fn decode_args(op: SelfOp, args: Option<&Value>) -> Result<SelfRequest, SelfCode> {
+    /// Like [`SelfRequest::decode`], with the version of the request, which its reply carries
+    /// ([`SELF_VERSION`] when the request has none that is accepted).
+    ///
+    /// # Errors
+    /// `(id, version, code)`.
+    #[allow(clippy::type_complexity)]
+    pub fn decode_versioned(frame: &[u8]) -> Result<(u64, u64, SelfRequest), (u64, u64, SelfCode)> {
+        let five = |(id, c)| (id, SELF_VERSION, c);
+        let malformed = SelfCode::General(ErrorCode::Malformed);
+        let v = cbor::decode(frame).map_err(|_| five((0, malformed)))?;
+        let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(|_| five((0, malformed)))?;
+        let id = f.req(2).and_then(uint).map_err(|_| five((0, malformed)))?;
+        let version = f.req(1).and_then(uint).map_err(|_| five((id, malformed)))?;
+        if !SELF_VERSIONS.contains(&version) {
+            return Err(five((id, SelfCode::General(ErrorCode::UnsupportedVersion))));
+        }
+        let op = f
+            .req(3)
+            .and_then(uint)
+            .map_err(|_| (id, version, malformed))?;
+        let op = SelfOp::from_u64(op).ok_or((
+            id,
+            version,
+            SelfCode::General(ErrorCode::UnknownOperation),
+        ))?;
+        Self::decode_args(op, f.opt(4), version)
+            .map(|r| (id, version, r))
+            .map_err(|c| (id, version, c))
+    }
+
+    fn decode_args(
+        op: SelfOp,
+        args: Option<&Value>,
+        version: u64,
+    ) -> Result<SelfRequest, SelfCode> {
         let malformed = SelfCode::General(ErrorCode::Malformed);
         let none = |r: SelfRequest| match args {
             None => Ok(r),
@@ -630,19 +676,31 @@ impl SelfRequest {
                 })
             }
             SelfOp::ImportKdbx => {
-                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
-                let path = m(f.req(1).and_then(|v| text_max(v, MAX_PATH)))?;
-                if path.is_empty() {
-                    return Err(SelfCode::General(ErrorCode::InvalidInput));
-                }
-                // An empty database password is legitimate in KeePass; a key file is not
-                // supported.
+                // The key file (key 4) exists from version 9 on: unknown before.
+                let keys: &[u64] = if version >= SELF_VERSION_KEY_FILE {
+                    &[1, 2, 3, 4]
+                } else {
+                    &[1, 2, 3]
+                };
+                let f = m(Fields::new(args()?, keys))?;
+                let path = |k| -> Result<Option<String>, SelfCode> {
+                    let Some(v) = f.opt(k) else { return Ok(None) };
+                    let p = m(text_max(v, MAX_PATH))?;
+                    if p.is_empty() {
+                        return Err(SelfCode::General(ErrorCode::InvalidInput));
+                    }
+                    Ok(Some(p.to_owned()))
+                };
+                let file = path(1)?.ok_or(malformed)?;
+                // An empty database password is legitimate in KeePass, with or without a key
+                // file.
                 let password =
                     Zeroizing::new(m(f.req(2).and_then(|v| text_max(v, MAX_PASSWORD)))?.to_owned());
                 Ok(SelfRequest::ImportKdbx {
-                    path: path.to_owned(),
+                    path: file,
                     password,
                     locker: f.opt(3).map(|l| m(fixed::<16>(l))).transpose()?,
+                    key_file: path(4)?,
                 })
             }
         }
@@ -739,6 +797,22 @@ impl SelfReply {
         Self::encode_with(id, result.as_ref().map_err(|c| (*c, None)))
     }
 
+    /// Like [`SelfReply::encode_with`], for a request of `version` (one of [`SELF_VERSIONS`]),
+    /// which the reply carries.
+    ///
+    /// # Errors
+    /// [`ErrorCode::Internal`].
+    pub fn encode_versioned(
+        version: u64,
+        id: u64,
+        result: Result<&SelfReply, (SelfCode, Option<u64>)>,
+    ) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
+        if !SELF_VERSIONS.contains(&version) {
+            return Err(ErrorCode::Internal);
+        }
+        Self::encode_inner(version, id, result)
+    }
+
     /// Like [`SelfReply::encode`], a refusal carrying the wait of a [`ErrorCode::Throttled`]
     /// refusal.
     ///
@@ -748,7 +822,15 @@ impl SelfReply {
         id: u64,
         result: Result<&SelfReply, (SelfCode, Option<u64>)>,
     ) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
-        let mut e = vec![(1, Value::Uint(SELF_VERSION)), (2, Value::Uint(id))];
+        Self::encode_inner(SELF_VERSION, id, result)
+    }
+
+    fn encode_inner(
+        version: u64,
+        id: u64,
+        result: Result<&SelfReply, (SelfCode, Option<u64>)>,
+    ) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
+        let mut e = vec![(1, Value::Uint(version)), (2, Value::Uint(id))];
         match result {
             Ok(r) => {
                 e.push((3, Value::Uint(0)));
@@ -762,7 +844,12 @@ impl SelfReply {
                     SelfCode::General(ErrorCode::UnsupportedVersion) => {
                         e.push((
                             4,
-                            Value::map(vec![(2, Value::Array(vec![Value::Uint(SELF_VERSION)]))]),
+                            Value::map(vec![(
+                                2,
+                                Value::Array(
+                                    SELF_VERSIONS.iter().map(|v| Value::Uint(*v)).collect(),
+                                ),
+                            )]),
                         ));
                     }
                     SelfCode::General(ErrorCode::Throttled) => {
@@ -791,7 +878,7 @@ impl SelfReply {
         let bad = |_| ErrorCode::Malformed;
         let v = cbor::decode(frame).map_err(bad)?;
         let f = Fields::new(&v, &[1, 2, 3, 4]).map_err(bad)?;
-        if f.req(1).and_then(uint).map_err(bad)? != SELF_VERSION {
+        if !SELF_VERSIONS.contains(&f.req(1).and_then(uint).map_err(bad)?) {
             return Err(ErrorCode::Malformed);
         }
         let id = f.req(2).and_then(uint).map_err(bad)?;

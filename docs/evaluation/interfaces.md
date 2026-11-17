@@ -84,7 +84,7 @@ tournent 60 secondes chacune dans le travail informatif `fuzz` de la CI.
 | `decode_locker_body` | Métadonnées de casier | Coffre, opérations |
 | `read_kdbx` | Lecteur KDBX complet (enveloppe, KDF, HMAC) | Base KeePass |
 | `read_kdbx_payload` | Étapes après déchiffrement (gzip, XML) | Base KeePass |
-| `decode_local_request` | Trames et requêtes des profils de l'API locale, export de casier compris (version 9) | Tout processus du compte |
+| `decode_local_request` | Trames et requêtes des profils de l'API locale, export de casier compris (version 10) | Tout processus du compte |
 | `decode_sync_message` | Trames et corps de tous les messages du protocole et de l'administration ; en-tête et contenu d'un paquet du courrier des accords (ADR 0070) | Serveur, postes, réseau |
 | `decode_operation` | `Operation` (réencodage identique exigé), `SealedPayload`, `ControlBody`, `SyncState`, `OpItem`, `Stub`, `Vector`, `PrunedPast`, `PeerHello`, révocations, enveloppes d'époque, accords | Serveur, autres postes |
 | `decode_server_annex` | Contenu descellé de l'annexe (registre réingéré, opérations revalidées) | Fichier sur le disque |

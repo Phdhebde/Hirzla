@@ -237,10 +237,12 @@ export const api = {
   removeRecoveryKit: () => call("remove_recovery_kit"),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
+  chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),
+  clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
 
-  // Encrypted export of a locker (local API version 9, ADR 0077).
+  // Encrypted export of a locker (local API version 10, ADR 0077).
   /**
    * @param {string} locker @param {string} name  Suggests the file name.
    * @param {string | null} password  Null: the core draws a passphrase. @returns {Promise<LockerExported>}

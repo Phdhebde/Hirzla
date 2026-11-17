@@ -120,14 +120,19 @@ fn strict_decoding() {
         (1, Value::bytes(&[1; 16])),
         (2, Value::text("/tmp/x")),
     ]);
-    assert!(ExportRequest::decode(&frame(9, 140, good.clone())).is_ok());
+    assert!(ExportRequest::decode(&frame(10, 140, good.clone())).is_ok());
     let err = |f: &[u8]| ExportRequest::decode(f).unwrap_err();
     assert_eq!(
         err(&frame(5, 140, good.clone())),
         (5, ExportCode::General(ErrorCode::UnsupportedVersion))
     );
+    // Version 9 is the Self mode's (key file of `ImportKdbx`), not the export's.
     assert_eq!(
-        err(&frame(9, 149, good.clone())),
+        err(&frame(9, 140, good.clone())),
+        (5, ExportCode::General(ErrorCode::UnsupportedVersion))
+    );
+    assert_eq!(
+        err(&frame(10, 149, good.clone())),
         (5, ExportCode::General(ErrorCode::UnknownOperation))
     );
     let malformed = (5, ExportCode::General(ErrorCode::Malformed));
@@ -135,7 +140,7 @@ fn strict_decoding() {
     // Unknown key, short locker, empty path or password, empty name.
     assert_eq!(
         err(&frame(
-            9,
+            10,
             140,
             Value::map(vec![
                 (1, Value::bytes(&[1; 16])),
@@ -147,7 +152,7 @@ fn strict_decoding() {
     );
     assert_eq!(
         err(&frame(
-            9,
+            10,
             140,
             Value::map(vec![(1, Value::bytes(&[1; 15])), (2, Value::text("/x"))])
         )),
@@ -155,7 +160,7 @@ fn strict_decoding() {
     );
     assert_eq!(
         err(&frame(
-            9,
+            10,
             140,
             Value::map(vec![(1, Value::bytes(&[1; 16])), (2, Value::text(""))])
         )),
@@ -163,7 +168,7 @@ fn strict_decoding() {
     );
     assert_eq!(
         err(&frame(
-            9,
+            10,
             140,
             Value::map(vec![
                 (1, Value::bytes(&[1; 16])),
@@ -175,7 +180,7 @@ fn strict_decoding() {
     );
     assert_eq!(
         err(&frame(
-            9,
+            10,
             141,
             Value::map(vec![
                 (1, Value::text("/x")),
@@ -187,7 +192,7 @@ fn strict_decoding() {
     );
     assert_eq!(
         err(&frame(
-            9,
+            10,
             141,
             Value::map(vec![
                 (1, Value::text("/x")),
@@ -198,16 +203,16 @@ fn strict_decoding() {
         malformed
     );
     assert_eq!(
-        err(&frame(9, 141, Value::map(vec![(1, Value::text("/x"))]))),
+        err(&frame(10, 141, Value::map(vec![(1, Value::text("/x"))]))),
         malformed
     );
-    assert!(!is_export_request(&frame(9, 139, Value::map(Vec::new()))));
-    assert!(!is_export_request(&frame(9, 150, Value::map(Vec::new()))));
-    assert!(is_export_request(&frame(9, 145, Value::map(Vec::new()))));
+    assert!(!is_export_request(&frame(10, 139, Value::map(Vec::new()))));
+    assert!(!is_export_request(&frame(10, 150, Value::map(Vec::new()))));
+    assert!(is_export_request(&frame(10, 145, Value::map(Vec::new()))));
 }
 
 #[test]
-fn a_core_without_version_9_answers_in_its_own_version() {
+fn a_core_without_version_10_answers_in_its_own_version() {
     // `UnknownOperation` from a version 1 core, as `Reply::encode` would write it.
     let f = cbor::encode(&Value::map(vec![
         (1, Value::Uint(1)),

@@ -1,4 +1,4 @@
-//! Encrypted export of a locker (`docs/api-locale.md` § 19, version 9, ADR 0077): a one-shot
+//! Encrypted export of a locker (`docs/api-locale.md` § 19, version 10, ADR 0077): a one-shot
 //! copy of a locker that a colleague imports into their own vault as a new locker, without
 //! the server mode.
 //!

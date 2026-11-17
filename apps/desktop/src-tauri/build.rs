@@ -39,6 +39,8 @@ const COMMANDS: &[&str] = &[
     "recovery_unlock",
     "remove_recovery_kit",
     "choose_kdbx_file",
+    "choose_kdbx_key_file",
+    "clear_kdbx_key_file",
     "import_kdbx",
     "export_locker",
     "copy_export_password",

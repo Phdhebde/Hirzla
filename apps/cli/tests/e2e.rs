@@ -506,8 +506,28 @@ fn self_mode_v5_commands() {
     assert!(fails(&hirzla(&sock, &["import-kdbx", kdbx], Some("faux"))).contains("incorrect"));
     let out = ok(&hirzla(&sock, &["import-kdbx", kdbx], Some("hirzla-test")));
     assert!(out.contains("5 secret(s) importé(s)"), "{out}");
-    assert!(out.contains("1 pièce(s) jointe(s)"), "{out}");
+    // The attachment of « Banque » is imported now: nothing to report.
+    assert!(!out.contains("pièce(s) jointe(s)"), "{out}");
     assert_eq!(ok(&hirzla(&sock, &["get", "Banque"], None)), "Pa55w0rd!\n");
+    // A database opened by its key file alone: an empty password on the standard input.
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../crates/hirzla-vault/tests/kdbx");
+    let only = fixtures.join("pykeepass-keyfile-only.kdbx");
+    let key = fixtures.join("keyfile-raw.bin");
+    let (only, key) = (only.to_str().unwrap(), key.to_str().unwrap());
+    assert!(fails(&hirzla(&sock, &["import-kdbx", only], Some(""))).contains("vide"));
+    let out = ok(&hirzla(
+        &sock,
+        &["import-kdbx", only, "--fichier-cle", key],
+        Some(""),
+    ));
+    assert!(out.contains("secret(s) importé(s)"), "{out}");
+    assert!(fails(&hirzla(
+        &sock,
+        &["import-kdbx", only, "--fichier-cle", "/absent.keyx"],
+        Some(""),
+    ))
+    .contains("fichier clé introuvable"));
 
     // History and restore of a version.
     ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));

@@ -1767,6 +1767,24 @@ impl Vault {
         })
     }
 
+    /// Deletes the stored chunks of an attachment that no secret version references: one that
+    /// [`Vault::add_attachment`] stored for a secret whose writing then failed. Only its holder
+    /// knows its identifier, drawn at random when it was stored.
+    ///
+    /// # Errors
+    /// A failure of the database.
+    pub fn discard_attachment(
+        &mut self,
+        locker: Id16,
+        attachment: &AttachmentRef,
+    ) -> Result<(), VaultError> {
+        self.conn.execute(
+            "DELETE FROM attachment_chunks WHERE attachment_id = ?1 AND locker_id = ?2",
+            params![attachment.id.as_slice(), locker.as_slice()],
+        )?;
+        Ok(())
+    }
+
     /// Reads an attachment back, checking every chunk's rank and count.
     ///
     /// # Errors

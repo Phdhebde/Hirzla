@@ -39,6 +39,8 @@ pub struct AppState {
     pub(crate) pending_export: Mutex<Option<PathBuf>>,
     /// Passphrase drawn by the core for the last export, for the copy button.
     pub(crate) export_password: Mutex<Option<Zeroizing<String>>>,
+    /// Key file of that database, if it has one.
+    pub(crate) pending_kdbx_key: Mutex<Option<PathBuf>>,
     /// SSH private key file chosen with the file picker, waiting for its title.
     pub(crate) pending_ssh_key: Mutex<Option<PathBuf>>,
     /// Recovery share files chosen with the file picker, waiting for the new password.
@@ -69,6 +71,7 @@ impl AppState {
             pending_kdbx: Mutex::new(None),
             pending_export: Mutex::new(None),
             export_password: Mutex::new(None),
+            pending_kdbx_key: Mutex::new(None),
             pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),

@@ -895,6 +895,7 @@
           <button id="secret-mdp-generer" class="bouton bouton-secondaire" type="button">Générer</button>
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
+        <label id="secret-mdp-effacer-case" class="case" hidden><input type="checkbox" id="secret-mdp-effacer"> Effacer le mot de passe actuel</label>
       </div>
       <label class="champ" data-pour="ssh">
         <span class="champ-libelle">Clé SSH du coffre</span>
@@ -922,6 +923,7 @@
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
+      <label id="secret-notes-effacer-case" class="case" hidden><input type="checkbox" id="secret-notes-effacer"> Effacer les notes actuelles</label>
       <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
@@ -950,9 +952,10 @@
   <dialog id="dialogue-kdbx" class="dialogue dialogue-etroit" aria-labelledby="kdbx-titre">
     <form id="form-kdbx" method="dialog" novalidate>
       <h2 id="kdbx-titre" class="titre-carte">Importer depuis KeePass (KDBX)</h2>
-      <p class="texte-secondaire">Bases KDBX 4 (KeePass 2.35 et suivants, KeePassXC) protégées par un mot de passe
-        seul, chiffrées en AES-256 ou ChaCha20 avec Argon2. Le noyau lit la base et crée les entrées dans votre
-        casier personnel.</p>
+      <p class="texte-secondaire">Bases KDBX 3.1 et 4 (KeePass 2, KeePassXC) protégées par un mot de passe,
+        chiffrées en AES-256 ou ChaCha20 (AES-KDF ou Argon2). Le noyau lit la base et crée les entrées dans votre
+        casier personnel, avec leurs pièces jointes. Une base protégée aussi, ou seulement, par un fichier clé
+        s'ouvre avec ce fichier ; seul son chemin est transmis au noyau, qui le lit.</p>
       <div class="ligne-actions">
         <button id="kdbx-choisir" class="bouton bouton-secondaire" type="button">Choisir la base…</button>
         <span id="kdbx-fichier" class="mono"></span>
@@ -962,8 +965,13 @@
         <input id="kdbx-mdp" class="saisie saisie-mono" type="password" autocomplete="off" spellcheck="false"
                maxlength="1024">
       </label>
-      <p class="aide">Les pièces jointes, l'historique des entrées et les codes TOTP ne sont pas importés ;
-        le compte rendu les signale.</p>
+      <div class="ligne-actions">
+        <button id="kdbx-cle-choisir" class="bouton bouton-secondaire" type="button">Fichier clé…</button>
+        <span id="kdbx-cle" class="mono"></span>
+        <button id="kdbx-cle-retirer" class="bouton bouton-secondaire" type="button" hidden>Retirer</button>
+      </div>
+      <p class="aide">Avec un fichier clé, laissez le mot de passe vide si la base n'en a pas. L'historique des
+        entrées n'est pas importé ; le compte rendu signale ce qui n'a pas pu l'être.</p>
       <div id="kdbx-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>

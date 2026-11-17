@@ -169,12 +169,11 @@ Un fichier scellé par l'enveloppe hybride (ECDH P-384 + ML-KEM-1024, `crypto.md
   et `hirzla casier importer FICHIER [--nom NOM]` (mot de passe demandé sans écho). Aucun
   secret en argument.
 
-### 9. API locale version 9
+### 9. API locale version 10
 
 Opérations **140** `LockerExport` et **141** `LockerImport`, erreurs **140 à 145**, plage
-**140–149** réservée à cet ADR (`api-locale.md` § 19). Profil complet seulement. D'autres
-branches en cours (déverrouillage matériel, dossiers) peuvent aussi prendre la version 9 :
-les numéros seront renumérotés à la fusion, la spécification d'abord.
+**140–149** réservée à cet ADR (`api-locale.md` § 19). Profil complet seulement. La version 9 a été
+prise par le mode Self (fichier clé d'`ImportKdbx`, ADR 0025) : l'export prend la version 10.
 
 Le noyau lit et écrit **lui-même** le fichier, au chemin absolu donné par le client : un fichier
 de plusieurs centaines de Mio ne tient pas dans une trame de 8 Mio. Écriture en `0600`, sans

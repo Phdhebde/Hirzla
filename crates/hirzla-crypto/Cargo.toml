@@ -18,6 +18,10 @@ argon2 = { version = "0.6.0", default-features = false, features = ["alloc", "ze
 # Raw ChaCha20 (RFC 8439) for reading KeePass KDBX 4 databases only (ADR 0025): AWS-LC keeps
 # it private. RustCrypto, audited with chacha20poly1305 (NCC Group, 2020). Pinned.
 chacha20 = { version = "=0.10.2", default-features = false, features = ["cipher", "zeroize"] }
+# Raw Salsa20, for the inner stream of KeePass KDBX 3.1 databases only (ADR 0025): absent
+# from AWS-LC. RustCrypto, same repository and `cipher` traits as `chacha20`; no `unsafe`.
+# Pinned.
+salsa20 = { version = "=0.11.0", default-features = false, features = ["zeroize"] }
 # Random-generator traits required by vsss-rs; fed by the AWS-LC generator.
 rand_core = { version = "0.10.1", default-features = false }
 thiserror = "2.0"

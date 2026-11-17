@@ -345,13 +345,18 @@ fn the_self_mode_commands_drive_a_real_core() {
     // KeePass import: the core reads the file.
     let kdbx = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../crates/hirzla-vault/tests/kdbx/keepassxc-chacha20-argon2id.kdbx");
-    let refused = state.import_kdbx_file(&kdbx, z("faux")).unwrap_err();
+    let refused = state.import_kdbx_file(&kdbx, z("faux"), None).unwrap_err();
     assert_eq!(refused.code(), "import");
     assert!(refused.message().contains("incorrect"));
-    let report =
-        serde_json::to_value(state.import_kdbx_file(&kdbx, z("hirzla-test")).unwrap()).unwrap();
+    let report = serde_json::to_value(
+        state
+            .import_kdbx_file(&kdbx, z("hirzla-test"), None)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(report["imported"], 5);
-    assert_eq!(report["attachments"], 1);
+    // The attachment of « Banque » is imported now.
+    assert_eq!(report["attachments"], 0);
     let list = serde_json::to_value(state.list(Some(z("Banque")), false).unwrap()).unwrap();
     let bank = &list["entries"][0];
     let target = SecretRef {

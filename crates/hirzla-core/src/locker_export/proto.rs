@@ -1,4 +1,4 @@
-//! Locker export operations of the local API (`docs/api-locale.md` § 19): version 9,
+//! Locker export operations of the local API (`docs/api-locale.md` § 19): version 10,
 //! operation codes 140 to 149, error codes 140 to 149. Same frames, same CBOR profile and
 //! same strict decoding as the rest of the API (`crate::proto`).
 
@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 use crate::proto::{ErrorCode, MAX_PASSWORD};
 
 /// Version of the protocol that carries the export operations.
-pub const EXPORT_VERSION: u64 = 9;
+pub const EXPORT_VERSION: u64 = 10;
 /// Operation codes reserved for the export (ADR 0077).
 pub const EXPORT_OPS: std::ops::RangeInclusive<u64> = 140..=149;
 /// Longest path of an export file, in bytes.
@@ -438,7 +438,7 @@ impl ExportReply {
         let id = f.req(2).and_then(uint).map_err(bad)?;
         let status = f.req(3).and_then(uint).map_err(bad)?;
         if status != 0 {
-            // A core that does not speak version 9 answers in its own version.
+            // A core that does not speak version 10 answers in its own version.
             let code = ExportCode::from_status(status).ok_or(ErrorCode::Malformed)?;
             return Ok((id, Err(code)));
         }
