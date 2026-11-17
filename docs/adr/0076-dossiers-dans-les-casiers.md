@@ -223,6 +223,10 @@ par `dossier liste`).
   Leurs entrées sont importées ; rien n'est perdu que le rangement.
 - Un nom de groupe vide ou trop long est remplacé par « Sans nom » ou coupé à 255 octets sur une
   frontière de caractère ; les caractères de contrôle sont retirés.
+- Première mise en œuvre : le lecteur KDBX ne rend que le chemin de groupe de chaque entrée.
+  Un groupe sans aucune entrée en dessous n'est donc pas encore créé, et deux groupes frères de
+  même nom donnent un seul dossier. Les deux points suivront quand le lecteur rendra la liste
+  des groupes (identifiant et parent).
 
 ## Conséquences
 

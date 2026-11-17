@@ -555,8 +555,28 @@ fn kdbx_import() {
     let mail = &entries[1];
     let mut tags: Vec<&str> = mail.tags.iter().map(|t| t.as_str()).collect();
     tags.sort_unstable();
-    assert_eq!(tags, ["Internet/Mail", "mail", "perso"]);
+    // The group is a folder now, no longer a tag (ADR 0076 § 11).
+    assert_eq!(tags, ["mail", "perso"]);
     assert_eq!(mail.hosts, ["mail.example.org"]);
+    let crate::folders::proto::FolderReply::Trees(trees) = c
+        .handle_folder(crate::folders::proto::FolderRequest::Tree { locker: None })
+        .unwrap()
+    else {
+        panic!("trees expected");
+    };
+    let tree = &trees[0];
+    let internet = tree
+        .folders
+        .iter()
+        .find(|f| f.name.as_str() == "Internet" && f.parent.is_none())
+        .unwrap();
+    let inner = tree
+        .folders
+        .iter()
+        .find(|f| f.name.as_str() == "Mail")
+        .unwrap();
+    assert_eq!(inner.parent, Some(internet.id));
+    assert!(tree.placements.contains(&(mail.id, inner.id)));
     assert_eq!(entries[2].secret_type, SecretType::Note as u64);
     match c
         .handle(Request::Read {

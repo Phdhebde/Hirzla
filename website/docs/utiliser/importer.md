@@ -23,6 +23,7 @@ lui-même.
 | | |
 | --- | --- |
 | Bases acceptées | KDBX 4 (KeePass 2.35 et suivants, KeePassXC), protégées par un mot de passe seul, chiffrées en AES-256 ou ChaCha20 avec Argon2 |
+| Groupes | Chaque groupe devient un dossier du casier, à la même place ; les étiquettes KeePass restent des étiquettes |
 | Non importés | Pièces jointes, historique des entrées, codes TOTP. Le compte rendu les signale |
 
 En ligne de commande :

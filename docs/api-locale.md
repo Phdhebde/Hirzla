@@ -1225,8 +1225,10 @@ Détails :
     clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
     de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
     identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
-    « Sans titre » ; chemin du groupe (sans la racine) en étiquette, plus les étiquettes
-    KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
+    « Sans titre » ; chaque groupe devient un dossier du casier (le groupe racine en est la
+    racine), créés en une écriture avant les entrées, chaque entrée rangée dans le sien
+    (ADR 0076 § 11 : au-delà de 32 niveaux ou de 2 048 groupes, fondus dans un ancêtre ; noms
+    nettoyés) ; étiquettes KeePass gardées comme étiquettes ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
     KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
     coffre (valeur trop longue) comptée dans « refusés ».
 

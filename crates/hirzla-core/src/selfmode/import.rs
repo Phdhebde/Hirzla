@@ -87,7 +87,8 @@ pub(crate) fn plan(
         url,
         notes,
         tags,
-        group_path,
+        // The group is the folder of the secret (ADR 0076), set by the caller.
+        group_path: _,
         custom,
         custom_skipped,
         totp,
@@ -125,13 +126,7 @@ pub(crate) fn plan(
             edit.add.push((SetKind::Urls, SetValue::Text(u)));
         }
     }
-    let mut tag_values: Vec<Zeroizing<String>> = Vec::with_capacity(tags.len() + 1);
-    if !group_path.is_empty() {
-        let parts: Vec<&str> = group_path.iter().map(|g| g.trim()).collect();
-        tag_values.push(Zeroizing::new(parts.join("/")));
-    }
-    tag_values.extend(tags);
-    for t in tag_values.into_iter().take(MAX_ITEMS) {
+    for t in tags.into_iter().take(MAX_ITEMS) {
         if !edit
             .add
             .iter()
@@ -233,7 +228,7 @@ mod tests {
     }
 
     #[test]
-    fn group_path_and_custom_fields() {
+    fn group_path_is_no_tag_and_custom_fields() {
         let mut r = ImportReport::default();
         let e = KdbxEntry {
             title: z("Messagerie"),
@@ -257,7 +252,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(tags, ["Internet/Mail", "perso"]);
+        // The group path is the folder now (ADR 0076); a KeePass tag that looks like it stays.
+        assert_eq!(tags, ["perso", "Internet/Mail"]);
         assert_eq!(edit.set_custom.len(), 1);
         assert!(edit.set_custom[0].1.sensitive);
     }
