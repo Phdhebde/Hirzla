@@ -46,7 +46,7 @@ pub struct ImportedDto {
     locker: String,
     secrets: u64,
     attachments: u64,
-    folders_as_tags: u64,
+    folders: u64,
     refused: u64,
 }
 
@@ -212,7 +212,7 @@ impl AppState {
                 locker: hex(&locker),
                 secrets: report.secrets,
                 attachments: report.attachments,
-                folders_as_tags: report.folders_as_tags,
+                folders: report.folders,
                 refused: report.refused,
             }),
             ExportReply::Exported { .. } => Err(DesktopError::Protocol),

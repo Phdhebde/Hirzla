@@ -630,3 +630,87 @@ proptest::proptest! {
         }
     }
 }
+
+#[test]
+fn the_folder_field_reads_back_and_a_move_to_the_root_wins_over_an_older_folder() {
+    let base = note("x", 1);
+    let edit = |b: &SecretBody, f: Option<Id16>, l: u64, dev: u8| {
+        let mut s = stamp(l);
+        s.device = [dev; 16];
+        apply_edit(
+            Some(b),
+            b.secret_id,
+            b.secret_type,
+            Vec::new(),
+            SecretEdit {
+                set: vec![(Field::Folder, FieldValue::Folder(f))],
+                ..SecretEdit::default()
+            },
+            s,
+            dot(l),
+            || [9; 16],
+        )
+        .unwrap()
+    };
+    let in_folder = edit(&base, Some([4; 16]), 2, 2);
+    assert!(roundtrip(&in_folder) == in_folder);
+    assert_eq!(in_folder.folder(), Some([4; 16]));
+    assert_eq!(in_folder.min_format_version(), 3);
+    assert_eq!(base.min_format_version(), 1);
+    // Concurrently: one moves to the root (later stamp), the other edits the title.
+    let to_root = edit(&in_folder, None, 3, 3);
+    assert!(roundtrip(&to_root) == to_root);
+    let mut renamed = in_folder.clone();
+    renamed.fields.insert(
+        Field::Title,
+        FieldEntry {
+            value: FieldValue::text("y"),
+            stamp: stamp(3),
+        },
+    );
+    let m = merge(&[renamed.clone(), to_root.clone()]).unwrap();
+    assert_eq!(m.folder(), None);
+    let m2 = merge(&[to_root, renamed]).unwrap();
+    assert!(m == m2);
+}
+
+#[test]
+fn locker_metadata_with_folders_reads_back_and_without_them_keeps_its_v2_form() {
+    let meta = LockerBody::edit(
+        None,
+        Vec::new(),
+        vec![(LockerField::Name, FieldValue::text("Casier"))],
+        stamp(1),
+    )
+    .unwrap();
+    let v2_bytes = cbor::encode(&meta.to_value().unwrap()).unwrap();
+    assert_eq!(meta.min_format_version(), 1);
+    let with = LockerBody::edit_folders(
+        Some(&meta),
+        Vec::new(),
+        vec![crate::folder::FolderEdit::Create {
+            id: [5; 16],
+            name: Zeroizing::new("Dossier".to_owned()),
+            parent: None,
+        }],
+        stamp(2),
+    )
+    .unwrap();
+    assert_eq!(with.min_format_version(), 3);
+    let bytes = cbor::encode(&with.to_value().unwrap()).unwrap();
+    let back = LockerBody::from_value(&cbor::decode(&bytes).unwrap()).unwrap();
+    assert!(back == with);
+    // No folder: the encoding is the one of version 2 (no key 3).
+    let back = LockerBody::from_value(&cbor::decode(&v2_bytes).unwrap()).unwrap();
+    assert!(back.folders.is_empty());
+    assert!(cbor::encode(&back.to_value().unwrap()).unwrap() == v2_bytes);
+    // An empty folder map is not canonical: the key is omitted instead.
+    let mut v = meta.to_value().unwrap();
+    if let Value::Map(m) = &mut v {
+        m.push((Value::Uint(3), Value::Map(Vec::new())));
+    }
+    assert!(LockerBody::from_value(&v).is_err());
+    // Merging keeps folders from every head.
+    let merged = merge_locker(&[meta, with.clone()]).unwrap();
+    assert!(merged.folders == with.folders);
+}

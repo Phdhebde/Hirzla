@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
+use hirzla_core::folders::proto::{FolderReply, FolderRequest};
 use hirzla_core::locker_export::proto::{ExportCode, ExportReply, ExportRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
@@ -296,6 +297,39 @@ impl CoreLink {
                 }
                 Err(ClientError::Io(_))
                     if !retried && matches!(request, ConnectionRequest::Read { .. }) =>
+                {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one folder request (`docs/api-locale.md` § 20, version 11). Only the tree, which
+    /// changes nothing, is sent again on a new connection.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::folders::refusal`].
+    pub fn call_folder(&mut self, request: &FolderRequest) -> Result<FolderReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_folder(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::folders::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, FolderRequest::Tree { .. }) =>
                 {
                     retried = true;
                 }

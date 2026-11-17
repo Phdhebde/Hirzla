@@ -756,6 +756,7 @@ impl Vault {
             name: Zeroizing::new(merged.name().to_owned()),
             meta_heads: meta_heads.iter().map(|(id, _)| *id).collect(),
             entries,
+            folders: merged.folders,
         })
     }
 
@@ -1299,6 +1300,7 @@ impl Vault {
             name: Zeroizing::new(name.to_owned()),
             meta_heads: vec![meta_id],
             entries: BTreeMap::new(),
+            folders: crate::folder::Folders::new(),
         };
         self.write_shard(&tx, &shard)?;
         before_commit();
@@ -1312,7 +1314,19 @@ impl Vault {
     /// # Errors
     /// [`VaultError::NotFound`], [`VaultError::InvalidInput`], or a failure.
     pub fn rename_locker(&mut self, locker: Id16, name: &str) -> Result<(), VaultError> {
-        let shard = self.shard(&locker)?.clone();
+        self.write_meta(locker, |base, parents, stamp| {
+            LockerBody::edit(
+                Some(base),
+                parents,
+                vec![(LockerField::Name, FieldValue::text(name))],
+                stamp,
+            )
+        })
+    }
+
+    /// The merged metadata of a locker, from its `LockerMetaPut` heads.
+    pub(crate) fn locker_meta(&self, locker: &Id16) -> Result<LockerBody, VaultError> {
+        let shard = self.shard(locker)?;
         let mut heads = Vec::new();
         for h in &shard.meta_heads {
             let (_, p) = self.load(h)?;
@@ -1320,23 +1334,37 @@ impl Vault {
                 p.content.as_ref().ok_or(VaultError::Corrupt)?,
             )?);
         }
-        let base = secret::merge_locker(&heads).ok_or(VaultError::Corrupt)?;
+        secret::merge_locker(&heads).ok_or(VaultError::Corrupt)
+    }
+
+    /// Writes a new `LockerMetaPut` built by `edit` from the merged heads, the heads and the
+    /// stamp of the new operation. Raises the file to the version the new metadata needs, in
+    /// the same transaction (§ 5.3).
+    pub(crate) fn write_meta(
+        &mut self,
+        locker: Id16,
+        edit: impl FnOnce(&LockerBody, Vec<OpId>, Stamp) -> Result<LockerBody, EditError>,
+    ) -> Result<(), VaultError> {
+        let shard = self.shard(&locker)?.clone();
+        let base = self.locker_meta(&locker)?;
         let (opref, prev, deps, lamport) = self.next_op(&locker, &shard.built_from)?;
         let stamp = Stamp {
             lamport,
             member: opref.member,
             device: opref.device,
         };
-        let meta = LockerBody::edit(
-            Some(&base),
-            shard.meta_heads.clone(),
-            vec![(LockerField::Name, FieldValue::text(name))],
-            stamp,
-        )
-        .map_err(edit_error)?;
+        let meta = edit(&base, shard.meta_heads.clone(), stamp).map_err(edit_error)?;
+        let content = meta.to_value()?;
+        // The metadata must read back under the same rules.
+        LockerBody::from_value(&content)?;
         let epoch = self.current_epoch(&locker)?;
         let key = self.locker_key(&locker, &epoch)?;
         let tx = self.conn.unchecked_transaction()?;
+        let needed = meta.min_format_version();
+        let raised = needed > self.format_version;
+        if raised {
+            self.raise_format_version(&tx, needed)?;
+        }
         let id = self.store_op(
             &tx,
             locker,
@@ -1349,17 +1377,21 @@ impl Vault {
                 lamport,
                 deps,
                 wall_ms: now_ms(),
-                content: Some(meta.to_value()?),
+                content: Some(content),
             },
             &key,
         )?;
         let mut shard = shard;
         shard.built_from = vec![id];
         shard.meta_heads = vec![id];
-        shard.name = Zeroizing::new(name.to_owned());
+        shard.name = Zeroizing::new(meta.name().to_owned());
+        shard.folders = meta.folders;
         self.write_shard(&tx, &shard)?;
         before_commit();
         tx.commit()?;
+        if raised {
+            self.format_version = needed;
+        }
         self.shards.insert(locker, shard);
         Ok(())
     }
@@ -1616,6 +1648,7 @@ impl Vault {
         edit: SecretEdit,
         purge_cleanup: Option<(&[OpId], &[Id16])>,
     ) -> Result<(), VaultError> {
+        self.check_folder_target(&locker, &edit)?;
         let shard = self.shard(&locker)?.clone();
         let (base, secret_type, parents) = match create {
             Some(t) => {
@@ -1664,9 +1697,9 @@ impl Vault {
         let epoch = self.current_epoch(&locker)?;
         let key = self.locker_key(&locker, &epoch)?;
         let tx = self.conn.unchecked_transaction()?;
-        // A version 1 file is raised to the version its first later object needs, in the
-        // transaction that writes that object (§ 5.3, ADR 0067).
-        let needed = secret_type.min_format_version();
+        // A file is raised to the version its first later object needs, in the transaction
+        // that writes that object (§ 5.3, ADR 0067, ADR 0076).
+        let needed = body.min_format_version();
         let raised = needed > self.format_version;
         if raised {
             self.raise_format_version(&tx, needed)?;
@@ -1821,6 +1854,7 @@ impl Vault {
     }
 }
 
+mod folders;
 mod keys;
 mod locker_export;
 mod restore;
@@ -1864,3 +1898,6 @@ mod tests_connections;
 
 #[cfg(test)]
 mod tests_keys;
+
+#[cfg(test)]
+mod tests_folders;

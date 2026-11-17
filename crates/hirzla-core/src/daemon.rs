@@ -22,6 +22,7 @@ use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
 use crate::events::{Event, Log, Refusal};
+use crate::folders::proto::{is_folder_request, FolderReply, FolderRequest};
 use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
 use crate::locker_export::service as export_service;
 use crate::proto::{
@@ -761,6 +762,42 @@ fn serve_export(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a folder request (`docs/api-locale.md` § 20). The browser profile is refused
+/// (§ 20.1). Returns `false` if the connection must close.
+fn serve_folder(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let (id, result) = match FolderRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ErrorCode::Unauthorized;
+            log.record(Event::FolderRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_folder(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = FolderReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, version, code) = match SelfRequest::decode_versioned(frame) {
@@ -853,6 +890,12 @@ fn serve(
         }
         if is_export_request(&frame) {
             if serve_export(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_folder_request(&frame) {
+            if serve_folder(&mut conn, core, log, &frame, profile) {
                 continue;
             }
             break;

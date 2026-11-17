@@ -7,6 +7,8 @@ l'anglais dans le code.
 | --- | --- | --- |
 | Coffre | `Vault` | L'ensemble des casiers d'un utilisateur ou d'une organisation |
 | Casier | `Locker` | Groupe de secrets partageant une clé et des droits |
+| Dossier | `Folder` | Rangement des secrets d'un casier, en arborescence ; ne porte ni clé ni droit (ADR 0076) |
+| Arbre affiché | `FolderTree` | Arborescence des dossiers d'un casier telle que chaque poste la calcule à partir de l'état fusionné : cycles rattachés à la racine, contenu d'un dossier supprimé remonté à l'ancêtre actif le plus proche |
 | Secret | `Secret` | Une entrée : mot de passe, clé, code, note, fichier |
 | Scellé / descellé | `sealed` / `unsealed` | État d'un secret : chiffré au repos / déchiffré en mémoire |
 | Verrouillé / ouvert | `locked` / `unlocked` | État du coffre : clé du poste indisponible / disponible |

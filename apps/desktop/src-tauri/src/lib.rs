@@ -11,6 +11,7 @@
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
 //! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
 //!   ADR 0067);
+//! - [`folders`]: folders inside lockers (local API version 11, ADR 0076);
 //! - [`totp`]: TOTP codes shown, copied, set and removed (local API version 13, ADR 0078);
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
@@ -36,6 +37,7 @@ pub mod csv;
 pub mod error;
 #[cfg(target_os = "linux")]
 pub mod events;
+pub mod folders;
 pub mod generator;
 pub mod import;
 pub mod link;
@@ -109,6 +111,12 @@ pub fn run() -> Result<(), tauri::Error> {
             connections::update_connection,
             connections::choose_ssh_key_file,
             connections::create_ssh_key,
+            folders::folder_trees,
+            folders::create_folder,
+            folders::rename_folder,
+            folders::move_folder,
+            folders::delete_folder,
+            folders::move_secret,
             totp::totp_code,
             totp::totp_copy,
             totp::totp_set,

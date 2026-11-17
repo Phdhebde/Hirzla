@@ -4,11 +4,11 @@
 use super::Vault;
 use crate::error::VaultError;
 use crate::model::{Id16, OpId};
-use crate::secret::{SecretEdit, SecretState, SetValue};
+use crate::secret::{Field, SecretEdit, SecretState, SetValue};
 
 impl Vault {
     /// Writes a new version of a secret whose fields, sets and custom fields are those of the
-    /// stored version `op_id`, in the active state.
+    /// stored version `op_id`, in the active state. Its folder stays the current one.
     ///
     /// # Errors
     /// [`VaultError::NotFound`] if the version is not one of the secret's stored versions or
@@ -36,11 +36,14 @@ impl Vault {
             state: Some(SecretState::Active),
             ..SecretEdit::default()
         };
+        // The place of the secret is not content: it keeps its current folder (ADR 0076 § 4).
         for (f, e) in &old.fields {
-            edit.set.push((*f, e.value.clone()));
+            if *f != Field::Folder {
+                edit.set.push((*f, e.value.clone()));
+            }
         }
         for f in current.fields.keys() {
-            if !old.fields.contains_key(f) {
+            if *f != Field::Folder && !old.fields.contains_key(f) {
                 edit.clear.push(*f);
             }
         }

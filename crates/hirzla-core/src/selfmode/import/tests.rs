@@ -163,7 +163,7 @@ fn notes_empty_and_counts() {
 }
 
 #[test]
-fn group_path_and_custom_fields() {
+fn group_path_is_no_tag_and_custom_fields() {
     let (p, _) = planned(KdbxEntry {
         title: z("Messagerie"),
         password: z("x"),
@@ -173,7 +173,8 @@ fn group_path_and_custom_fields() {
         ..KdbxEntry::default()
     });
     assert_eq!(p.secret_type, SecretType::Password);
-    assert_eq!(tags(&p.edit), ["Internet/Mail", "perso"]);
+    // The group is the folder now (ADR 0076); a KeePass tag that looks like it stays.
+    assert_eq!(tags(&p.edit), ["perso", "Internet/Mail"]);
     assert_eq!(customs(&p.edit), [("Question", "Chat", true)]);
 }
 
@@ -202,11 +203,9 @@ fn values_beyond_bounds_go_to_custom_fields() {
             ("Identifiant", false),
             ("Mot de passe", true),
             ("Adresse", false),
-            ("Groupe KeePass", false),
             ("Étiquettes KeePass", false),
         ]
     );
-    assert_eq!(customs(&p.edit)[4].1, format!("{long_group}/{long_group}"));
     // The custom value beyond 64 KiB cannot be kept: counted.
     assert_eq!(r.custom_skipped, 1);
 }

@@ -197,6 +197,24 @@
     [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
     [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
   };
+  // Folders of the personal locker (ADR 0076), and the folder of some secrets.
+  const folders = [
+    { locker: L, id: id(101), name: "Finances", parent: null },
+    { locker: L, id: id(102), name: "Comptes", parent: id(101) },
+    { locker: L, id: id(103), name: "Maison", parent: null },
+    { locker: L, id: id(104), name: "Infrastructure", parent: null },
+  ];
+  const placed = { [id(1)]: id(102), [id(4)]: id(101), [id(5)]: id(103), [id(7)]: id(103), [id(21)]: id(104), [id(22)]: id(104), [id(24)]: id(104) };
+  const byName = (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id.localeCompare(b.id);
+  const under = (top) => {
+    const out = new Set([top]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of folders) if (f.parent && out.has(f.parent) && !out.has(f.id)) { out.add(f.id); grew = true; }
+    }
+    return out;
+  };
   // Fields each secret holds (what `secret_history` lists, never a value): only the bank
   // account, the tax account and the GitLab note have notes, only the backup server key has
   // a passphrase. `update_secret` changes them.
@@ -257,6 +275,47 @@
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);
       if (i >= 0) { if (a.purge) entries.splice(i, 1); else entries[i].trash = true; }
+    },
+    folder_trees: () => {
+      if (state !== "unlocked") return refuse("locked", "Le coffre est verrouillé.");
+      return lockerList().map((l) => ({
+        locker: l.id,
+        folders: folders.filter((f) => f.locker === l.id).sort(byName).map(({ id: fid, name, parent }) => ({ id: fid, name, parent })),
+        placements: entries.filter((e) => e.locker === l.id && placed[e.id]).map((e) => [e.id, placed[e.id]]).sort(),
+      }));
+    },
+    create_folder: (a) => {
+      const f = { locker: a.locker, id: id(200 + folders.length), name: a.name, parent: a.parent };
+      folders.push(f);
+      return f.id;
+    },
+    rename_folder: (a) => {
+      const f = folders.find((x) => x.id === a.folder);
+      if (!f) return refuse("not_found", "Introuvable.");
+      f.name = a.name;
+    },
+    move_folder: (a) => {
+      const f = folders.find((x) => x.id === a.folder);
+      if (!f) return refuse("not_found", "Introuvable.");
+      if (a.parent && under(f.id).has(a.parent)) return refuse("invalid_input", "Un dossier ne se range pas sous lui-même.");
+      f.parent = a.parent;
+    },
+    delete_folder: (a) => {
+      const gone = under(a.folder);
+      let n = 0;
+      for (const e of entries) {
+        if (placed[e.id] && gone.has(placed[e.id])) {
+          if (!e.trash) n += 1;
+          e.trash = true;
+          delete placed[e.id];
+        }
+      }
+      for (let i = folders.length - 1; i >= 0; i -= 1) if (gone.has(folders[i].id)) folders.splice(i, 1);
+      return n;
+    },
+    move_secret: (a) => {
+      if (a.folder) placed[a.target.id] = a.folder;
+      else delete placed[a.target.id];
     },
     // TOTP codes (local API version 13): made-up codes, never a TOTP secret.
     totp_code: (a) => {
@@ -441,7 +500,7 @@
     choose_export_file: () => "Equipe-reseau.hirzla-export",
     import_locker: (a) => {
       if (a.password !== "falaise-orage-brindille-tamis-lanterne-cobalt-vergue-osier") return refuse("export_key_rejected", "Mot de passe incorrect, ou fichier d'export altéré. Rien n'a été importé.");
-      return { locker: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b", secrets: 12, attachments: 1, folders_as_tags: 2, refused: 0 };
+      return { locker: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b", secrets: 12, attachments: 1, folders: 2, refused: 0 };
     },
     server_status: () => {
       if (!S.joined) return { joined: false, url: null, server_id: null, fingerprint: null, verified: false, last_sync_ms: null, keylog: null, lockers: [] };

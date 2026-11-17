@@ -96,6 +96,21 @@ Sur la fiche d'un secret, la valeur reste scellée tant que vous ne la demandez 
 - **Favoris** regroupe les secrets marqués d'une étoile.
 - Les casiers, à gauche, filtrent par casier.
 
+## Ranger dans des dossiers
+
+Chaque casier peut ranger ses secrets dans des dossiers, et des dossiers dans d'autres. Un
+dossier ne sert qu'au rangement : les droits restent ceux du casier.
+
+- Choisissez un casier ou un dossier à gauche, puis **Nouveau dossier**, **Renommer**,
+  **Déplacer…** ou **Supprimer…** au-dessus de la liste. Supprimer un dossier met ses secrets à
+  la corbeille ; la confirmation dit combien.
+- Sur la fiche d'un secret, **⋯ › Déplacer…** le range dans un autre dossier de son casier.
+- Un secret créé pendant qu'un dossier est affiché y est rangé.
+- La recherche porte sur tout le coffre ; chaque résultat montre son dossier.
+
+En ligne de commande : `hirzla dossier liste`, `hirzla dossier creer Banque/Comptes`,
+`hirzla mv "Messagerie" Internet`.
+
 ## Modifier, historique et corbeille
 
 - **Modifier** enregistre une nouvelle version du secret. L'**historique** garde les versions

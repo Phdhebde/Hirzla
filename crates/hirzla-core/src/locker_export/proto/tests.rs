@@ -72,7 +72,7 @@ fn replies_round_trip() {
                 report: ImportReport {
                     secrets: 5,
                     attachments: 1,
-                    folders_as_tags: 2,
+                    folders: 2,
                     refused: 0,
                 },
             },

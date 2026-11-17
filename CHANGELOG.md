@@ -31,13 +31,32 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   autre coffre comme un nouveau casier, sous les clés de celui qui importe. Sans serveur.
 - Par défaut, le noyau tire une phrase de passe de 8 mots (88 bits), montrée une seule fois ;
   un mot de passe choisi doit compter 16 caractères au moins.
-- Exportés : secrets actifs, champs, fichiers joints, liens internes, description du casier.
-  Ni corbeille, ni historique, ni clés, ni identifiants. Les casiers partagés d'un serveur ne
+- Exportés : secrets actifs, champs, fichiers joints, liens internes, description du casier,
+  dossiers (ADR 0076 : l'import les recrée). Ni corbeille, ni historique, ni clés, ni identifiants. Les casiers partagés d'un serveur ne
   s'exportent pas encore.
 - Format : `docs/format.md` § 16. API locale version 10 (`docs/api-locale.md` § 19) :
   `LockerExport` (140), `LockerImport` (141), profil complet seulement.
 - Ligne de commande : `casier exporter`, `casier importer`. Application : réglages.
 - Nouvelle cible de fuzzing `decode_locker_export`.
+
+### Dossiers dans les casiers (ADR 0076)
+
+- Chaque casier peut ranger ses secrets dans une arborescence de dossiers. Le casier reste
+  l'unité de partage et de droits ; un dossier ne porte ni clé ni droit. Noms et rangement
+  sont scellés : le serveur ne les voit jamais.
+- Fusion déterministe des modifications concurrentes : deux déplacements croisés ne forment
+  jamais de boucle à l'affichage, un secret rangé dans un dossier supprimé ailleurs reste
+  visible dans le dossier parent.
+- Format du coffre v3, sur-ensemble du v2 : un coffre v1 ou v2 s'ouvre sans changement et ne
+  passe en v3 qu'à l'écriture de son premier dossier, dans la même transaction.
+- API locale version 11 (`docs/api-locale.md` § 20) : `FolderTree`, `FolderCreate`,
+  `FolderRename`, `FolderMove`, `FolderDelete`, `SecretMove`, profil complet seulement.
+- Ligne de commande : `dossier liste|creer|renommer|deplacer|supprimer`, `mv`.
+- Application de poste : arbre des dossiers sous chaque casier, actions sur un dossier,
+  « Déplacer… » sur la fiche d'un secret.
+- **Casiers partagés** : tous les postes d'un casier partagé qui utilise des dossiers doivent
+  avoir un noyau 1.1.0 ou plus. Un noyau plus ancien met de côté les écritures qui portent des
+  dossiers, puis les applique une fois mis à jour.
 
 ### Connexions SSH et RDP (ADR 0067)
 

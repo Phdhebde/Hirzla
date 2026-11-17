@@ -1,12 +1,14 @@
-# Format du coffre `.hirzla` — spécification v2
+# Format du coffre `.hirzla` — spécification v3
 
 - Statut : proposé pour relecture (étape 1 de `PROMPTS.md`)
-- `FORMAT_VERSION` : 2. La version 1 reste lisible (§ 5.3, ADR 0067).
+- `FORMAT_VERSION` : 3. Les versions 1 et 2 restent lisibles (§ 5.3, ADR 0067, ADR 0076).
 - Documents liés : `docs/crypto.md` (mécanismes), `docs/sync-protocol.md` (sémantique des
-  opérations, fusion, échanges), ADR 0002, 0005, 0006, 0010, 0067.
+  opérations, fusion, échanges), ADR 0002, 0005, 0006, 0010, 0067, 0076.
 
 La version 2 ajoute les connexions SSH et RDP : types de secret 7 et 8, champs 50 à 55, lien
-de secret (§ 8.1, § 8.3, § 8.5). Tout le reste est celui de la version 1. Les étiquettes
+de secret (§ 8.1, § 8.3, § 8.5). La version 3 ajoute les dossiers d'un casier : clé 3 de
+`LockerBody`, champ 4 de `SecretBody`, clés optionnelles de l'index (§ 7.5, § 8.2, § 10). Tout
+le reste est celui de la version 1. Les étiquettes
 `hirzla/v1/…` (§ 2.5) nomment la génération du schéma cryptographique, qui ne change pas.
 
 « Doit » est une obligation. Un lecteur qui rencontre une valeur non conforme **refuse** le
@@ -455,7 +457,7 @@ de l'en-tête : les anciennes parts n'ouvrent plus rien.
 | Réglage | Valeur | Raison |
 | --- | --- | --- |
 | `application_id` | `0x487A6C61` (« Hzla ») | Reconnaître un coffre sans le déchiffrer |
-| `user_version` | `1` ou `2` | Doit être égal à `format_version` de l'en-tête |
+| `user_version` | `1`, `2` ou `3` | Doit être égal à `format_version` de l'en-tête |
 | `page_size` | 4096 | Identique sur les trois systèmes |
 | `encoding` | UTF-8 | |
 | `auto_vacuum` | `FULL`, fixé avant la première table | Rendre l'espace libéré, limiter les restes |
@@ -580,16 +582,23 @@ Dans cet ordre. Le premier échec arrête l'ouverture.
 Un fichier dont `format_version` est inconnu est refusé, même plus récent. Un `user_version`
 différent du `format_version` de l'en-tête est refusé (`Corrupt`).
 
-**Versions lues et montée de version (ADR 0067).** Un lecteur v2 ouvre les fichiers v1 et v2,
-et ne réécrit rien à l'ouverture. Un coffre neuf est créé en v2. Un coffre v1 reste v1 tant
-qu'aucun objet propre à la v2 n'y est écrit (§ 8.1 : secret de type 7 ou 8). Le rédacteur le
-passe en v2 **dans la transaction** qui écrit le premier : il réécrit `header.body` avec
-`format_version = 2`, `header.auth`, et `user_version`, avec l'opération elle-même. Il n'y a
-pas de retour en v1. Un rédacteur n'écrit jamais d'objet v2 dans un fichier resté v1.
+**Versions lues et montée de version (ADR 0067, ADR 0076).** Un lecteur v3 ouvre les fichiers
+v1, v2 et v3, et ne réécrit rien à l'ouverture. Un coffre neuf est créé en v3. Un coffre reste
+dans sa version tant qu'aucun objet d'une version plus récente n'y est écrit :
+
+- objets v2 : secret de type 7 ou 8 (§ 8.1) ;
+- objets v3 : `LockerBody` qui porte des dossiers (§ 7.5), version de secret qui porte le
+  champ `folder` (§ 8.2).
+
+Le rédacteur monte le fichier **dans la transaction** qui écrit le premier de ces objets, à la
+version qu'il demande (un dossier écrit dans un coffre v1 le passe directement en v3) : il
+réécrit `header.body` avec le nouveau `format_version`, `header.auth`, et `user_version`, avec
+l'opération elle-même. Il n'y a pas de retour en arrière. Un rédacteur n'écrit jamais un objet
+d'une version plus récente que celle du fichier.
 
 Une migration qui **transformerait** des données existantes reste une opération explicite qui
-écrit un nouveau fichier. La montée v1 → v2 n'en est pas une : elle est additive et ne touche
-que l'en-tête.
+écrit un nouveau fichier. Les montées v1 → v2 → v3 n'en sont pas : elles sont additives et ne
+touchent que l'en-tête.
 
 ### 5.4 En-tête
 
@@ -598,7 +607,7 @@ que l'en-tête.
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
 | 1 | `magic` | `tstr` | `"hirzla"` |
-| 2 | `format_version` | `uint` | `1` ou `2` (§ 5.3) |
+| 2 | `format_version` | `uint` | `1`, `2` ou `3` (§ 5.3) |
 | 3 | `vault_id` | `ID16` | |
 | 4 | `suite_write` | `uint` | Suite des nouvelles écritures, `1` |
 | 5 | `suites_read` | `array<uint>` | Trié, contient `suite_write` |
@@ -713,8 +722,9 @@ Règles :
 | `attachment_id`, rang, `locker_id` | `attachment_chunks` | Lecture paresseuse des morceaux | Le nombre et la taille approximative des fichiers joints |
 | Tailles des boîtes | Partout | Inévitable | Une taille arrondie par le bourrage (§ 11) |
 
-Restent chiffrés : titres, adresses, noms d'utilisateur, notes, noms de casiers, types de
-secrets, `secret_id`, valeurs, horloges, dépendances causales, noms de fichiers joints, index.
+Restent chiffrés : titres, adresses, noms d'utilisateur, notes, noms de casiers, noms et
+arborescence des dossiers, dossier de chaque secret, types de secrets, `secret_id`, valeurs,
+horloges, dépendances causales, noms de fichiers joints, index.
 
 ## 7. Opérations et versions de secret
 
@@ -832,8 +842,10 @@ Portées par `LockerMetaPut`, fusionnées comme un secret.
 | --- | --- | --- | --- |
 | 1 | `parents` | `array<OpId>` | Trié |
 | 2 | `fields` | `map<uint, FieldEntry>` | Ci-dessous |
+| 3 | `folders` | `map<ID16, Folder>` | v3 (§ 7.5). Omise si vide ; 1 à 2 048 dossiers sinon |
 
-Les deux clés sont toujours présentes. `parents` est vide à la première version.
+Les clés 1 et 2 sont toujours présentes. `parents` est vide à la première version. Un casier
+sans dossier ne porte pas la clé 3 : son `LockerBody` est octet pour octet celui de la v2.
 
 | Champ | Nom | Valeur | Contraintes |
 | --- | --- | --- | --- |
@@ -843,6 +855,43 @@ Les deux clés sont toujours présentes. `parents` est vide à la première vers
 | 4 | `icon` | `tstr(≤64)` | |
 | 10 | `keep_versions` | `uint` | 1 à 1000, défaut 20. Politique de rétention (§ 9.3) |
 | 11 | `quarantine_timeout_h` | `uint` | 1 à 2160, défaut 168 (7 jours). Délai avant rejet automatique d'une opération en quarantaine (`sync-protocol.md` § 9.3) |
+
+### 7.5 Dossiers (v3, ADR 0076)
+
+Un dossier range les secrets d'un casier. Il ne porte ni clé ni droit : le casier reste l'unité
+de partage. `Folder`, valeur du map `folders` de `LockerBody`, a trois registres, toujours
+présents :
+
+| Clé | Nom | Valeur | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `name` | `FieldEntry` de `tstr` | 1 à 255 octets UTF-8, aucun caractère de contrôle (`/` permis) |
+| 2 | `parent` | `FieldEntry` de `ID16` ou `null` | `null` : racine du casier. Sinon un dossier du même map, autre que lui-même |
+| 3 | `state` | `FieldEntry` de `uint` | 0 actif, 1 supprimé |
+
+Le lecteur refuse un map vide, plus de 2 048 dossiers, un nom hors limites, un `parent` qui
+ne désigne pas un dossier du map ou qui le désigne lui-même, un `state` autre que 0 ou 1.
+
+**Fusion.** Union des identifiants ; pour chaque dossier, chaque registre suit la règle R
+(plus grande `Stamp`). Un dossier n'est **jamais retiré** du map : le supprimer, c'est poser
+`state = 1`. Le contrôle d'une `LockerMetaPut` est celui de § 7.3, étendu aux dossiers
+(`sync-protocol.md` § 8.5).
+
+**Arbre affiché.** Il est calculé à partir de l'état fusionné, sans rien écrire ; le même état
+donne le même arbre sur chaque poste :
+
+1. dans chaque cycle (déplacements concurrents), le dossier dont le registre `parent` a la
+   plus grande `Stamp` est affiché à la racine ;
+2. un dossier supprimé n'est pas affiché : ses sous-dossiers actifs et ses secrets s'affichent
+   dans son ancêtre actif le plus proche, la racine à défaut ;
+3. un secret dont le `folder` ne désigne aucun dossier connu s'affiche à la racine, sans que
+   son champ soit réécrit ;
+4. le rédacteur ne dépasse pas 32 niveaux ; un arbre plus profond, issu de déplacements
+   concurrents, est accepté et affiché.
+
+Un rédacteur qui modifie l'arborescence écrit à la racine (`parent = null`) un dossier que la
+règle 1 y affiche. Règles du rédacteur, refus sinon : 2 048 dossiers au plus, supprimés
+compris ; profondeur de 32 au plus ; parent actif du même casier ; jamais sous lui-même ni sous
+un descendant. Deux frères peuvent porter le même nom.
 
 ## 8. Types de secrets
 
@@ -880,6 +929,7 @@ Règle de fusion par champ, appliquée selon `sync-protocol.md` § 8 :
 | 1 | `fields` | `title` | `tstr` | R | Non | 1 024 octets, obligatoire |
 | 2 | `fields` | `notes` | `tstr` | R | Oui | 1 Mio |
 | 3 | `fields` | `favorite` | `bool` | R | Non | |
+| 4 | `fields` | `folder` | `ID16` ou `null` | R | Non | v3 (§ 7.5). Absent ou `null` : racine du casier |
 | 1 | `sets` | `tags` | `tstr` | S | Non | 128 octets, 64 éléments |
 | 3 | `sets` | `attachments` | `AttachmentRef` | S | Oui | 64 éléments |
 
@@ -1056,6 +1106,7 @@ AAD = `CBOR({1: "hirzla/v1/index", 2: vault_id, 3: locker_id})`.
 | 3 | `name` | `tstr(≤256)` | Copie du nom du casier |
 | 4 | `meta_heads` | `array<OpId>` | Têtes `LockerMetaPut` |
 | 5 | `entries` | `array<IndexEntry>` | Trié par `secret_id` |
+| 6 | `folders` | `map<ID16, Folder>` | v3, optionnelle : état fusionné des dossiers (§ 7.5), même encodage que la clé 3 de `LockerBody`. Omise si le casier n'a pas de dossier |
 
 `IndexEntry` :
 
@@ -1071,6 +1122,7 @@ AAD = `CBOR({1: "hirzla/v1/index", 2: vault_id, 3: locker_id})`.
 | 8 | `favorite` | `bool` | |
 | 9 | `state` | `uint` | |
 | 10 | `updated` | `Stamp` | Plus grande `Stamp` du secret |
+| 11 | `folder` | `ID16` | v3, optionnelle : le champ `folder` du secret, omis s'il est absent ou `null` |
 
 Règle des `hosts` : chaque URL est analysée selon le *URL Standard* du WHATWG ; son hôte, en
 ASCII (A-label IDNA, minuscules), entre dans `hosts`. Une URL sans hôte ou qui ne s'analyse
@@ -1172,14 +1224,15 @@ Fichiers dans `crates/hirzla-vault/tests/fixtures/v1/` :
 | `unlock.expected.txt` | Pour la méthode mot de passe : paramètres Argon2id, `vault_id`, `wrapped_device_key` et la `DeviceKey` attendue. Ce calcul est déterministe et se vérifie seul |
 
 Les tests de refus dérivent leurs fichiers du coffre de référence, en mémoire : contenu
-d'opération déplacé vers une autre ligne, fichier tronqué, `format_version = 3`,
+d'opération déplacé vers une autre ligne, fichier tronqué, `format_version = 4`,
 `user_version` différent, table en trop, déclencheur, vue, mode WAL, bourrage non nul,
 `suites_read` modifié, paramètres Argon2id sous le plancher.
 
-Ces fichiers sont en **version 1** et le restent : ils prouvent qu'un lecteur v2 lit la v1.
-Les tests de la version 2 en partent : ouverture sans réécriture, montée en v2 à la première
-connexion écrite (en-tête, `user_version`, relecture), absence de montée quand l'écriture
-échoue, refus d'un `user_version` différent de l'en-tête et d'un `format_version = 3`.
+Ces fichiers sont en **version 1** et le restent : ils prouvent qu'un lecteur v3 lit la v1.
+Les tests des versions 2 et 3 en partent : ouverture sans réécriture, montée en v2 à la
+première connexion écrite, en v3 au premier dossier écrit (en-tête, `user_version`, relecture),
+absence de montée quand l'écriture échoue, refus d'un `user_version` différent de l'en-tête et
+d'un `format_version = 4`.
 
 L'extension `.hirzla.fixture` évite que la protection de secrets de l'intégration continue
 (fichiers `*.hirzla` suivis) bloque les fichiers de référence.
@@ -1533,8 +1586,13 @@ morceaux. Morceaux de 1 048 572 octets de clair, comme au § 8.4.
    ensembles), sans écrire.
 5. Seulement alors, écriture d'un nouveau casier : nouvelle clé de casier, nouveaux
    identifiants, fichiers joints rescellés sous de nouvelles clés, opérations signées par
-   l'appareil qui importe. Un chemin de dossier devient l'étiquette `a/b/c` tant que les
-   dossiers (ADR 0076) ne sont pas dans le coffre.
+   l'appareil qui importe. Les chemins de dossier deviennent des dossiers du nouveau casier
+   (§ 7.5), créés en une écriture avant les secrets : un chemin par dossier, deux dossiers
+   frères de même nom n'en font qu'un, un nom est nettoyé comme pour KeePass (ADR 0076 § 11).
+
+À l'export, le chemin d'un secret est celui du dossier où il est affiché (§ 7.5, arbre
+affiché) ; un secret à la racine n'a pas de clé 7. Au-delà de 16 niveaux, le chemin s'arrête
+au dossier de niveau 16.
 
 ### 16.5 Limites
 

@@ -3,6 +3,7 @@
 
 import { api } from "./api.js";
 import { announce, byId, h, icon, mask } from "./dom.js";
+import { FolderDialog, Trees } from "./folders.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
 /** @typedef {import("./api.js").Locker} Locker */
@@ -73,6 +74,7 @@ const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
 /**
  * @typedef {object} VaultHooks
  * @property {(e: import("./api.js").ApiError) => void} onError  Refusal not handled here.
+ * @property {(e: import("./api.js").ApiError) => boolean} handles  Refusals that change the screen.
  * @property {() => number} revealSeconds  How long a revealed value stays visible.
  * @property {(entry: Entry) => void} onEdit  Opens the form on this secret.
  * @property {(locker: string, name: string) => void} onMembers  Opens the members of a shared locker.
@@ -95,6 +97,11 @@ export class VaultView {
     this.lockers = [];
     /** @type {Map<string, SharedInfo>} Shared lockers, by identifier (server mode). */
     this.shared = new Map();
+    /** Folders of each locker (ADR 0076). */
+    this.trees = new Trees();
+    /** @type {Set<string>} Lockers and folders folded in the navigation. */
+    this.folded = new Set();
+    this.folderDialog = new FolderDialog(hooks.handles);
     /** @type {Entry[]} */
     this.shown = [];
     this.filter = "tous";
@@ -145,6 +152,11 @@ export class VaultView {
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
     byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
     byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    byId("fiche-deplacer").addEventListener("click", () => this.moveSelected());
+    byId("dossier-nouveau").addEventListener("click", () => this.newFolder());
+    byId("dossier-renommer").addEventListener("click", () => this.renameFolder());
+    byId("dossier-deplacer").addEventListener("click", () => this.moveFolder());
+    byId("dossier-supprimer").addEventListener("click", () => void this.deleteFolder());
     // The menu of the record closes once an action is chosen, or on Escape.
     const menu = /** @type {HTMLDetailsElement} */ (byId("fiche-menu"));
     menu.addEventListener("click", (e) => {
@@ -176,9 +188,26 @@ export class VaultView {
     return this.entries.find((e) => e.id === this.selectedId);
   }
 
-  /** The locker shown alone, if any. @returns {string | null} */
+  /** The locker shown alone, or the locker of the folder shown, if any. @returns {string | null} */
   lockerFilter() {
-    return this.filter.startsWith("casier:") ? this.filter.slice("casier:".length) : null;
+    if (this.filter.startsWith("casier:")) return this.filter.slice("casier:".length);
+    return this.folderFilter()?.locker ?? null;
+  }
+
+  /** The folder shown, if any (`dossier:LOCKER:FOLDER`). @returns {{ locker: string, folder: string } | null} */
+  folderFilter() {
+    if (!this.filter.startsWith("dossier:")) return null;
+    const [locker, folder] = this.filter.slice("dossier:".length).split(":");
+    return locker && folder ? { locker, folder } : null;
+  }
+
+  /** Whether this device may write in a locker. @param {string} locker @returns {boolean} */
+  writes(locker) {
+    const l = this.lockers.find((x) => x.id === locker);
+    if (!l) return false;
+    if (l.personal) return true;
+    const info = this.shared.get(locker);
+    return !!info && info.access && info.writes;
   }
 
   /**
@@ -229,6 +258,7 @@ export class VaultView {
     this.entries = [];
     this.lockers = [];
     this.shared = new Map();
+    this.trees.clear();
     this.shown = [];
     this.selectedId = null;
     this.query = "";
@@ -236,6 +266,7 @@ export class VaultView {
     this.list.replaceChildren();
     byId("liste-casiers").replaceChildren();
     byId("liste-casier-partage").hidden = true;
+    byId("liste-dossier").hidden = true;
     byId("fiche-champs").replaceChildren();
     byId("fiche-principales").replaceChildren();
     byId("fiche-icone").replaceChildren();
@@ -266,6 +297,19 @@ export class VaultView {
     } catch (e) {
       this.hooks.onError(/** @type {any} */ (e));
       return;
+    }
+    try {
+      this.trees.set(await api.folderTrees());
+    } catch (e) {
+      // A core older than version 11 has no folders: the vault is shown without them.
+      this.trees.clear();
+      if (/** @type {any} */ (e).code !== "unsupported_version") this.hooks.onError(/** @type {any} */ (e));
+    }
+    const ff = this.folderFilter();
+    if (ff && !this.trees.get(ff.locker, ff.folder)) {
+      // The folder shown was deleted or moved away by another device: back to its locker.
+      this.filter = `casier:${ff.locker}`;
+      this.hooks.onFilter(this.filter);
     }
     this.renderLockers();
     this.renderCounts();
@@ -305,13 +349,77 @@ export class VaultView {
           button.setAttribute("aria-label", `${l.name}, casier partagé${role}${lost}, ${count} secret${count > 1 ? "s" : ""}`);
         }
         if (this.filter === `casier:${l.id}`) button.setAttribute("aria-current", "page");
-        return h("li", {}, [button]);
+        if (!this.trees.hasFolders(l.id)) return h("li", {}, [button]);
+        const open = !this.folded.has(l.id);
+        return h("li", {}, [
+          h("div", { class: "nav-ligne" }, [this.foldButton(l.id, l.name, open), button]),
+          this.folderList(l.id, null, open, 0),
+        ]);
       }),
     );
   }
 
-  /** Role and members button above the list of a shared locker. */
+  /**
+   * The button that folds or unfolds a node of the navigation.
+   * @param {string} key  Locker or folder.
+   * @param {string} name
+   * @param {boolean} open
+   * @returns {HTMLElement}
+   */
+  foldButton(key, name, open) {
+    const b = h("button", {
+      class: "nav-replier",
+      type: "button",
+      "aria-expanded": open ? "true" : "false",
+      "aria-label": `${open ? "Replier" : "Déplier"} ${name}`,
+      title: open ? "Replier" : "Déplier",
+      text: open ? "▾" : "▸",
+    });
+    b.addEventListener("click", () => {
+      if (this.folded.has(key)) this.folded.delete(key);
+      else this.folded.add(key);
+      this.renderLockers();
+    });
+    return b;
+  }
+
+  /**
+   * The folders of a locker under `parent`, with the number of secrets each holds directly.
+   * @param {string} locker
+   * @param {string | null} parent
+   * @param {boolean} open
+   * @param {number} depth
+   * @returns {HTMLElement}
+   */
+  folderList(locker, parent, open, depth) {
+    const ul = h("ul", { class: "nav-dossiers", hidden: !open });
+    if (depth > 32) return ul;
+    for (const f of this.trees.children(locker, parent)) {
+      const count = this.entries.filter(
+        (e) => e.locker === locker && !e.trash && this.trees.folderOf(locker, e.id) === f.id,
+      ).length;
+      const filter = `dossier:${locker}:${f.id}`;
+      const button = h("button", { class: "nav-lien", type: "button", "data-vue": "secrets", "data-filtre": filter }, [
+        icon("dossier"),
+        h("span", { class: "nav-nom", text: f.name }),
+        h("span", { class: "compte", text: String(count), "aria-hidden": "true" }),
+      ]);
+      button.setAttribute("aria-label", `${f.name}, dossier, ${count} secret${count > 1 ? "s" : ""}`);
+      if (this.filter === filter) button.setAttribute("aria-current", "page");
+      const kids = this.trees.children(locker, f.id).length > 0;
+      const unfolded = !this.folded.has(f.id);
+      const line = h("div", { class: "nav-ligne" }, [
+        kids ? this.foldButton(f.id, f.name, unfolded) : h("span", { class: "nav-replier nav-replier-vide", "aria-hidden": "true" }),
+        button,
+      ]);
+      ul.append(h("li", {}, [line, kids ? this.folderList(locker, f.id, unfolded, depth + 1) : null]));
+    }
+    return ul;
+  }
+
+  /** Role and members button above the list of a shared locker, and the folder actions. */
   renderLockerHeader() {
+    this.renderFolderHeader();
     const id = this.lockerFilter();
     const locker = id ? this.lockers.find((l) => l.id === id) : undefined;
     const box = byId("liste-casier-partage");
@@ -323,6 +431,22 @@ export class VaultView {
       : !info.access
         ? "Accès perdu : le serveur ne vous sert plus ce casier."
         : `Casier partagé · votre rôle : ${info.role ? info.role.toLowerCase() : "aucun"}${info.writes ? "" : " (lecture seule)"}.`;
+  }
+
+  /** Path and actions of the folder shown, or the creation of a folder in the locker shown. */
+  renderFolderHeader() {
+    const locker = this.lockerFilter();
+    const ff = this.folderFilter();
+    const box = byId("liste-dossier");
+    box.hidden = !locker || this.filter === "corbeille" || !this.writes(locker);
+    if (box.hidden || !locker) return;
+    const l = this.lockers.find((x) => x.id === locker);
+    byId("liste-dossier-chemin").textContent = ff
+      ? `${l?.name ?? "Casier"} / ${this.trees.path(ff.locker, ff.folder)}`
+      : this.trees.hasFolders(locker)
+        ? "Secrets à la racine du casier."
+        : "Rangez les secrets de ce casier dans des dossiers.";
+    for (const id of ["dossier-renommer", "dossier-deplacer", "dossier-supprimer"]) byId(id).hidden = !ff;
   }
 
   /** @returns {string} */
@@ -337,6 +461,8 @@ export class VaultView {
       const id = this.filter.slice("casier:".length);
       return this.lockers.find((l) => l.id === id)?.name ?? "Casier";
     }
+    const ff = this.folderFilter();
+    if (ff) return this.trees.get(ff.locker, ff.folder)?.name ?? "Dossier";
     return "Tous les secrets";
   }
 
@@ -347,7 +473,14 @@ export class VaultView {
       if (e.trash) return false;
       if (f === "favoris") return e.favorite;
       if (f.startsWith("type:")) return (TYPE_FILTERS[f.slice("type:".length)] ?? []).includes(e.kind);
-      if (f.startsWith("casier:")) return e.locker === f.slice("casier:".length);
+      // A locker lists the secrets of its root; a folder, those it holds directly (ADR 0076).
+      if (f.startsWith("casier:")) {
+        return e.locker === f.slice("casier:".length) && this.trees.folderOf(e.locker, e.id) === null;
+      }
+      if (f.startsWith("dossier:")) {
+        const ff = this.folderFilter();
+        return !!ff && e.locker === ff.locker && this.trees.folderOf(e.locker, e.id) === ff.folder;
+      }
       return true;
     });
     byId("liste-titre").textContent = this.filterTitle();
@@ -364,7 +497,9 @@ export class VaultView {
           ? "La corbeille est vide."
           : f === "favoris"
             ? "Aucun favori. Marquez un secret comme favori depuis sa fiche."
-            : "Aucun secret. Créez-en un, ou importez un fichier depuis les réglages.";
+            : f.startsWith("dossier:")
+              ? "Ce dossier ne contient aucun secret directement."
+              : "Aucun secret. Créez-en un, ou importez un fichier depuis les réglages.";
     }
     empty.hidden = n !== 0;
     this.list.hidden = n === 0;
@@ -379,7 +514,7 @@ export class VaultView {
             e.favorite
               ? h("span", { class: "element-favori", title: "Favori" }, [icon("favori", "icone-pleine")])
               : h("span"),
-            h("span", { class: "element-sous", text: subtitle(e) }),
+            h("span", { class: "element-sous", text: this.withPath(e, subtitle(e)) }),
           ],
         ),
       ),
@@ -392,6 +527,19 @@ export class VaultView {
     }
     this.markActive();
     this.renderRecord();
+  }
+
+  /**
+   * A line of the list, with the folder of the secret when the list mixes several places
+   * (search, whole vault, type, favourites).
+   * @param {Entry} e
+   * @param {string} text
+   * @returns {string}
+   */
+  withPath(e, text) {
+    if (this.filter.startsWith("casier:") || this.filter.startsWith("dossier:")) return text;
+    const folder = this.trees.folderOf(e.locker, e.id);
+    return folder ? `${text} · ${this.trees.path(e.locker, folder)}` : text;
   }
 
   markActive() {
@@ -448,9 +596,13 @@ export class VaultView {
     fields.replaceChildren();
     if (!entry) return;
     const locker = this.lockers.find((l) => l.id === entry.locker);
+    const folder = this.trees.folderOf(entry.locker, entry.id);
     byId("fiche-type").textContent =
       (TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown) +
-      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "");
+      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "") +
+      (folder ? ` · dossier ${this.trees.path(entry.locker, folder)}` : "");
+    byId("fiche-deplacer").hidden =
+      entry.trash || !this.trees.hasFolders(entry.locker) || !this.writes(entry.locker);
     byId("fiche-icone").replaceChildren(icon(TYPE_ICONS[entry.kind] ?? TYPE_ICONS.unknown));
     byId("fiche-titre").textContent = entry.title;
     /** @type {HTMLDetailsElement} */ (byId("fiche-menu")).open = false;
@@ -1065,6 +1217,118 @@ export class VaultView {
       announce(`Version ${number} rétablie.`);
       await this.refresh();
       await this.openHistory();
+    } catch (e) {
+      this.hooks.onError(/** @type {any} */ (e));
+    }
+  }
+
+  /** Puts the selected secret in a folder of its locker, or at its root. */
+  moveSelected() {
+    const entry = this.selected();
+    if (!entry || entry.trash) return;
+    const ref = { locker: entry.locker, id: entry.id };
+    this.folderDialog.open({
+      title: `Déplacer « ${entry.title} »`,
+      text: "Le secret reste dans son casier : seul son rangement change.",
+      submit: "Déplacer",
+      places: this.trees.places(entry.locker),
+      place: this.trees.folderOf(entry.locker, entry.id) ?? "",
+      run: async (_, place) => {
+        await api.moveSecret(ref, place);
+        announce(place ? `Rangé dans « ${this.trees.path(entry.locker, place)} ».` : "Rangé à la racine du casier.");
+        await this.refresh();
+      },
+    });
+  }
+
+  /** A new folder in the folder shown, or at the root of the locker shown. */
+  newFolder() {
+    const locker = this.lockerFilter();
+    if (!locker) return;
+    const parent = this.folderFilter()?.folder ?? null;
+    this.folderDialog.open({
+      title: "Nouveau dossier",
+      text: parent
+        ? `Dans « ${this.trees.path(locker, parent)} ». Le nom du dossier est scellé comme le reste du casier.`
+        : "À la racine du casier. Le nom du dossier est scellé comme le reste du casier.",
+      submit: "Créer le dossier",
+      name: "",
+      run: async (name) => {
+        await api.createFolder(locker, name, parent);
+        if (parent) this.folded.delete(parent);
+        this.folded.delete(locker);
+        announce(`Dossier « ${name} » créé.`);
+        await this.refresh();
+      },
+    });
+  }
+
+  renameFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    this.folderDialog.open({
+      title: "Renommer le dossier",
+      text: this.trees.path(ff.locker, ff.folder),
+      submit: "Renommer",
+      name: folder.name,
+      run: async (name) => {
+        await api.renameFolder(ff.locker, ff.folder, name);
+        announce("Dossier renommé.");
+        await this.refresh();
+      },
+    });
+  }
+
+  moveFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    this.folderDialog.open({
+      title: `Déplacer « ${folder.name} »`,
+      text: "Le dossier part avec ses sous-dossiers et ses secrets.",
+      submit: "Déplacer",
+      places: this.trees.places(ff.locker, this.trees.subtree(ff.locker, ff.folder)),
+      place: folder.parent ?? "",
+      run: async (_, place) => {
+        await api.moveFolder(ff.locker, ff.folder, place);
+        if (place) this.folded.delete(place);
+        announce("Dossier déplacé.");
+        await this.refresh();
+      },
+    });
+  }
+
+  async deleteFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    const under = this.trees.subtree(ff.locker, ff.folder);
+    const subs = under.size - 1;
+    // Counted from the listing, which holds every active secret when there is no search.
+    const secrets = this.entries.filter((e) => {
+      if (e.locker !== ff.locker || e.trash) return false;
+      const f = this.trees.folderOf(e.locker, e.id);
+      return f !== null && under.has(f);
+    }).length;
+    const what = this.query
+      ? "Les secrets qu'ils contiennent iront à la corbeille."
+      : secrets === 0
+        ? "Aucun secret n'ira à la corbeille."
+        : `${secrets} secret${secrets > 1 ? "s iront" : " ira"} à la corbeille.`;
+    const ok = await confirmDialog(
+      "Supprimer le dossier ?",
+      `« ${this.trees.path(ff.locker, ff.folder)} »${subs > 0 ? ` et ses ${subs} sous-dossier${subs > 1 ? "s" : ""}` : ""} seront supprimés. ${what}`,
+      "Supprimer",
+    );
+    if (!ok) return;
+    try {
+      const n = await api.deleteFolder(ff.locker, ff.folder);
+      announce(n === 0 ? "Dossier supprimé." : `Dossier supprimé ; ${n} secret${n > 1 ? "s" : ""} mis à la corbeille.`);
+      this.filter = `casier:${ff.locker}`;
+      this.hooks.onFilter(this.filter);
+      this.selectedId = null;
+      await this.refresh();
     } catch (e) {
       this.hooks.onError(/** @type {any} */ (e));
     }

@@ -139,8 +139,8 @@ pub struct ImportReport {
     pub secrets: u64,
     /// Attachments stored.
     pub attachments: u64,
-    /// Folder paths turned into tags.
-    pub folders_as_tags: u64,
+    /// Folders created from the folder paths (ADR 0076 § 11).
+    pub folders: u64,
     /// Secrets the vault refused.
     pub refused: u64,
 }
@@ -388,7 +388,7 @@ impl ExportReply {
                     counts([
                         report.secrets,
                         report.attachments,
-                        report.folders_as_tags,
+                        report.folders,
                         report.refused,
                     ]),
                 ),
@@ -467,14 +467,14 @@ impl ExportReply {
             }
             ExportOp::LockerImport => {
                 let b = Fields::new(body, &[1, 2]).map_err(bad)?;
-                let [secrets, attachments, folders_as_tags, refused] =
+                let [secrets, attachments, folders, refused] =
                     b.req(2).and_then(counts_from).map_err(bad)?;
                 ExportReply::Imported {
                     locker: b.req(1).and_then(fixed::<16>).map_err(bad)?,
                     report: ImportReport {
                         secrets,
                         attachments,
-                        folders_as_tags,
+                        folders,
                         refused,
                     },
                 }

@@ -13,18 +13,13 @@ use super::{now_ms, Vault};
 use crate::error::{ExportRefusal, VaultError};
 use crate::export::{
     self, ExportAttachment, ExportContent, ExportLocker, ExportSecret, MAX_ATTACHMENTS, MAX_FILE,
-    MAX_SECRETS,
+    MAX_FOLDER_DEPTH, MAX_SECRETS,
 };
+use crate::folder::PathFolders;
 use crate::model::Id16;
 use crate::secret::{
-    merge_locker, AttachmentRef, FieldValue, LockerBody, LockerField, SecretLink, SecretState,
-    SetKind, SetValue,
+    AttachmentRef, Field, FieldValue, LockerField, SecretLink, SecretState, SetKind, SetValue,
 };
-
-/// Longest tag (`format.md` § 8.2): a folder path longer than this is not turned into a tag.
-const MAX_TAG: usize = 128;
-/// Most tags of a secret.
-const MAX_TAGS: usize = 64;
 
 /// What an export left out, in counts only.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -47,8 +42,8 @@ pub struct ImportStats {
     pub secrets: u64,
     /// Attachments stored.
     pub attachments: u64,
-    /// Secrets whose folder path became a tag (folders are not in this vault yet, ADR 0076).
-    pub folders_as_tags: u64,
+    /// Folders created from the folder paths of the secrets (ADR 0076 § 11).
+    pub folders: u64,
     /// Secrets the vault refused.
     pub refused: u64,
 }
@@ -61,21 +56,10 @@ fn text(v: Option<&FieldValue>) -> Option<Zeroizing<String>> {
 }
 
 impl Vault {
-    /// The description of a locker, from its metadata heads.
-    fn locker_meta(&self, locker: &Id16) -> Result<LockerBody, VaultError> {
-        let shard = self.shard(locker)?;
-        let mut heads = Vec::new();
-        for h in &shard.meta_heads {
-            let (_, p) = self.load(h)?;
-            heads.push(LockerBody::from_value(
-                p.content.as_ref().ok_or(VaultError::Corrupt)?,
-            )?);
-        }
-        merge_locker(&heads).ok_or(VaultError::Corrupt)
-    }
-
     /// Gathers what an export of `locker` carries: the current state of its active secrets,
-    /// their attachments, links inside the export, and the locker's description.
+    /// their attachments, links inside the export, the path of the folder where each one
+    /// shows (ADR 0076), and the locker's description. A folder deeper than the
+    /// format's 16 names is written as its ancestor of level 16.
     ///
     /// # Errors
     /// [`VaultError::NotFound`] for an unknown locker, [`VaultError::Export`] with
@@ -84,6 +68,7 @@ impl Vault {
         let too_large = VaultError::Export(ExportRefusal::TooLarge);
         let shard = self.shard(&locker)?.clone();
         let meta = self.locker_meta(&locker)?;
+        let tree = self.folder_tree(locker)?;
         let field = |f| meta.fields.get(&f).map(|e| &e.value);
         let locker_desc = ExportLocker {
             name: text(field(LockerField::Name)).ok_or(VaultError::Corrupt)?,
@@ -124,9 +109,17 @@ impl Vault {
                 sets: Vec::new(),
                 custom: Vec::new(),
                 attachments: Vec::new(),
-                folder: Vec::new(),
+                folder: tree
+                    .path(tree.place(body.folder()))
+                    .into_iter()
+                    .take(MAX_FOLDER_DEPTH)
+                    .map(|n| Zeroizing::new(n.to_owned()))
+                    .collect(),
             };
             for (f, entry) in &body.fields {
+                if *f == Field::Folder {
+                    continue;
+                }
                 match &entry.value {
                     FieldValue::Link(l) => match ranks.get(&l.secret) {
                         Some(r) if l.locker == locker => out.links.push((*f, *r)),
@@ -199,8 +192,9 @@ impl Vault {
     }
 
     /// Creates a new locker from an export: the locker named `name` (or as in the file), its
-    /// attachments, then its secrets, with links pointing to the new secrets. Everything is
-    /// checked before the first write.
+    /// folders (made from the folder paths, ADR 0076 § 11), its attachments, then its secrets,
+    /// each in its folder, with links pointing to the new secrets. Everything is checked
+    /// before the first write.
     ///
     /// # Errors
     /// [`VaultError::InvalidInput`] for a bad name or content the vault refuses,
@@ -231,9 +225,16 @@ impl Vault {
             ids.push(random_array()?);
         }
 
+        let folders = PathFolders::plan(
+            content.secrets.iter().map(|s| s.folder.as_slice()),
+            random_array,
+        )?;
+
         let locker: Id16 = random_array()?;
         self.create_locker_with_id(locker, name, extra, false)?;
         let mut stats = ImportStats::default();
+        self.edit_folders(locker, folders.edits())?;
+        stats.folders = folders.len() as u64;
         let mut refs: Vec<AttachmentRef> = Vec::with_capacity(content.attachments.len());
         for a in &content.attachments {
             refs.push(self.add_attachment(locker, &a.name, &a.media_type, &a.data)?);
@@ -253,19 +254,9 @@ impl Vault {
                 },
                 own,
             );
-            if !secret.folder.is_empty() {
-                let path: Vec<&str> = secret.folder.iter().map(|n| n.as_str()).collect();
-                let tag = Zeroizing::new(path.join("/"));
-                let tags = edit.add.iter().filter(|(k, _)| *k == SetKind::Tags).count();
-                let present = edit.add.iter().any(|(k, v)| {
-                    *k == SetKind::Tags && matches!(v, SetValue::Text(t) if *t == tag)
-                });
-                if tag.len() <= MAX_TAG && (present || tags < MAX_TAGS) {
-                    if !present {
-                        edit.add.push((SetKind::Tags, SetValue::Text(tag)));
-                    }
-                    stats.folders_as_tags += 1;
-                }
+            if let Some(folder) = folders.folder_of(&secret.folder) {
+                edit.set
+                    .push((Field::Folder, FieldValue::Folder(Some(folder))));
             }
             match self.write_secret(locker, *id, Some(secret.secret_type), edit, None) {
                 Ok(()) => stats.secrets += 1,

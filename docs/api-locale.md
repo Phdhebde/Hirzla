@@ -479,9 +479,10 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) et l'export de casier (version 10, § 19) ont leurs propres versions et ne sont pas annoncés par `Status`.
-- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. Les versions 11 et 12 sont prises par des branches en cours (dossiers, déverrouillage matériel).
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) l'export de casier (version 10, § 19) et les dossiers (version 11, § 20) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12 est prise par une branche en cours (déverrouillage matériel).
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
+- La version 11 ajoute les opérations de dossiers 150 à 155 (§ 20, ADR 0076). Elle ne change rien aux autres opérations.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -1246,8 +1247,10 @@ Détails :
     ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
     même sans mot de passe ; sinon : note ; titre absent : hôte de l'adresse, puis identifiant,
     puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
-    remplacées par la valeur visée ; chemin du groupe (sans la racine) en étiquette, plus les
-    étiquettes KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans
+    remplacées par la valeur visée ; chaque groupe devient un dossier du casier (le groupe
+    racine en est la racine), créés en une écriture avant les entrées, chaque entrée rangée dans
+    le sien (ADR 0076 § 11 : au-delà de 32 niveaux ou de 2 048 groupes, fondus dans un ancêtre ;
+    noms nettoyés) ; étiquettes KeePass gardées comme étiquettes ; champs personnalisés gardés, sensibles s'ils sont protégés dans
     KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP convertis (KeePassXC `otp`,
     KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP), les autres
     (HOTP, Steam, hors bornes, plusieurs secrets) gardés tels quels en champs sensibles et
@@ -1550,7 +1553,7 @@ l'attendent pas. Ces opérations comptent comme une activité pour le verrouilla
 | Code | Nom | Arguments | Réponse |
 | --- | --- | --- | --- |
 | 140 | `LockerExport` | `{1: casier bstr(16), 2: chemin tstr, 3?: mot de passe tstr}` | `{1?: phrase tstr, 2: {1: secrets, 2: corbeille, 3: fichiers joints, 4: liens écartés}}` |
-| 141 | `LockerImport` | `{1: chemin tstr, 2: mot de passe tstr, 3?: nom tstr}` | `{1: casier bstr(16), 2: {1: secrets, 2: fichiers joints, 3: dossiers en étiquettes, 4: refusés}}` |
+| 141 | `LockerImport` | `{1: chemin tstr, 2: mot de passe tstr, 3?: nom tstr}` | `{1: casier bstr(16), 2: {1: secrets, 2: fichiers joints, 3: dossiers créés, 4: refusés}}` |
 
 - **`LockerExport`** : sans mot de passe, le noyau tire une phrase de 8 mots de la liste
   française du générateur, séparés par `-` (88 bits), et la rend dans la clé 1, **une seule
@@ -1597,9 +1600,125 @@ de mot de passe, de chemin ni de nom. Le journal n'écrit que l'opération et le
 
 1. **Casiers partagés** : l'action 4 de `roles.md` (export par un `Owner` avec quorum, événement
    `locker_exported`) attend un ADR qui l'ajoute au courrier des accords.
-2. **Dossiers** : l'import convertit un chemin de dossier en étiquette tant que l'ADR 0076 n'est
-   pas fusionné ; l'export n'écrit pas encore de chemin.
-3. **Variante scellée pour la clé publique d'un collègue** : version 2 du fichier (ADR 0077 § 7).
+2. **Variante scellée pour la clé publique d'un collègue** : version 2 du fichier (ADR 0077 § 7).
+
+## 20. Dossiers dans les casiers (version 11)
+
+Décision : ADR 0076. Format : `format.md` § 7.5 (dossiers d'un casier, champ `folder` d'un
+secret, format du coffre v3). Le noyau parle en plus la **version 11**, qui lit l'arbre des
+dossiers de chaque casier, crée, renomme, déplace et supprime un dossier, et range un secret.
+Codes : opérations **150 à 159**, erreurs **150 à 159** réservées (aucune n'est définie : les
+codes généraux du § 7 suffisent). Code : `crates/hirzla-core/src/folders`.
+
+Un dossier range les secrets d'un casier ; il ne porte ni clé ni droit. Les mêmes opérations
+valent pour les casiers du coffre et pour les casiers partagés du mode Serveur.
+
+### 20.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+150 à 159 va aux dossiers ; elle doit porter `v = 11`, sinon `UnsupportedVersion` avec
+`{2: [11]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 11`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé. `Status` n'annonce pas la version 11 : un client la
+découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`, et le client montre le coffre sans dossiers).
+
+### 20.2 Types
+
+**Dossier** : `{1: id bstr(16), 2: nom tstr, 3?: parent bstr(16)}`. Clé 3 absente : à la
+racine du casier. C'est le dossier tel que l'**arbre affiché** le place (`format.md` § 7.5 :
+cycles rattachés à la racine, dossiers supprimés absents, leur contenu remonté à l'ancêtre
+actif le plus proche).
+
+**Arbre d'un casier** : `{1: casier bstr(16), 2: [dossier], 3: [{1: secret bstr(16), 2: dossier
+bstr(16)}]}`. La clé 2 liste les dossiers actifs, triés par nom sans tenir compte de la casse,
+puis par identifiant. La clé 3 donne, pour chaque secret non purgé qui ne s'affiche pas à la
+racine, le dossier où il s'affiche ; triée par secret. Un secret absent de la clé 3 est à la
+racine.
+
+### 20.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 150 | `FolderTree` | ouvert | `{1?: casier}` | `{1: [arbre]}` |
+| 151 | `FolderCreate` | ouvert | `{1: casier, 2: nom, 3?: parent}` | `{1: dossier}` |
+| 152 | `FolderRename` | ouvert | `{1: casier, 2: dossier, 3: nom}` | — |
+| 153 | `FolderMove` | ouvert | `{1: casier, 2: dossier, 3?: parent}` | — |
+| 154 | `FolderDelete` | ouvert | `{1: casier, 2: dossier}` | `{1: secrets mis à la corbeille uint}` |
+| 155 | `SecretMove` | ouvert | `{1: casier, 2: secret, 3?: dossier}` | — |
+
+Détails :
+
+1. **`FolderTree`** — sans casier : un arbre par casier que ce poste détient, ceux du coffre
+   puis les casiers partagés. Avec un casier inconnu : `NotFound`.
+2. **Nom** — 1 à 255 octets UTF-8, sans caractère de contrôle ; `/` est permis. Deux frères
+   peuvent porter le même nom. Sinon `InvalidInput`.
+3. **`FolderCreate`** — le noyau tire l'identifiant. Parent absent : à la racine. Le parent
+   doit être un dossier actif du même casier ; 2 048 dossiers au plus par casier, supprimés
+   compris ; profondeur de 32 au plus. Sinon `InvalidInput`. Dans un coffre v1 ou v2, le
+   premier dossier passe le fichier en v3 dans la même transaction (`format.md` § 5.3).
+4. **`FolderMove`** — parent absent : à la racine. Un dossier ne se range ni sous lui-même ni
+   sous un de ses descendants, ni au-delà de 32 niveaux (`InvalidInput`).
+5. **`FolderDelete`** — met à la corbeille chaque secret actif affiché dans le dossier ou un de
+   ses sous-dossiers (une version par secret, qui garde son champ `folder`), puis marque le
+   dossier et ses sous-dossiers supprimés. Rend le nombre de secrets mis à la corbeille.
+   Restaurer un de ces secrets le montre dans l'ancêtre actif le plus proche.
+6. **`SecretMove`** — dossier absent : à la racine (le champ est écrit `null`). Le dossier doit
+   être actif dans le casier du secret (`InvalidInput`) ; un secret purgé ou absent :
+   `NotFound`. Ranger un secret là où il est déjà n'écrit rien. Déplacer un secret vers un
+   **autre casier** n'est pas un rangement et n'existe pas ici.
+7. **Casiers partagés** — créer, renommer, déplacer ou supprimer un dossier écrit les
+   métadonnées du casier : il faut un rôle qui écrit (`Editor` et plus) ; ranger un secret est
+   une écriture de ce secret. Un rôle qui ne le permet pas : `InvalidInput`, comme les autres
+   écritures refusées d'un casier partagé (§ 15.4). Les noms restent scellés : le serveur ne
+   les voit jamais.
+8. **Autres opérations** — `List` (5) et `Create` (7) ne changent pas : un client combine
+   `List` et `FolderTree`, et crée un secret dans un dossier par `Create` puis `SecretMove`.
+   La recherche de `List` porte sur tout le coffre, sans critère de dossier. `RestoreVersion`
+   (67) garde le dossier **actuel** du secret. `History` compte un rangement comme un changement
+   du champ 4.
+
+### 20.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de nom de dossier ni d'identifiant. Le journal du noyau n'écrit que l'opération et le nom du
+résultat : `event=folder_request op=<nom> result=<ok|nom>`, avec les noms `folder_tree`,
+`folder_create`, `folder_rename`, `folder_move`, `folder_delete`, `secret_move`.
+
+### 20.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `dossier liste [--casier C]` | `List`, `FolderTree` |
+| `dossier creer CHEMIN [--casier C]` | `List`, `FolderTree`, `FolderCreate` (un par dossier manquant) |
+| `dossier renommer CHEMIN NOM [--casier C]` | `List`, `FolderTree`, `FolderRename` |
+| `dossier deplacer CHEMIN DESTINATION [--casier C]` | `List`, `FolderTree`, `FolderMove` |
+| `dossier supprimer CHEMIN [--casier C] [--oui]` | `List`, `FolderTree`, `FolderDelete` |
+| `mv NOM \| --id ID DESTINATION` | `List`, `FolderTree`, `SecretMove` |
+
+- Sans `--casier`, le casier personnel. C : nom d'un casier, sans tenir compte de la casse, ou
+  début de son identifiant (4 chiffres hexadécimaux au moins).
+- Un CHEMIN sépare les noms par `/` ; `/` seul désigne la racine. Un élément `#` suivi d'au
+  moins 4 chiffres hexadécimaux désigne un dossier par le début de son identifiant (affiché
+  par `dossier liste`) : en tête de chemin, dans tout le casier ; plus loin, parmi les
+  sous-dossiers du précédent. C'est ainsi qu'on désigne un nom qui contient `/` ou deux frères
+  de même nom.
+- `dossier liste` affiche chaque dossier avec son identifiant abrégé et le nombre de secrets
+  actifs qu'il contient directement, et le nombre de secrets à la racine.
+- `dossier supprimer` dit combien de secrets iront à la corbeille et demande « oui » ; hors
+  terminal, `--oui` est obligatoire.
+- `mv` range le secret dans un dossier de **son** casier.
+
+### 20.6 Points ouverts
+
+1. **Création dans un dossier en une écriture** : `Create` ne prend pas de dossier ; créer un
+   secret dans un dossier en écrit deux versions. Une clé de `Create` demanderait une nouvelle
+   version de l'opération 7.
+2. **Glisser-déposer** dans l'application de poste : hors de ce lot (ADR 0076 § 10).
+
+L'export de casier (§ 19) écrit le chemin du dossier où chaque secret est affiché ; l'import
+recrée ces dossiers dans le nouveau casier (ADR 0076 § 8, `format.md` § 16.4) et compte les
+dossiers créés (clé 3 du compte rendu de `LockerImport`).
 
 ## 22. Codes TOTP (version 13)
 
@@ -1609,9 +1728,9 @@ secret (RFC 6238, `hirzla_crypto::totp`, HMAC d'AWS-LC) et pose, retire ou crée
 opérations **170 à 179**, erreurs **170 à 179** réservées (aucune n'est définie : les codes
 généraux du § 7 suffisent). Code : `crates/hirzla-core/src/totp`.
 
-Numérotation : la version 10 et la section 19 sont l'export de casier ; les versions 11 et 12
-et les sections 20 et 21 sont prises par des branches en cours (dossiers, déverrouillage
-matériel) ; le mainteneur renumérote à la fusion si l'ordre change.
+Numérotation : la version 10 et la section 19 sont l'export de casier, la version 11 et la
+section 20 les dossiers (ADR 0076) ; la version 12 et la section 21 sont prises par une branche
+en cours (déverrouillage matériel) ; le mainteneur renumérote à la fusion si l'ordre change.
 
 **La graine TOTP ne quitte jamais le noyau.** Aucune opération ne la rend ; `Read` (6) du
 champ 12 répond `Unsupported` (§ 5.3).

@@ -90,12 +90,12 @@ Un lien entre secrets (`ssh_key`, `jump`, `format.md` § 8.5) est exporté comme
 la cible** dans la liste des secrets du fichier. Un lien vers un autre casier est écarté à
 l'export et compté.
 
-**Dossiers (ADR 0076, en cours sur une autre branche).** Le chemin de dossier est un tableau de
-noms (1 à 16 noms de 1 à 256 octets, de la racine vers le dossier), indépendant de la façon
-dont le coffre range ses dossiers. Ce noyau n'en écrit pas encore ; à l'import, il convertit
-un chemin reçu en étiquette `a/b/c` (le compte rendu le dit). Quand l'ADR 0076 sera fusionné,
-l'export écrira le chemin du dossier de chaque secret, et l'import recréera les dossiers.
-Aucune version du fichier ne change pour cela.
+**Dossiers (ADR 0076).** Le chemin de dossier est un tableau de noms (1 à 16 noms de 1 à
+256 octets, de la racine vers le dossier), indépendant de la façon dont le coffre range ses
+dossiers. L'export écrit le chemin du dossier où chaque secret est affiché (arrêté au niveau
+16 pour un dossier plus profond) ; l'import recrée les dossiers dans le nouveau casier et y
+range les secrets. Aucune version du fichier ne change pour cela. (Avant l'ADR 0076, le
+chemin reçu devenait une étiquette `a/b/c` ; ce comportement n'a jamais été publié.)
 
 ### 3. Ce qui est exporté, ce qui ne l'est pas
 
@@ -128,8 +128,8 @@ Aucune version du fichier ne change pour cela.
 - La dérivation Argon2id et le descellement se font **hors du verrou du noyau**, comme
   l'import KDBX.
 - Importer deux fois donne deux casiers : pas de dédoublonnage, pas de fusion.
-- Compte rendu (nombres seulement) : secrets importés, fichiers joints, dossiers convertis en
-  étiquettes, secrets refusés par le coffre.
+- Compte rendu (nombres seulement) : secrets importés, fichiers joints, dossiers créés,
+  secrets refusés par le coffre.
 
 ### 6. Mode Serveur
 
