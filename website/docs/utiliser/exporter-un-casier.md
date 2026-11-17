@@ -28,6 +28,7 @@ Dans **Réglages › Export chiffré d'un casier** :
 | Les secrets actifs du casier, tous leurs champs, leurs fichiers joints | La corbeille et l'historique des versions |
 | Le nom, la description, la couleur et l'icône du casier | Vos clés, votre identité, vos autres casiers |
 | Les liens entre secrets du casier (clé SSH, rebond) | Les liens vers un autre casier (retirés et comptés) |
+| Les dossiers, recréés à l'import (16 niveaux au plus) | Les dossiers supprimés et les dossiers vides |
 
 !!! warning "Le fichier et son mot de passe valent le casier"
     - Transmettez le mot de passe **par un autre canal** que le fichier : de vive voix, par

@@ -71,6 +71,18 @@ Commandes :
   connexion voir NOM      Fiche d'une connexion, sans son mot de passe. --id ID.
   connexion modifier NOM  Modifie une connexion : options de création (sauf --casier et
                           --tag), --titre T, --effacer CHAMP. --id ID.
+  dossier liste           Arbre des dossiers d'un casier, avec le nombre de secrets de
+                          chacun et leur identifiant (#…). --casier CASIER.
+  dossier creer CHEMIN    Crée le dossier, et ses parents manquants. --casier CASIER.
+  dossier renommer CHEMIN NOM
+                          Renomme un dossier. --casier CASIER.
+  dossier deplacer CHEMIN DESTINATION
+                          Déplace un dossier (« / » : la racine du casier). --casier CASIER.
+  dossier supprimer CHEMIN
+                          Supprime un dossier et ses sous-dossiers ; leurs secrets vont à
+                          la corbeille. --oui (sans question), --casier CASIER.
+  mv NOM DESTINATION      Range un secret dans un dossier de son casier (« / » : la
+                          racine). --id ID.
   cle-ssh ajouter NOM FICHIER
                           Range une clé SSH privée existante (format OpenSSH).
                           --publique FICHIER, --identifiant U, --phrase (demandée),
@@ -341,6 +353,34 @@ pub enum ConnectionCommand {
     },
 }
 
+/// `dossier liste|creer|renommer|deplacer|supprimer` (ADR 0076). A CHEMIN separates names
+/// with `/`; a `#` followed by at least 4 hexadecimal digits designates a folder by id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderCommand {
+    List {
+        locker: Option<String>,
+    },
+    Create {
+        path: String,
+        locker: Option<String>,
+    },
+    Rename {
+        path: String,
+        name: String,
+        locker: Option<String>,
+    },
+    Move {
+        path: String,
+        destination: String,
+        locker: Option<String>,
+    },
+    Delete {
+        path: String,
+        locker: Option<String>,
+        yes: bool,
+    },
+}
+
 /// `cle-ssh ajouter NOM FICHIER` (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshKeyAdd {
@@ -429,6 +469,13 @@ pub enum Command {
     Recovery(Recovery),
     Connection(ConnectionCommand),
     SshKeyAdd(SshKeyAdd),
+    Folder(FolderCommand),
+    /// `mv NOM|--id ID DESTINATION` (ADR 0076).
+    Mv {
+        name: Option<String>,
+        id: Option<String>,
+        destination: String,
+    },
     Totp(TotpCommand),
     Status,
     Stop,
@@ -808,6 +855,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--titre",
             "--effacer",
         ],
+        "dossier" => &["--casier", "--oui"],
+        "mv" => &["--id"],
         "cle-ssh" => &[
             "--publique",
             "--identifiant",
@@ -1231,6 +1280,73 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 }
             };
             Command::Connection(sub_command)
+        }
+        "dossier" => {
+            max_positional(3)?;
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            let arg = |i: usize, what: &str| -> Result<String, String> {
+                positional
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("« dossier {sub} » attend {what}."))
+            };
+            let at_most = |n: usize| -> Result<(), String> {
+                if positional.len() > n {
+                    Err(format!("trop d'arguments pour « dossier {sub} »."))
+                } else {
+                    Ok(())
+                }
+            };
+            if has("--oui") && sub != "supprimer" {
+                return Err(format!("option inconnue pour « dossier {sub} » : --oui"));
+            }
+            let locker = one("--casier")?;
+            Command::Folder(match sub {
+                "liste" => {
+                    at_most(1)?;
+                    FolderCommand::List { locker }
+                }
+                "creer" => {
+                    at_most(2)?;
+                    FolderCommand::Create {
+                        path: arg(1, "un CHEMIN")?,
+                        locker,
+                    }
+                }
+                "renommer" => FolderCommand::Rename {
+                    path: arg(1, "un CHEMIN et un NOM")?,
+                    name: arg(2, "un CHEMIN et un NOM")?,
+                    locker,
+                },
+                "deplacer" => FolderCommand::Move {
+                    path: arg(1, "un CHEMIN et une DESTINATION")?,
+                    destination: arg(2, "un CHEMIN et une DESTINATION")?,
+                    locker,
+                },
+                "supprimer" => {
+                    at_most(2)?;
+                    FolderCommand::Delete {
+                        path: arg(1, "un CHEMIN")?,
+                        locker,
+                        yes: has("--oui"),
+                    }
+                }
+                _ => return Err(format!("sous-commande de « dossier » inconnue.\n\n{USAGE}")),
+            })
+        }
+        "mv" => {
+            max_positional(2)?;
+            let id = one("--id")?;
+            let (name, destination) = match (positional.as_slice(), &id) {
+                ([name, destination], None) => (Some(name.clone()), destination.clone()),
+                ([destination], Some(_)) => (None, destination.clone()),
+                _ => return Err("« mv » attend NOM DESTINATION, ou --id ID DESTINATION.".into()),
+            };
+            Command::Mv {
+                name,
+                id,
+                destination,
+            }
         }
         "cle-ssh" => {
             max_positional(3)?;
@@ -2396,5 +2512,61 @@ mod tests {
             })
         );
         assert_eq!(p(&["passwd"]).unwrap().command, Command::Passwd);
+    }
+
+    #[test]
+    fn parses_folder_commands() {
+        assert_eq!(
+            p(&["dossier", "liste", "--casier", "Équipe"])
+                .unwrap()
+                .command,
+            Command::Folder(FolderCommand::List {
+                locker: Some("Équipe".into())
+            })
+        );
+        assert_eq!(
+            p(&["dossier", "deplacer", "A/B", "/"]).unwrap().command,
+            Command::Folder(FolderCommand::Move {
+                path: "A/B".into(),
+                destination: "/".into(),
+                locker: None,
+            })
+        );
+        assert_eq!(
+            p(&["dossier", "supprimer", "A", "--oui"]).unwrap().command,
+            Command::Folder(FolderCommand::Delete {
+                path: "A".into(),
+                locker: None,
+                yes: true,
+            })
+        );
+        assert_eq!(
+            p(&["mv", "--id", "abcd", "Banque"]).unwrap().command,
+            Command::Mv {
+                name: None,
+                id: Some("abcd".into()),
+                destination: "Banque".into(),
+            }
+        );
+        assert_eq!(
+            p(&["mv", "GitHub", "/"]).unwrap().command,
+            Command::Mv {
+                name: Some("GitHub".into()),
+                id: None,
+                destination: "/".into(),
+            }
+        );
+        for bad in [
+            &["dossier"][..],
+            &["dossier", "creer"],
+            &["dossier", "renommer", "A"],
+            &["dossier", "creer", "A", "--oui"],
+            &["dossier", "liste", "en-trop"],
+            &["dossier", "liste", "--id", "abcd"],
+            &["mv", "GitHub"],
+            &["mv", "GitHub", "A", "--id", "abcd"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 }

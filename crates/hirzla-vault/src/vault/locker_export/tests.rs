@@ -234,7 +234,7 @@ fn a_locker_goes_from_one_vault_to_another() {
         ImportStats {
             secrets: 4,
             attachments: 1,
-            folders_as_tags: 0,
+            folders: 0,
             refused: 0,
         }
     );
@@ -336,23 +336,61 @@ fn import_takes_a_name_and_never_merges() {
 }
 
 #[test]
-fn folder_paths_become_tags_until_folders_exist() {
-    let src = source();
-    let (mut content, _) = src.vault.export_locker(src.locker).unwrap();
-    let rank = content
+fn folders_come_back_as_folders() {
+    let mut src = source();
+    let internet = src
+        .vault
+        .create_folder(src.locker, "Internet", None)
+        .unwrap();
+    let mail_folder = src
+        .vault
+        .create_folder(src.locker, "Mail", Some(internet))
+        .unwrap();
+    // A deleted folder: its secrets show, and are exported, in its parent.
+    let old = src
+        .vault
+        .create_folder(src.locker, "Ancien", Some(internet))
+        .unwrap();
+    let (mail_id, _) = find(&src.vault, src.locker, "Messagerie");
+    src.vault
+        .move_secret(src.locker, mail_id, Some(mail_folder))
+        .unwrap();
+    let (key_id, _) = find(&src.vault, src.locker, "Clé");
+    src.vault
+        .move_secret(src.locker, key_id, Some(old))
+        .unwrap();
+    src.vault
+        .edit_folders(
+            src.locker,
+            vec![crate::folder::FolderEdit::Delete { id: old }],
+        )
+        .unwrap();
+
+    let (content, _) = src.vault.export_locker(src.locker).unwrap();
+    let paths: Vec<Vec<String>> = content
         .secrets
         .iter()
-        .position(|s| s.secret_type == SecretType::Password)
-        .unwrap();
-    content.secrets[rank].folder = vec![
-        Zeroizing::new("Internet".into()),
-        Zeroizing::new("Mail".into()),
-    ];
+        .map(|s| s.folder.iter().map(|n| n.as_str().to_owned()).collect())
+        .collect();
+    assert!(paths.contains(&vec!["Internet".to_owned(), "Mail".to_owned()]));
+    assert!(paths.contains(&vec!["Internet".to_owned()]));
+    assert_eq!(paths.iter().filter(|p| p.is_empty()).count(), 2);
+    let file = seal(&content, EXPORT_PASSWORD, COST).unwrap();
+
     let dir = tempdir();
     let (_, mut dst) = new_vault(&dir, "b.hirzla");
-    let (locker, stats) = dst.import_locker(&content, None).unwrap();
-    assert_eq!(stats.folders_as_tags, 1);
+    let (locker, stats) = dst
+        .import_locker(&open(&file, EXPORT_PASSWORD).unwrap(), None)
+        .unwrap();
+    assert_eq!(stats.folders, 2);
+    assert_eq!(stats.secrets, 4);
+    let tree = dst.folder_tree(locker).unwrap();
+    assert_eq!(tree.len(), 2);
     let (_, mail) = find(&dst, locker, "Messagerie");
+    assert_eq!(tree.path(tree.place(mail.folder())), ["Internet", "Mail"]);
+    let (_, key) = find(&dst, locker, "Clé");
+    assert_eq!(tree.path(tree.place(key.folder())), ["Internet"]);
+    // The path is a folder, not a tag.
     let tags: Vec<String> = mail.sets[&SetKind::Tags]
         .visible()
         .filter_map(|v| match v {
@@ -360,8 +398,43 @@ fn folder_paths_become_tags_until_folders_exist() {
             SetValue::Attachment(_) => None,
         })
         .collect();
-    assert!(tags.contains(&"Internet/Mail".to_owned()));
-    assert!(tags.contains(&"travail".to_owned()));
+    assert_eq!(tags, ["travail"]);
+}
+
+#[test]
+fn folder_paths_are_cleaned_and_shared() {
+    let src = source();
+    let (mut content, _) = src.vault.export_locker(src.locker).unwrap();
+    let names = |n: &[&str]| -> Vec<Zeroizing<String>> {
+        n.iter().map(|x| Zeroizing::new((*x).to_owned())).collect()
+    };
+    content.secrets[0].folder = names(&["Perso", " Banque\u{7} "]);
+    content.secrets[1].folder = names(&["Perso", "Banque"]);
+    content.secrets[2].folder = names(&["Perso"]);
+    let dir = tempdir();
+    let (_, mut dst) = new_vault(&dir, "b.hirzla");
+    let (locker, stats) = dst.import_locker(&content, None).unwrap();
+    assert_eq!(stats.folders, 2);
+    let tree = dst.folder_tree(locker).unwrap();
+    let mut shown: Vec<Vec<&str>> = dst
+        .list(locker)
+        .unwrap()
+        .iter()
+        .map(|e| {
+            let body = dst.read_secret(locker, e.secret_id).unwrap();
+            tree.path(tree.place(body.folder()))
+        })
+        .collect();
+    shown.sort();
+    assert_eq!(
+        shown,
+        [
+            vec![],
+            vec!["Perso"],
+            vec!["Perso", "Banque"],
+            vec!["Perso", "Banque"]
+        ]
+    );
 }
 
 #[test]

@@ -425,6 +425,19 @@ impl Core {
         }
     }
 
+    /// Changes the folders of a shared locker (`docs/api-locale.md` § 20, ADR 0076).
+    pub(crate) fn edit_shared_folders(
+        &mut self,
+        locker: &Id16,
+        edits: Vec<hirzla_vault::folder::FolderEdit>,
+    ) -> Result<(), ServerCode> {
+        self.vault().map_err(|e| ServerCode::General(e.code))?;
+        match (self.vault.as_ref(), self.server.as_mut()) {
+            (Some(vault), Some(Ok(server))) => server.edit_folders(vault, locker, edits),
+            _ => Err(ServerCode::General(ErrorCode::NotFound)),
+        }
+    }
+
     pub(crate) fn vault(&mut self) -> Result<&mut Vault, ErrorReply> {
         if self.vault.is_none() {
             return Err(ErrorReply::new(if self.config.vault_path.exists() {

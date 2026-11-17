@@ -628,8 +628,28 @@ fn kdbx_import() {
     let mail = &entries[1];
     let mut tags: Vec<&str> = mail.tags.iter().map(|t| t.as_str()).collect();
     tags.sort_unstable();
-    assert_eq!(tags, ["Internet/Mail", "mail", "perso"]);
+    // The group is a folder now, no longer a tag (ADR 0076 § 11).
+    assert_eq!(tags, ["mail", "perso"]);
     assert_eq!(mail.hosts, ["mail.example.org"]);
+    let crate::folders::proto::FolderReply::Trees(trees) = c
+        .handle_folder(crate::folders::proto::FolderRequest::Tree { locker: None })
+        .unwrap()
+    else {
+        panic!("trees expected");
+    };
+    let tree = &trees[0];
+    let internet = tree
+        .folders
+        .iter()
+        .find(|f| f.name.as_str() == "Internet" && f.parent.is_none())
+        .unwrap();
+    let inner = tree
+        .folders
+        .iter()
+        .find(|f| f.name.as_str() == "Mail")
+        .unwrap();
+    assert_eq!(inner.parent, Some(internet.id));
+    assert!(tree.placements.contains(&(mail.id, inner.id)));
     assert_eq!(entries[2].secret_type, SecretType::Note as u64);
     match c
         .handle(Request::Read {
@@ -748,9 +768,33 @@ fn kdbx_import_keepass2() {
             by_title("adresse-seule.example").hosts,
             ["adresse-seule.example"]
         );
-        // The group path as a tag; too long for one, in a custom field.
-        assert_eq!(by_title("Forum").tags[0].as_str(), "Internet");
+        // Groups are folders (ADR 0076 § 11), not tags, whatever their length.
+        assert!(by_title("Forum").tags.is_empty());
         assert!(by_title("Profond").tags.is_empty());
+        let crate::folders::proto::FolderReply::Trees(trees) = c
+            .handle_folder(crate::folders::proto::FolderRequest::Tree { locker: None })
+            .unwrap()
+        else {
+            panic!("trees expected");
+        };
+        let tree = &trees[0];
+        let folder_of = |t: &str| {
+            let id = by_title(t).id;
+            tree.placements.iter().find(|(s, _)| *s == id).map(|p| p.1)
+        };
+        let path_of = |mut f: Option<[u8; 16]>| {
+            let mut names = Vec::new();
+            while let Some(id) = f {
+                let w = tree.folders.iter().find(|x| x.id == id).unwrap();
+                names.insert(0, w.name.as_str().to_owned());
+                f = w.parent;
+            }
+            names
+        };
+        assert_eq!(path_of(folder_of("Forum")), ["Internet"], "{name}");
+        let deep_path = path_of(folder_of("Profond"));
+        assert_eq!(deep_path.len(), 6, "{name}");
+        assert!(deep_path[0].starts_with("Groupe de niveau 0 avec un nom assez long"));
 
         let vault = c.vault().unwrap();
         let locker = vault.personal_locker();
@@ -769,11 +813,9 @@ fn kdbx_import_keepass2() {
             ),
             _ => panic!(),
         }
-        let deep = custom_fields(&body("Profond"));
-        assert_eq!(deep[0].0, "Groupe KeePass");
-        assert!(deep[0]
-            .1
-            .starts_with("Groupe de niveau 0 avec un nom assez long/"));
+        assert!(custom_fields(&body("Profond"))
+            .iter()
+            .all(|f| f.0 != "Groupe KeePass"));
         // Expiry and auto-type, in custom fields.
         assert_eq!(
             custom_fields(&body("Expire")),

@@ -946,6 +946,75 @@ fn locker_export_from_the_command_line() {
     }
 }
 
+/// Folders from the command line (ADR 0076): a path created with its parents, a secret
+/// put in it, the tree with its counts, a rename, a move to the root, then a deletion that
+/// sends the secret to the trash.
+#[test]
+fn folders_from_the_command_line() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+    ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));
+
+    let out = ok(&hirzla(
+        &sock,
+        &["dossier", "creer", "Finances/Comptes"],
+        None,
+    ));
+    assert!(out.contains("Dossier créé"), "{out}");
+    let refused = fails(&hirzla(&sock, &["dossier", "creer", "Finances"], None));
+    assert!(refused.contains("existe déjà"), "{refused}");
+    ok(&hirzla(&sock, &["mv", "Banque", "/Finances/Comptes"], None));
+    let tree = ok(&hirzla(&sock, &["dossier", "liste"], None));
+    assert!(tree.contains("0 secret(s) à la racine"), "{tree}");
+    assert!(tree.contains("Finances  (0)"), "{tree}");
+    assert!(tree.contains("  Comptes  (1)"), "{tree}");
+
+    ok(&hirzla(
+        &sock,
+        &["dossier", "renommer", "Finances", "Argent"],
+        None,
+    ));
+    let refused = fails(&hirzla(
+        &sock,
+        &["dossier", "deplacer", "Argent", "Argent/Comptes"],
+        None,
+    ));
+    assert!(refused.contains("sous lui-même"), "{refused}");
+    ok(&hirzla(
+        &sock,
+        &["dossier", "deplacer", "Argent/Comptes", "/"],
+        None,
+    ));
+    let tree = ok(&hirzla(&sock, &["dossier", "liste"], None));
+    assert!(tree.contains("Argent  (0)"), "{tree}");
+    assert!(
+        tree.lines()
+            .any(|l| l.ends_with("  Comptes  (1)") && !l.contains("    ")),
+        "{tree}"
+    );
+
+    // Not a terminal: deleting needs --oui.
+    let refused = fails(&hirzla(&sock, &["dossier", "supprimer", "Comptes"], None));
+    assert!(refused.contains("--oui"), "{refused}");
+    let out = ok(&hirzla(
+        &sock,
+        &["dossier", "supprimer", "Comptes", "--oui"],
+        None,
+    ));
+    assert!(out.contains("1 secret(s) mis à la corbeille"), "{out}");
+    let listed = ok(&hirzla(&sock, &["ls", "--corbeille"], None));
+    assert!(
+        listed.contains("Banque") && listed.contains("(corbeille)"),
+        "{listed}"
+    );
+    let refused = fails(&hirzla(&sock, &["mv", "Inconnu", "/"], None));
+    assert!(refused.contains("introuvable"), "{refused}");
+}
+
 #[test]
 fn totp_codes_from_the_command_line() {
     // RFC 6238 appendix B, SHA-1 seed in base32.

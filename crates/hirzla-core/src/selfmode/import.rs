@@ -302,35 +302,9 @@ pub(crate) fn resolve_references(entries: &mut [KdbxEntry]) {
 // Mapping
 // -----------------------------------------------------------------------------------------
 
-/// Where an entry goes, from its group path. For now the path (root excluded) is one tag
-/// `A/B/C`; the choice between folders, lockers per top group and a tag tree is open
-/// (ADR 0025). A path longer than a tag is kept in a custom field instead.
-struct Placement {
-    tags: Vec<Zeroizing<String>>,
-    overflow: Option<CustomField>,
-}
-
-fn placement(group_path: &[Zeroizing<String>]) -> Placement {
-    if group_path.is_empty() {
-        return Placement {
-            tags: Vec::new(),
-            overflow: None,
-        };
-    }
-    let parts: Vec<&str> = group_path.iter().map(|g| g.trim()).collect();
-    let path = Zeroizing::new(parts.join("/"));
-    if path.len() <= MAX_TAG {
-        Placement {
-            tags: vec![path],
-            overflow: None,
-        }
-    } else {
-        Placement {
-            tags: Vec::new(),
-            overflow: Some(field("Groupe KeePass", path, false)),
-        }
-    }
-}
+// Where an entry goes: its group is a folder of the target locker (ADR 0076 § 11). The
+// folders are planned for the whole database by `hirzla_vault::folder::PathFolders`, before the entries,
+// and the caller sets the folder of each secret; the group path is no longer a tag.
 
 fn field(label: &str, value: Zeroizing<String>, sensitive: bool) -> CustomField {
     CustomField {
@@ -411,7 +385,8 @@ pub(crate) fn plan(entry: KdbxEntry, report: &mut ImportReport) -> Option<Planne
         url,
         notes,
         tags,
-        group_path,
+        // The group is the folder of the secret, set by the caller (ADR 0076 § 11).
+        group_path: _,
         custom,
         mut custom_skipped,
         otp,
@@ -486,12 +461,10 @@ pub(crate) fn plan(entry: KdbxEntry, report: &mut ImportReport) -> Option<Planne
             edit.add.push((SetKind::Urls, SetValue::Text(u)));
         }
     }
-    // Tags: the group path (see `placement`), then KeePass tags.
-    let place = placement(&group_path);
-    extra.extend(place.overflow);
+    // KeePass tags; the group is a folder, not a tag.
     let mut kept_tags: Vec<Zeroizing<String>> = Vec::new();
     let mut left_tags: Vec<Zeroizing<String>> = Vec::new();
-    for t in place.tags.into_iter().chain(tags) {
+    for t in tags {
         if kept_tags.contains(&t) {
             continue;
         }

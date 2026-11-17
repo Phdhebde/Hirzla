@@ -159,7 +159,7 @@ champs personnalisés ; ce qui ne peut pas être gardé du tout est compté. Rie
 | `UserName` (protégé ou non) | Identifiant ; fait d'espaces seulement : absent |
 | `URL` | Adresse, espaces de bord retirés |
 | `{REF:<champ>@I:<UUID>}` dans un champ | Valeur visée (T, U, P, A, N, I), quatre niveaux d'imbrication au plus ; les recherches par titre ou identifiant (`@T:`, `@U:`…) restent telles quelles, leur résultat dépend des options de recherche de KeePass |
-| Groupes | Chemin `A/B` en étiquette (inchangé) ; au-delà de 128 octets, champ « Groupe KeePass » |
+| Groupes | Dossiers du casier, à la même place ; le groupe racine en est la racine (ADR 0076 § 11). Le chemin n'est plus une étiquette |
 | `Tags` | Étiquettes ; au-delà de 64 ou de 128 octets, champ « Étiquettes KeePass » |
 | Champs personnalisés | Gardés, sensibles s'ils sont protégés ; au-delà de 64 champs ou de 64 Kio : comptés |
 | Pièces jointes | Fichiers joints du secret, contenu chiffré dans le casier ; type déduit de l'extension ; une pièce partagée par plusieurs entrées est copiée pour chacune ; au-delà de 64 par entrée, de 100 Mio ou d'un nom de 512 octets : comptées |

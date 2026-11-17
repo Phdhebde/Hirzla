@@ -50,6 +50,7 @@ use hirzla_sync::net::{tls, NetError};
 use hirzla_sync::wire::{OpItem, Stub, SyncState};
 use hirzla_sync::{AccessAuthorizer, LocalDevice, OpStatus, Replica, SyncError};
 use hirzla_vault::cbor::{self, array_max, boolean, bytes_max, fixed, uint_in, Fields, Value};
+use hirzla_vault::folder::{FolderEdit, FolderTree};
 use hirzla_vault::model::{Id16, OpId, ServerInfo, MAX_SERVER_URL};
 use hirzla_vault::secret::{IndexEntry, SecretBody, SecretEdit, SecretState, SecretType};
 use hirzla_vault::Vault;
@@ -1619,6 +1620,56 @@ impl ServerMode {
         }
         self.save(vault)?;
         Ok(id)
+    }
+
+    /// The tree of folders shown for a shared locker (ADR 0076 § 3).
+    #[must_use]
+    pub fn folder_tree(&self, locker: &Id16) -> Option<FolderTree> {
+        let s = self.joined.as_ref()?.lockers.get(locker)?;
+        Some(s.replica.folder_tree())
+    }
+
+    /// Changes the folders of a shared locker: one `LockerMetaPut`, allowed to whoever may
+    /// write the locker metadata (`Editor` and above, ADR 0076 § 4).
+    ///
+    /// # Errors
+    /// [`ErrorCode::InvalidInput`] without the right or for an edit that breaks a writer's
+    /// rule, [`ErrorCode::NotFound`] for an unknown locker.
+    pub fn edit_folders(
+        &mut self,
+        vault: &Vault,
+        locker: &Id16,
+        edits: Vec<FolderEdit>,
+    ) -> Result<(), ServerCode> {
+        let me = self.me();
+        if self.joined.is_some() && self.frozen_lockers(self.now())?.contains(locker) {
+            return Err(general(ErrorCode::InvalidInput));
+        }
+        let j = self.joined.as_mut().ok_or(general(ErrorCode::NotFound))?;
+        let s = j
+            .lockers
+            .get_mut(locker)
+            .ok_or(general(ErrorCode::NotFound))?;
+        let allowed = s
+            .replica
+            .authorization()
+            .ok_or(general(ErrorCode::InvalidInput))?
+            .access()
+            .state()
+            .authorize(me, &Action::WriteLockerMeta, &BTreeSet::new())
+            .is_ok();
+        if !allowed || !s.access {
+            return Err(general(ErrorCode::InvalidInput));
+        }
+        let op = s
+            .replica
+            .put_folders(edits)
+            .map_err(|_| general(ErrorCode::InvalidInput))?;
+        if s.replica.status(&op) != Some(OpStatus::Applied) {
+            return Err(general(ErrorCode::InvalidInput));
+        }
+        self.save(vault)?;
+        Ok(())
     }
 }
 

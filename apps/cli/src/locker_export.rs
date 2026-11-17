@@ -193,11 +193,8 @@ pub fn run(session: &Session<'_>, command: &LockerCommand) -> Result<(), String>
                 report.secrets,
                 report.attachments
             ));
-            if report.folders_as_tags > 0 {
-                say(&format!(
-                    "{} dossier(s) repris en étiquette.",
-                    report.folders_as_tags
-                ));
+            if report.folders > 0 {
+                say(&format!("{} dossier(s) recréé(s).", report.folders));
             }
             if report.refused > 0 {
                 say(&format!(

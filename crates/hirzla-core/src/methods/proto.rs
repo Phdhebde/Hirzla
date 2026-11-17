@@ -1,5 +1,5 @@
 //! Hardware unlock method operations of the local API (`docs/api-locale.md` § 21, ADR 0075):
-//! version 12, operation codes 150 to 159, error codes 150 to 159. Same frames, same CBOR
+//! version 12, operation codes 160 to 169, error codes 160 to 169. Same frames, same CBOR
 //! profile and same strict decoding as the rest of the API (`crate::proto`).
 
 use hirzla_vault::cbor::{self, array_max, boolean, text_max, uint, uint_in, Fields, Value};
@@ -10,7 +10,7 @@ use crate::proto::{ErrorCode, MAX_PASSWORD};
 /// Version of the protocol that carries the hardware unlock method operations.
 pub const METHODS_VERSION: u64 = 12;
 /// Operation codes reserved for them.
-pub const METHOD_OPS: std::ops::RangeInclusive<u64> = 150..=159;
+pub const METHOD_OPS: std::ops::RangeInclusive<u64> = 160..=169;
 /// Longest PIN of a security key, bytes (CTAP 2.1: 63).
 pub const MAX_PIN: usize = 63;
 /// Highest rank of a method (eight methods at most, `docs/format.md` § 5.4).
@@ -22,13 +22,13 @@ pub const ENROLLABLE_KINDS: [u8; 3] = [3, 4, 5];
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodOp {
     /// The unlock methods of the vault, and what this device can enrol.
-    UnlockMethods = 150,
+    UnlockMethods = 160,
     /// Enrol a hardware method.
-    EnrollMethod = 151,
+    EnrollMethod = 161,
     /// Open the vault with a hardware method.
-    UnlockWithMethod = 152,
+    UnlockWithMethod = 162,
     /// Remove a hardware method.
-    RemoveMethod = 153,
+    RemoveMethod = 163,
 }
 
 impl MethodOp {
@@ -58,20 +58,20 @@ impl MethodOp {
     }
 }
 
-/// Error codes of this family (150 to 159). The general codes of § 7 keep their numbers.
+/// Error codes of this family (160 to 169). The general codes of § 7 keep their numbers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MethodCode {
     /// A general code of § 7.
     General(ErrorCode),
-    /// 150: no such hardware here, system too old, or support not compiled in.
+    /// 160: no such hardware here, system too old, or support not compiled in.
     Unavailable,
-    /// 151: the user cancelled, or the system gave up waiting.
+    /// 161: the user cancelled, or the system gave up waiting.
     Cancelled,
-    /// 152: the hardware key no longer exists or no longer matches.
+    /// 162: the hardware key no longer exists or no longer matches.
     Invalidated,
-    /// 153: a PIN is needed, or the one given was wrong.
+    /// 163: a PIN is needed, or the one given was wrong.
     PinRequired,
-    /// 154: the security key is blocked.
+    /// 164: the security key is blocked.
     PinBlocked,
 }
 
@@ -81,11 +81,11 @@ impl MethodCode {
     pub fn status(self) -> u64 {
         match self {
             MethodCode::General(c) => c as u64,
-            MethodCode::Unavailable => 150,
-            MethodCode::Cancelled => 151,
-            MethodCode::Invalidated => 152,
-            MethodCode::PinRequired => 153,
-            MethodCode::PinBlocked => 154,
+            MethodCode::Unavailable => 160,
+            MethodCode::Cancelled => 161,
+            MethodCode::Invalidated => 162,
+            MethodCode::PinRequired => 163,
+            MethodCode::PinBlocked => 164,
         }
     }
 
@@ -93,11 +93,11 @@ impl MethodCode {
     #[must_use]
     pub fn from_status(n: u64) -> Option<MethodCode> {
         Some(match n {
-            150 => MethodCode::Unavailable,
-            151 => MethodCode::Cancelled,
-            152 => MethodCode::Invalidated,
-            153 => MethodCode::PinRequired,
-            154 => MethodCode::PinBlocked,
+            160 => MethodCode::Unavailable,
+            161 => MethodCode::Cancelled,
+            162 => MethodCode::Invalidated,
+            163 => MethodCode::PinRequired,
+            164 => MethodCode::PinBlocked,
             n => MethodCode::General(ErrorCode::from_u64(n)?),
         })
     }
@@ -138,9 +138,9 @@ pub struct MethodEntry {
 /// A request of this family.
 #[derive(Clone, PartialEq, Eq)]
 pub enum MethodRequest {
-    /// 150.
+    /// 160.
     UnlockMethods,
-    /// 151.
+    /// 161.
     EnrollMethod {
         /// Kind to enrol (3, 4 or 5).
         kind: u8,
@@ -149,14 +149,14 @@ pub enum MethodRequest {
         /// PIN of the security key, when the method asks the client for it.
         pin: Option<Zeroizing<String>>,
     },
-    /// 152.
+    /// 162.
     UnlockWithMethod {
         /// Rank of the method.
         rank: u8,
         /// PIN of the security key, when the method asks the client for it.
         pin: Option<Zeroizing<String>>,
     },
-    /// 153.
+    /// 163.
     RemoveMethod {
         /// Rank of the method.
         rank: u8,
@@ -174,14 +174,14 @@ impl std::fmt::Debug for MethodRequest {
 pub enum MethodReply {
     /// No result.
     Done,
-    /// 150.
+    /// 160.
     Methods {
         /// The methods of the header, in rank order.
         methods: Vec<MethodEntry>,
         /// Kinds this device can enrol now.
         enrollable: Vec<u8>,
     },
-    /// 151: rank of the new method.
+    /// 161: rank of the new method.
     Enrolled {
         /// Its rank.
         rank: u8,

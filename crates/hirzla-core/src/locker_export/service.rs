@@ -177,7 +177,7 @@ impl Core {
             report: ImportReport {
                 secrets: s.secrets,
                 attachments: s.attachments,
-                folders_as_tags: s.folders_as_tags,
+                folders: s.folders,
                 refused: s.refused,
             },
         })

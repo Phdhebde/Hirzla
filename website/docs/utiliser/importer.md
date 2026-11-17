@@ -25,7 +25,8 @@ lui-même.
 | | |
 | --- | --- |
 | Bases acceptées | KDBX 3.1 et 4 (KeePass 2, KeePassXC), protégées par un mot de passe, un fichier clé ou les deux, chiffrées en AES-256 ou ChaCha20, dérivation AES-KDF ou Argon2 |
-| Repris | Titre, identifiant (même sans mot de passe), mot de passe, adresse, notes, étiquettes, champs personnalisés, pièces jointes, références entre entrées (`{REF:…@I:…}`), TOTP (KeePassXC `otp`, KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP). Le groupe devient une étiquette `Groupe/Sous-groupe` |
+| Repris | Titre, identifiant (même sans mot de passe), mot de passe, adresse, notes, étiquettes, champs personnalisés, pièces jointes, références entre entrées (`{REF:…@I:…}`), TOTP (KeePassXC `otp`, KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP). |
+| Groupes | Chaque groupe devient un dossier du casier, à la même place ; les étiquettes KeePass restent des étiquettes |
 | Gardés dans des champs | Expiration, saisie automatique, HOTP, TOTP non convertibles (Steam, hors limites) |
 | Non importés | Historique des entrées, corbeille KeePass, Twofish. Le compte rendu les signale |
 

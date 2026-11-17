@@ -12,6 +12,8 @@
  *   hosts: string[], tags: string[], favorite: boolean, trash: boolean }} Entry
  * @typedef {{ id: string, name: string, personal: boolean }} Locker
  * @typedef {{ entries: Entry[], lockers: Locker[] }} Listing
+ * @typedef {{ locker: string, folders: { id: string, name: string, parent: string | null }[],
+ *   placements: [string, string][] }} FolderTree
  * @typedef {{ locker: string, id: string }} SecretRef
  * @typedef {"title" | "username" | "password" | "notes" | "ssh_public_key" | "ssh_passphrase"} FieldName
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
@@ -31,7 +33,7 @@
  *   custom_skipped: number, totp: number, refused: number }} KdbxReport
  * @typedef {{ password: string | null, file: string, secrets: number, trashed: number, attachments: number,
  *   links_dropped: number }} LockerExported
- * @typedef {{ locker: string, secrets: number, attachments: number, folders_as_tags: number,
+ * @typedef {{ locker: string, secrets: number, attachments: number, folders: number,
  *   refused: number }} LockerImported
  * @typedef {"owner" | "manager" | "editor" | "reader" | "blind_user" | "auditor"} RoleName
  * @typedef {"role" | "quorum" | "last_owner" | "access_lost"} Refusal
@@ -197,6 +199,19 @@ export const api = {
    */
   createSshKey: (key) => call("create_ssh_key", { key }),
 
+  // Folders inside lockers (local API version 11, ADR 0076).
+  /** @returns {Promise<FolderTree[]>} */
+  folderTrees: () => call("folder_trees"),
+  /** @param {string} locker @param {string} name @param {string | null} parent @returns {Promise<string>} */
+  createFolder: (locker, name, parent) => call("create_folder", { locker, name, parent }),
+  /** @param {string} locker @param {string} folder @param {string} name @returns {Promise<void>} */
+  renameFolder: (locker, folder, name) => call("rename_folder", { locker, folder, name }),
+  /** @param {string} locker @param {string} folder @param {string | null} parent @returns {Promise<void>} */
+  moveFolder: (locker, folder, parent) => call("move_folder", { locker, folder, parent }),
+  /** @param {string} locker @param {string} folder @returns {Promise<number>} Secrets sent to the trash. */
+  deleteFolder: (locker, folder) => call("delete_folder", { locker, folder }),
+  /** @param {SecretRef} target @param {string | null} folder @returns {Promise<void>} */
+  moveSecret: (target, folder) => call("move_secret", { target, folder }),
   // TOTP codes (local API version 13).
   /** @param {SecretRef} target @returns {Promise<TotpCode>} */
   totpCode: (target) => call("totp_code", { target }),

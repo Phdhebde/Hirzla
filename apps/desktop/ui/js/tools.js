@@ -757,7 +757,7 @@ export class SettingsView {
       /** @type {HTMLDialogElement} */ (byId("dialogue-import-export")).close();
       /** @type {string[]} */
       const lines = [`Nouveau casier créé : ${r.secrets} secret(s), ${r.attachments} pièce(s) jointe(s).`];
-      if (r.folders_as_tags) lines.push(`${r.folders_as_tags} dossier(s) repris en étiquette.`);
+      if (r.folders) lines.push(`${r.folders} dossier(s) recréé(s).`);
       if (r.refused) lines.push(`${r.refused} élément(s) non repris (étiquette trop longue ou trop nombreuses).`);
       const box = byId("import-resultat");
       box.replaceChildren(...lines.map((t) => h("p", { text: t })));
