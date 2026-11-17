@@ -220,13 +220,13 @@ impl Core {
     }
 
     /// The locker a creation goes to: the one given, or the personal locker.
-    fn target_locker(&mut self, locker: Option<Id16>) -> Result<Id16, ErrorCode> {
+    pub(crate) fn target_locker(&mut self, locker: Option<Id16>) -> Result<Id16, ErrorCode> {
         let personal = self.vault().map_err(|e| e.code)?.personal_locker();
         Ok(locker.unwrap_or(personal))
     }
 
     /// Creates a secret in a locker of the vault or in a shared locker.
-    fn create_in(
+    pub(crate) fn create_in(
         &mut self,
         locker: Id16,
         secret_type: SecretType,
@@ -246,7 +246,11 @@ impl Core {
     /// The merged body of a secret this device holds, in the vault or in a shared locker;
     /// `None` if the locker or the secret is unknown. A purged secret is returned as such
     /// from the vault, and as `None` from a shared locker.
-    fn secret_body(&mut self, locker: &Id16, id: &Id16) -> Result<Option<SecretBody>, ErrorReply> {
+    pub(crate) fn secret_body(
+        &mut self,
+        locker: &Id16,
+        id: &Id16,
+    ) -> Result<Option<SecretBody>, ErrorReply> {
         self.vault()?;
         if self.is_shared(locker) {
             return Ok(self.server().and_then(|s| s.read(locker, id)).cloned());

@@ -29,6 +29,7 @@ use crate::selfmode::import;
 use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
 use crate::service::{Config, Core};
+use crate::totp::proto::{is_totp_request, TotpReply, TotpRequest};
 use crate::transport::{Connection, Endpoint, Listener};
 
 /// Most connections served at once.
@@ -685,6 +686,42 @@ fn serve_connection(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a TOTP request (`docs/api-locale.md` § 22). The browser profile is refused
+/// (§ 22.1). Returns `false` if the connection must close.
+fn serve_totp(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let (id, result) = match TotpRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ErrorCode::Unauthorized;
+            log.record(Event::TotpRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_totp(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = TotpReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, version, code) = match SelfRequest::decode_versioned(frame) {
@@ -765,6 +802,12 @@ fn serve(
         }
         if is_connection_request(&frame) {
             if serve_connection(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_totp_request(&frame) {
+            if serve_totp(&mut conn, core, log, &frame, profile) {
                 continue;
             }
             break;

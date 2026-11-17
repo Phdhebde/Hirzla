@@ -10,7 +10,7 @@ sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
 les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
-§ 6.2) par l'ADR 0068.
+§ 6.2) par l'ADR 0068 ; les codes TOTP (version 13, § 22) par l'ADR 0078.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -224,7 +224,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 | Nom | Encodage |
 | --- | --- |
 | Identifiant de casier ou de secret | `bstr(16)` |
-| Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées, plus tard (ADR 0010) : `Unsupported` |
+| Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées (ADR 0010) : `Unsupported`. Le TOTP (12) n'est jamais lu : son code s'obtient par `TotpCode` (§ 22) |
 | Valeur de champ | `tstr` (≤ 1 Mio ; le coffre applique ses propres limites par champ), `bool` pour le favori |
 | Sélecteur | `{1: casier, 2: secret}` **ou** `{3: titre}` (exactement l'un des deux) |
 | Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note. Les connexions (7, 8) et les clés SSH (2) se créent par la version 6 (§ 17) |
@@ -439,6 +439,7 @@ identifiant de secret, ni chemin).
 | `auto_type` | `what` (`username`, `password`, `username_and_password`, `other`), `target` (`terminal`, `application`) ; § 18.1 |
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 | `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
+| `totp_request` | `op` (`totp_code`, `totp_set`, `totp_clear`, `totp_create`), `result` (`ok` ou nom de l'erreur, § 22) ; jamais un code |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
@@ -477,6 +478,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 ## 10. Versions
 
 - Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. Les versions 10 à 12 sont prises par des branches en cours (export, dossiers, déverrouillage matériel).
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
@@ -508,7 +510,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
-RDP au § 17.5.
+RDP au § 17.5, celle des codes TOTP au § 22.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -595,6 +597,11 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   elle-même dans la fenêtre au premier plan, puis envoie `AutoTyped`. La vue web ne reçoit que
   le nom de l'application cible. La liste « Ne plus m'avertir » est dans son fichier de
   préférences local, hors du coffre.
+- Codes TOTP (§ 22) : `TotpCode` pour la fiche d'un secret qui porte un TOTP (à l'ouverture,
+  puis à chaque fin de période), `TotpCode` et copie par le processus Rust pour « Copier le
+  code TOTP », `TotpSet` et `TotpClear` depuis le formulaire de modification, `TotpCreate`
+  pour le type « Code TOTP » et `TotpSet` après le `Create` d'un mot de passe saisi avec un
+  TOTP. La fiche sait qu'un secret porte un TOTP par `History` (champ 12).
 - Elle envoie `AppPoll` (§ 18) toutes les deux secondes, et `ShowApp` à son démarrage : si
   une autre instance écoute, elle s'arrête aussitôt.
 
@@ -1507,3 +1514,123 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
+## 22. Codes TOTP (version 13)
+
+Décision : ADR 0078. Format : `format.md` § 8.3 (champ 12 `totp`, `TotpConfig`, types 1 et 3 ;
+aucun changement). Le noyau parle en plus la **version 13**, qui calcule le code TOTP d'un
+secret (RFC 6238, `hirzla_crypto::totp`, HMAC d'AWS-LC) et pose, retire ou crée un TOTP. Codes :
+opérations **170 à 179**, erreurs **170 à 179** réservées (aucune n'est définie : les codes
+généraux du § 7 suffisent). Code : `crates/hirzla-core/src/totp`.
+
+Numérotation : les versions 10 à 12 et les sections 19 à 21 sont prises par des branches en
+cours (export, dossiers, déverrouillage matériel) ; le mainteneur renumérote à la fusion si
+l'ordre change.
+
+**La graine TOTP ne quitte jamais le noyau.** Aucune opération ne la rend ; `Read` (6) du
+champ 12 répond `Unsupported` (§ 5.3).
+
+### 22.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+170 à 179 va aux codes TOTP ; elle doit porter `v = 13`, sinon `UnsupportedVersion` avec
+`{2: [13]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 13`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé (ADR 0026 ne donne au profil navigateur que des
+opérations liées à une origine). `Status` (§ 6) n'annonce pas la version 13 : un client la
+découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`).
+
+### 22.2 Types
+
+**Saisie TOTP** — `tstr`, 4 096 octets au plus (`Malformed` au-delà), non vide après retrait
+des blancs (`InvalidInput`). Écriture seulement. Le noyau accepte :
+
+- une adresse `otpauth://totp/LIBELLÉ?secret=…` ; paramètres lus : `secret` (base32,
+  obligatoire), `algorithm` (`SHA1`, `SHA256`, `SHA512`), `digits`, `period`, `issuer` (à
+  défaut, le préfixe `Émetteur:` du libellé) ; les autres paramètres sont ignorés ;
+- une clé secrète seule en base32 (casse indifférente ; espaces, tirets et `=` ignorés), avec
+  HMAC-SHA-1, 6 chiffres et 30 s.
+
+Refusés (`InvalidInput`) : un autre schéma, `otpauth://hotp/`, `encoder=steam`, deux
+paramètres `secret`, un base32 non valide, toute valeur hors des bornes de `TotpConfig`
+(graine 10 à 128 octets, 6 à 8 chiffres, période 15 à 300 s, émetteur 256 octets au plus).
+
+**Code** — résultat de `TotpCode` :
+
+| Clé | Nom | Type | Règle |
+| --- | --- | --- | --- |
+| 1 | code | `tstr` | Chiffres décimaux seuls, autant que la clé 4 |
+| 2 | secondes restantes | `uint` | 1 à la période : secondes avant le changement de code |
+| 3 | période | `uint` | 15 à 300 |
+| 4 | chiffres | `uint` | 6 à 8 |
+| 5 | algorithme | `uint` | 1 SHA-1, 2 SHA-256, 3 SHA-512 |
+| 6 | émetteur | `tstr` | Si la configuration en a un |
+| 7 | code suivant | `tstr` | Si la requête l'a demandé ; même longueur que la clé 1 |
+
+### 22.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 170 | `TotpCode` | ouvert | `{1: casier, 2: secret, 3?: suivant bool}` | code |
+| 171 | `TotpSet` | ouvert | `{1: casier, 2: secret, 3: saisie}` | — |
+| 172 | `TotpClear` | ouvert | `{1: casier, 2: secret}` | — |
+| 173 | `TotpCreate` | ouvert | `{1?: casier, 2: titre tstr, 3: saisie, 4?: identifiant tstr, 5?: [étiquette]}` | `{1: casier, 2: secret}` |
+
+Détails :
+
+1. **`TotpCode`** — le secret doit exister dans un casier que ce poste détient, ne pas être
+   purgé et porter un TOTP, sinon `NotFound` (un secret à la corbeille donne encore son code).
+   Le code est calculé sur l'horloge du système à l'instant de la requête ; une horloge
+   antérieure à 1970 : `Internal`. Aucune correction de décalage : le site tolère d'ordinaire
+   la période voisine (RFC 6238 § 5.2), et la clé 7 donne le code suivant à qui le demande.
+   **`TotpCode` ne compte pas comme une activité** pour le verrouillage automatique (§ 6,
+   point 4) : une fiche ouverte qui redemande le code à chaque période ne tient pas le coffre
+   ouvert.
+2. **`TotpSet`** — pose ou remplace le TOTP d'un secret de type 1 (mot de passe) ou 3 (code
+   TOTP) ; un autre type : `InvalidInput`. Une saisie refusée n'écrit rien. Vaut pour un casier
+   partagé selon le rôle du membre (§ 15.4). Une nouvelle version du secret est écrite, comme
+   par `Update`.
+3. **`TotpClear`** — retire le TOTP. `NotFound` si le secret n'en a pas. Un secret de type 3
+   sans TOTP reste un secret valide (titre, identifiant, notes).
+4. **`TotpCreate`** — crée un secret de type 3 avec le titre (non vide, sinon `InvalidInput`),
+   le TOTP, l'identifiant et les étiquettes donnés (64 au plus). Casier personnel par défaut ;
+   un casier partagé est permis selon le rôle du membre (§ 15.4). Les notes et le favori
+   s'ajoutent ensuite par `Update` (8).
+5. **Autres opérations** — `List` (5) rend les secrets de type 3 avec leur identifiant ;
+   `History` (65) nomme le champ 12 par son numéro, ce qui dit à un client qu'un secret porte
+   un TOTP sans en rien révéler. `Delete`, `RestoreSecret`, `ReadVersion` et `RestoreVersion`
+   valent pour les secrets de type 3 comme pour tout secret. `Match` et `Fill` ne rendent
+   jamais un code.
+
+### 22.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de code, de saisie, d'émetteur, de titre ni d'identifiant de secret. Le journal du noyau
+n'écrit que l'opération et le nom du résultat : `event=totp_request op=<nom> result=<ok|nom>`,
+avec les noms `totp_code`, `totp_set`, `totp_clear`, `totp_create` (§ 8).
+
+### 22.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `totp NOM \| --id ID [--stdout] [--suivant]` | `List` (résolution), `TotpCode`, `Status` |
+| `totp NOM \| --id ID --definir` | `List`, `TotpSet` |
+| `totp NOM \| --id ID --retirer` | `List`, `TotpClear` |
+| `totp NOM --creer [--identifiant U] [--casier C] [--tag T]…` | (`List` pour C), `TotpCreate` |
+
+- Le code suit la règle de `get` (§ 11) : copié avec effacement après `clipboard_clear_s`, ou
+  écrit sur la sortie standard si elle n'est pas un terminal ou avec `--stdout`. Le temps qui
+  reste s'écrit sur la **sortie d'erreur** ; dans les 5 dernières secondes, la commande
+  rappelle `--suivant`, qui donne le code de la période suivante.
+- `--definir` et `--creer` **demandent** la saisie sans écho (ou la lisent sur l'entrée
+  standard) : aucun secret en argument.
+- Une seule action par commande ; `--creer` prend un NOM et refuse `--id`.
+
+### 22.6 Points ouverts
+
+1. **Extension** : pas de code TOTP pour le profil navigateur. Il faudrait une opération liée
+   à l'origine (ADR 0026), un message de l'hôte natif et une interface ; ADR à venir.
+2. **Lecture d'un QR code** : pas faite (dépendance de traitement d'image qui verrait la
+   graine).
+3. **Horloge déréglée** : le noyau ne peut pas la détecter sans réseau ; un code refusé par le
+   site en est le seul signe.

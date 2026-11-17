@@ -60,8 +60,11 @@ fn the_interface_references_nothing_remote_and_runs_no_inline_code() {
             continue;
         }
         let text = fs::read_to_string(&p).unwrap();
-        // The SVG namespace is an identifier, not a resource.
-        let text = text.replace("xmlns=\"http://www.w3.org/2000/svg\"", "");
+        // The SVG namespace is an identifier, not a resource: as an attribute in markup, or as
+        // the argument of `createElementNS` in a script (the TOTP ring, ADR 0078).
+        let text = text
+            .replace("xmlns=\"http://www.w3.org/2000/svg\"", "")
+            .replace("\"http://www.w3.org/2000/svg\"", "");
         for forbidden in [
             "http://",
             "https://",

@@ -359,6 +359,7 @@ fn key_types_cannot_be_printed() {
             has_debug!(sign::PublisherSigningKey),
         ),
         ("password::Password", has_debug!(password::Password)),
+        ("totp::TotpCode", has_debug!(hirzla_crypto::totp::TotpCode)),
         ("vault::Vault", has_debug!(hirzla_vault::Vault)),
         (
             "vault::RecoveryShare",
@@ -481,6 +482,47 @@ fn local_api_requests_and_replies_print_no_secret() {
                     current: z(SENTINEL),
                     new: z(SENTINEL)
                 }
+            ),
+        ),
+        (
+            "TotpRequest::Set",
+            format!(
+                "{:?}",
+                hirzla_core::totp::proto::TotpRequest::Set {
+                    locker: [0; 16],
+                    id: [0; 16],
+                    input: z(SENTINEL)
+                }
+            ),
+        ),
+        (
+            "TotpRequest::Create",
+            format!(
+                "{:?}",
+                hirzla_core::totp::proto::TotpRequest::Create {
+                    locker: None,
+                    title: z(SENTINEL),
+                    input: z(SENTINEL),
+                    username: Some(z(SENTINEL)),
+                    tags: vec![z(SENTINEL)]
+                }
+            ),
+        ),
+        (
+            "TotpReply::Code",
+            format!(
+                "{:?}",
+                hirzla_core::totp::proto::TotpReply::Code(Box::new(
+                    hirzla_core::totp::proto::TotpCodeInfo {
+                        code: z(SENTINEL),
+                        seconds_left: 1,
+                        period: 30,
+                        digits: 6,
+                        algorithm: 1,
+                        issuer: Some(z(SENTINEL)),
+                        next: Some(z(SENTINEL)),
+                    }
+                ))
             ),
         ),
         (

@@ -785,3 +785,71 @@ fn a_secret_is_typed_into_another_application() {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
 }
+
+#[test]
+fn totp_codes_are_shown_set_and_removed() {
+    // RFC 6238 appendix B, SHA-1 seed in base32.
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+
+    let new = |input: &str| {
+        serde_json::from_value(serde_json::json!({
+            "locker": null,
+            "title": "Forge",
+            "input": input,
+            "username": "alice",
+            "tags": ["2fa"],
+        }))
+        .unwrap()
+    };
+    // Not a TOTP: refused before anything is stored.
+    assert_eq!(
+        state.totp_create(new("pas un secret")).unwrap_err().code(),
+        "invalid"
+    );
+    let r: SecretRef = state
+        .totp_create(new(&format!(
+            "otpauth://totp/Forge:alice?secret={SEED}&algorithm=SHA256&digits=8&issuer=Forge"
+        )))
+        .unwrap();
+    let code = serde_json::to_value(state.totp_code(&r).unwrap()).unwrap();
+    assert_eq!(code["digits"], 8);
+    assert_eq!(code["period"], 30);
+    assert_eq!(code["algorithm"], "SHA-256");
+    assert_eq!(code["issuer"], "Forge");
+    assert_eq!(code["code"].as_str().unwrap().len(), 8);
+    assert!(code.get("secret").is_none() && code.get("next").is_none());
+    let left = code["seconds_left"].as_u64().unwrap();
+    assert!((1..=30).contains(&left));
+    let list = serde_json::to_value(state.list(None, false).unwrap()).unwrap();
+    assert_eq!(list["entries"][0]["kind"], "totp");
+    assert!(!list.to_string().contains(SEED));
+
+    // Replaced by a base32 secret alone: 6 digits.
+    state.totp_set(&r, z(SEED)).unwrap();
+    let code = serde_json::to_value(state.totp_code(&r).unwrap()).unwrap();
+    assert_eq!(code["code"].as_str().unwrap().len(), 6);
+    assert_eq!(state.totp_set(&r, z("   ")).unwrap_err().code(), "invalid");
+    assert_eq!(
+        state
+            .totp_set(&r, z("https://forge.example"))
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    state.totp_clear(&r).unwrap();
+    assert_eq!(state.totp_code(&r).err().unwrap().code(), "not_found");
+}

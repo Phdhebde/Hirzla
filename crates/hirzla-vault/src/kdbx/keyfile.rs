@@ -49,7 +49,7 @@ pub fn key_file_key(data: &[u8]) -> Result<Zeroizing<[u8; 32]>, KdbxRefusal> {
 
 /// 64 hexadecimal digits (whitespace ignored) into 32 bytes; `None` otherwise.
 fn hex32(text: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
-    let bytes = super::otp::decode(&super::otp::hex()?, text)?;
+    let bytes = crate::totp::decode(&crate::totp::hex()?, text)?;
     let mut out = Zeroizing::new([0u8; 32]);
     (bytes.len() == 32).then(|| out.copy_from_slice(&bytes))?;
     Some(out)

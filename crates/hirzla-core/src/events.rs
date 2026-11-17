@@ -14,6 +14,7 @@ use crate::connections::proto::ConnectionOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
+use crate::totp::proto::TotpOp;
 
 /// Why a connection was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -161,6 +162,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A TOTP request was answered (`docs/api-locale.md` § 22). `result` is `ok` or the name
+    /// of the error: fixed words only. Never a code.
+    TotpRequest {
+        /// Operation.
+        op: TotpOp,
+        /// Outcome.
+        result: &'static str,
+    },
     /// A server mode request was answered (`docs/api-locale.md` § 15). `result` is `ok` or
     /// the name of the error: fixed words only.
     ServerRequest {
@@ -253,6 +262,9 @@ impl Event {
                     "event=connection_request op={} result={result}",
                     op.name()
                 )
+            }
+            Event::TotpRequest { op, result } => {
+                write!(out, "event=totp_request op={} result={result}", op.name())
             }
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
@@ -403,6 +415,11 @@ mod tests {
         for op in ConnectionOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
                 events.push(Event::ConnectionRequest { op, result });
+            }
+        }
+        for op in TotpOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "unauthorized", "locked"] {
+                events.push(Event::TotpRequest { op, result });
             }
         }
         for n in 40..=48 {

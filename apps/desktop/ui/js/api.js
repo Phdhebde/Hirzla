@@ -132,6 +132,12 @@ export function toApiError(e) {
  * @typedef {"port" | "username" | "domain" | "password" | "ssh_key" | "jump" | "host_key" | "notes"} ConnectionClear
  */
 
+/**
+ * TOTP codes (local API version 13, ADR 0078). The code comes from the core; never the TOTP secret.
+ * @typedef {{ code: string, seconds_left: number, period: number, digits: number,
+ *   algorithm: "SHA-1" | "SHA-256" | "SHA-512", issuer: string | null }} TotpCode
+ */
+
 export const api = {
   /** @returns {Promise<Status>} */
   status: () => call("app_status"),
@@ -183,6 +189,21 @@ export const api = {
    * @returns {Promise<SecretRef>}
    */
   createSshKey: (key) => call("create_ssh_key", { key }),
+
+  // TOTP codes (local API version 13).
+  /** @param {SecretRef} target @returns {Promise<TotpCode>} */
+  totpCode: (target) => call("totp_code", { target }),
+  /** @param {SecretRef} target @param {boolean} next  The code of the next period. @returns {Promise<number>} */
+  totpCopy: (target, next) => call("totp_copy", { target, next }),
+  /** @param {SecretRef} target @param {string} input  otpauth:// URI or base32 secret. @returns {Promise<void>} */
+  totpSet: (target, input) => call("totp_set", { target, input }),
+  /** @param {SecretRef} target @returns {Promise<void>} */
+  totpClear: (target) => call("totp_clear", { target }),
+  /**
+   * @param {{ locker: string | null, title: string, input: string, username?: string, tags: string[] }} totp
+   * @returns {Promise<SecretRef>}
+   */
+  totpCreate: (totp) => call("totp_create", { totp }),
 
   // This workstation (ADR 0071).
   /** @returns {Promise<LocalPreferences>} */
