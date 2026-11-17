@@ -15,6 +15,9 @@ use crate::cbor::{fixed, text_max, uint_in, CborError, Fields, Value};
 use crate::model::{Id16, Stamp};
 use crate::secret::EditError;
 
+mod paths;
+pub use paths::{folder_name, PathFolders};
+
 /// Most folders in one locker, deleted ones included.
 pub const MAX_FOLDERS: usize = 2048;
 /// Longest folder name, in bytes.

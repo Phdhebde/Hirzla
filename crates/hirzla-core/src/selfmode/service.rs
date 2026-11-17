@@ -1,12 +1,12 @@
 //! What the core does with a Self-mode request (`docs/api-locale.md` § 16).
 
+use hirzla_vault::folder::PathFolders;
 use hirzla_vault::kdbx::KdbxDatabase;
 use hirzla_vault::model::{Id16, Settings};
 use hirzla_vault::secret::{AttachmentRef, Field, FieldValue, SecretState, SetKind, SetValue};
 use hirzla_vault::{recovery_params, RecoveryShare, Vault, VaultError};
 
 use super::import;
-use super::import_folders::GroupFolders;
 use super::proto::{
     ImportReport, RecoveryInfo, SelfCode, SelfReply, SelfRequest, SettingsArgs, VersionInfo,
     MAX_VERSIONS,
@@ -305,12 +305,10 @@ impl Core {
         let mut entries = std::mem::take(&mut db.entries);
         import::resolve_references(&mut entries);
         // The groups become folders, created in one write before the entries (ADR 0076 § 11).
-        let groups = GroupFolders::plan(entries.iter().map(|e| e.group_path.as_slice()), || {
+        let groups = PathFolders::plan(entries.iter().map(|e| e.group_path.as_slice()), || {
             hirzla_crypto::util::random_array().map_err(|_| code(ErrorCode::Internal))
         })?;
-        if groups.len() > 0 {
-            vault.edit_folders(locker, groups.edits()).map_err(verr)?;
-        }
+        vault.edit_folders(locker, groups.edits()).map_err(verr)?;
         for entry in entries {
             let folder = groups.folder_of(&entry.group_path);
             let Some(planned) = import::plan(entry, &mut report) else {

@@ -386,6 +386,25 @@ export class SettingsView {
     byId("dialogue-kdbx").addEventListener("close", () => {
       /** @type {HTMLInputElement} */ (byId("kdbx-mdp")).value = "";
     });
+    for (const r of document.querySelectorAll('input[name="export-mode"]')) {
+      r.addEventListener("change", () => {
+        byId("export-choisi").hidden = !this.exportChosen();
+      });
+    }
+    byId("form-export").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.exportLocker();
+    });
+    byId("export-copier").addEventListener("click", () => void this.copyExportPassword());
+    byId("import-export").addEventListener("click", () => this.openImportExport());
+    byId("import-export-choisir").addEventListener("click", () => void this.chooseExportFile());
+    byId("form-import-export").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.importLocker();
+    });
+    byId("dialogue-import-export").addEventListener("close", () => {
+      /** @type {HTMLInputElement} */ (byId("import-export-mdp")).value = "";
+    });
     byId("reglage-zone").addEventListener("change", () => void this.saveTray());
     byId("reglage-saisie-tout").addEventListener("click", () => void this.forgetTrusted(null));
     byId("form-reglages-coffre").addEventListener("submit", (e) => {
@@ -470,17 +489,168 @@ export class SettingsView {
       /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked = s.lock_on_sleep;
       /** @type {HTMLInputElement} */ (byId("reglage-session")).checked = s.lock_on_session_lock;
       this.renderKit(await api.recoveryStatus());
+      this.renderLockers((await api.list("", false)).lockers);
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("reglages-coffre-erreur"), err.message);
     }
   }
 
+  /**
+   * The lockers of the vault, for the export.
+   * @param {import("./api.js").Locker[]} lockers
+   */
+  renderLockers(lockers) {
+    const select = /** @type {HTMLSelectElement} */ (byId("export-casier"));
+    const kept = select.value;
+    select.replaceChildren(...lockers.map((l) => h("option", { value: l.id, text: l.name })));
+    if (lockers.some((l) => l.id === kept)) select.value = kept;
+    /** @type {HTMLButtonElement} */ (byId("export-lancer")).disabled = lockers.length === 0;
+  }
+
+  /** @returns {boolean} The user chooses the password of the export. */
+  exportChosen() {
+    const r = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="export-mode"]:checked'));
+    return r?.value === "choisi";
+  }
+
+  /** Hides the result of the last export, and its passphrase. */
+  clearExportResult() {
+    byId("export-phrase").textContent = "";
+    byId("export-phrase-bloc").hidden = true;
+    byId("export-compte").textContent = "";
+    byId("export-resultat").hidden = true;
+  }
+
+  async exportLocker() {
+    const select = /** @type {HTMLSelectElement} */ (byId("export-casier"));
+    const pw = /** @type {HTMLInputElement} */ (byId("export-mdp"));
+    const confirmation = /** @type {HTMLInputElement} */ (byId("export-confirmation"));
+    const button = /** @type {HTMLButtonElement} */ (byId("export-lancer"));
+    const error = byId("export-erreur");
+    showError(error, null);
+    this.clearExportResult();
+    if (!select.value) return;
+    /** @type {string | null} */
+    let password = null;
+    if (this.exportChosen()) {
+      if (pw.value !== confirmation.value) {
+        showError(error, "Les deux saisies du mot de passe diffèrent.");
+        return;
+      }
+      password = pw.value;
+    }
+    const name = select.selectedOptions[0]?.textContent ?? "";
+    button.disabled = true;
+    button.textContent = "Chiffrement…";
+    try {
+      const r = await api.exportLocker(select.value, name, password);
+      pw.value = "";
+      confirmation.value = "";
+      /** @type {string[]} */
+      const parts = [`Export écrit : ${r.file}. ${r.secrets} secret(s), ${r.attachments} pièce(s) jointe(s).`];
+      if (r.trashed) parts.push(`${r.trashed} secret(s) de la corbeille non exporté(s).`);
+      if (r.links_dropped) parts.push(`${r.links_dropped} lien(s) vers un autre casier retiré(s).`);
+      byId("export-compte").textContent = parts.join(" ");
+      if (r.password) {
+        byId("export-phrase").textContent = r.password;
+        byId("export-phrase-bloc").hidden = false;
+      }
+      byId("export-resultat").hidden = false;
+      announce("Export chiffré écrit.");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(error, err.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Exporter…";
+    }
+  }
+
+  async copyExportPassword() {
+    try {
+      const s = await api.copyExportPassword();
+      announce(`Phrase de passe copiée. Le presse-papiers sera effacé dans ${s} s.`);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("export-erreur"), err.message);
+    }
+  }
+
+  openImportExport() {
+    showError(byId("import-export-erreur"), null);
+    byId("import-export-fichier").textContent = "";
+    /** @type {HTMLInputElement} */ (byId("import-export-nom")).value = "";
+    /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = true;
+    /** @type {HTMLDialogElement} */ (byId("dialogue-import-export")).showModal();
+    byId("import-export-choisir").focus();
+  }
+
+  async chooseExportFile() {
+    showError(byId("import-export-erreur"), null);
+    try {
+      byId("import-export-fichier").textContent = await api.chooseExportFile();
+      /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = false;
+      byId("import-export-mdp").focus();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("import-export-erreur"), err.message);
+    }
+  }
+
+  async importLocker() {
+    const pw = /** @type {HTMLInputElement} */ (byId("import-export-mdp"));
+    const name = /** @type {HTMLInputElement} */ (byId("import-export-nom"));
+    const button = /** @type {HTMLButtonElement} */ (byId("import-export-importer"));
+    const error = byId("import-export-erreur");
+    showError(error, null);
+    button.disabled = true;
+    button.textContent = "Import…";
+    try {
+      const r = await api.importLocker(pw.value, name.value.trim() || null);
+      pw.value = "";
+      /** @type {HTMLDialogElement} */ (byId("dialogue-import-export")).close();
+      /** @type {string[]} */
+      const lines = [`Nouveau casier créé : ${r.secrets} secret(s), ${r.attachments} pièce(s) jointe(s).`];
+      if (r.folders) lines.push(`${r.folders} dossier(s) recréé(s).`);
+      if (r.refused) lines.push(`${r.refused} élément(s) non repris (étiquette trop longue ou trop nombreuses).`);
+      const box = byId("import-resultat");
+      box.replaceChildren(...lines.map((t) => h("p", { text: t })));
+      box.hidden = false;
+      this.onImported();
+      this.renderLockers((await api.list("", false)).lockers);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      pw.value = "";
+      if (!this.onError(err)) {
+        showError(error, err.message);
+        pw.focus();
+      }
+    } finally {
+      button.disabled = !byId("import-export-fichier").textContent;
+      button.textContent = "Importer";
+    }
+  }
+
   /** Forgets what the settings view holds: called when the vault locks. */
   wipe() {
-    for (const id of ["mdp-actuel", "mdp-nouveau", "mdp-confirmation", "kdbx-mdp"]) {
+    for (const id of [
+      "mdp-actuel",
+      "mdp-nouveau",
+      "mdp-confirmation",
+      "kdbx-mdp",
+      "export-mdp",
+      "export-confirmation",
+      "import-export-mdp",
+      "import-export-nom",
+    ]) {
       /** @type {HTMLInputElement} */ (byId(id)).value = "";
     }
+    this.clearExportResult();
+    byId("import-export-fichier").textContent = "";
+    /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = true;
     byId("recouvrement-resultat").hidden = true;
     byId("kdbx-fichier").textContent = "";
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;

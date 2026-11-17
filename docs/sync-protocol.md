@@ -1246,7 +1246,8 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     `Checkpoint` : type 34 (`transparence.md`, ADR 0019). Changement de clé d'un membre : type
     30, toujours réservé.
 20. **Partage par export chiffré pour un destinataire en mode Self** (`architecture.md`) :
-    non spécifié ici.
+    hors du protocole de synchronisation. Export d'un casier par fichier protégé par mot de
+    passe, importé comme nouveau casier : ADR 0077, `format.md` § 16, `api-locale.md` § 19.
 21. **`LockerCreate` épinglée** par chaque poste (§ 7.3), décidé à l'étape 10.
 22. **Enveloppes de `Grant`, `DeviceAdd` et `EnvelopeAdd`** : `KeyEnvelope` ne porte pas
     d'époque ; elles visent l'époque `epoch` de leur opération, donc l'époque courante de leur

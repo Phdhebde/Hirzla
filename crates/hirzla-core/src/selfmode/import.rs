@@ -303,7 +303,7 @@ pub(crate) fn resolve_references(entries: &mut [KdbxEntry]) {
 // -----------------------------------------------------------------------------------------
 
 // Where an entry goes: its group is a folder of the target locker (ADR 0076 § 11). The
-// folders are planned for the whole database by `super::import_folders`, before the entries,
+// folders are planned for the whole database by `hirzla_vault::folder::PathFolders`, before the entries,
 // and the caller sets the folder of each secret; the group path is no longer a tag.
 
 fn field(label: &str, value: Zeroizing<String>, sensitive: bool) -> CustomField {

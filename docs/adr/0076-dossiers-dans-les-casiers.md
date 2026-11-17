@@ -174,9 +174,11 @@ Opérations **150 à 159**, profil complet seulement, version 11 ; erreurs 150 �
 mode Self (ADR 0025), la version 10 et la plage 140 à 149 celles de l'export de casier
 (ADR 0077).
 
-L'export de casier (ADR 0077) porte un chemin de dossier optionnel par secret. Tant que les deux
-ne sont pas réunis, il le convertit en étiquette ; une fois réunis, l'import d'un export range
-chaque secret dans le dossier de ce chemin, créé au besoin comme pour KeePass (§ 11).
+L'export de casier (ADR 0077) porte un chemin de dossier optionnel par secret : l'export écrit
+celui du dossier où le secret est affiché (16 niveaux au plus, la borne du format d'export) ;
+l'import range chaque secret dans le dossier de ce chemin, créé comme pour KeePass (§ 11), et
+non plus dans une étiquette `a/b/c`. Le compte rendu de `LockerImport` donne le nombre de
+dossiers créés.
 
 | Code | Nom | Rôle |
 | --- | --- | --- |

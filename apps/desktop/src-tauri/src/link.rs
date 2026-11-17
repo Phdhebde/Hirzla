@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
 use hirzla_core::folders::proto::{FolderReply, FolderRequest};
+use hirzla_core::locker_export::proto::{ExportCode, ExportReply, ExportRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
@@ -365,6 +366,31 @@ impl CoreLink {
                 }
                 Err(e) => return Err(e.into()),
             }
+        }
+    }
+
+    /// Sends one export request (`docs/api-locale.md` § 19, version 10). Never sent again:
+    /// an export writes a file, an import creates a locker.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::locker_export::refusal`].
+    pub fn call_export(&mut self, request: &ExportRequest) -> Result<ExportReply, DesktopError> {
+        let mut client = match self.client.take() {
+            Some(c) => c,
+            None => self.connect()?,
+        };
+        match client.call_export(request) {
+            Ok(Ok(reply)) => {
+                self.client = Some(client);
+                Ok(reply)
+            }
+            Ok(Err(code)) => {
+                if code != ExportCode::General(ErrorCode::Unauthorized) {
+                    self.client = Some(client);
+                }
+                Err(crate::locker_export::refusal(code))
+            }
+            Err(e) => Err(e.into()),
         }
     }
 

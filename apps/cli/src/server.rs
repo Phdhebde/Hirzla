@@ -608,6 +608,10 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
             say("Membre retiré. Les versions écrites désormais lui sont illisibles.");
             Ok(())
         }
+        LockerCommand::Export { .. } | LockerCommand::Import { .. } => {
+            drop(c);
+            crate::locker_export::run(session, command)
+        }
     }
 }
 

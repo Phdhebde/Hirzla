@@ -194,13 +194,17 @@ fn locker_key_context(
 }
 
 /// Pads then seals (§ 3.2, § 11).
-fn seal_padded(kek: &SymmetricKey, aad: &[u8], content: &[u8]) -> Result<Vec<u8>, VaultError> {
+pub(crate) fn seal_padded(
+    kek: &SymmetricKey,
+    aad: &[u8],
+    content: &[u8],
+) -> Result<Vec<u8>, VaultError> {
     let padded = pad::pad(content).ok_or(VaultError::InvalidInput)?;
     Ok(sym::seal(kek, aad, &padded)?.as_bytes().to_vec())
 }
 
 /// Unseals then removes the padding strictly. Any failure is [`VaultError::Corrupt`].
-fn unseal_padded(
+pub(crate) fn unseal_padded(
     kek: &SymmetricKey,
     aad: &[u8],
     sealed: &[u8],
@@ -211,13 +215,13 @@ fn unseal_padded(
     Ok(Zeroizing::new(content.to_vec()))
 }
 
-fn now_ms() -> u64 {
+pub(crate) fn now_ms() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
 
-fn nfc(password: &str) -> Result<Password, VaultError> {
+pub(crate) fn nfc(password: &str) -> Result<Password, VaultError> {
     if password.is_empty() {
         return Err(VaultError::InvalidInput);
     }
@@ -466,7 +470,12 @@ impl Vault {
             shards: BTreeMap::new(),
             settings: Settings::default(),
         };
-        vault.create_locker_with_id(personal_locker, &options.personal_locker_name, true)?;
+        vault.create_locker_with_id(
+            personal_locker,
+            &options.personal_locker_name,
+            Vec::new(),
+            true,
+        )?;
         Ok(vault)
     }
 
@@ -1200,14 +1209,17 @@ impl Vault {
     /// [`VaultError::InvalidInput`] or a storage or cryptographic failure.
     pub fn create_locker(&mut self, name: &str) -> Result<Id16, VaultError> {
         let id: Id16 = random_array()?;
-        self.create_locker_with_id(id, name, false)?;
+        self.create_locker_with_id(id, name, Vec::new(), false)?;
         Ok(id)
     }
 
+    /// Creates a locker with metadata fields besides its name (`extra`: description, colour,
+    /// icon).
     fn create_locker_with_id(
         &mut self,
         locker: Id16,
         name: &str,
+        extra: Vec<(LockerField, FieldValue)>,
         personal: bool,
     ) -> Result<(), VaultError> {
         if name.is_empty() || name.len() > 256 {
@@ -1263,13 +1275,9 @@ impl Vault {
             member,
             device,
         };
-        let meta = LockerBody::edit(
-            None,
-            Vec::new(),
-            vec![(LockerField::Name, FieldValue::text(name))],
-            stamp,
-        )
-        .map_err(edit_error)?;
+        let mut fields = vec![(LockerField::Name, FieldValue::text(name))];
+        fields.extend(extra);
+        let meta = LockerBody::edit(None, Vec::new(), fields, stamp).map_err(edit_error)?;
         let meta_id = self.store_op(
             &tx,
             locker,
@@ -1848,12 +1856,14 @@ impl Vault {
 
 mod folders;
 mod keys;
+mod locker_export;
 mod restore;
 
 pub use keys::{
     recovery_params, RecoveryKit, RecoveryShare, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S,
     MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
 };
+pub use locker_export::{ExportStats, ImportStats};
 
 #[cfg(test)]
 pub(crate) mod test_hooks {

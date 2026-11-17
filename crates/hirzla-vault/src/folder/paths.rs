@@ -1,31 +1,32 @@
-//! KeePass groups as folders of the target locker (ADR 0076 § 11).
-//!
-//! The root group of the database is the root of the locker; every other group becomes a
-//! folder with its name and its place in the tree. The folders are created by a single
-//! locker metadata write, before the entries; each entry is then created in its folder.
+//! Folders made from paths of names (ADR 0076 § 11): the groups of a KeePass database, the
+//! folder paths of a locker export (ADR 0077). Each distinct path becomes a folder of the
+//! target locker, with its name and its place in the tree; the folders are created by a
+//! single locker metadata write, before the secrets, and each secret is then created in its
+//! folder. An empty path is the root of the locker.
 //!
 //! Limits of the vault (`format.md` § 7.5), so that nothing but the arrangement is lost:
 //!
-//! - beyond 32 levels, deeper groups are merged into their ancestor of level 32;
-//! - beyond 2 048 groups, the next ones (document order) are merged into their created
+//! - beyond 32 levels, deeper names are merged into their ancestor of level 32;
+//! - beyond 2 048 folders, the next ones (in the order given) are merged into their created
 //!   parent;
 //! - a name loses its control characters and surrounding spaces, an empty one becomes
 //!   « Sans nom », a longer one is cut at 255 bytes on a character boundary.
 //!
-//! Groups are known from the paths of the entries: a group with no entry under it at any
-//! depth is not seen, and two sibling groups of the same name become one folder.
+//! Folders are known from the paths only: two siblings of the same name are one folder.
 
-use hirzla_vault::folder::{FolderEdit, MAX_FOLDERS, MAX_FOLDER_DEPTH, MAX_FOLDER_NAME};
-use hirzla_vault::model::Id16;
 use zeroize::Zeroizing;
 
-/// Name given to a group whose name is empty once cleaned.
+use super::{FolderEdit, MAX_FOLDERS, MAX_FOLDER_DEPTH, MAX_FOLDER_NAME};
+use crate::model::Id16;
+
+/// Name given to a folder whose name is empty once cleaned.
 const UNNAMED: &str = "Sans nom";
 
-/// The name a group gets as a folder.
-pub(crate) fn folder_name(group: &str) -> Zeroizing<String> {
-    let mut out = Zeroizing::new(String::with_capacity(group.len().min(MAX_FOLDER_NAME)));
-    for c in group.chars().filter(|c| !c.is_control()) {
+/// The name a path element gets as a folder.
+#[must_use]
+pub fn folder_name(name: &str) -> Zeroizing<String> {
+    let mut out = Zeroizing::new(String::with_capacity(name.len().min(MAX_FOLDER_NAME)));
+    for c in name.chars().filter(|c| !c.is_control()) {
         out.push(c);
     }
     let trimmed = out.trim();
@@ -50,30 +51,30 @@ struct Node {
     id: Id16,
 }
 
-/// The folders made from the groups of a database.
+/// The folders made from a set of paths.
 #[derive(Default)]
-pub(crate) struct GroupFolders {
+pub struct PathFolders {
     nodes: Vec<Node>,
 }
 
-impl GroupFolders {
-    /// The folders for these group paths (root group excluded, outermost first), in the
-    /// order given. `draw` gives a fresh identifier for each folder.
+impl PathFolders {
+    /// The folders for these paths (outermost name first, root excluded), in the order
+    /// given. `draw` gives a fresh identifier for each folder.
     ///
     /// # Errors
     /// The error of `draw`.
-    pub(crate) fn plan<'a, E>(
+    pub fn plan<'a, E>(
         paths: impl IntoIterator<Item = &'a [Zeroizing<String>]>,
         mut draw: impl FnMut() -> Result<Id16, E>,
-    ) -> Result<GroupFolders, E> {
-        let mut out = GroupFolders::default();
+    ) -> Result<PathFolders, E> {
+        let mut out = PathFolders::default();
         for path in paths {
             let mut at: Option<usize> = None;
-            for group in path.iter().take(MAX_FOLDER_DEPTH) {
-                let name = folder_name(group);
+            for name in path.iter().take(MAX_FOLDER_DEPTH) {
+                let name = folder_name(name);
                 at = match out.child(at, &name) {
                     Some(i) => Some(i),
-                    // Past the limit, the group is merged into its created parent.
+                    // Past the limit, the folder is merged into its created parent.
                     None if out.nodes.len() >= MAX_FOLDERS => at,
                     None => {
                         out.nodes.push(Node {
@@ -96,12 +97,20 @@ impl GroupFolders {
     }
 
     /// Number of folders.
-    pub(crate) fn len(&self) -> usize {
+    #[must_use]
+    pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
+    /// Whether there is no folder.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
+    }
+
     /// The edits that create every folder, parents first.
-    pub(crate) fn edits(&self) -> Vec<FolderEdit> {
+    #[must_use]
+    pub fn edits(&self) -> Vec<FolderEdit> {
         self.nodes
             .iter()
             .map(|n| FolderEdit::Create {
@@ -112,13 +121,14 @@ impl GroupFolders {
             .collect()
     }
 
-    /// The folder of an entry from its group path; `None`: the root of the locker.
-    pub(crate) fn folder_of(&self, path: &[Zeroizing<String>]) -> Option<Id16> {
+    /// The folder of a secret from its path; `None`: the root of the locker.
+    #[must_use]
+    pub fn folder_of(&self, path: &[Zeroizing<String>]) -> Option<Id16> {
         let mut at: Option<usize> = None;
-        for group in path.iter().take(MAX_FOLDER_DEPTH) {
-            match self.child(at, &folder_name(group)) {
+        for name in path.iter().take(MAX_FOLDER_DEPTH) {
+            match self.child(at, &folder_name(name)) {
                 Some(i) => at = Some(i),
-                // Merged into its parent (more than 2 048 groups).
+                // Merged into its parent (more than 2 048 folders).
                 None => break,
             }
         }
@@ -156,7 +166,7 @@ mod tests {
             p(&["Internet"]),
             p(&["Banque"]),
         ];
-        let g = GroupFolders::plan(paths.iter().map(Vec::as_slice), counter()).unwrap();
+        let g = PathFolders::plan(paths.iter().map(Vec::as_slice), counter()).unwrap();
         assert_eq!(g.len(), 3);
         let edits = g.edits();
         let FolderEdit::Create { id: internet, .. } = &edits[0] else {
@@ -179,7 +189,7 @@ mod tests {
         let long = "é".repeat(200);
         let cut = folder_name(&long);
         assert!(cut.len() <= MAX_FOLDER_NAME && cut.chars().all(|c| c == 'é'));
-        assert!(hirzla_vault::folder::is_valid_folder_name(&cut));
+        assert!(super::super::is_valid_folder_name(&cut));
         assert_eq!(folder_name("Perso/Pro").as_str(), "Perso/Pro");
     }
 
@@ -188,7 +198,7 @@ mod tests {
         let names: Vec<String> = (0..40).map(|i| format!("N{i}")).collect();
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         let path = p(&refs);
-        let g = GroupFolders::plan([path.as_slice()], counter()).unwrap();
+        let g = PathFolders::plan([path.as_slice()], counter()).unwrap();
         assert_eq!(g.len(), MAX_FOLDER_DEPTH);
         assert_eq!(g.folder_of(&path), g.folder_of(&path[..MAX_FOLDER_DEPTH]));
     }
@@ -198,7 +208,7 @@ mod tests {
         let paths: Vec<Vec<Zeroizing<String>>> = (0..MAX_FOLDERS + 3)
             .map(|i| p(&["Racine", &format!("G{i}")]))
             .collect();
-        let g = GroupFolders::plan(paths.iter().map(Vec::as_slice), counter()).unwrap();
+        let g = PathFolders::plan(paths.iter().map(Vec::as_slice), counter()).unwrap();
         assert_eq!(g.len(), MAX_FOLDERS);
         let top = g.folder_of(&p(&["Racine"]));
         assert!(top.is_some());

@@ -95,7 +95,7 @@ jobs:
           for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload \
             decode_local_request decode_sync_message decode_operation decode_server_annex \
             decode_release decode_audit_log decode_recovery_share decode_keylog decode_hornn_grant \
-            parse_csv parse_native_json; do
+            decode_locker_export parse_csv parse_native_json; do
             cargo +nightly fuzz run "$target" -- -max_total_time=60 || status=1
           done
           exit $status
