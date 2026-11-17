@@ -562,6 +562,79 @@ fn self_mode_operations_are_refused_to_the_browser_profile() {
 }
 
 #[test]
+fn unlock_methods_answer_over_the_real_channel() {
+    use hirzla_core::methods::proto::{MethodCode, MethodReply, MethodRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "methods");
+    let me = std::env::current_exe().unwrap();
+    let _core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    assert_eq!(
+        c.call_methods(&MethodRequest::UnlockMethods).unwrap().err(),
+        Some((MethodCode::General(ErrorCode::NoVault), None))
+    );
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: hirzla_crypto::password::MIN_M_KIB,
+            t: hirzla_crypto::password::MIN_T,
+            p: 1,
+        }),
+    })
+    .unwrap();
+    let Ok(MethodReply::Methods { methods, .. }) =
+        c.call_methods(&MethodRequest::UnlockMethods).unwrap()
+    else {
+        panic!()
+    };
+    // The master password, always there.
+    assert_eq!(methods.len(), 1);
+    assert_eq!((methods[0].rank, methods[0].kind), (0, 1));
+    c.call(&Request::Lock).unwrap();
+    // No hardware method at rank 1.
+    assert_eq!(
+        c.call_methods(&MethodRequest::UnlockWithMethod { rank: 1, pin: None })
+            .unwrap()
+            .err(),
+        Some((MethodCode::General(ErrorCode::NotFound), None))
+    );
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=unlock_method op=unlock_methods kind=- result=ok"),
+        "{log}"
+    );
+    assert!(!log.contains(PASSWORD));
+}
+
+#[test]
+fn unlock_methods_are_refused_to_the_browser_profile() {
+    use hirzla_core::methods::proto::{MethodCode, MethodRequest};
+    let dir = private_dir();
+    let ep = endpoint(dir.path(), "methods-browser");
+    let me = std::env::current_exe().unwrap();
+    let nobody = dir.path().join("nobody");
+    let _core = start(
+        dir.path(),
+        &ep,
+        &nobody,
+        &["--allow-browser-exe", me.to_str().unwrap()],
+    );
+    let mut c = connect(&ep);
+    for r in [
+        MethodRequest::UnlockMethods,
+        MethodRequest::UnlockWithMethod { rank: 1, pin: None },
+        MethodRequest::RemoveMethod { rank: 1 },
+    ] {
+        assert_eq!(
+            c.call_methods(&r).unwrap().err(),
+            Some((MethodCode::General(ErrorCode::Unauthorized), None))
+        );
+    }
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=unlock_method op=remove_method kind=- result=unauthorized"));
+}
+
+#[test]
 fn connections_answer_over_the_real_channel() {
     use hirzla_core::connections::proto::{ConnectionFields, ConnectionReply, ConnectionRequest};
     const HOST: &str = "hote-confidentiel.exemple.test";

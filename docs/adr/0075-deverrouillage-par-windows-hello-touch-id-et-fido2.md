@@ -186,7 +186,7 @@ voient le matériau ou le secret.
   absent ne compte pas.
 - **Retrait** (`RemoveMethod`) : coffre ouvert ; mot de passe (`kind` 1) et kit (`kind` 6)
   refusés ; dernière méthode seulement ; suppression de la clé Hello ensuite.
-- **Journal** : `event=unlock_method op=<nom> kind=<hello|enclave|fido2> result=<…>`, sans
+- **Journal** : `event=unlock_method op=<nom> kind=<hello|enclave|fido> result=<…>`, sans
   identifiant de clé, ni nom, ni rang au-delà du type.
 - Le noyau ne réessaie jamais une méthode de lui-même et ne passe jamais seul au mot de passe :
   c'est le client qui propose le recours.

@@ -21,6 +21,8 @@ use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
 use crate::events::{Event, Log, Refusal};
+use crate::methods::proto::{is_method_request, MethodCode, MethodReply, MethodRequest};
+use crate::methods::service::{run_gesture, Prepared};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
@@ -610,6 +612,50 @@ fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a hardware unlock method request (`docs/api-locale.md` § 19, ADR 0075). The
+/// browser profile is refused. The user's gesture runs outside the core's lock: the other
+/// clients and the automatic lock go on meanwhile. Returns `false` if the connection must
+/// close.
+fn serve_methods(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
+    let (id, result) = match MethodRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = MethodCode::General(ErrorCode::Unauthorized);
+            log.record(Event::MethodRequest {
+                op: request.op(),
+                kind: "-",
+                result: code.name(),
+            });
+            (id, Err((code, None)))
+        }
+        Ok((id, request)) => {
+            let prepared = lock().methods_prepare(request);
+            let result = match prepared {
+                Prepared::Done(r) => r,
+                Prepared::Gesture(pending) => {
+                    let outcome = run_gesture(&pending);
+                    lock().methods_finish(pending, outcome)
+                }
+            };
+            (id, result)
+        }
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err((code, None)))
+        }
+    };
+    let Ok(body) = MethodReply::encode(id, result.as_ref().map_err(|e| *e)) else {
+        return false;
+    };
+    write_frame(conn, &body).is_ok()
+}
+
 /// Answers a server mode request (`docs/api-locale.md` § 15). The browser profile is refused
 /// (§ 15.1). Returns `false` if the connection must close.
 fn serve_server(
@@ -756,6 +802,12 @@ fn serve(
                 refuse_self(&mut conn, log, &frame)
             };
             if ok {
+                continue;
+            }
+            break;
+        }
+        if is_method_request(&frame) {
+            if serve_methods(&mut conn, core, log, &frame, profile) {
                 continue;
             }
             break;

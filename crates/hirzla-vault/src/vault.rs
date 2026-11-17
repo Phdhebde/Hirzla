@@ -1799,7 +1799,7 @@ mod hardware;
 mod keys;
 mod restore;
 
-pub use hardware::{unlock_methods, MethodInfo};
+pub use hardware::{unlock_methods, vault_id_of, MethodInfo};
 pub use keys::{
     recovery_params, RecoveryKit, RecoveryShare, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S,
     MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,

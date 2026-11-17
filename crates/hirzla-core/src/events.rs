@@ -11,6 +11,7 @@ use hirzla_keystore::platform::HardeningReport;
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
 use crate::connections::proto::ConnectionOp;
+use crate::methods::proto::MethodOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -161,6 +162,17 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A hardware unlock method request was answered (`docs/api-locale.md` § 19, ADR 0075).
+    /// `kind` is `hello`, `enclave`, `fido` or `-`; `result` is `ok` or the name of the error:
+    /// fixed words only, never a key name, a credential identifier nor a rank.
+    MethodRequest {
+        /// Operation.
+        op: MethodOp,
+        /// Kind of method.
+        kind: &'static str,
+        /// Outcome.
+        result: &'static str,
+    },
     /// A server mode request was answered (`docs/api-locale.md` § 15). `result` is `ok` or
     /// the name of the error: fixed words only.
     ServerRequest {
@@ -254,6 +266,11 @@ impl Event {
                     op.name()
                 )
             }
+            Event::MethodRequest { op, kind, result } => write!(
+                out,
+                "event=unlock_method op={} kind={kind} result={result}",
+                op.name()
+            ),
             Event::ServerRequest { op, result } => {
                 write!(out, "event=server_request op={} result={result}", op.name())
             }
@@ -403,6 +420,13 @@ mod tests {
         for op in ConnectionOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
                 events.push(Event::ConnectionRequest { op, result });
+            }
+        }
+        for op in MethodOp::ALL {
+            for kind in ["hello", "enclave", "fido", "-"] {
+                for result in ["ok", "method_cancelled", "unlock_failed"] {
+                    events.push(Event::MethodRequest { op, kind, result });
+                }
             }
         }
         for n in 40..=48 {

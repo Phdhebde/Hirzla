@@ -69,7 +69,7 @@ impl FactorKind {
     pub fn name(self) -> &'static str {
         match self {
             FactorKind::SecureEnclave => "enclave",
-            FactorKind::Fido2 => "fido2",
+            FactorKind::Fido2 => "fido",
             FactorKind::WindowsHello => "hello",
         }
     }

@@ -19,7 +19,7 @@ use crate::error::VaultError;
 use crate::model::hardware::{
     is_hardware_kind, HardwareKey, UNLOCK_FIDO2, UNLOCK_SECURE_ENCLAVE, UNLOCK_WINDOWS_HELLO,
 };
-use crate::model::{Header, UnlockMethod, UnlockParams, UNLOCK_PASSWORD};
+use crate::model::{Header, Id16, UnlockMethod, UnlockParams, UNLOCK_PASSWORD};
 
 /// Most methods in a header (`docs/format.md` § 5.4).
 const MAX_METHODS: usize = 8;
@@ -62,6 +62,16 @@ pub fn unlock_methods(path: &Path) -> Result<Vec<MethodInfo>, VaultError> {
     let conn = crate::store::open(path)?;
     let (_, _, header) = Vault::read_header(&conn)?;
     Ok(describe(&header))
+}
+
+/// The identifier of the vault at `path`, read from its clear header without any key.
+///
+/// # Errors
+/// [`VaultError::NotAVault`], [`VaultError::Corrupt`], storage.
+pub fn vault_id_of(path: &Path) -> Result<Id16, VaultError> {
+    let conn = crate::store::open(path)?;
+    let (_, _, header) = Vault::read_header(&conn)?;
+    Ok(header.vault_id)
 }
 
 /// The method secret of a hardware method from the material its key released (§ 4.2.1).

@@ -23,6 +23,9 @@ signature-systeme = []
 # Exposes the decoder of the unsealed server mode annex to the fuzz targets (`fuzz/`).
 # Never enabled in a shipped binary.
 fuzzing = []
+# FIDO2 security keys over USB HID on Linux and macOS (ADR 0075 § 8): `ctap-hid-fido2`, which
+# needs libudev on Linux. Windows always goes through webauthn.dll.
+fido2-hid = ["hirzla-keystore/fido2-hid"]
 
 [dependencies]
 hirzla-crypto = { path = "../hirzla-crypto" }
@@ -46,3 +49,5 @@ hirzla-vault = { path = "../hirzla-vault", features = ["test-support"] }
 hirzla-server = { path = "../../apps/server" }
 rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
 rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
+# Simulated hardware unlock factors (ADR 0075 § 9); tests only.
+hirzla-keystore = { path = "../hirzla-keystore", features = ["test-software"] }
