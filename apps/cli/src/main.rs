@@ -14,6 +14,7 @@ mod methods;
 mod selfmode;
 mod server;
 mod term;
+mod totp;
 mod update;
 
 use std::io::{IsTerminal, Write};
@@ -602,6 +603,7 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Recovery(what) => selfmode::recovery(&session, what),
         Command::Connection(command) => connections::run(&session, command),
         Command::SshKeyAdd(command) => connections::add_ssh_key(&session, command),
+        Command::Totp(command) => totp::run(&session, command),
         Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }

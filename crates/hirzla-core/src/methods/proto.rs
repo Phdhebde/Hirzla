@@ -1,4 +1,4 @@
-//! Hardware unlock method operations of the local API (`docs/api-locale.md` § 20, ADR 0075):
+//! Hardware unlock method operations of the local API (`docs/api-locale.md` § 21, ADR 0075):
 //! version 12, operation codes 150 to 159, error codes 150 to 159. Same frames, same CBOR
 //! profile and same strict decoding as the rest of the API (`crate::proto`).
 

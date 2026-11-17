@@ -49,6 +49,14 @@ Commandes :
   import-kdbx FICHIER     Importe une base KeePass KDBX 3.1 ou 4 ; son mot de passe est demandé.
                           --fichier-cle FICHIER : fichier clé de la base (mot de passe vide
                           permis).
+  totp NOM                Copie le code TOTP actuel d'un secret (effacement différé), ou
+                          l'écrit sur la sortie standard si elle n'est pas un terminal.
+                          --id ID, --stdout, --suivant (code de la période suivante).
+  totp NOM --definir      Ajoute ou remplace le TOTP d'un mot de passe ou d'un code TOTP.
+                          L'URI otpauth:// ou le secret base32 est demandé sans écho.
+  totp NOM --retirer      Retire le TOTP d'un secret. --id ID.
+  totp NOM --creer        Range un nouveau secret de type code TOTP (URI ou secret
+                          demandé). --identifiant U, --casier CASIER, --tag T.
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.
@@ -421,6 +429,7 @@ pub enum Command {
     Recovery(Recovery),
     Connection(ConnectionCommand),
     SshKeyAdd(SshKeyAdd),
+    Totp(TotpCommand),
     Status,
     Stop,
     Server(ServerCommand),
@@ -434,6 +443,30 @@ pub enum Command {
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
+    },
+}
+
+/// `hirzla totp` (`docs/api-locale.md` § 22.5): one secret, by name or `--id`, and what to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TotpCommand {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    pub action: TotpAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TotpAction {
+    /// The current code, or with `next` the code of the next time step.
+    Code { stdout: bool, next: bool },
+    /// Add or replace the TOTP of the secret.
+    Set,
+    /// Remove the TOTP of the secret.
+    Clear,
+    /// Create a TOTP secret named `name`.
+    Create {
+        username: Option<String>,
+        locker: Option<String>,
+        tags: Vec<String>,
     },
 }
 
@@ -787,6 +820,17 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "appareil" => &["--oui"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
+        "totp" => &[
+            "--id",
+            "--stdout",
+            "--suivant",
+            "--definir",
+            "--retirer",
+            "--creer",
+            "--identifiant",
+            "--casier",
+            "--tag",
+        ],
         "history" => &["--id", "--version", "--champ", "--stdout"],
         "restore" => &["--id", "--version"],
         "import-kdbx" => &["--fichier-cle"],
@@ -991,6 +1035,52 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     purge: has("--purger"),
                 }
             }
+        }
+        "totp" => {
+            max_positional(1)?;
+            let name = positional.first().cloned();
+            let id = one("--id")?;
+            let actions = ["--definir", "--retirer", "--creer"]
+                .iter()
+                .filter(|a| has(a))
+                .count();
+            if actions > 1 {
+                return Err(
+                    "« totp » prend une seule action : --definir, --retirer ou --creer.".into(),
+                );
+            }
+            let creating = has("--creer");
+            if creating && (name.is_none() || id.is_some()) {
+                return Err("« totp --creer » attend le NOM du nouveau secret, sans --id.".into());
+            }
+            if !creating && name.is_some() == id.is_some() {
+                return Err("« totp » attend un NOM ou --id ID, l'un des deux.".into());
+            }
+            let code_only = ["--stdout", "--suivant"];
+            let create_only = ["--identifiant", "--casier", "--tag"];
+            if actions > 0 && code_only.iter().any(|f| has(f)) {
+                return Err("--stdout et --suivant ne valent que pour copier un code.".into());
+            }
+            if !creating && create_only.iter().any(|f| has(f)) {
+                return Err("--identifiant, --casier et --tag ne valent qu'avec --creer.".into());
+            }
+            let action = if creating {
+                TotpAction::Create {
+                    username: one("--identifiant")?,
+                    locker: one("--casier")?,
+                    tags: all("--tag"),
+                }
+            } else if has("--definir") {
+                TotpAction::Set
+            } else if has("--retirer") {
+                TotpAction::Clear
+            } else {
+                TotpAction::Code {
+                    stdout: has("--stdout"),
+                    next: has("--suivant"),
+                }
+            };
+            Command::Totp(TotpCommand { name, id, action })
         }
         "set" => {
             max_positional(1)?;
@@ -1520,11 +1610,71 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
 
     fn p(a: &[&str]) -> Result<Args, String> {
         parse(a.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn parses_totp() {
+        let t = |a: &[&str]| match p(a).unwrap().command {
+            Command::Totp(t) => t,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            t(&["totp", "Forge"]),
+            TotpCommand {
+                name: Some("Forge".into()),
+                id: None,
+                action: TotpAction::Code {
+                    stdout: false,
+                    next: false
+                },
+            }
+        );
+        assert_eq!(
+            t(&["totp", "--id", "a1b2", "--stdout", "--suivant"]).action,
+            TotpAction::Code {
+                stdout: true,
+                next: true
+            }
+        );
+        assert_eq!(t(&["totp", "Forge", "--definir"]).action, TotpAction::Set);
+        assert_eq!(
+            t(&["totp", "--id", "a1b2", "--retirer"]).action,
+            TotpAction::Clear
+        );
+        assert_eq!(
+            t(&[
+                "totp",
+                "Forge",
+                "--creer",
+                "--identifiant",
+                "alice",
+                "--tag",
+                "2fa"
+            ])
+            .action,
+            TotpAction::Create {
+                username: Some("alice".into()),
+                locker: None,
+                tags: vec!["2fa".into()],
+            }
+        );
+        for bad in [
+            &["totp"][..],
+            &["totp", "Forge", "--id", "a1b2"],
+            &["totp", "Forge", "--definir", "--retirer"],
+            &["totp", "Forge", "--definir", "--stdout"],
+            &["totp", "Forge", "--identifiant", "alice"],
+            &["totp", "--id", "a1b2", "--creer"],
+            &["totp", "Forge", "Autre"],
+            &["totp", "Forge", "--champ", "titre"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

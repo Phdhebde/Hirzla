@@ -75,6 +75,8 @@ pub struct Core {
     pub(crate) factors: Vec<Arc<dyn UnlockFactor>>,
     /// Set while a hardware gesture runs: one at a time.
     pub(crate) gesture_busy: Arc<AtomicBool>,
+    /// Clock of the TOTP codes, replaced by tests that need a fixed time (ADR 0078).
+    pub(crate) totp_clock: Option<fn() -> Option<u64>>,
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -210,6 +212,7 @@ impl Core {
             app_window: AppWindow::default(),
             factors: system_factors(),
             gesture_busy: Arc::new(AtomicBool::new(false)),
+            totp_clock: None,
         }
     }
 

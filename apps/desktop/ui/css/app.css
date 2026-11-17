@@ -365,6 +365,16 @@ button.touche:hover { color: var(--hz-texte); border-color: var(--hz-texte-secon
 .valeur-vide { color: var(--hz-texte-secondaire); }
 .valeur-grande { font-size: 20px; min-height: 32px; display: block; overflow-wrap: anywhere; }
 .decompte { display: block; font-family: var(--hz-font-texte); font-size: 12px; color: var(--hz-texte-secondaire); letter-spacing: 0; margin-top: 4px; }
+/* TOTP code of a record: grouped digits, and a ring that empties until the code changes. */
+.code-totp { display: block; font-family: var(--hz-font-mono); font-size: 22px; font-weight: 500; letter-spacing: 0.08em; white-space: nowrap; }
+.totp-minuteur { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--hz-texte-secondaire); font-variant-numeric: tabular-nums; }
+.totp-anneau { width: 22px; height: 22px; transform: rotate(-90deg); }
+.totp-anneau circle { fill: none; stroke-width: 4; }
+.totp-anneau-fond { stroke: var(--hz-bordure); }
+.totp-anneau-arc { stroke: var(--hz-glacier); transition: stroke-dashoffset 0.9s linear; }
+.totp-anneau-bientot .totp-anneau-arc { stroke: var(--hz-alerte); }
+.totp-bientot .totp-minuteur { color: var(--hz-alerte); }
+@media (prefers-reduced-motion: reduce) { .totp-anneau-arc { transition: none; } }
 .etiquette {
   display: inline-block; padding: 2px 8px; margin: 2px 6px 2px 0; border-radius: var(--hz-rayon-petit); font-size: 13px;
   border: 1px solid var(--hz-bordure);

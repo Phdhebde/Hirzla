@@ -35,7 +35,7 @@ const TYPE_ICONS = /** @type {Record<string, string>} */ ({
 
 /** Types that have their own filter in the navigation, with the kinds each one gathers. */
 const TYPE_FILTERS = /** @type {Record<string, string[]>} */ ({
-  password: ["password"],
+  password: ["password", "totp"],
   ssh_key: ["ssh_key"],
   connexion: ["ssh_connection", "rdp_connection"],
   note: ["note"],
@@ -103,6 +103,8 @@ export class VaultView {
     this.selectedId = null;
     /** @type {Set<() => void>} Clears revealed values and their timers. */
     this.hiders = new Set();
+    /** @type {Set<() => void>} Stops the TOTP codes of the record shown and clears them. */
+    this.tickers = new Set();
     this.searchTimer = 0;
     /** Number of the record being drawn: a record read from the core is dropped when it is no longer the one shown. */
     this.recordToken = 0;
@@ -223,6 +225,7 @@ export class VaultView {
   /** Forgets everything shown: called when the vault locks. */
   wipe() {
     this.hideAll();
+    this.stopTickers();
     this.entries = [];
     this.lockers = [];
     this.shared = new Map();
@@ -247,6 +250,12 @@ export class VaultView {
   hideAll() {
     for (const hide of [...this.hiders]) hide();
     this.hiders.clear();
+  }
+
+  /** Stops and clears the TOTP codes shown. */
+  stopTickers() {
+    for (const stop of [...this.tickers]) stop();
+    this.tickers.clear();
   }
 
   async refresh() {
@@ -431,6 +440,7 @@ export class VaultView {
   renderRecord() {
     this.recordToken += 1;
     this.hideAll();
+    this.stopTickers();
     const entry = this.selected();
     byId("fiche-vide").hidden = !!entry;
     byId("fiche-contenu").hidden = !entry;
@@ -450,7 +460,7 @@ export class VaultView {
     fav.title = entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris";
     fav.hidden = entry.trash;
     byId("fiche-modifier").hidden =
-      entry.trash || !["password", "note", "ssh_connection", "rdp_connection"].includes(entry.kind);
+      entry.trash || !["password", "note", "totp", "ssh_connection", "rdp_connection"].includes(entry.kind);
     byId("fiche-supprimer-texte").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
     byId("fiche-restaurer").hidden = !entry.trash;
 
@@ -462,7 +472,7 @@ export class VaultView {
     }
     if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
       void this.renderConnection(entry, this.recordToken);
-    } else if (["password", "note", "ssh_key"].includes(entry.kind)) {
+    } else if (["password", "note", "ssh_key", "totp"].includes(entry.kind)) {
       void this.renderFields(entry, this.recordToken);
     } else {
       fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
@@ -486,8 +496,9 @@ export class VaultView {
   }
 
   /**
-   * The fields of a password, a note or an SSH key. An empty optional field (notes,
-   * passphrase) is left out; an empty main field says so, without reveal or copy buttons.
+   * The fields of a password, a note, an SSH key or a TOTP code. An empty optional field
+   * (notes, passphrase, TOTP) is left out; an empty main field says so, without reveal or
+   * copy buttons.
    * @param {Entry} entry
    * @param {number} token  Drawing this record belongs to; a later one cancels it.
    */
@@ -495,7 +506,7 @@ export class VaultView {
     const ref = { locker: entry.locker, id: entry.id };
     const present = await this.presentFields(ref);
     if (token !== this.recordToken) return;
-    /** @param {FieldName} f */
+    /** @param {string} f  A field name of the history (`docs/api-locale.md` § 16.2). */
     const has = (f) => present === null || present.has(f);
     const fields = byId("fiche-champs");
     // The most frequent action of each type comes first, above the fields.
@@ -505,6 +516,9 @@ export class VaultView {
       note: ["notes", "Contenu"],
       ssh_key: ["ssh_public_key", "Clé publique"],
     })[entry.kind];
+    // A TOTP code: its own secret's main action, and the second one of a password.
+    const totp = (entry.kind === "password" || entry.kind === "totp") && has("totp") && !entry.trash;
+    if (totp && entry.kind === "totp") main.append(this.totpCopyButton(ref, "bouton-principal"));
     if (quick && !entry.trash) {
       const [field, label] = quick;
       if (has(field)) {
@@ -523,6 +537,7 @@ export class VaultView {
         u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
         main.append(u);
       }
+      if (totp) main.append(this.totpCopyButton(ref, "bouton-secondaire"));
     }
     if (!entry.trash) {
       /** @type {import("./api.js").TypedWhat[]} */
@@ -534,6 +549,7 @@ export class VaultView {
       }
       if ((entry.kind === "password" || entry.kind === "note") && has("notes")) offered.push("notes");
       if (entry.kind === "ssh_key" && has("ssh_passphrase")) offered.push("ssh_passphrase");
+      if (entry.kind === "totp" && entry.username) offered.push("username");
       const type = this.hooks.autoType.button(ref, entry.title, offered);
       if (type) main.append(type);
     }
@@ -546,18 +562,123 @@ export class VaultView {
     if (entry.kind === "password") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
       fields.append(required("Mot de passe", "password"));
+      if (totp) fields.append(this.totpField(ref, token));
       if (entry.hosts.length) fields.append(listField("Sites", entry.hosts, "mono"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
       if (has("notes")) fields.append(this.secretField("Notes", ref, "notes"));
     } else if (entry.kind === "note") {
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
       fields.append(required("Contenu", "notes"));
+    } else if (entry.kind === "totp") {
+      if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
+      if (entry.trash || !has("totp")) fields.append(emptyField("Code TOTP"));
+      else fields.append(this.totpField(ref, token));
+      if (entry.hosts.length) fields.append(listField("Sites", entry.hosts, "mono"));
+      if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
+      if (has("notes")) fields.append(this.secretField("Notes", ref, "notes"));
     } else if (entry.kind === "ssh_key") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
       fields.append(required("Clé publique", "ssh_public_key"));
       if (has("ssh_passphrase")) fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
     }
+  }
+
+  /**
+   * The button that copies the current TOTP code, by the Rust process: the page never holds
+   * the copied value.
+   * @param {import("./api.js").SecretRef} ref
+   * @param {string} style  bouton-principal or bouton-secondaire.
+   */
+  totpCopyButton(ref, style) {
+    const b = h("button", { class: `bouton ${style}`, type: "button" }, [icon("totp"), "Copier le code TOTP"]);
+    b.addEventListener("click", () => void this.copyTotp(ref));
+    return b;
+  }
+
+  /** @param {import("./api.js").SecretRef} ref */
+  async copyTotp(ref) {
+    try {
+      const s = await api.totpCopy(ref, false);
+      announce(`Code TOTP copié. Le presse-papiers sera effacé dans ${s} s.`);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "not_found") announce("Ce secret n'a plus de TOTP.");
+      else this.hooks.onError(err);
+    }
+  }
+
+  /**
+   * The TOTP code of a secret: computed by the core, shown grouped (« 287 082 »), with a ring
+   * that empties until the code changes. The code is asked again at the end of each period,
+   * only while the record is shown; the core does not count it as activity, so an open record
+   * does not keep the vault open. The TOTP secret never reaches the page.
+   * @param {import("./api.js").SecretRef} ref
+   * @param {number} token  Drawing this record belongs to; a later one stops the refresh.
+   */
+  totpField(ref, token) {
+    const value = h("span", { class: "code-totp", text: "··· ···" });
+    const ring = svgRing();
+    const left = h("span", { class: "totp-reste", "aria-hidden": "true" });
+    const meta = h("span", { class: "decompte" });
+    const copy = iconButton("copier", "Copier le code TOTP");
+    copy.addEventListener("click", () => void this.copyTotp(ref));
+    const row = h("div", { class: "champ-fiche" }, [
+      h("dt", { text: "Code TOTP" }),
+      h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, meta]), h("span", { class: "totp-minuteur" }, [ring.svg, left])]),
+      h("dd", { class: "actions-champ" }, [copy]),
+    ]);
+    let timer = 0;
+    let fetchToken = 0;
+    let remaining = 0;
+    let period = 30;
+    const stop = () => {
+      clearInterval(timer);
+      timer = 0;
+      fetchToken += 1;
+      value.textContent = "";
+      this.tickers.delete(stop);
+    };
+    const draw = () => {
+      ring.set(remaining / period, remaining <= 5);
+      left.textContent = `${remaining} s`;
+      row.classList.toggle("totp-bientot", remaining <= 5);
+    };
+    const load = async () => {
+      const mine = ++fetchToken;
+      /** @type {import("./api.js").TotpCode} */
+      let c;
+      try {
+        c = await api.totpCode(ref);
+      } catch (e) {
+        if (mine !== fetchToken || token !== this.recordToken) return;
+        stop();
+        const err = /** @type {import("./api.js").ApiError} */ (e);
+        if (err.code === "not_found") row.replaceWith(emptyField("Code TOTP"));
+        else this.hooks.onError(err);
+        return;
+      }
+      if (mine !== fetchToken || token !== this.recordToken) return;
+      value.textContent = groupDigits(c.code);
+      value.setAttribute("aria-label", `Code TOTP ${c.code.split("").join(" ")}`);
+      period = c.period;
+      remaining = c.seconds_left;
+      const what = [c.issuer, `${c.digits} chiffres`, `toutes les ${c.period} s`, c.algorithm === "SHA-1" ? null : c.algorithm];
+      meta.textContent = what.filter(Boolean).join(" · ");
+      draw();
+    };
+    timer = window.setInterval(() => {
+      if (token !== this.recordToken) {
+        stop();
+        return;
+      }
+      if (remaining > 0) remaining -= 1;
+      if (remaining === 0) void load();
+      else draw();
+    }, 1000);
+    this.tickers.add(stop);
+    void load();
+    return row;
   }
 
   /**
@@ -996,9 +1117,53 @@ function setIconButton(b, name, label) {
   b.title = label;
 }
 
+/**
+ * A code with its digits grouped by three (six digits) or four (seven or eight), easier to read
+ * and to type: « 287 082 », « 9428 7082 ».
+ * @param {string} code
+ */
+export function groupDigits(code) {
+  const cut = code.length === 6 ? 3 : code.length > 6 ? 4 : 0;
+  return cut ? `${code.slice(0, cut)} ${code.slice(cut)}` : code;
+}
+
+/**
+ * The ring of a TOTP code: full at the start of a period, empty when the code changes.
+ * @returns {{ svg: SVGSVGElement, set: (fraction: number, soon: boolean) => void }}
+ */
+function svgRing() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = /** @type {SVGSVGElement} */ (document.createElementNS(ns, "svg"));
+  svg.setAttribute("class", "totp-anneau");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const track = document.createElementNS(ns, "circle");
+  const arc = document.createElementNS(ns, "circle");
+  for (const c of [track, arc]) {
+    c.setAttribute("cx", "18");
+    c.setAttribute("cy", "18");
+    c.setAttribute("r", "15");
+  }
+  track.setAttribute("class", "totp-anneau-fond");
+  arc.setAttribute("class", "totp-anneau-arc");
+  const length = 2 * Math.PI * 15;
+  arc.setAttribute("stroke-dasharray", String(length));
+  svg.append(track, arc);
+  return {
+    svg,
+    set: (fraction, soon) => {
+      const f = Math.max(0, Math.min(1, fraction));
+      arc.setAttribute("stroke-dashoffset", String(length * (1 - f)));
+      svg.classList.toggle("totp-anneau-bientot", soon);
+    },
+  };
+}
+
 /** @param {Entry} e */
 function subtitle(e) {
   if (e.kind === "password") return e.username || e.hosts[0] || TYPE_NAMES.password;
+  if (e.kind === "totp") return e.username ? `${TYPE_NAMES.totp} · ${e.username}` : TYPE_NAMES.totp;
   if (e.kind === "ssh_connection" || e.kind === "rdp_connection") {
     const where = `${e.username ? `${e.username}@` : ""}${e.hosts[0] ?? ""}`;
     return where ? `${e.kind === "rdp_connection" ? "RDP" : "SSH"} · ${where}` : TYPE_NAMES[e.kind];

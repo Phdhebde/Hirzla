@@ -16,6 +16,7 @@ use crate::methods::proto::MethodOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
+use crate::totp::proto::TotpOp;
 
 /// Why a connection was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,7 +164,7 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
-    /// A hardware unlock method request was answered (`docs/api-locale.md` § 20, ADR 0075).
+    /// A hardware unlock method request was answered (`docs/api-locale.md` § 21, ADR 0075).
     /// `kind` is `hello`, `enclave`, `fido` or `-`; `result` is `ok` or the name of the error:
     /// fixed words only, never a key name, a credential identifier nor a rank.
     MethodRequest {
@@ -171,6 +172,14 @@ pub enum Event {
         op: MethodOp,
         /// Kind of method.
         kind: &'static str,
+        /// Outcome.
+        result: &'static str,
+    },
+    /// A TOTP request was answered (`docs/api-locale.md` § 22). `result` is `ok` or the name
+    /// of the error: fixed words only. Never a code.
+    TotpRequest {
+        /// Operation.
+        op: TotpOp,
         /// Outcome.
         result: &'static str,
     },
@@ -280,6 +289,9 @@ impl Event {
                 "event=unlock_method op={} kind={kind} result={result}",
                 op.name()
             ),
+            Event::TotpRequest { op, result } => {
+                write!(out, "event=totp_request op={} result={result}", op.name())
+            }
             Event::ExportRequest { op, result } => {
                 write!(out, "event=export_request op={} result={result}", op.name())
             }
@@ -439,6 +451,11 @@ mod tests {
                 for result in ["ok", "method_cancelled", "unlock_failed"] {
                     events.push(Event::MethodRequest { op, kind, result });
                 }
+            }
+        }
+        for op in TotpOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "unauthorized", "locked"] {
+                events.push(Event::TotpRequest { op, result });
             }
         }
         for op in ExportOp::ALL {

@@ -1,6 +1,6 @@
 ---
 title: Gérer vos secrets
-description: Utiliser Hirzla au quotidien - créer un mot de passe ou une note, générer un mot de passe, copier et révéler, rechercher, favoris, historique des versions, corbeille, casiers.
+description: Utiliser Hirzla au quotidien - créer un mot de passe ou une note, codes TOTP, générer un mot de passe, copier et révéler, rechercher, favoris, historique des versions, corbeille, casiers.
 ---
 
 # Gérer vos secrets
@@ -19,8 +19,8 @@ description: Utiliser Hirzla au quotidien - créer un mot de passe ou une note, 
 ## Créer un secret
 
 1. Cliquez sur **Nouveau secret**.
-2. Choisissez le type : **Mot de passe**, **Note**, **Connexion SSH**, **Connexion RDP** ou
-   **Clé SSH**.
+2. Choisissez le type : **Mot de passe**, **Note**, **Connexion SSH**, **Connexion RDP**,
+   **Clé SSH** ou **Code TOTP**.
 3. Renseignez le titre, l'identifiant et le mot de passe, ou cliquez sur **Générer**.
 4. Dans « Adresses web », indiquez l'adresse du site, une par ligne. L'extension ne remplira
    l'identifiant que sur ces sites.
@@ -43,6 +43,31 @@ session lui-même.
 
 Si la clé ou le rebond d'une connexion part à la corbeille ou disparaît, la fiche le signale.
 Le filtre **Connexions** du volet de gauche les réunit.
+
+## Codes de double authentification (TOTP)
+
+Hirzla calcule les codes à 6 ou 8 chiffres que demandent les sites protégés par une double
+authentification, à la place d'une application d'authentification. La clé du TOTP reste
+scellée dans le coffre : seul le code s'affiche.
+
+1. Sur le site, activez la double authentification. Sous le QR code, choisissez la saisie
+   manuelle : le site donne une clé secrète, ou une adresse qui commence par `otpauth://totp/`.
+2. Dans Hirzla, ouvrez le mot de passe du site, cliquez sur **Modifier**, et collez la clé ou
+   l'adresse dans **Double authentification (TOTP)**. Pour un TOTP seul, créez plutôt un
+   secret de type **Code TOTP**.
+3. Enregistrez, puis donnez au site le code affiché sur la fiche pour terminer l'activation.
+
+La fiche montre le code, un anneau qui se vide jusqu'au changement et les secondes restantes ;
+l'anneau change de couleur dans les cinq dernières secondes. **Copier le code TOTP** le place
+dans le presse-papiers, effacé après le délai réglé. Les TOTP importés de KeePass s'affichent
+de la même façon.
+
+- Pour remplacer le TOTP, collez la nouvelle clé dans le formulaire ; pour le retirer, cochez
+  **Retirer le TOTP actuel**. Laissé vide, le champ garde le TOTP actuel.
+- Hirzla refuse les codes HOTP (à compteur) et les codes Steam.
+- Le code dépend de l'heure du poste : si le site le refuse, vérifiez que l'horloge du système
+  est à l'heure.
+- En ligne de commande : `hirzla totp NOM` (voir [Ligne de commande](ligne-de-commande.md)).
 
 ## Générer un mot de passe
 

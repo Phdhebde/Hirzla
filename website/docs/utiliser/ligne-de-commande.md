@@ -43,6 +43,10 @@ hirzla restore Messagerie  # sort de la corbeille
 | `gen [TAILLE]` | Génère un mot de passe, 24 caractères par défaut, et affiche son entropie | `--mode caracteres\|phrase\|prononcable\|pin\|modele`, `--profil`, `--sans-symboles`, `--sans-chiffres`, `--sans-majuscules`, `--min`, `--symboles`, `--exclure`, `--sans-ambigus`, `--memes-touches`, `--sans-repetition`, `--lettre-en-tete`, `--separateur`, `--majuscule`, `--chiffres`, `--modele`, `--stdout` |
 | `history NOM` | Versions d'un secret, la plus récente en premier | `--version N --champ CHAMP` |
 | `restore NOM` | Sort de la corbeille, ou rétablit une version | `--version N` |
+| `totp NOM` | Copie le code TOTP actuel (double authentification), ou l'écrit sur la sortie standard | `--id`, `--stdout`, `--suivant` (code de la période suivante) |
+| `totp NOM --definir` | Ajoute ou remplace le TOTP d'un secret ; l'adresse `otpauth://` ou la clé base32 est demandée | `--id` |
+| `totp NOM --retirer` | Retire le TOTP d'un secret | `--id` |
+| `totp NOM --creer` | Range un nouveau secret de type code TOTP | `--identifiant`, `--casier`, `--tag` |
 
 Champs : `titre`, `identifiant`, `mot-de-passe`, `notes`.
 

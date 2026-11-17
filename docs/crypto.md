@@ -253,6 +253,13 @@ s'applique pas à eux.
 Règles :
 
 - La liste est exhaustive. RSA est stocké, jamais utilisé, en v1.
+- **TOTP** (ADR 0078) : `hirzla_crypto::totp` prend le HMAC d'AWS-LC
+  (`HMAC_SHA1_FOR_LEGACY_USE_ONLY`, `HMAC_SHA256`, `HMAC_SHA512`) et n'ajoute que la
+  troncature dynamique décimale de la RFC 4226 § 5.3, sans clé ni dérivation. Bornes : graine
+  10 à 128 octets, 6 à 8 chiffres, période 15 à 300 s. Tests : les 18 vecteurs de la RFC 6238
+  annexe B et les 10 de la RFC 4226 annexe D. Le code (`TotpCode`) est effacé à la libération
+  et n'a pas de `Debug`. La clé TOTP saisie (`otpauth://` ou base32) est décodée par
+  `data-encoding` dans une mémoire effacée (`hirzla_vault::totp`).
 - Ces mécanismes ne protègent jamais une donnée Hirzla. Ils ne s'appliquent qu'au secret
   stocké, pour le protocole du tiers.
 - Ils tournent dans le noyau, avec une bibliothèque auditée (ADR 0009). La clé ou la graine

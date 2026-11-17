@@ -49,7 +49,7 @@ pub enum DesktopError {
     /// The core refused a server mode request (`docs/api-locale.md` § 15.5).
     #[error("the core refused the server mode request: {}", .0.name())]
     Server(ServerCode),
-    /// The core refused a hardware unlock method request (`docs/api-locale.md` § 20).
+    /// The core refused a hardware unlock method request (`docs/api-locale.md` § 21).
     #[error("the core refused the unlock method request: {}", .0.name())]
     Method(MethodCode),
     /// The core refused an export request (`docs/api-locale.md` § 19.3).
@@ -122,7 +122,7 @@ impl DesktopError {
         }
     }
 
-    /// A refusal of a hardware unlock method request (`docs/api-locale.md` § 20). The general
+    /// A refusal of a hardware unlock method request (`docs/api-locale.md` § 21). The general
     /// refusals whose meaning differs here keep the method family; the others keep their
     /// usual meaning.
     #[must_use]
@@ -278,7 +278,7 @@ pub fn server_message(code: ServerCode) -> String {
 }
 
 /// French message for a refusal of a hardware unlock method request
-/// (`docs/api-locale.md` § 20).
+/// (`docs/api-locale.md` § 21).
 #[must_use]
 pub fn method_message(code: MethodCode) -> String {
     match code {

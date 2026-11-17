@@ -19,7 +19,7 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   propose la méthode matérielle en premier, le mot de passe dessous.
 - Ligne de commande : `hirzla methods`, `hirzla methods add hello|touchid|fido2`,
   `hirzla methods remove RANG`, `hirzla unlock --materiel [RANG]`.
-- API locale version 12 (`docs/api-locale.md` § 20) : `UnlockMethods`, `EnrollMethod`,
+- API locale version 12 (`docs/api-locale.md` § 21) : `UnlockMethods`, `EnrollMethod`,
   `UnlockWithMethod`, `RemoveMethod` ; profil complet seulement ; le geste se fait hors du
   verrou du noyau.
 - Format : contenu du `keystore_blob` des méthodes 3, 4 et 5 et étiquette
@@ -31,6 +31,20 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   `libudev`.
 - À vérifier sur du vrai matériel avant livraison : tests H1, H2, M2, F1 et F2 de
   `docs/keystore-prototypes.md`.
+
+### Codes TOTP (ADR 0078)
+
+- La fiche d'un mot de passe ou d'un code TOTP affiche le code de double authentification,
+  groupé, avec un anneau et les secondes restantes ; « Copier le code TOTP » le copie avec
+  effacement du presse-papiers. Les TOTP importés de KeePass deviennent utilisables.
+- Ajout, remplacement et retrait d'un TOTP depuis le formulaire, par l'adresse
+  `otpauth://totp/…` ou la clé base32 que donne le site ; nouveau type « Code TOTP ».
+- Calcul RFC 6238 dans le noyau, sur le HMAC d'AWS-LC (SHA-1, SHA-256, SHA-512), vérifié par
+  les vecteurs de la RFC. La clé du TOTP ne quitte jamais le noyau ; un code n'est jamais
+  journalisé. Afficher un code ne retarde pas le verrouillage automatique.
+- API locale version 13 (`docs/api-locale.md` § 22) : `TotpCode`, `TotpSet`, `TotpClear`,
+  `TotpCreate` (opérations 170 à 173), profil complet seulement.
+- Ligne de commande : `hirzla totp NOM [--suivant]`, `--definir`, `--retirer`, `--creer`.
 
 ### Export chiffré d'un casier (ADR 0077)
 

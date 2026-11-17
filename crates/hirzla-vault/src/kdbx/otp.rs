@@ -11,16 +11,16 @@
 //! - The KeeTrayTOTP plug-in keeps a base32 secret in `TOTP Seed` and `period;digits` in
 //!   `TOTP Settings`.
 //!
-//! Base32 and hexadecimal are decoded by `data-encoding` (ADR 0025), with case folded and
+//! Base32 and hexadecimal are decoded by `data-encoding` (ADR 0025, `crate::totp`), with case folded and
 //! spaces and padding ignored, into erased memory. An entry with several secrets, a HOTP, a
 //! Steam code or a value outside the vault's bounds is not converted: the importer then keeps
 //! the strings as they are, in custom fields, and counts them.
 
-use data_encoding::{Encoding, Specification};
 use zeroize::Zeroizing;
 
 use super::xml::KdbxField;
 use crate::secret::TotpConfig;
+use crate::totp::{algorithm, base32, bounded, decode, hex, number, otpauth};
 
 /// The strings that hold a secret, one of which must be present, alone.
 const SECRET_KEYS: [&str; 6] = [
@@ -32,132 +32,10 @@ const SECRET_KEYS: [&str; 6] = [
     "TOTP Seed",
 ];
 
-/// Characters skipped while decoding a secret typed or copied by hand.
-const IGNORED: &str = " \t\r\n=-";
-
 fn get<'a>(otp: &'a [KdbxField], key: &str) -> Option<&'a str> {
     otp.iter()
         .find(|f| f.label.as_str() == key)
         .map(|f| f.value.trim())
-}
-
-/// RFC 4648 base32, upper or lower case, spaces, hyphens and padding ignored. Trailing bits
-/// are not checked: secrets generated as random base32 characters often leave some set.
-fn base32() -> Option<Encoding> {
-    let mut spec = Specification::new();
-    spec.symbols.push_str("ABCDEFGHIJKLMNOPQRSTUVWXYZ234567");
-    spec.translate.from.push_str("abcdefghijklmnopqrstuvwxyz");
-    spec.translate.to.push_str("ABCDEFGHIJKLMNOPQRSTUVWXYZ");
-    spec.ignore.push_str(IGNORED);
-    spec.check_trailing_bits = false;
-    spec.encoding().ok()
-}
-
-/// Hexadecimal, upper or lower case, spaces ignored.
-pub(super) fn hex() -> Option<Encoding> {
-    let mut spec = Specification::new();
-    spec.symbols.push_str("0123456789abcdef");
-    spec.translate.from.push_str("ABCDEF");
-    spec.translate.to.push_str("abcdef");
-    spec.ignore.push_str(IGNORED);
-    spec.encoding().ok()
-}
-
-/// Decodes into erased memory, partial output included on a refusal.
-pub(super) fn decode(encoding: &Encoding, text: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
-    let len = encoding.decode_len(text.len()).ok()?;
-    let mut out = Zeroizing::new(vec![0u8; len]);
-    let n = encoding.decode_mut(text, &mut out).ok()?;
-    out.truncate(n);
-    Some(out)
-}
-
-fn algorithm(name: Option<&str>) -> Option<u8> {
-    // `HMAC-SHA-256` in KeePass 2, `SHA256` in an otpauth URI.
-    let Some(name) = name else { return Some(1) };
-    let name: String = name
-        .chars()
-        .filter(char::is_ascii_alphanumeric)
-        .collect::<String>()
-        .to_ascii_uppercase();
-    match name.strip_prefix("HMAC").unwrap_or(&name) {
-        "SHA1" => Some(1),
-        "SHA256" => Some(2),
-        "SHA512" => Some(3),
-        _ => None,
-    }
-}
-
-fn number<T: core::str::FromStr>(text: Option<&str>, default: T) -> Option<T> {
-    text.map_or(Some(default), |t| t.trim().parse().ok())
-}
-
-/// The parts of a KeePassXC `otpauth://totp/…` URI.
-fn otpauth(uri: &str) -> Option<TotpConfig> {
-    let (scheme, rest) = uri.split_once("://")?;
-    if !scheme.eq_ignore_ascii_case("otpauth") {
-        return None;
-    }
-    let (kind, rest) = rest.split_once('/')?;
-    // HOTP has no place in the vault; Steam codes use their own alphabet.
-    if !kind.eq_ignore_ascii_case("totp") {
-        return None;
-    }
-    let (label, query) = rest.split_once('?')?;
-    let mut secret: Option<Zeroizing<String>> = None;
-    let mut algo = None;
-    let mut digits = None;
-    let mut period = None;
-    let mut issuer = None;
-    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        // A decoded value that needed a copy is moved, not copied, into erased memory.
-        let value = Zeroizing::new(value.into_owned());
-        match key.as_ref() {
-            "secret" if secret.is_none() => secret = Some(value),
-            "algorithm" => algo = Some(value),
-            "digits" => digits = Some(value),
-            "period" => period = Some(value),
-            "issuer" => issuer = Some(value.trim().to_owned()),
-            "encoder" | "secret" => return None,
-            _ => {}
-        }
-    }
-    let secret = decode(&base32()?, secret?.as_bytes())?;
-    // The issuer of the query wins; otherwise the label's `Issuer:account` prefix.
-    let issuer = issuer.filter(|i| !i.is_empty()).or_else(|| {
-        let label = url::form_urlencoded::parse(format!("l={label}").as_bytes())
-            .next()
-            .map(|(_, v)| v.into_owned())?;
-        let (prefix, _) = label.split_once(':')?;
-        Some(prefix.trim().to_owned()).filter(|p| !p.is_empty())
-    });
-    bounded(
-        secret,
-        algorithm(algo.as_deref().map(String::as_str))?,
-        number(digits.as_deref().map(String::as_str), 6)?,
-        number(period.as_deref().map(String::as_str), 30)?,
-        issuer,
-    )
-}
-
-fn bounded(
-    secret: Zeroizing<Vec<u8>>,
-    algorithm: u8,
-    digits: u8,
-    period: u16,
-    issuer: Option<String>,
-) -> Option<TotpConfig> {
-    let ok = (10..=128).contains(&secret.len())
-        && (6..=8).contains(&digits)
-        && (15..=300).contains(&period)
-        && issuer.as_ref().is_none_or(|i| i.len() <= 256);
-    ok.then_some(TotpConfig {
-        secret,
-        algorithm,
-        digits,
-        period,
-        issuer,
-    })
 }
 
 /// The TOTP configuration of an entry's one-time password strings, when they hold exactly one
