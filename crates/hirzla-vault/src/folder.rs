@@ -228,7 +228,9 @@ pub fn edit_folders(
                 if folders.contains_key(&id)
                     || folders.len() >= MAX_FOLDERS
                     || !is_valid_folder_name(&name)
-                    || tree.depth_under(parent).is_none_or(|d| d >= MAX_FOLDER_DEPTH)
+                    || tree
+                        .depth_under(parent)
+                        .is_none_or(|d| d >= MAX_FOLDER_DEPTH)
                 {
                     return Err(EditError::NotAllowed);
                 }

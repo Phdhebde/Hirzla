@@ -38,7 +38,12 @@ fn roundtrip(f: &Folders) -> Folders {
 #[test]
 fn encode_decode_round_trip() {
     let mut f = Folders::new();
-    edit_folders(&mut f, vec![create(1, None), create(2, Some(1))], stamp(1, 1)).unwrap();
+    edit_folders(
+        &mut f,
+        vec![create(1, None), create(2, Some(1))],
+        stamp(1, 1),
+    )
+    .unwrap();
     edit_folders(&mut f, vec![FolderEdit::Delete { id: id(2) }], stamp(2, 1)).unwrap();
     assert!(roundtrip(&f) == f);
 }
@@ -112,11 +117,19 @@ fn depth_is_bounded_for_writers() {
         parent = Some(n);
     }
     let tree = FolderTree::of(&f);
-    assert_eq!(tree.get(&id(MAX_FOLDER_DEPTH as u8)).unwrap().depth, MAX_FOLDER_DEPTH);
+    assert_eq!(
+        tree.get(&id(MAX_FOLDER_DEPTH as u8)).unwrap().depth,
+        MAX_FOLDER_DEPTH
+    );
     assert!(edit_folders(&mut f.clone(), vec![create(200, parent)], stamp(2, 1)).is_err());
     // Moving a two-level subtree under depth 31 would reach 33.
     let mut g = Folders::new();
-    edit_folders(&mut g, vec![create(100, None), create(101, Some(100))], stamp(1, 1)).unwrap();
+    edit_folders(
+        &mut g,
+        vec![create(100, None), create(101, Some(100))],
+        stamp(1, 1),
+    )
+    .unwrap();
     for (k, v) in g {
         f.insert(k, v);
     }
@@ -157,7 +170,12 @@ fn count_is_bounded_deleted_ones_included() {
 #[test]
 fn concurrent_moves_into_each_other_detach_the_latest() {
     let mut base = Folders::new();
-    edit_folders(&mut base, vec![create(1, None), create(2, None)], stamp(1, 1)).unwrap();
+    edit_folders(
+        &mut base,
+        vec![create(1, None), create(2, None)],
+        stamp(1, 1),
+    )
+    .unwrap();
     let mut a = base.clone();
     let mv = FolderEdit::Move {
         id: id(1),

@@ -14,8 +14,7 @@ use hirzla_vault::model::{
     KIND_CONTROL, KIND_LOCKER_META_PUT, KIND_SECRET_PUT, MAX_DEPS, MAX_OPERATION_LEN,
 };
 use hirzla_vault::secret::{
-    apply_edit, EditError, FieldValue, LockerBody, LockerField, SecretBody, SecretEdit,
-    SecretType,
+    apply_edit, EditError, FieldValue, LockerBody, LockerField, SecretBody, SecretEdit, SecretType,
 };
 
 use super::{Body, Content, Entry, OpStatus, Replica};
@@ -1032,7 +1031,6 @@ impl<A: Authorizer> Replica<A> {
         }
         Ok(report)
     }
-
 }
 
 /// Writes onto `into` the folder registers of `old` that carry `own`, with `stamp`

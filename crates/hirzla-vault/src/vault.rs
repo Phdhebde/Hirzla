@@ -1335,11 +1335,7 @@ impl Vault {
     pub(crate) fn write_meta(
         &mut self,
         locker: Id16,
-        edit: impl FnOnce(
-            &LockerBody,
-            Vec<OpId>,
-            Stamp,
-        ) -> Result<LockerBody, EditError>,
+        edit: impl FnOnce(&LockerBody, Vec<OpId>, Stamp) -> Result<LockerBody, EditError>,
     ) -> Result<(), VaultError> {
         let shard = self.shard(&locker)?.clone();
         let base = self.locker_meta(&locker)?;
@@ -1832,8 +1828,8 @@ impl Vault {
     }
 }
 
-mod keys;
 mod folders;
+mod keys;
 mod restore;
 
 pub use keys::{

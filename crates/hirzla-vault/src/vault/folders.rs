@@ -62,7 +62,12 @@ impl Vault {
     ///
     /// # Errors
     /// See [`Vault::edit_folders`].
-    pub fn rename_folder(&mut self, locker: Id16, folder: Id16, name: &str) -> Result<(), VaultError> {
+    pub fn rename_folder(
+        &mut self,
+        locker: Id16,
+        folder: Id16,
+        name: &str,
+    ) -> Result<(), VaultError> {
         self.edit_folders(
             locker,
             vec![FolderEdit::Rename {
@@ -156,7 +161,11 @@ impl Vault {
     }
 
     /// Checks the folder a write puts a secret in: it must be active in the locker.
-    pub(super) fn check_folder_target(&self, locker: &Id16, edit: &SecretEdit) -> Result<(), VaultError> {
+    pub(super) fn check_folder_target(
+        &self,
+        locker: &Id16,
+        edit: &SecretEdit,
+    ) -> Result<(), VaultError> {
         for (f, v) in &edit.set {
             if *f != Field::Folder {
                 continue;

@@ -15,6 +15,7 @@ use hirzla_core::connections::proto::{
     ConnectionCard, ConnectionFields, ConnectionReply, ConnectionRequest, LinkState,
 };
 use hirzla_core::events::Log;
+use hirzla_core::folders::proto::{FolderReply, FolderRequest, LockerTree};
 use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector};
 use hirzla_core::server_mode::proto::{
     AlertKind, QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role,
@@ -2424,4 +2425,167 @@ fn connections_are_shared_and_a_link_gives_no_right() {
             .unwrap_err(),
         ErrorCode::InvalidInput
     );
+}
+
+// -----------------------------------------------------------------------------------------
+// Folders in a shared locker (ADR 0076, `docs/api-locale.md` § 19)
+// -----------------------------------------------------------------------------------------
+
+fn folder(m: &mut Member, r: FolderRequest) -> Result<FolderReply, ErrorCode> {
+    m.core.handle_folder(r)
+}
+
+fn shared_tree(m: &mut Member, locker: Id16) -> LockerTree {
+    match folder(
+        m,
+        FolderRequest::Tree {
+            locker: Some(locker),
+        },
+    )
+    .unwrap()
+    {
+        FolderReply::Trees(mut t) => t.remove(0),
+        other => panic!("unexpected {other:?}"),
+    }
+}
+
+/// Alice creates folders in a shared locker and puts a secret in one; Bob, editor, sees the
+/// same tree after a sync, renames and deletes; Carol, reader, may not change the tree. The
+/// server only ever relays sealed operations: no folder name reaches its store.
+#[test]
+fn folders_of_a_shared_locker_synchronise() {
+    let tmp = tempdir();
+    let (server, mut members, locker) = joined(tmp.path(), &["alice", "bob", "carol"]);
+    let (bob_id, carol_id) = (members[1].id, members[2].id);
+    let bob_fp = members[1].fingerprint.clone();
+    let carol_fp = members[2].fingerprint.clone();
+    grant(&mut members[0], locker, bob_id, Role::Editor, Some(&bob_fp)).unwrap();
+    grant(
+        &mut members[0],
+        locker,
+        carol_id,
+        Role::Reader,
+        Some(&carol_fp),
+    )
+    .unwrap();
+    let name = "Dossier-Partage-Confidentiel-71c3";
+    let FolderReply::Created(top) = folder(
+        &mut members[0],
+        FolderRequest::Create {
+            locker,
+            name: z(name),
+            parent: None,
+        },
+    )
+    .unwrap() else {
+        panic!("created expected");
+    };
+    let secret = members[0].create(locker, "Base", "mot-de-passe").unwrap();
+    folder(
+        &mut members[0],
+        FolderRequest::SecretMove {
+            locker,
+            secret,
+            folder: Some(top),
+        },
+    )
+    .unwrap();
+    members[0].sync();
+    members[1].sync();
+    members[2].sync();
+    let t = shared_tree(&mut members[1], locker);
+    assert_eq!(t.folders.len(), 1);
+    assert_eq!(t.folders[0].name.as_str(), name);
+    assert_eq!(t.placements, vec![(secret, top)]);
+
+    // Bob (editor) creates a sub-folder and renames the top one.
+    let FolderReply::Created(sub) = folder(
+        &mut members[1],
+        FolderRequest::Create {
+            locker,
+            name: z("Sous"),
+            parent: Some(top),
+        },
+    )
+    .unwrap() else {
+        panic!("created expected");
+    };
+    folder(
+        &mut members[1],
+        FolderRequest::Rename {
+            locker,
+            folder: top,
+            name: z("Renommé"),
+        },
+    )
+    .unwrap();
+    // Carol (reader) may not.
+    assert_eq!(
+        folder(
+            &mut members[2],
+            FolderRequest::Create {
+                locker,
+                name: z("Non"),
+                parent: None,
+            },
+        )
+        .err(),
+        Some(ErrorCode::InvalidInput)
+    );
+    members[1].sync();
+    members[0].sync();
+    let t = shared_tree(&mut members[0], locker);
+    assert_eq!(t.folders.len(), 2);
+    assert!(t
+        .folders
+        .iter()
+        .any(|f| f.id == sub && f.parent == Some(top)));
+    assert!(t
+        .folders
+        .iter()
+        .any(|f| f.id == top && f.name.as_str() == "Renommé"));
+
+    // Alice deletes the top folder: the secret goes to the trash, for everyone.
+    assert!(
+        folder(
+            &mut members[0],
+            FolderRequest::Delete {
+                locker,
+                folder: top
+            }
+        )
+        .unwrap()
+            == FolderReply::Trashed(1)
+    );
+    members[0].sync();
+    members[1].sync();
+    let t = shared_tree(&mut members[1], locker);
+    assert!(t.folders.is_empty());
+    let Reply::List { entries, .. } = members[1]
+        .core
+        .handle(Request::List {
+            query: None,
+            include_trash: true,
+        })
+        .unwrap()
+    else {
+        panic!("list expected");
+    };
+    assert!(entries.iter().any(|e| e.id == secret && e.state == 1));
+
+    // The server's store never saw the folder name.
+    let mut stored = Vec::new();
+    let mut todo = vec![server.data.clone()];
+    while let Some(d) = todo.pop() {
+        for e in std::fs::read_dir(&d).unwrap() {
+            let p = e.unwrap().path();
+            if p.is_dir() {
+                todo.push(p);
+            } else {
+                stored.extend(std::fs::read(&p).unwrap());
+            }
+        }
+    }
+    assert!(!stored.is_empty());
+    assert!(!stored.windows(name.len()).any(|w| w == name.as_bytes()));
 }

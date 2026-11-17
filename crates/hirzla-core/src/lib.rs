@@ -27,6 +27,7 @@ pub mod codesign;
 pub mod connections;
 pub mod daemon;
 pub mod events;
+pub mod folders;
 pub mod generator;
 pub mod origin;
 pub mod proto;

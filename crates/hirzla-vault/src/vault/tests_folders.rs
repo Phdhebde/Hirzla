@@ -64,7 +64,12 @@ fn note(v: &mut Vault, l: Id16, title: &str) -> Id16 {
 }
 
 fn shown_in(v: &Vault, l: Id16, s: Id16) -> Option<Id16> {
-    let e = v.list(l).unwrap().into_iter().find(|e| e.secret_id == s).unwrap();
+    let e = v
+        .list(l)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.secret_id == s)
+        .unwrap();
     v.folder_tree(l).unwrap().place(e.folder)
 }
 
@@ -117,10 +122,19 @@ fn writer_rules_are_enforced() {
     let b = v.create_folder(l, "B", Some(a)).unwrap();
     let s = note(&mut v, l, "x");
     for bad in ["", "a\u{7}b", &"x".repeat(256)] {
-        assert_eq!(v.create_folder(l, bad, None).err(), Some(VaultError::InvalidInput));
+        assert_eq!(
+            v.create_folder(l, bad, None).err(),
+            Some(VaultError::InvalidInput)
+        );
     }
-    assert_eq!(v.move_folder(l, a, Some(b)).err(), Some(VaultError::InvalidInput));
-    assert_eq!(v.move_folder(l, a, Some(a)).err(), Some(VaultError::InvalidInput));
+    assert_eq!(
+        v.move_folder(l, a, Some(b)).err(),
+        Some(VaultError::InvalidInput)
+    );
+    assert_eq!(
+        v.move_folder(l, a, Some(a)).err(),
+        Some(VaultError::InvalidInput)
+    );
     assert_eq!(
         v.create_folder(l, "x", Some([9; 16])).err(),
         Some(VaultError::InvalidInput)

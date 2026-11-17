@@ -61,7 +61,11 @@ fn concurrent_moves_into_each_other_and_a_deletion_converge() {
     let mut w = World::new(&[Role::Editor, Role::Owner]);
     let (a, b, c) = ([0xa; 16], [0xb; 16], [0xc; 16]);
     w.replicas[0]
-        .put_folders(vec![create(a, "A", None), create(b, "B", None), create(c, "C", Some(b))])
+        .put_folders(vec![
+            create(a, "A", None),
+            create(b, "B", None),
+            create(c, "C", Some(b)),
+        ])
         .unwrap();
     let (s, _) = w.replicas[0]
         .put_secret(None, SecretType::Password, password_edit("s", "v"))
@@ -73,10 +77,16 @@ fn concurrent_moves_into_each_other_and_a_deletion_converge() {
 
     // Concurrent, nobody syncs: A under B, B under A, the secret to C, C deleted.
     let o1 = w.replicas[0]
-        .put_folders(vec![FolderEdit::Move { id: a, parent: Some(b) }])
+        .put_folders(vec![FolderEdit::Move {
+            id: a,
+            parent: Some(b),
+        }])
         .unwrap();
     let o2 = w.replicas[1]
-        .put_folders(vec![FolderEdit::Move { id: b, parent: Some(a) }])
+        .put_folders(vec![FolderEdit::Move {
+            id: b,
+            parent: Some(a),
+        }])
         .unwrap();
     let o3 = move_secret(&mut w.replicas[1], s, Some(c));
     let o4 = w.replicas[2]
@@ -116,7 +126,9 @@ fn concurrent_moves_into_each_other_and_a_deletion_converge() {
 #[test]
 fn a_reader_cannot_change_folders() {
     let mut w = World::new(&[Role::Reader]);
-    w.replicas[0].put_folders(vec![create([1; 16], "A", None)]).unwrap();
+    w.replicas[0]
+        .put_folders(vec![create([1; 16], "A", None)])
+        .unwrap();
     w.sync();
     // The reader's own replica refuses to emit, or its operation is refused everywhere.
     if let Ok(op) = w.replicas[1].put_folders(vec![create([2; 16], "B", None)]) {
@@ -129,7 +141,9 @@ fn a_reader_cannot_change_folders() {
 #[test]
 fn a_stale_local_folder_change_is_written_again_on_the_new_epoch() {
     let mut w = World::new(&[Role::Editor]);
-    w.replicas[1].put_folders(vec![create([1; 16], "Local", None)]).unwrap();
+    w.replicas[1]
+        .put_folders(vec![create([1; 16], "Local", None)])
+        .unwrap();
     // Alice rotates the key before Bob's operation leaves his device.
     w.replicas[0].rotate().unwrap();
     w.pass(0, 1);
