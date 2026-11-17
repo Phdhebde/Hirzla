@@ -41,6 +41,9 @@ pub struct AppState {
     pub(crate) pending_shares: Mutex<Vec<PathBuf>>,
     /// Site CA chosen with the file picker, waiting for the address of the server.
     pub(crate) pending_ca: Mutex<Option<crate::servermode::PendingCa>>,
+    /// A typing into another application waiting for the user's agreement
+    /// ([`crate::autotype`]).
+    pub(crate) pending_auto_type: Mutex<Option<crate::autotype::Pending>>,
     /// Local preferences ([`crate::prefs`]), loaded at start.
     pub(crate) prefs: Mutex<crate::prefs::PrefsStore>,
 }
@@ -63,6 +66,7 @@ impl AppState {
             pending_ssh_key: Mutex::new(None),
             pending_shares: Mutex::new(Vec::new()),
             pending_ca: Mutex::new(None),
+            pending_auto_type: Mutex::new(None),
             prefs: Mutex::new(crate::prefs::PrefsStore::default()),
         }
     }
@@ -86,6 +90,7 @@ impl AppState {
     /// generated password.
     pub(crate) fn forget(&self) {
         self.clipboard.clear_now();
+        *guard(&self.pending_auto_type) = None;
         *guard(&self.generated) = None;
         guard(&self.generated_batch).clear();
     }
@@ -594,7 +599,7 @@ impl AppState {
         }
     }
 
-    fn read_text(
+    pub(crate) fn read_text(
         &self,
         target: &SecretRef,
         field: FieldName,

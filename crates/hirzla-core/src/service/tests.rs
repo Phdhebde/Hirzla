@@ -586,3 +586,21 @@ fn window_call_works_locked_and_is_not_activity() {
     let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
     assert!(log.contains("op=show_app"), "{log}");
 }
+
+/// ADR 0072: the application reports a typing; the log names what and the kind of target.
+#[test]
+fn auto_typed_is_one_log_line_of_fixed_words() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), None);
+    assert!(
+        c.handle(Request::AutoTyped {
+            what: crate::proto::Typed::Password,
+            terminal: true
+        }) == Ok(Reply::Done)
+    );
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("event=auto_type what=password target=terminal"),
+        "{log}"
+    );
+}

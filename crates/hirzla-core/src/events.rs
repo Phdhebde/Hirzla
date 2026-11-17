@@ -11,7 +11,7 @@ use hirzla_keystore::platform::HardeningReport;
 use crate::agent::proto::AgentOp;
 use crate::codesign::SignatureKind;
 use crate::connections::proto::ConnectionOp;
-use crate::proto::{ErrorCode, Op};
+use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
 
@@ -109,6 +109,13 @@ pub enum Event {
     },
     /// The core stops.
     Stopped,
+    /// The desktop application typed a value into another application (ADR 0072).
+    AutoTyped {
+        /// What was typed.
+        what: Typed,
+        /// The target is a terminal.
+        terminal: bool,
+    },
     /// An agent request was answered (`docs/api-locale.md` § 14). `result` is `ok`, the
     /// name of the error, or the reason a grant was refused: fixed words only.
     AgentRequest {
@@ -213,6 +220,12 @@ impl Event {
                 }
             ),
             Event::Stopped => write!(out, "event=stopped"),
+            Event::AutoTyped { what, terminal } => write!(
+                out,
+                "event=auto_type what={} target={}",
+                what.name(),
+                if *terminal { "terminal" } else { "application" }
+            ),
             Event::AgentRequest { op, result } => {
                 write!(out, "event=agent_request op={} result={result}", op.name())
             }
@@ -327,6 +340,14 @@ mod tests {
             },
             Event::MemoryNotLocked {
                 limit_kib: Some(8192),
+            },
+            Event::AutoTyped {
+                what: Typed::UsernameAndPassword,
+                terminal: true,
+            },
+            Event::AutoTyped {
+                what: Typed::Other,
+                terminal: false,
             },
             Event::MemoryNotLocked { limit_kib: None },
         ];

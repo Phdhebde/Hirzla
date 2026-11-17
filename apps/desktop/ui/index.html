@@ -32,6 +32,7 @@
     <symbol id="i-serveur" viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4zM7.5 7h.01M7.5 17h.01"/></symbol>
     <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
     <symbol id="i-corbeille" viewBox="0 0 24 24"><path d="M5 7h14M9 7V4h6v3M7 7l1 13h8l1-13"/></symbol>
+    <symbol id="i-clavier" viewBox="0 0 24 24"><path d="M3 6h18v12H3zM7 10h.01M11 10h.01M15 10h.01M7 14h10"/></symbol>
     <symbol id="i-copier" viewBox="0 0 24 24"><path d="M9 9h11v11H9zM5 15V4h11"/></symbol>
     <symbol id="i-oeil" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM12 9.5a2.5 2.5 0 1 0 0 5 2.5 2.5 0 0 0 0-5z"/></symbol>
     <symbol id="i-oeil-barre" viewBox="0 0 24 24"><path d="M2.5 12s3.5-6.5 9.5-6.5 9.5 6.5 9.5 6.5-3.5 6.5-9.5 6.5S2.5 12 2.5 12zM4 4l16 16"/></symbol>
@@ -638,6 +639,16 @@
           pour que fermer la fenêtre verrouille le coffre et arrête Hirzla.</p>
         <p id="reglage-zone-absente" class="aide" hidden>Ce bureau n'a pas de zone de notification : fermer la fenêtre
           verrouille le coffre et arrête Hirzla.</p>
+        <div id="reglage-saisie">
+          <h3 class="champ-libelle">Applications sans avertissement de saisie</h3>
+          <p id="reglage-saisie-vide" class="aide">Aucune. Hirzla vous nomme l'application avant chaque saisie
+            automatique.</p>
+          <ul id="reglage-saisie-liste" class="liste-simple"></ul>
+          <div class="ligne-actions">
+            <button id="reglage-saisie-tout" class="bouton bouton-secondaire bouton-petit" type="button" hidden>Avertir
+              de nouveau pour toutes</button>
+          </div>
+        </div>
         <div id="reglages-poste-erreur" class="alerte" role="alert" hidden>
           <span class="forme forme-triangle" aria-hidden="true"></span>
           <p></p>
@@ -1002,6 +1013,44 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" value="non" autofocus>Elles diffèrent, ou je n'ai pas pu comparer</button>
         <button class="bouton bouton-principal" value="oui">Elles sont identiques</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Typing a field into another application (ADR 0072). -->
+  <dialog id="dialogue-saisie" class="dialogue dialogue-etroit" aria-labelledby="saisie-titre">
+    <form id="form-saisie" method="dialog" novalidate>
+      <h2 id="saisie-titre" class="titre-carte">Saisir dans une application</h2>
+      <div id="saisie-etape-choix">
+        <p class="texte-secondaire">Placez d'abord le curseur dans le champ voulu de l'autre application, puis revenez
+          ici. Hirzla se met en retrait, repère l'application qui reprend le clavier et vous la nomme avant de
+          saisir.</p>
+        <fieldset class="cases">
+          <legend class="champ-libelle">Que saisir ?</legend>
+          <div id="saisie-choix" class="cases"></div>
+        </fieldset>
+        <p class="aide">Hirzla n'appuie jamais sur Entrée : vous validez vous-même.</p>
+      </div>
+      <div id="saisie-etape-avertissement" hidden>
+        <p>Hirzla va saisir <strong id="saisie-quoi"></strong> de « <span id="saisie-secret"></span> » dans :</p>
+        <p class="cible-saisie"><strong id="saisie-application"></strong><span id="saisie-chemin" class="mono"></span>
+          <span id="saisie-fenetre" class="texte-secondaire"></span></p>
+        <div id="saisie-terminal" class="alerte" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p>C'est un terminal : ce qui y est saisi peut rester dans l'historique des commandes.</p>
+        </div>
+        <p class="aide">Une fois saisie, la valeur est visible de cette application et de tout ce qui observe le
+          clavier, comme une frappe à la main. Le nom d'un programme est un indice, pas une preuve.</p>
+        <label id="saisie-ne-plus-ligne" class="case"><input type="checkbox" id="saisie-ne-plus"> Ne plus m'avertir pour
+          cette application</label>
+      </div>
+      <div id="saisie-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button id="saisie-annuler" class="bouton bouton-secondaire" type="button">Annuler</button>
+        <button id="saisie-valider" class="bouton bouton-principal" type="submit">Continuer</button>
       </div>
     </form>
   </dialog>

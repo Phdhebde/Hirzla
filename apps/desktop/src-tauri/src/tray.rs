@@ -271,9 +271,9 @@ pub fn remove<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Installs or removes the icon to match `prefs` and what the desktop offers.
-fn apply<R: Runtime>(app: &AppHandle<R>, prefs: Preferences) {
-    if prefs.keep_in_tray && available() {
+/// Installs or removes the icon to match the preference and what the desktop offers.
+fn apply<R: Runtime>(app: &AppHandle<R>, keep_in_tray: bool) {
+    if keep_in_tray && available() {
         // A failure leaves the application without an icon: closing stops it.
         let _ = install(app);
     } else {
@@ -287,8 +287,8 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     if let Ok(dir) = app.path().app_config_dir() {
         *guard(&app.state::<AppState>().prefs) = PrefsStore::load(&dir);
     }
-    let prefs = guard(&app.state::<AppState>().prefs).get();
-    apply(app, prefs);
+    let keep_in_tray = guard(&app.state::<AppState>().prefs).get().keep_in_tray;
+    apply(app, keep_in_tray);
     let app = app.clone();
     let _ = std::thread::Builder::new()
         .name("window-call".into())
@@ -337,10 +337,16 @@ pub fn set_preferences<R: Runtime>(
     state: State<'_>,
     keep_in_tray: bool,
 ) -> Result<PreferencesDto, DesktopError> {
-    let prefs = Preferences { keep_in_tray };
-    guard(&state.prefs).set(prefs)?;
+    {
+        let mut store = guard(&state.prefs);
+        let prefs = Preferences {
+            keep_in_tray,
+            ..store.get()
+        };
+        store.set(prefs)?;
+    }
     let handle = app.clone();
-    app.run_on_main_thread(move || apply(&handle, prefs))
+    app.run_on_main_thread(move || apply(&handle, keep_in_tray))
         .map_err(|_| {
             DesktopError::Invalid("La zone de notification n'a pas pu être mise à jour.")
         })?;

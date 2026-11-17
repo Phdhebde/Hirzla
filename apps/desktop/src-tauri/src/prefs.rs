@@ -23,18 +23,52 @@ fn yes() -> bool {
     true
 }
 
+/// Most applications in the « ne plus m'avertir » list.
+pub const MAX_TRUSTED: usize = 256;
+/// Longest executable path in that list, in bytes.
+pub const MAX_TRUSTED_PATH: usize = 4096;
+
 /// The local preferences.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preferences {
     /// Closing the window hides it and keeps the application in the notification area.
     #[serde(default = "yes")]
     pub keep_in_tray: bool,
+    /// Executables into which a value is typed without the warning (ADR 0072): full paths
+    /// on this workstation.
+    #[serde(default)]
+    pub auto_type_trusted: Vec<String>,
 }
 
 impl Default for Preferences {
     fn default() -> Preferences {
-        Preferences { keep_in_tray: true }
+        Preferences {
+            keep_in_tray: true,
+            auto_type_trusted: Vec::new(),
+        }
+    }
+}
+
+/// Whether `path` may enter the « ne plus m'avertir » list.
+#[must_use]
+pub fn trusted_path_is_valid(path: &str) -> bool {
+    !path.is_empty() && path.len() <= MAX_TRUSTED_PATH && !path.chars().any(char::is_control)
+}
+
+impl Preferences {
+    /// A list that does not hold: the warning comes back for every application. The other
+    /// preferences are kept.
+    fn checked(mut self) -> Preferences {
+        if self.auto_type_trusted.len() > MAX_TRUSTED
+            || !self
+                .auto_type_trusted
+                .iter()
+                .all(|p| trusted_path_is_valid(p))
+        {
+            self.auto_type_trusted.clear();
+        }
+        self
     }
 }
 
@@ -60,7 +94,7 @@ impl PrefsStore {
     /// The current preferences.
     #[must_use]
     pub fn get(&self) -> Preferences {
-        self.current
+        self.current.clone()
     }
 
     /// Replaces the preferences and writes them.
@@ -69,8 +103,9 @@ impl PrefsStore {
     /// [`DesktopError::Invalid`] if the file cannot be written; the preferences then stay as
     /// they were.
     pub fn set(&mut self, prefs: Preferences) -> Result<(), DesktopError> {
+        let prefs = prefs.checked();
         if let Some(path) = &self.path {
-            write(path, prefs).map_err(|_| {
+            write(path, &prefs).map_err(|_| {
                 DesktopError::Invalid("Les préférences n'ont pas pu être enregistrées.")
             })?;
         }
@@ -84,15 +119,17 @@ fn read(path: &Path) -> Option<Preferences> {
     if !meta.is_file() || meta.len() > MAX_FILE {
         return None;
     }
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
+    serde_json::from_slice::<Preferences>(&fs::read(path).ok()?)
+        .ok()
+        .map(Preferences::checked)
 }
 
 /// Writes next to the file, then renames: a crash leaves the old file or the new one.
-fn write(path: &Path, prefs: Preferences) -> std::io::Result<()> {
+fn write(path: &Path, prefs: &Preferences) -> std::io::Result<()> {
     let dir = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
     fs::create_dir_all(dir)?;
     let tmp = path.with_extension("json.tmp");
-    let body = serde_json::to_vec_pretty(&prefs).map_err(std::io::Error::other)?;
+    let body = serde_json::to_vec_pretty(prefs).map_err(std::io::Error::other)?;
     let mut file = fs::File::create(&tmp)?;
     file.write_all(&body)?;
     file.sync_all()?;
@@ -120,6 +157,7 @@ mod tests {
         store
             .set(Preferences {
                 keep_in_tray: false,
+                ..Preferences::default()
             })
             .unwrap();
         assert!(!PrefsStore::load(&d).get().keep_in_tray);
@@ -157,8 +195,47 @@ mod tests {
         store
             .set(Preferences {
                 keep_in_tray: false,
+                ..Preferences::default()
             })
             .unwrap();
         assert!(!store.get().keep_in_tray);
+    }
+
+    /// ADR 0072: a list that does not hold is dropped whole, and the warning comes back.
+    #[test]
+    fn a_damaged_trust_list_is_ignored() {
+        let d = dir("trust");
+        fs::create_dir_all(&d).unwrap();
+        let ok = r#"{"keep_in_tray":false,"auto_type_trusted":["/usr/bin/gedit","C:\\Windows\\notepad.exe"]}"#;
+        fs::write(d.join(FILE_NAME), ok).unwrap();
+        let p = PrefsStore::load(&d).get();
+        assert_eq!(p.auto_type_trusted.len(), 2);
+        assert!(!p.keep_in_tray);
+        for bad in [
+            r#"{"keep_in_tray":false,"auto_type_trusted":["/usr/bin/gedit",""]}"#.to_owned(),
+            r#"{"keep_in_tray":false,"auto_type_trusted":["a\nb"]}"#.to_owned(),
+            format!(
+                r#"{{"keep_in_tray":false,"auto_type_trusted":["{}"]}}"#,
+                "a".repeat(MAX_TRUSTED_PATH + 1)
+            ),
+            format!(
+                r#"{{"keep_in_tray":false,"auto_type_trusted":[{}]}}"#,
+                vec![r#""/a""#; MAX_TRUSTED + 1].join(",")
+            ),
+        ] {
+            fs::write(d.join(FILE_NAME), bad).unwrap();
+            let p = PrefsStore::load(&d).get();
+            assert!(p.auto_type_trusted.is_empty());
+            // The rest of the file still counts.
+            assert!(!p.keep_in_tray);
+        }
+        // A list of another shape is a damaged file: defaults.
+        fs::write(
+            d.join(FILE_NAME),
+            r#"{"auto_type_trusted":"/usr/bin/gedit"}"#,
+        )
+        .unwrap();
+        assert_eq!(PrefsStore::load(&d).get(), Preferences::default());
+        fs::remove_dir_all(&d).unwrap();
     }
 }

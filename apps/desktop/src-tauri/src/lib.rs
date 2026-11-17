@@ -7,6 +7,7 @@
 //!
 //! - [`link`]: the connection to the core, hardening of this process after it is accepted;
 //! - [`commands`]: what the web view may ask, checked strictly;
+//! - [`autotype`]: typing a field into another application, with its warning (ADR 0072);
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
 //! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
 //!   ADR 0067);
@@ -24,6 +25,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod autotype;
 pub mod clipboard;
 pub mod commands;
 pub mod connections;
@@ -151,6 +153,12 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::quorum_respond,
             tray::get_preferences,
             tray::set_preferences,
+            autotype::auto_type_available,
+            autotype::auto_type_prepare,
+            autotype::auto_type_confirm,
+            autotype::auto_type_cancel,
+            autotype::auto_type_trusted,
+            autotype::auto_type_forget,
         ])
         .setup(|app| {
             #[cfg(target_os = "linux")]

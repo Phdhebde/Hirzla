@@ -444,6 +444,11 @@ impl Core {
                 .map(Reply::Flag)
                 .map_err(ErrorReply::new),
             Request::AppPoll => Ok(Reply::Flag(self.app_window.poll(Instant::now()))),
+            // A line of the log, nothing else: the typing happened in the application.
+            Request::AutoTyped { what, terminal } => {
+                self.log.record(Event::AutoTyped { what, terminal });
+                Ok(Reply::Done)
+            }
             Request::Init { password, kdf } => self.init(&password, kdf),
             Request::Unlock { password } => self.unlock(&password),
             Request::Lock => {

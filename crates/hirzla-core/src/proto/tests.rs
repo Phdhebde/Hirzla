@@ -27,6 +27,14 @@ fn every_request_round_trips() {
         Request::Shutdown,
         Request::ShowApp,
         Request::AppPoll,
+        Request::AutoTyped {
+            what: Typed::UsernameAndPassword,
+            terminal: true,
+        },
+        Request::AutoTyped {
+            what: Typed::Other,
+            terminal: false,
+        },
         Request::Init {
             password: z("mot de passe"),
             kdf: None,
@@ -787,4 +795,58 @@ fn window_call_is_version_8_and_carries_nothing() {
             reply_round_trip(op, Ok(Reply::Flag(flag)));
         }
     }
+}
+
+/// `AutoTyped` (version 8, ADR 0072): a closed set of words, nothing free.
+#[test]
+fn auto_typed_carries_fixed_values_only() {
+    let request = |args: Value| {
+        encode_map(vec![
+            (1, Value::Uint(8)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(Op::AutoTyped as u64)),
+            (4, args),
+        ])
+    };
+    let ok = request(Value::map(vec![
+        (1, Value::Uint(2)),
+        (2, Value::Bool(false)),
+    ]));
+    assert!(
+        Request::decode_versioned(&ok).unwrap()
+            == (
+                3,
+                8,
+                Request::AutoTyped {
+                    what: Typed::Password,
+                    terminal: false
+                }
+            )
+    );
+    // Unknown value, text instead of a number, missing or unknown key.
+    for (args, code) in [
+        (
+            Value::map(vec![(1, Value::Uint(9)), (2, Value::Bool(false))]),
+            ErrorCode::InvalidInput,
+        ),
+        (
+            Value::map(vec![
+                (1, Value::text("notepad.exe")),
+                (2, Value::Bool(false)),
+            ]),
+            ErrorCode::Malformed,
+        ),
+        (Value::map(vec![(1, Value::Uint(2))]), ErrorCode::Malformed),
+        (
+            Value::map(vec![
+                (1, Value::Uint(2)),
+                (2, Value::Bool(false)),
+                (3, Value::text("x")),
+            ]),
+            ErrorCode::Malformed,
+        ),
+    ] {
+        assert_eq!(refused(&request(args)), (3, code));
+    }
+    reply_round_trip(Op::AutoTyped, Ok(Reply::Done));
 }

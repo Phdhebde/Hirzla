@@ -4,6 +4,7 @@
 // the vault by itself, everything shown is wiped and the unlock screen comes back.
 
 import { api } from "./api.js";
+import { AutoType, loadAutoType } from "./autotype.js";
 import { announce, byId, h, showError } from "./dom.js";
 import { SecretForm } from "./form.js";
 import { Palette } from "./palette.js";
@@ -67,7 +68,9 @@ const vault = new VaultView({
   onEdit: (entry) => void form.open(entry),
   onMembers: (locker, name) => void server.members.open(locker, name),
   onFilter: (filter) => markNav("secrets", filter),
+  autoType: new AutoType((e) => onGlobalError(e)),
 });
+void loadAutoType();
 
 const form = new SecretForm({
   onError: onGlobalError,

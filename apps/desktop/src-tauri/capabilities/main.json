@@ -71,6 +71,12 @@
     "allow-quorum-inbox",
     "allow-quorum-respond",
     "allow-get-preferences",
-    "allow-set-preferences"
+    "allow-set-preferences",
+    "allow-auto-type-available",
+    "allow-auto-type-prepare",
+    "allow-auto-type-confirm",
+    "allow-auto-type-cancel",
+    "allow-auto-type-trusted",
+    "allow-auto-type-forget"
   ]
 }
