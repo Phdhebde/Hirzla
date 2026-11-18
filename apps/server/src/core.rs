@@ -1215,10 +1215,11 @@ impl Core {
     ) -> Option<(Message, u64)> {
         let l = self.lockers.get(locker)?;
         let limit = usize::try_from(limit).unwrap_or(1000);
-        // A late operation whose body was erased (ADR 0047) is served to nobody.
-        let (items, more) = l.log.after(after, limit, |it| {
-            (owner || !it.late) && !(it.late && it.stub.is_some())
-        });
+        // A late operation is served to the owner only, and to nobody once its body was
+        // erased (ADR 0047).
+        let (items, more) = l
+            .log
+            .after(after, limit, |it| !it.late || (owner && it.stub.is_none()));
         let last = items
             .last()
             .map_or(if more { after } else { l.log.head_seq() }, |it| {

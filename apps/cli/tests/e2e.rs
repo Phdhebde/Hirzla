@@ -109,7 +109,11 @@ fn hirzla(sock: &str, args: &[&str], stdin: Option<&str>) -> Output {
     {
         let mut input = child.stdin.take().unwrap();
         if let Some(s) = stdin {
-            input.write_all(s.as_bytes()).unwrap();
+            // The CLI may exit before reading its input (a refusal, no
+            // core): the pipe is then closed, which is not a test failure.
+            if let Err(e) = input.write_all(s.as_bytes()) {
+                assert_eq!(e.kind(), std::io::ErrorKind::BrokenPipe, "{e}");
+            }
         }
     }
     child.wait_with_output().unwrap()

@@ -1,0 +1,114 @@
+name: Homebrew
+
+# Updates the Homebrew cask (`brew install hirzla`) once a release is PUBLISHED by hand
+# (Livraison only drafts it: the files of a draft are not public, a cask pointing to them would
+# fail). The cask installs the macOS .pkg unchanged; its version and SHA-256 are the only lines
+# rewritten here, after the .pkg of the release was checked against the release's SHA256SUMS.
+#
+# Configuration:
+#   - repository variable HOMEBREW_TAP: the tap repository (`Hirzla/homebrew-hirzla`);
+#   - secret HOMEBREW_TAP_DEPLOY_KEY: private SSH key whose public half is a deploy key WITH
+#     write access on that repository only. It is read by one step and never echoed.
+# Without either, the job explains what is missing and does nothing.
+#
+# A dry-run tag (vX.Y.Z-essai.N) is never published, and is refused here anyway. Re-run by
+# hand (workflow_dispatch) with the tag of a published release to resynchronise the cask.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag of a published release (vX.Y.Z)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: homebrew
+  cancel-in-progress: false
+
+jobs:
+  cask:
+    name: Update the cask
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      TAP: ${{ vars.HOMEBREW_TAP }}
+    steps:
+      - name: Release
+        id: release
+        run: |
+          if ! [[ "$TAG" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+            echo "::error::$TAG is not a release tag vX.Y.Z (dry runs are never published)."
+            exit 1
+          fi
+          version="${BASH_REMATCH[1]}"
+          if [ "$(gh release view "$TAG" -R "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" != "false" ]; then
+            echo "::error::Release $TAG is not published."
+            exit 1
+          fi
+          if [ -z "$TAP" ]; then
+            echo "::warning::Repository variable HOMEBREW_TAP is not set: cask not updated."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+      - name: Package checksum
+        id: sum
+        if: steps.release.outputs.skip == 'false'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          pkg="Hirzla_${VERSION}_aarch64.pkg"
+          mkdir dl && cd dl
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p "$pkg" -p SHA256SUMS
+          sha256sum -c --ignore-missing --strict SHA256SUMS
+          sum="$(awk -v f="$pkg" '$2 == f || $2 == "*" f { print $1 }' SHA256SUMS)"
+          if ! [[ "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::No SHA-256 for $pkg in SHA256SUMS."
+            exit 1
+          fi
+          echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+      - name: Update the tap
+        if: steps.release.outputs.skip == 'false'
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SHA256: ${{ steps.sum.outputs.sha256 }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::warning::Secret HOMEBREW_TAP_DEPLOY_KEY is not set: cask not updated."
+            exit 0
+          fi
+          key="$RUNNER_TEMP/tap_key"
+          install -m 600 /dev/null "$key"
+          printf '%s\n' "$DEPLOY_KEY" > "$key"
+          trap 'rm -f "$key"' EXIT
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          # GitHub's published SSH host keys (https://api.github.com/meta), not trust on first use.
+          curl -fsS https://api.github.com/meta \
+            | jq -r '.ssh_keys[] | "github.com " + .' > "$RUNNER_TEMP/known_hosts"
+          git clone -q --depth 1 "git@github.com:${TAP}.git" tap
+          cd tap
+          cask=Casks/hirzla.rb
+          sed -i -E \
+            -e "s/^  version \"[^\"]*\"$/  version \"$VERSION\"/" \
+            -e "s/^  sha256 \"[0-9a-f]{64}\"$/  sha256 \"$SHA256\"/" "$cask"
+          grep -qx "  version \"$VERSION\"" "$cask" && grep -qx "  sha256 \"$SHA256\"" "$cask" || {
+            echo "::error::$cask was not updated (unexpected layout)."
+            exit 1
+          }
+          if git diff --quiet; then
+            echo "Cask already at $VERSION."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+              -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+              commit -q -am "hirzla $VERSION"
+          git push -q origin HEAD
+          echo "### Cask Homebrew : hirzla $VERSION ($TAP)" >> "$GITHUB_STEP_SUMMARY"
