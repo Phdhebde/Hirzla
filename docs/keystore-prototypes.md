@@ -196,12 +196,23 @@ rétablissent la méthode.
 
 ### M2 — Touch ID (Secure Enclave)
 
-Sur un Mac Apple silicon ou à puce T2, avec au moins une empreinte :
+Sur un Mac Apple silicon ou à puce T2, avec au moins une empreinte, d'abord le facteur seul
+(posez le doigt quand Touch ID le demande) :
+
+```sh
+cargo test -p hirzla-keystore --test secure_enclave_unlock -- --ignored --nocapture --test-threads=1
+```
+
+Puis le produit :
 
 ```sh
 hirzla init && hirzla methods add touchid
 hirzla lock && hirzla unlock --materiel
 ```
+
+La clé de l'enclave se recharge avec des données **vides** et sa forme chiffrée dans l'attribut
+`toid`. Passée comme données de la clé, elle donne une **autre** clé, sans demander Touch ID :
+l'ouverture échoue alors avec « refusé » (constaté sous macOS 27).
 
 Vérifier : la forme chiffrée de la clé de l'enclave est bien rendue par l'attribut `toid` et
 rechargée par `SecKeyCreateWithData` (ADR 0075, note sur Touch ID) — sinon l'ajout échoue avec

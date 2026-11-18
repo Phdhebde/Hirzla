@@ -7,7 +7,10 @@
 //!   **wrapped by the enclave** (its token object identifier, usable by this Mac's enclave
 //!   only). The enclave's public key is never written anywhere;
 //! - unlock: the enclave key is loaded back from its wrapped form (`SecKeyCreateWithData` with
-//!   the enclave token), and the enclave computes `S = ECDH(SE_priv, E_pub)` after Touch ID.
+//!   empty data, the enclave token and the wrapped form as its token object identifier), and
+//!   the enclave computes `S = ECDH(SE_priv, E_pub)` after Touch ID. Passing the wrapped form
+//!   as the key data instead makes the enclave hand back **another** key, without Touch ID
+//!   (seen on macOS 27, Apple silicon): the material then never opens the vault.
 //!
 //! The keychain is not used: keeping an enclave key there needs the `keychain-access-groups`
 //! entitlement, hence a paid Developer ID certificate (ADR 0063). To be verified on a Mac
@@ -157,15 +160,18 @@ fn names() -> [CFString; 7] {
     }
 }
 
-/// Loads the enclave key back from its wrapped form.
+/// Loads the enclave key back from its wrapped form, given as its token object identifier
+/// (the key data stays empty: see the module documentation).
 fn enclave_key(wrapped: &[u8]) -> Result<SecKey, FactorError> {
     let [key_type, ec, key_class, _public, private, token, enclave] = names();
+    let token_oid = CFString::from_static_string(TOKEN_OID);
     let attributes: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[
         (key_type, ec.as_CFType()),
         (key_class, private.as_CFType()),
         (token, enclave.as_CFType()),
+        (token_oid, CFData::from_buffer(wrapped).as_CFType()),
     ]);
-    key_from_data(wrapped, &attributes)
+    key_from_data(&[], &attributes)
 }
 
 /// Imports an uncompressed P-256 public key.
