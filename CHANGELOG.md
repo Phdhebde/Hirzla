@@ -8,7 +8,7 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
-## [Non publié]
+## [1.1.0] — 2026-11-18
 
 ### Déverrouillage par Windows Hello, Touch ID et clé de sécurité FIDO2 (ADR 0075)
 
