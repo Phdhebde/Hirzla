@@ -10,6 +10,36 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 
 ## [Non publié]
 
+### Déverrouillage par Windows Hello, Touch ID et clé de sécurité FIDO2 (ADR 0075)
+
+- Le coffre s'ouvre d'un geste : Windows Hello, Touch ID (clé de la Secure Enclave) ou une clé
+  de sécurité FIDO2 avec `hmac-secret` (sémantique WebAuthn PRF). Le mot de passe maître reste
+  toujours valable ; il est redemandé pour ajouter une méthode.
+- Windows Hello et Touch ID, à cryptographie classique seulement, sont **désactivés par
+  défaut** (décision du mainteneur du 2026-11-18, ADR 0075 § 4) : on les autorise après un
+  avertissement sur le risque post-quantique résiduel. Le noyau refuse leur ajout sans
+  acceptation explicite (`EnrollMethod`, clé 4 ; erreur 165 `ClassicalFactorNotAccepted`) ;
+  une méthode déjà enrôlée ouvre toujours le coffre. FIDO2 et le mot de passe ne sont pas
+  concernés.
+- Application : Réglages › Déverrouillage (liste, ajout, retrait ; case « Autoriser Windows
+  Hello / Touch ID », gardée dans `preferences.json`) ; l'écran de déverrouillage propose la
+  méthode matérielle en premier, le mot de passe dessous.
+- Ligne de commande : `hirzla methods`, `hirzla methods add hello|touchid|fido2`
+  (`hello` et `touchid` avec `--accepter-risque-classique`), `hirzla methods remove RANG`,
+  `hirzla unlock --materiel [RANG]`.
+- API locale version 12 (`docs/api-locale.md` § 21) : `UnlockMethods`, `EnrollMethod`,
+  `UnlockWithMethod`, `RemoveMethod` ; profil complet seulement ; le geste se fait hors du
+  verrou du noyau.
+- Format : contenu du `keystore_blob` des méthodes 3, 4 et 5 et étiquette
+  `hirzla/v1/hardware-secret` (`docs/format.md` § 4.2.1). Pas de nouvelle version du format :
+  un noyau 1.0.0 ouvre toujours le coffre avec le mot de passe.
+- FIDO2 sous Linux et macOS : fonctionnalité Cargo `fido2-hid` (`ctap-hid-fido2`), activée dans
+  le noyau livré sur ces deux systèmes (la ligne de commande, l'hôte natif et l'application ne
+  l'embarquent pas). Sous Windows, FIDO2 passe par `webauthn.dll`. Le paquet Linux dépend de
+  `libudev`.
+- À vérifier sur du vrai matériel avant livraison : tests H1, H2, M2, F1 et F2 de
+  `docs/keystore-prototypes.md`.
+
 ### Codes TOTP (ADR 0078)
 
 - La fiche d'un mot de passe ou d'un code TOTP affiche le code de double authentification,

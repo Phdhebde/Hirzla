@@ -103,6 +103,16 @@
       </div>
       <p class="etat etat-scelle"><span class="forme forme-carre" aria-hidden="true"></span>Le coffre est verrouillé.</p>
       <h1 class="titre-ecran" tabindex="-1">Ouvrir le coffre</h1>
+      <!-- Hardware method first, when one is usable on this workstation (ADR 0075). -->
+      <div id="deverrouillage-materiel" hidden>
+        <label id="deverrouillage-pin-champ" class="champ" hidden>
+          <span class="champ-libelle">Code PIN de la clé de sécurité</span>
+          <input id="deverrouillage-pin" class="saisie saisie-mono" type="password" autocomplete="off"
+                 spellcheck="false" maxlength="63">
+        </label>
+        <button id="deverrouillage-materiel-bouton" class="bouton bouton-principal bouton-large" type="button">Ouvrir avec Windows Hello</button>
+        <p class="texte-secondaire separateur-ou">ou avec le mot de passe maître</p>
+      </div>
       <label class="champ">
         <span class="champ-libelle">Mot de passe maître</span>
         <span class="saisie-groupe">
@@ -743,6 +753,27 @@
         <p class="aide">Le noyau rescelle la clé du coffre sous le nouveau mot de passe ; vos secrets ne sont pas
           rechiffrés. L'ancien mot de passe n'ouvre plus le coffre.</p>
       </section>
+      <section class="carte" aria-labelledby="reglages-methodes">
+        <h2 id="reglages-methodes" class="titre-carte">Déverrouillage</h2>
+        <p class="texte-secondaire">Ouvrez le coffre avec Windows Hello, Touch ID ou une clé de sécurité FIDO2, sans
+          saisir le mot de passe maître. Le mot de passe maître reste toujours valable : gardez-le.</p>
+        <ul id="methodes-liste" class="liste-simple"></ul>
+        <div id="methodes-classiques" hidden>
+          <label class="case"><input type="checkbox" id="reglage-classiques" aria-describedby="reglage-classiques-aide">
+            Autoriser Windows Hello / Touch ID</label>
+          <p id="reglage-classiques-aide" class="aide">Désactivés par défaut : ces méthodes du système reposent sur une
+            cryptographie classique. Une méthode déjà ajoutée ouvre toujours le coffre.</p>
+        </div>
+        <div id="methodes-ajouter" class="ligne-actions"></div>
+        <p id="methodes-aucune" class="encadre" role="status" hidden>Aucune méthode matérielle n'est disponible sur ce
+          poste.</p>
+        <div id="methodes-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+        <p class="aide">La clé matérielle ne quitte jamais l'appareil ; le coffre n'en garde qu'une référence publique.
+          Seule la dernière méthode de la liste peut être retirée.</p>
+      </section>
       <section class="carte" aria-labelledby="reglages-recouvrement">
         <h2 id="reglages-recouvrement" class="titre-carte">Kit de recouvrement</h2>
         <p class="texte-secondaire">Le kit partage une clé de secours en plusieurs parts : il en faut un nombre choisi
@@ -1292,6 +1323,59 @@
       <ol id="historique-liste" class="versions"></ol>
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-principal" value="ok">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add a hardware unlock method (ADR 0075): the master password is asked again. -->
+  <dialog id="dialogue-methode" class="dialogue dialogue-etroit" aria-labelledby="methode-titre">
+    <form id="form-methode" method="dialog" novalidate>
+      <h2 id="methode-titre" class="titre-carte">Ajouter une méthode de déverrouillage</h2>
+      <p id="methode-texte" class="texte-secondaire">Confirmez votre mot de passe maître, puis suivez la demande du
+        système.</p>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe maître</span>
+        <input id="methode-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
+               spellcheck="false" maxlength="1024">
+      </label>
+      <label id="methode-pin-champ" class="champ" hidden>
+        <span class="champ-libelle">Code PIN de la clé de sécurité</span>
+        <input id="methode-pin" class="saisie saisie-mono" type="password" autocomplete="off"
+               spellcheck="false" maxlength="63">
+      </label>
+      <div id="methode-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="methode-ajouter" class="bouton bouton-principal" type="submit">Ajouter</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Windows Hello and Touch ID, off by default (ADR 0075 § 4): the warning, then a confirmation. -->
+  <dialog id="dialogue-classiques" class="dialogue dialogue-etroit" aria-labelledby="classiques-titre" aria-describedby="classiques-texte">
+    <form id="form-classiques" method="dialog" novalidate>
+      <h2 id="classiques-titre" class="titre-carte">Autoriser Windows Hello et Touch ID ?</h2>
+      <div id="classiques-texte">
+        <p>Le fichier du coffre seul reste aussi solide que votre mot de passe maître : ces méthodes ne retirent
+          rien à sa protection.</p>
+        <p>Mais Windows Hello et Touch ID utilisent une cryptographie classique. Quelqu'un qui aurait lu la clé
+          publique de la méthode dans votre session ouverte, et qui disposerait plus tard d'un ordinateur quantique,
+          pourrait retrouver le secret de cette méthode et ouvrir une copie du coffre prise ce jour-là, sans le mot
+          de passe maître.</p>
+        <p>Les clés de sécurité FIDO2 n'ont pas ce risque.</p>
+      </div>
+      <label class="case"><input type="checkbox" id="classiques-compris"> J'ai compris ce risque et j'autorise ces
+        méthodes sur ce poste.</label>
+      <div id="classiques-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="classiques-autoriser" class="bouton bouton-principal" type="submit" disabled>Autoriser</button>
       </div>
     </form>
   </dialog>

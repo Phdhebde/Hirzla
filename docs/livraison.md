@@ -204,7 +204,10 @@ même que les exécutables de chaque plateforme (et les `.exe` signés par SignP
   manifeste, qui porte sur les fichiers signés ; celle du MSI après l'empaquetage, sans
   toucher aux fichiers qu'il contient.
 - Le noyau, la ligne de commande, l'hôte natif et l'application ont les mêmes
-  fonctionnalités : `livraison`, sans `signature-systeme`.
+  fonctionnalités : `livraison`, sans `signature-systeme`. Sous Linux et macOS, le noyau seul
+  ajoute `fido2-hid` (clés FIDO2 par USB, ADR 0075), dans une invocation de Cargo à part pour
+  que `hidapi` n'atteigne pas les autres exécutables ; il faut `libudev-dev` pour le compiler
+  sous Linux, et `libudev` au poste (présente sur toute distribution à systemd).
 
 **macOS** (ADR 0065) : livré en paquet d'installation `.pkg`, jamais en image disque. Le job
 `installers` décompresse la `Hirzla.app` du job `executables`, vérifie sa signature et le

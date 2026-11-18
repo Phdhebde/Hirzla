@@ -159,3 +159,37 @@ fn empty_salt_and_bad_lengths_are_rejected() {
     assert!(hkdf_sha512(b"k", b"s", b"i", MAX_OUTPUT_LEN + 1).is_err());
     assert!(hkdf_sha512(b"k", b"s", b"i", MAX_OUTPUT_LEN).is_ok());
 }
+
+#[test]
+fn hardware_secret_label_and_material() {
+    // 0x0019 = 25, the length of "hirzla/v1/hardware-secret", then the kind.
+    let label = KdfLabel::HardwareSecret { method_kind: 5 };
+    assert_eq!(
+        label.info(),
+        [
+            &[0x00, 0x19][..],
+            b"hirzla/v1/hardware-secret",
+            &[0x00, 0x01, 0x05]
+        ]
+        .concat()
+    );
+    let salt = hex("000102030405060708090a0b0c0d0e0f");
+    // A 256-byte RSA signature, as Windows Hello releases it.
+    let material: Vec<u8> = (0..=255u8).collect();
+    let got = derive_key_from_material(&material, &salt, label).unwrap();
+    let expected = reference(&material, &salt, &label.info(), 32).unwrap();
+    assert_eq!(&got.as_bytes()[..], &expected[..]);
+    // Bound to the kind.
+    let other = derive_key_from_material(
+        &material,
+        &salt,
+        KdfLabel::HardwareSecret { method_kind: 4 },
+    )
+    .unwrap();
+    assert_ne!(other.as_bytes(), got.as_bytes());
+    // Refusals: too short, too long, empty salt.
+    assert!(derive_key_from_material(&[1u8; 31], &salt, label).is_err());
+    assert!(derive_key_from_material(&[1u8; MAX_MATERIAL_LEN + 1], &salt, label).is_err());
+    assert!(derive_key_from_material(&material, &[], label).is_err());
+    assert!(derive_key_from_material(&[1u8; MIN_MATERIAL_LEN], &salt, label).is_ok());
+}

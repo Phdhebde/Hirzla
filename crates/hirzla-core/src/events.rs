@@ -13,6 +13,7 @@ use crate::codesign::SignatureKind;
 use crate::connections::proto::ConnectionOp;
 use crate::folders::proto::FolderOp;
 use crate::locker_export::proto::ExportOp;
+use crate::methods::proto::MethodOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -164,6 +165,17 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A hardware unlock method request was answered (`docs/api-locale.md` § 21, ADR 0075).
+    /// `kind` is `hello`, `enclave`, `fido` or `-`; `result` is `ok` or the name of the error:
+    /// fixed words only, never a key name, a credential identifier nor a rank.
+    MethodRequest {
+        /// Operation.
+        op: MethodOp,
+        /// Kind of method.
+        kind: &'static str,
+        /// Outcome.
+        result: &'static str,
+    },
     /// A TOTP request was answered (`docs/api-locale.md` § 22). `result` is `ok` or the name
     /// of the error: fixed words only. Never a code.
     TotpRequest {
@@ -281,6 +293,11 @@ impl Event {
                     op.name()
                 )
             }
+            Event::MethodRequest { op, kind, result } => write!(
+                out,
+                "event=unlock_method op={} kind={kind} result={result}",
+                op.name()
+            ),
             Event::TotpRequest { op, result } => {
                 write!(out, "event=totp_request op={} result={result}", op.name())
             }
@@ -439,6 +456,13 @@ mod tests {
         for op in ConnectionOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized"] {
                 events.push(Event::ConnectionRequest { op, result });
+            }
+        }
+        for op in MethodOp::ALL {
+            for kind in ["hello", "enclave", "fido", "-"] {
+                for result in ["ok", "method_cancelled", "unlock_failed"] {
+                    events.push(Event::MethodRequest { op, kind, result });
+                }
             }
         }
         for op in TotpOp::ALL {

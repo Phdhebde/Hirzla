@@ -21,9 +21,9 @@ mod vault;
 
 pub use error::{ExportRefusal, VaultError};
 pub use vault::{
-    recovery_params, CreateOptions, ExportStats, ImportStats, KdfCost, LockerInfo, RecoveryKit,
-    RecoveryShare, SecretVersion, Vault, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE,
-    MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
+    recovery_params, unlock_methods, vault_id_of, CreateOptions, ExportStats, ImportStats, KdfCost,
+    LockerInfo, MethodInfo, RecoveryKit, RecoveryShare, SecretVersion, Vault, MAX_AUTO_LOCK_S,
+    MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
 };
 
 /// Version of the on-disk vault format written for a new vault (`docs/format.md` § 5.3).

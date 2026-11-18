@@ -11,6 +11,7 @@ mod clipboard;
 mod connections;
 mod folders;
 mod locker_export;
+mod methods;
 mod selfmode;
 mod server;
 mod term;
@@ -418,6 +419,8 @@ fn run(args: &Args) -> Result<(), String> {
             ));
             Ok(())
         }
+        Command::UnlockHardware { rank } => methods::unlock(&session, *rank),
+        Command::Methods(command) => methods::run(&session, command),
         Command::Lock => match session.try_connect() {
             Err(ClientError::NotRunning) => {
                 say("Le coffre est verrouillé (noyau arrêté).");

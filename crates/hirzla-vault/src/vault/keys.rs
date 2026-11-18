@@ -117,7 +117,7 @@ pub fn recovery_params(path: &Path) -> Result<Option<RecoveryParams>, VaultError
     }))
 }
 
-fn method_kek(
+pub(super) fn method_kek(
     secret: &SymmetricKey,
     vault_id: &Id16,
     index: usize,
@@ -241,7 +241,7 @@ impl Vault {
     }
 
     /// Rewrites the header and its authentication in one transaction.
-    fn write_header(&self, header: &Header) -> Result<(), VaultError> {
+    pub(super) fn write_header(&self, header: &Header) -> Result<(), VaultError> {
         let tx = self.conn.unchecked_transaction()?;
         self.write_header_in(&tx, header)?;
         before_commit();

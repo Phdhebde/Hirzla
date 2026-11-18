@@ -162,3 +162,66 @@ Attendu :
   accepte.
 
 À rapporter : la sortie complète, le modèle du Mac et la version de macOS.
+
+## Déverrouillage matériel (ADR 0075) : tests à la main
+
+Les facteurs Windows Hello, Touch ID et FIDO2 sont compilés et vérifiés par Clippy en CI, et
+toute leur logique côté noyau est testée avec des facteurs simulés
+(`hirzla-keystore`, fonctionnalité `test-software`). Ce qui touche le vrai matériel ne peut se
+vérifier qu'à la main, avant chaque livraison. Utiliser un coffre de test, jamais le coffre
+réel. Rapporter la sortie complète, la version du système et le matériel.
+
+### H1 — Windows Hello : enrôlement, ouverture, retrait
+
+```powershell
+hirzla init                      # coffre de test
+hirzla methods                   # attendu : « Ajoutables sur ce poste : hello, fido2 »
+hirzla methods add hello         # mot de passe maître, puis visage, empreinte ou PIN Windows Hello
+hirzla lock
+hirzla unlock --materiel         # attendu : la fenêtre Windows Hello, puis « Coffre ouvert »
+hirzla methods remove 1
+```
+
+Vérifier : la fenêtre Windows Hello passe **au premier plan** quand elle est ouverte par le
+noyau (sans fenêtre) depuis l'application et depuis un terminal ; « Annuler » donne « annulé »
+sans compter d'échec ; `certutil -csp "Microsoft Passport Key Storage Provider" -key` ne liste
+plus la clé `Hirzla-…` après le retrait.
+
+### H2 — Windows Hello réinitialisé
+
+Enrôler Hello, puis supprimer le code PIN Windows Hello et le recréer (Paramètres › Comptes ›
+Options de connexion). Attendu à `hirzla unlock --materiel` : « la clé matérielle n'existe
+plus… » ; le mot de passe maître ouvre le coffre ; `methods remove` puis `methods add hello`
+rétablissent la méthode.
+
+### M2 — Touch ID (Secure Enclave)
+
+Sur un Mac Apple silicon ou à puce T2, avec au moins une empreinte :
+
+```sh
+hirzla init && hirzla methods add touchid
+hirzla lock && hirzla unlock --materiel
+```
+
+Vérifier : la forme chiffrée de la clé de l'enclave est bien rendue par l'attribut `toid` et
+rechargée par `SecKeyCreateWithData` (ADR 0075, note sur Touch ID) — sinon l'ajout échoue avec
+« indisponible » ou l'ouverture avec « n'existe plus » ; l'ouverture demande Touch ID ; après
+l'ajout ou le retrait d'une empreinte (Réglages › Touch ID), la méthode devient « n'existe
+plus » (`BiometryCurrentSet`) et le mot de passe ouvre le coffre.
+
+### F1 — Clé FIDO2 sous Windows (webauthn.dll)
+
+Avec une clé qui gère `hmac-secret` (YubiKey 5, SoloKey 2, Token2…) et un PIN :
+`hirzla methods add fido2`, puis `hirzla unlock --materiel`. Vérifier : Windows demande le PIN
+et le contact ; deux clés enrôlées ouvrent chacune le coffre (rangs 1 et 2) ; une autre clé
+présentée donne « n'existe plus » ; une clé sans `hmac-secret` est refusée à l'ajout.
+
+### F2 — Clé FIDO2 sous Linux et macOS (`fido2-hid`)
+
+Avec le noyau livré (il porte la fonctionnalité), ou construit comme lui :
+`cargo build -p hirzla-core --features fido2-hid` (Linux : `libudev-dev` ; accès au
+périphérique `hidraw` par une règle udev). Puis, comme F1 :
+la ligne de commande demande le PIN sans écho. Vérifier : un PIN faux donne « code PIN … requis
+ou incorrect » ; après le nombre d'essais de la clé, « bloquée » ; **une même clé enrôlée sous
+Windows ouvre le coffre sous Linux** (sémantique PRF identique, à vérifier en copiant le
+fichier).

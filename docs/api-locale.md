@@ -11,7 +11,8 @@ l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Ser
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
 les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
 § 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
-chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les codes TOTP (version 13, § 22) par
+chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
+matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
 l'ADR 0078.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
@@ -479,8 +480,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17) l'export de casier (version 10, § 19) et les dossiers (version 11, § 20) ont leurs propres versions et ne sont pas annoncés par `Status`.
-- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12 est prise par une branche en cours (déverrouillage matériel).
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12, celle des méthodes de déverrouillage matérielles (§ 21).
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 11 ajoute les opérations de dossiers 150 à 155 (§ 20, ADR 0076). Elle ne change rien aux autres opérations.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
@@ -513,7 +514,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
-RDP au § 17.5, celle des codes TOTP au § 22.5.
+RDP au § 17.5, celles des méthodes de déverrouillage matérielles au § 21.5, celle des codes
+TOTP au § 22.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -588,6 +590,11 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
+- Méthodes de déverrouillage (§ 21) : `UnlockMethods` (écran de déverrouillage et Réglages ›
+  Déverrouillage), `EnrollMethod`, `UnlockWithMethod`, `RemoveMethod`. L'écran de
+  déverrouillage propose la première méthode matérielle utilisable au-dessus du mot de passe
+  maître ; le geste n'est lancé que sur demande. Seule `UnlockMethods` est renvoyée sur une
+  nouvelle connexion : un geste n'est jamais demandé deux fois.
 - Export de casier (§ 19) : `LockerExport` et `LockerImport`, depuis les réglages. Le fichier
   est choisi par le sélecteur du système ; la vue web reçoit son nom, les nombres du compte
   rendu et, une fois, la phrase de passe tirée, que le bouton « Copier » copie par le processus
@@ -1720,6 +1727,101 @@ L'export de casier (§ 19) écrit le chemin du dossier où chaque secret est aff
 recrée ces dossiers dans le nouveau casier (ADR 0076 § 8, `format.md` § 16.4) et compte les
 dossiers créés (clé 3 du compte rendu de `LockerImport`).
 
+## 21. Méthodes de déverrouillage matérielles (version 12)
+
+Décision : ADR 0075. Le coffre s'ouvre avec Windows Hello, Touch ID (clé de la Secure Enclave)
+ou une clé de sécurité FIDO2 (`hmac-secret`, sémantique WebAuthn PRF), **à côté** du mot de
+passe maître, qui reste toujours. Le format est au `format.md` § 4.2.1. Codes : opérations
+**160 à 169**, erreurs **160 à 169**. Code : `crates/hirzla-core/src/methods`, facteurs
+matériels dans `crates/hirzla-keystore/src/unlock`.
+
+### 21.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+160 à 169 va à cette famille ; elle doit porter `v = 12`, sinon `UnsupportedVersion` avec
+`{2: [12]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 12`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
+journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'essayant.
+
+### 21.2 Types
+
+| Nom | Encodage |
+| --- | --- |
+| Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement (`format.md` § 4.2) |
+| PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
+
+« Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
+facteur de ce type, disponible maintenant, et lit son `keystore_blob`. « PIN à demander » : le
+client doit demander le PIN de la clé de sécurité et le transmettre (FIDO2 sous Linux et
+macOS) ; sous Windows, le système le demande lui-même.
+
+### 21.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
+| 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
+| 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+
+- `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
+- `EnrollMethod` : frein (§ 6) ; coffre ouvert ; pour Windows Hello (5) et Touch ID (3),
+  méthodes à cryptographie classique seulement, la clé 4 doit valoir `true`, sinon
+  `ClassicalFactorNotAccepted`, **avant** la vérification du mot de passe (aucun essai du frein
+  consommé) et avant tout geste (ADR 0075 § 4, décision du mainteneur du 2026-11-18) ; la clé
+  4 est ignorée pour FIDO2, et absente vaut `false`. Puis vérification du mot de passe maître (un mot de passe faux
+  compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
+  geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
+  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
+  remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+- `UnlockWithMethod` : frein ; méthode lue dans l'en-tête en clair ; geste ; ouverture avec
+  tous les contrôles de `format.md` § 5.3. Un refus du matériel ou une ouverture qui échoue
+  comptent comme un échec de déverrouillage (même frein que le mot de passe) ; une
+  annulation, un matériel absent ou une clé disparue ne comptent pas.
+- `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
+  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello est ensuite supprimée du
+  système.
+- Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
+  le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
+  exige un reçoit `Busy`. Le système abandonne après 60 s.
+
+### 21.4 Erreurs et journal
+
+| Code | Nom | Sens |
+| --- | --- | --- |
+| 160 | `MethodUnavailable` | Pas de matériel, système trop ancien, prise en charge non compilée, ou `keystore_blob` illisible par ce poste |
+| 161 | `MethodCancelled` | Annulé par l'utilisateur, ou délai du système dépassé |
+| 162 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
+| 163 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
+| 164 | `PinBlocked` | Clé de sécurité bloquée |
+| 165 | `ClassicalFactorNotAccepted` | Ajout de Windows Hello ou Touch ID sans l'acceptation explicite du risque post-quantique résiduel (clé 4 d'`EnrollMethod`) ; le client affiche l'avertissement et fait confirmer |
+
+Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
+matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
+`NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
+journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
+ni nom de clé, ni identifiant de clé, ni rang, ni PIN. Un ajout refusé faute d'acceptation
+s'écrit `result=classical_factor_not_accepted`.
+
+Une méthode Windows Hello ou Touch ID déjà enrôlée continue d'ouvrir le coffre
+(`UnlockWithMethod` ne demande aucune acceptation).
+
+### 21.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `methods` | `UnlockMethods` |
+| `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`). `hello` et `touchid` exigent `--accepter-risque-classique` : sans elle, l'avertissement s'affiche et la commande échoue sans rien demander |
+| `methods remove RANG` | `RemoveMethod` |
+| `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
+
+### 21.6 Points ouverts
+
+Voir l'ADR 0075 : FIDO2 sous Linux et macOS par la fonctionnalité `fido2-hid`, activée dans le
+noyau livré (une compilation sans elle répond `MethodUnavailable` pour FIDO2) ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
+fenêtre.
+
 ## 22. Codes TOTP (version 13)
 
 Décision : ADR 0078. Format : `format.md` § 8.3 (champ 12 `totp`, `TotpConfig`, types 1 et 3 ;
@@ -1729,8 +1831,8 @@ opérations **170 à 179**, erreurs **170 à 179** réservées (aucune n'est dé
 généraux du § 7 suffisent). Code : `crates/hirzla-core/src/totp`.
 
 Numérotation : la version 10 et la section 19 sont l'export de casier, la version 11 et la
-section 20 les dossiers (ADR 0076) ; la version 12 et la section 21 sont prises par une branche
-en cours (déverrouillage matériel) ; le mainteneur renumérote à la fusion si l'ordre change.
+section 20 les dossiers (ADR 0076), la version 12 et la section 21 le déverrouillage
+matériel (ADR 0075).
 
 **La graine TOTP ne quitte jamais le noyau.** Aucune opération ne la rend ; `Read` (6) du
 champ 12 répond `Unsupported` (§ 5.3).

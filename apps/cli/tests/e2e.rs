@@ -490,6 +490,31 @@ fn locked_core_refuses_reads_without_starting() {
     assert!(ok(&hirzla(&sock, &["lock"], None)).contains("verrouillé"));
 }
 
+/// ADR 0075 § 4, maintainer decision of 2026-11-18: Windows Hello and Touch ID are added only
+/// with `--accepter-risque-classique`. Without it, the warning is printed and the command fails
+/// before asking for the password or reaching the core; FIDO2 needs nothing more.
+#[test]
+fn classical_methods_need_the_flag() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    for kind in ["hello", "touchid"] {
+        let err = fails(&hirzla(&sock, &["methods", "add", kind], None));
+        assert!(err.contains("--accepter-risque-classique"), "{err}");
+        assert!(err.contains("ordinateur quantique"), "{err}");
+        assert!(err.contains("FIDO2"), "{err}");
+        assert!(!err.contains("pas démarré"), "{err}");
+        // With the flag, the command goes on (and stops here: no core).
+        let err = fails(&hirzla(
+            &sock,
+            &["methods", "add", kind, "--accepter-risque-classique"],
+            Some(MASTER),
+        ));
+        assert!(!err.contains("ordinateur quantique"), "{err}");
+    }
+    let err = fails(&hirzla(&sock, &["methods", "add", "fido2"], Some(MASTER)));
+    assert!(!err.contains("ordinateur quantique"), "{err}");
+}
+
 #[test]
 fn self_mode_v5_commands() {
     let dir = private_dir();

@@ -3,6 +3,7 @@
 
 use hirzla_core::client::ClientError;
 use hirzla_core::locker_export::proto::ExportCode;
+use hirzla_core::methods::proto::MethodCode;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
 use hirzla_core::selfmode::proto::SelfCode;
 use hirzla_core::server_mode::proto::ServerCode;
@@ -48,7 +49,10 @@ pub enum DesktopError {
     /// The core refused a server mode request (`docs/api-locale.md` § 15.5).
     #[error("the core refused the server mode request: {}", .0.name())]
     Server(ServerCode),
-    /// The core refused an export request (`docs/api-locale.md` § 19.4).
+    /// The core refused a hardware unlock method request (`docs/api-locale.md` § 21).
+    #[error("the core refused the unlock method request: {}", .0.name())]
+    Method(MethodCode),
+    /// The core refused an export request (`docs/api-locale.md` § 19.3).
     #[error("the core refused the export request: {}", .0.name())]
     Export(ExportCode),
 }
@@ -72,6 +76,7 @@ impl DesktopError {
             // "access_lost" for the refusal of a locker: the interface shows it apart.
             DesktopError::Server(ServerCode::ServerRefused(4)) => "access_lost",
             DesktopError::Server(c) => c.name(),
+            DesktopError::Method(c) => c.name(),
             DesktopError::Export(c) => c.name(),
         }
     }
@@ -99,6 +104,7 @@ impl DesktopError {
             DesktopError::Import(what) => (*what).to_owned(),
             DesktopError::Cancelled => "Opération annulée.".into(),
             DesktopError::Server(c) => server_message(*c),
+            DesktopError::Method(c) => method_message(*c),
             DesktopError::Export(c) => crate::locker_export::message(*c),
         }
     }
@@ -113,6 +119,28 @@ impl DesktopError {
             }
             ServerCode::General(c) => DesktopError::Refused(ErrorReply::new(c)),
             other => DesktopError::Server(other),
+        }
+    }
+
+    /// A refusal of a hardware unlock method request (`docs/api-locale.md` § 21). The general
+    /// refusals whose meaning differs here keep the method family; the others keep their
+    /// usual meaning.
+    #[must_use]
+    pub fn from_method(code: MethodCode, retry_after_s: Option<u64>) -> DesktopError {
+        match code {
+            MethodCode::General(
+                ErrorCode::UnlockFailed
+                | ErrorCode::InvalidInput
+                | ErrorCode::NotFound
+                | ErrorCode::Unsupported
+                | ErrorCode::Busy,
+            ) => DesktopError::Method(code),
+            MethodCode::General(code) => DesktopError::Refused(ErrorReply {
+                code,
+                retry_after_s,
+                versions: Vec::new(),
+            }),
+            other => DesktopError::Method(other),
         }
     }
 
@@ -245,6 +273,46 @@ pub fn server_message(code: ServerCode) -> String {
         ServerCode::InvitationInvalid => "Lien d'invitation non valide ou altéré. Demandez-le \
             à nouveau à l'administrateur du serveur, ou saisissez l'adresse, l'autorité et \
             l'empreinte séparément."
+            .into(),
+    }
+}
+
+/// French message for a refusal of a hardware unlock method request
+/// (`docs/api-locale.md` § 21).
+#[must_use]
+pub fn method_message(code: MethodCode) -> String {
+    match code {
+        MethodCode::General(ErrorCode::UnlockFailed) => "Refusé : mot de passe maître \
+            incorrect, réponse refusée par le matériel, ou coffre altéré."
+            .into(),
+        MethodCode::General(ErrorCode::InvalidInput) => "Refusé : cette méthode n'est pas \
+            matérielle, ou le coffre compte déjà huit méthodes de déverrouillage."
+            .into(),
+        MethodCode::General(ErrorCode::NotFound) => {
+            "Cette méthode de déverrouillage n'existe plus. Actualisez la liste.".into()
+        }
+        MethodCode::General(ErrorCode::Unsupported) => "Seule la dernière méthode de la liste \
+            peut être retirée : retirez d'abord celles qui la suivent."
+            .into(),
+        MethodCode::General(ErrorCode::Busy) => {
+            "Une autre demande matérielle est en cours. Réessayez ensuite.".into()
+        }
+        MethodCode::General(c) => refusal_message(&ErrorReply::new(c)),
+        MethodCode::Unavailable => "Cette méthode n'est pas disponible sur ce poste : matériel \
+            absent, système trop ancien ou prise en charge non incluse."
+            .into(),
+        MethodCode::Cancelled => "Opération annulée.".into(),
+        MethodCode::Invalidated => "La clé matérielle n'existe plus ou ne correspond plus \
+            (réinitialisée, empreintes modifiées, autre clé présentée). Ouvrez le coffre avec \
+            le mot de passe maître, retirez cette méthode puis ajoutez-la de nouveau."
+            .into(),
+        MethodCode::PinRequired => "Code PIN de la clé de sécurité requis ou incorrect.".into(),
+        MethodCode::PinBlocked => "La clé de sécurité est bloquée après trop de codes PIN \
+            erronés. Ouvrez le coffre avec le mot de passe maître."
+            .into(),
+        MethodCode::ClassicalFactorNotAccepted => "Windows Hello et Touch ID sont désactivés \
+            par défaut. Autorisez-les dans Réglages › Déverrouillage, après avoir lu \
+            l'avertissement."
             .into(),
     }
 }

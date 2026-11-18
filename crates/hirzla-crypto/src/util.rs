@@ -1,8 +1,8 @@
 //! Small primitives other Hirzla crates need without touching `aws-lc-rs` directly:
-//! SHA-384, SHA3-256, random bytes and constant-time comparison.
+//! SHA-384, SHA3-256, the WebAuthn PRF salt, random bytes and constant-time comparison.
 
 use aws_lc_rs::constant_time::verify_slices_are_equal;
-use aws_lc_rs::digest::{digest, Context, SHA384, SHA3_256};
+use aws_lc_rs::digest::{digest, Context, SHA256, SHA384, SHA3_256};
 
 use crate::Error;
 
@@ -62,6 +62,23 @@ pub const SHA3_256_LEN: usize = 32;
 pub fn sha3_256(data: &[u8]) -> [u8; SHA3_256_LEN] {
     let mut out = [0u8; SHA3_256_LEN];
     out.copy_from_slice(digest(&SHA3_256, data).as_ref());
+    out
+}
+
+/// Prefix of the WebAuthn PRF extension (W3C WebAuthn level 3, PRF extension).
+const WEBAUTHN_PRF_PREFIX: &[u8] = b"WebAuthn PRF\x00";
+
+/// The FIDO2 `hmac-secret` salt that the WebAuthn PRF extension sends for `input`:
+/// `SHA-256("WebAuthn PRF" ‖ 0x00 ‖ input)`. Platform WebAuthn APIs apply this transformation
+/// themselves; a CTAP client over HID applies it here, so that one security key gives the same
+/// output on every system (ADR 0075).
+#[must_use]
+pub fn webauthn_prf_salt(input: &[u8; 32]) -> [u8; 32] {
+    let mut ctx = Context::new(&SHA256);
+    ctx.update(WEBAUTHN_PRF_PREFIX);
+    ctx.update(input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(ctx.finish().as_ref());
     out
 }
 
@@ -132,6 +149,16 @@ mod tests {
         assert_eq!(
             sha3_256(b"abc").to_vec(),
             hex("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
+        );
+    }
+
+    #[test]
+    fn webauthn_prf_salt_is_the_prefixed_sha256() {
+        // SHA-256("WebAuthn PRF" ‖ 0x00 ‖ 00 01 … 1f), computed independently (Python hashlib).
+        let input: [u8; 32] = core::array::from_fn(|i| u8::try_from(i).unwrap());
+        assert_eq!(
+            webauthn_prf_salt(&input).to_vec(),
+            hex("dc1f4f3b3d759586245d5de7e2e115d2a056a2df27109db7cef9b4b3a89bb106")
         );
     }
 
