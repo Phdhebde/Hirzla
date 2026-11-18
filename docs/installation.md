@@ -123,8 +123,8 @@ Désinstaller. Votre coffre n'est pas supprimé (§ 6).
 `brew upgrade` à chaque version publiée :
 
 ```sh
-brew tap phdhebde/hirzla
-brew trust phdhebde/hirzla        # Homebrew refuse les taps tiers non approuvés
+brew tap hirzla/hirzla
+brew trust hirzla/hirzla        # Homebrew refuse les taps tiers non approuvés
 brew install --cask hirzla        # le mot de passe d'administrateur est demandé
 ```
 
