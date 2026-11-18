@@ -8,6 +8,31 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [1.1.1] — 2026-11-18
+
+### Corrections
+
+- **Touch ID** : le déverrouillage par Touch ID était toujours refusé, sans que l'empreinte
+  soit demandée. Le noyau rechargeait mal la clé de la Secure Enclave et obtenait une autre
+  clé. Il la recharge maintenant par son identifiant d'objet (`toid`). Les méthodes Touch ID
+  ajoutées en 1.1.0 restent valables, sans nouvel ajout (#71). Nouveau test matériel M2 :
+  `cargo test -p hirzla-keystore --test secure_enclave_unlock -- --ignored`.
+- **Liens symboliques** : lancés par un lien (`/opt/homebrew/bin/hirzla`), la ligne de
+  commande, l'hôte natif et l'application cherchent le noyau à côté de leur exécutable réel.
+  La mise à jour hors ligne suit aussi le lien pour trouver le répertoire d'installation (#73).
+
+### Installation
+
+- **Homebrew** : `brew tap hirzla/hirzla`, `brew trust hirzla/hirzla`, puis
+  `brew install --cask hirzla` installe le paquet macOS, et `brew upgrade` le met à jour. Le
+  cask est mis à jour à chaque version publiée par le nouveau workflow `homebrew.yml`
+  (#74, #75 ; `docs/installation.md` § 4).
+
+### Maintenance
+
+- Tests de bout en bout de la CLI : une entrée standard fermée n'est plus une erreur (#70).
+- Deux expressions booléennes simplifiées pour clippy (#72).
+
 ## [1.1.0] — 2026-11-18
 
 ### Déverrouillage par Windows Hello, Touch ID et clé de sécurité FIDO2 (ADR 0075)
