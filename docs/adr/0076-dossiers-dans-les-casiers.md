@@ -1,6 +1,6 @@
 # ADR 0076 — Dossiers dans les casiers : format du coffre v3 et API locale v11
 
-- Statut : accepté (2026-11-17, décision de principe de Max ; modalités ci-dessous)
+- Statut : accepté (2026-11-18, Claude par délégation de Max)
 - Date : 2026-11-17
 
 ## Contexte

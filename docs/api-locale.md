@@ -12,7 +12,7 @@ l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par le
 les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
 § 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
 chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
-matérielles (version 12, § 21) par l'ADR 0075 (proposé) ; les codes TOTP (version 13, § 22) par
+matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
 l'ADR 0078.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
@@ -1761,12 +1761,16 @@ macOS) ; sous Windows, le système le demande lui-même.
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN}` | `{1: rang}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
 | 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
 | 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
 - `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
-- `EnrollMethod` : frein (§ 6) ; vérification du mot de passe maître (un mot de passe faux
+- `EnrollMethod` : frein (§ 6) ; coffre ouvert ; pour Windows Hello (5) et Touch ID (3),
+  méthodes à cryptographie classique seulement, la clé 4 doit valoir `true`, sinon
+  `ClassicalFactorNotAccepted`, **avant** la vérification du mot de passe (aucun essai du frein
+  consommé) et avant tout geste (ADR 0075 § 4, décision du mainteneur du 2026-11-18) ; la clé
+  4 est ignorée pour FIDO2, et absente vaut `false`. Puis vérification du mot de passe maître (un mot de passe faux
   compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
   geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
   que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
@@ -1791,19 +1795,24 @@ macOS) ; sous Windows, le système le demande lui-même.
 | 162 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
 | 163 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
 | 164 | `PinBlocked` | Clé de sécurité bloquée |
+| 165 | `ClassicalFactorNotAccepted` | Ajout de Windows Hello ou Touch ID sans l'acceptation explicite du risque post-quantique résiduel (clé 4 d'`EnrollMethod`) ; le client affiche l'avertissement et fait confirmer |
 
 Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
 matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
 `NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
 journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
-ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
+ni nom de clé, ni identifiant de clé, ni rang, ni PIN. Un ajout refusé faute d'acceptation
+s'écrit `result=classical_factor_not_accepted`.
+
+Une méthode Windows Hello ou Touch ID déjà enrôlée continue d'ouvrir le coffre
+(`UnlockWithMethod` ne demande aucune acceptation).
 
 ### 21.5 Ligne de commande
 
 | Commande | Requêtes |
 | --- | --- |
 | `methods` | `UnlockMethods` |
-| `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`) |
+| `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`). `hello` et `touchid` exigent `--accepter-risque-classique` : sans elle, l'avertissement s'affiche et la commande échoue sans rien demander |
 | `methods remove RANG` | `RemoveMethod` |
 | `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
 
@@ -1811,7 +1820,7 @@ ni nom de clé, ni identifiant de clé, ni rang, ni PIN.
 
 Voir l'ADR 0075 : FIDO2 sous Linux et macOS par la fonctionnalité `fido2-hid`, activée dans le
 noyau livré (une compilation sans elle répond `MethodUnavailable` pour FIDO2) ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
-fenêtre ; place de Windows Hello et Touch ID dans la configuration évaluée.
+fenêtre.
 
 ## 22. Codes TOTP (version 13)
 

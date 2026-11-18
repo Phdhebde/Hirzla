@@ -98,11 +98,23 @@ fn fixture() -> Fixture {
     }
 }
 
+/// An enrolment, with the acknowledgement of the classical risk where it is needed.
 fn enrol(kind: u8, pin: Option<&str>) -> MethodRequest {
     MethodRequest::EnrollMethod {
         kind,
         password: z(PASSWORD),
         pin: pin.map(z),
+        accept_classical_risk: kind == 3 || kind == 5,
+    }
+}
+
+/// An enrolment without the acknowledgement.
+fn enrol_unacknowledged(kind: u8) -> MethodRequest {
+    MethodRequest::EnrollMethod {
+        kind,
+        password: z(PASSWORD),
+        pin: None,
+        accept_classical_risk: false,
     }
 }
 
@@ -182,6 +194,7 @@ fn enrolment_needs_the_open_vault_and_the_password() {
         kind: 4,
         password: z("pas le bon"),
         pin: None,
+        accept_classical_risk: false,
     };
     assert_eq!(
         refused(&mut f.core, wrong.clone()),
@@ -202,6 +215,63 @@ fn enrolment_needs_the_open_vault_and_the_password() {
         refused(&mut f.core, enrol(4, None)),
         general(ErrorCode::Locked)
     );
+}
+
+/// Maintainer decision of 2026-11-18 (ADR 0075 § 4): Windows Hello and Touch ID are
+/// classical only, and off unless the user accepts their residual post-quantum risk. FIDO2 is
+/// not concerned; a method already enrolled keeps opening the vault.
+#[test]
+fn classical_methods_need_the_acknowledgement() {
+    let mut f = fixture();
+    for kind in [5u8, 3] {
+        assert_eq!(
+            refused(&mut f.core, enrol_unacknowledged(kind)),
+            (MethodCode::ClassicalFactorNotAccepted, None)
+        );
+    }
+    // Refused before any gesture, and before the password: no attempt of the brake spent.
+    assert_eq!(f.hello.gestures(), 0);
+    assert_eq!(f.enclave.gestures(), 0);
+    let wrong = MethodRequest::EnrollMethod {
+        kind: 5,
+        password: z("pas le bon"),
+        pin: None,
+        accept_classical_risk: false,
+    };
+    for _ in 0..5 {
+        assert_eq!(
+            refused(&mut f.core, wrong.clone()),
+            (MethodCode::ClassicalFactorNotAccepted, None)
+        );
+    }
+    assert_eq!(methods(&mut f.core).0.len(), 1);
+    // FIDO2 needs no acknowledgement.
+    assert_eq!(
+        f.core.handle_methods(enrol_unacknowledged(4)).unwrap(),
+        MethodReply::Enrolled { rank: 1 }
+    );
+    // With it, both are enrolled.
+    assert_eq!(
+        f.core.handle_methods(enrol(5, None)).unwrap(),
+        MethodReply::Enrolled { rank: 2 }
+    );
+    assert_eq!(
+        f.core.handle_methods(enrol(3, None)).unwrap(),
+        MethodReply::Enrolled { rank: 3 }
+    );
+    // Unlocking with them needs nothing more.
+    lock(&mut f.core);
+    for rank in 1..=3u8 {
+        f.core.handle_methods(unlock(rank, None)).unwrap();
+        lock(&mut f.core);
+    }
+    let log = f.sink.text();
+    assert!(log.contains(
+        "event=unlock_method op=enroll_method kind=hello result=classical_factor_not_accepted"
+    ));
+    assert!(log.contains(
+        "event=unlock_method op=enroll_method kind=enclave result=classical_factor_not_accepted"
+    ));
 }
 
 #[test]
@@ -457,6 +527,8 @@ fn wire_format_round_trips_and_refuses() {
         MethodRequest::UnlockMethods,
         enrol(4, Some(PIN)),
         enrol(5, None),
+        enrol(3, None),
+        enrol_unacknowledged(5),
         unlock(7, Some(PIN)),
         unlock(1, None),
         MethodRequest::RemoveMethod { rank: 2 },
@@ -474,16 +546,19 @@ fn wire_format_round_trips_and_refuses() {
             kind: 1,
             password: z(PASSWORD),
             pin: None,
+            accept_classical_risk: false,
         },
         MethodRequest::EnrollMethod {
             kind: 2,
             password: z(PASSWORD),
             pin: None,
+            accept_classical_risk: false,
         },
         MethodRequest::EnrollMethod {
             kind: 4,
             password: z(""),
             pin: None,
+            accept_classical_risk: false,
         },
         unlock(8, None),
         unlock(1, Some("")),
@@ -501,6 +576,28 @@ fn wire_format_round_trips_and_refuses() {
         MethodRequest::decode(&frame).unwrap_err(),
         (3, MethodCode::General(ErrorCode::Malformed))
     );
+    // The acknowledgement is a boolean, nothing else.
+    {
+        use hirzla_vault::cbor::{encode, Value};
+        let frame = encode(&Value::map(vec![
+            (1, Value::Uint(12)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(161)),
+            (
+                4,
+                Value::map(vec![
+                    (1, Value::Uint(5)),
+                    (2, Value::text(PASSWORD)),
+                    (4, Value::Uint(1)),
+                ]),
+            ),
+        ]))
+        .unwrap();
+        assert_eq!(
+            MethodRequest::decode(&frame).unwrap_err(),
+            (3, MethodCode::General(ErrorCode::Malformed))
+        );
+    }
     // Another version.
     let mut frame = MethodRequest::UnlockMethods.encode(4).unwrap().to_vec();
     // Version is the first value of the map: 0xa3 0x01 0x0c.
@@ -548,6 +645,7 @@ fn wire_format_round_trips_and_refuses() {
         MethodCode::Invalidated,
         MethodCode::PinRequired,
         MethodCode::PinBlocked,
+        MethodCode::ClassicalFactorNotAccepted,
         MethodCode::General(ErrorCode::Busy),
     ] {
         let frame = MethodReply::encode(2, Err((c, None))).unwrap();

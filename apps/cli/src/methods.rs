@@ -3,7 +3,9 @@
 //! stays.
 
 use hirzla_core::client::Client;
-use hirzla_core::methods::proto::{MethodCode, MethodEntry, MethodReply, MethodRequest, MAX_PIN};
+use hirzla_core::methods::proto::{
+    is_classical_kind, MethodCode, MethodEntry, MethodReply, MethodRequest, MAX_PIN,
+};
 use hirzla_core::proto::{ErrorCode, ErrorReply, VaultState, MAX_PASSWORD};
 use zeroize::Zeroizing;
 
@@ -14,8 +16,14 @@ use crate::{client_message, refusal_message, say, status, term, Session};
 pub enum MethodsCommand {
     /// Lists the methods of the vault and what this device can add.
     List,
-    /// Adds a method of kind 3, 4 or 5.
-    Add { kind: u8 },
+    /// Adds a method of kind 3, 4 or 5. Windows Hello and Touch ID need
+    /// `--accepter-risque-classique` (ADR 0075 § 4).
+    Add {
+        /// Kind of method.
+        kind: u8,
+        /// The user accepted the residual post-quantum risk of a classical-only method.
+        accept_classical_risk: bool,
+    },
     /// Removes the method at a rank.
     Remove { rank: u8 },
 }
@@ -40,6 +48,20 @@ fn kind_label(kind: u8) -> &'static str {
         6 => "kit de recouvrement",
         _ => "méthode inconnue",
     }
+}
+
+/// The option that accepts the residual post-quantum risk of Windows Hello and Touch ID.
+pub const ACCEPT_CLASSICAL_FLAG: &str = "--accepter-risque-classique";
+
+/// Why Windows Hello and Touch ID are off unless the user accepts their risk (ADR 0075 § 4,
+/// maintainer decision of 2026-11-18).
+fn classical_warning(kind: u8) -> String {
+    format!(
+        "{} est désactivé par défaut. Le fichier du coffre seul reste aussi solide que le mot          de passe maître. Mais cette méthode du système utilise une cryptographie classique :          quelqu'un qui aurait lu sa clé publique dans votre session ouverte et disposerait plus          tard d'un ordinateur quantique pourrait retrouver le secret de cette méthode, et ouvrir          une copie du coffre prise ce jour-là sans le mot de passe maître. Les clés de sécurité          FIDO2 n'ont pas ce risque (« hirzla methods add fido2 »). Pour ajouter {} en          connaissance de cause : « hirzla methods add {} {ACCEPT_CLASSICAL_FLAG} ».",
+        kind_label(kind),
+        kind_label(kind),
+        if kind == 3 { "touchid" } else { "hello" },
+    )
 }
 
 fn gesture_hint(kind: u8) -> &'static str {
@@ -86,6 +108,9 @@ fn method_message(code: MethodCode, retry_after_s: Option<u64>) -> String {
         MethodCode::PinBlocked => {
             "la clé de sécurité est bloquée après trop de codes PIN erronés.".into()
         }
+        MethodCode::ClassicalFactorNotAccepted => format!(
+            "le noyau refuse Windows Hello et Touch ID sans l'acceptation du risque              post-quantique résiduel ({ACCEPT_CLASSICAL_FLAG})."
+        ),
     }
 }
 
@@ -121,6 +146,16 @@ fn read_pin() -> Result<Zeroizing<String>, String> {
 
 /// `methods`, `methods add KIND`, `methods remove RANG`.
 pub fn run(session: &Session<'_>, command: &MethodsCommand) -> Result<(), String> {
+    // Checked before anything else: no password asked, no core started.
+    if let MethodsCommand::Add {
+        kind,
+        accept_classical_risk: false,
+    } = command
+    {
+        if is_classical_kind(*kind) {
+            return Err(classical_warning(*kind));
+        }
+    }
     let mut c = session.connect(false)?;
     match command {
         MethodsCommand::List => {
@@ -159,7 +194,10 @@ pub fn run(session: &Session<'_>, command: &MethodsCommand) -> Result<(), String
             }
             Ok(())
         }
-        MethodsCommand::Add { kind } => {
+        MethodsCommand::Add {
+            kind,
+            accept_classical_risk,
+        } => {
             let password =
                 term::read_secret("Mot de passe maître (confirmation) : ", false, MAX_PASSWORD)?;
             let mut pin = None;
@@ -169,6 +207,7 @@ pub fn run(session: &Session<'_>, command: &MethodsCommand) -> Result<(), String
                     kind: *kind,
                     password: password.clone(),
                     pin: pin.take(),
+                    accept_classical_risk: *accept_classical_risk && is_classical_kind(*kind),
                 };
                 match call(&mut c, &request)? {
                     Ok(MethodReply::Enrolled { rank }) => {

@@ -758,6 +758,12 @@
         <p class="texte-secondaire">Ouvrez le coffre avec Windows Hello, Touch ID ou une clé de sécurité FIDO2, sans
           saisir le mot de passe maître. Le mot de passe maître reste toujours valable : gardez-le.</p>
         <ul id="methodes-liste" class="liste-simple"></ul>
+        <div id="methodes-classiques" hidden>
+          <label class="case"><input type="checkbox" id="reglage-classiques" aria-describedby="reglage-classiques-aide">
+            Autoriser Windows Hello / Touch ID</label>
+          <p id="reglage-classiques-aide" class="aide">Désactivés par défaut : ces méthodes du système reposent sur une
+            cryptographie classique. Une méthode déjà ajoutée ouvre toujours le coffre.</p>
+        </div>
         <div id="methodes-ajouter" class="ligne-actions"></div>
         <p id="methodes-aucune" class="encadre" role="status" hidden>Aucune méthode matérielle n'est disponible sur ce
           poste.</p>
@@ -1344,6 +1350,32 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
         <button id="methode-ajouter" class="bouton bouton-principal" type="submit">Ajouter</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Windows Hello and Touch ID, off by default (ADR 0075 § 4): the warning, then a confirmation. -->
+  <dialog id="dialogue-classiques" class="dialogue dialogue-etroit" aria-labelledby="classiques-titre" aria-describedby="classiques-texte">
+    <form id="form-classiques" method="dialog" novalidate>
+      <h2 id="classiques-titre" class="titre-carte">Autoriser Windows Hello et Touch ID ?</h2>
+      <div id="classiques-texte">
+        <p>Le fichier du coffre seul reste aussi solide que votre mot de passe maître : ces méthodes ne retirent
+          rien à sa protection.</p>
+        <p>Mais Windows Hello et Touch ID utilisent une cryptographie classique. Quelqu'un qui aurait lu la clé
+          publique de la méthode dans votre session ouverte, et qui disposerait plus tard d'un ordinateur quantique,
+          pourrait retrouver le secret de cette méthode et ouvrir une copie du coffre prise ce jour-là, sans le mot
+          de passe maître.</p>
+        <p>Les clés de sécurité FIDO2 n'ont pas ce risque.</p>
+      </div>
+      <label class="case"><input type="checkbox" id="classiques-compris"> J'ai compris ce risque et j'autorise ces
+        méthodes sur ce poste.</label>
+      <div id="classiques-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="classiques-autoriser" class="bouton bouton-principal" type="submit" disabled>Autoriser</button>
       </div>
     </form>
   </dialog>

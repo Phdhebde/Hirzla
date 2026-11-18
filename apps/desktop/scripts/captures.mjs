@@ -244,6 +244,21 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "08-reglages", theme);
   await p.evaluate(() => document.querySelector("#reglages-poste").scrollIntoView({ block: "start" }));
   await shot(p, "08b-reglages-sur-ce-poste", theme);
+  // Unlock methods: Windows Hello behind its toggle, then the warning (ADR 0075 § 4).
+  await p.evaluate(() => document.querySelector("#reglages-methodes").scrollIntoView({ block: "start" }));
+  await p.waitForSelector("#methodes-classiques:not([hidden])");
+  if ((await p.locator("#methodes-ajouter button", { hasText: "Windows Hello" }).count()) !== 0) {
+    errors.push(`${theme}: Windows Hello offered before the toggle`);
+  }
+  await shot(p, "08c-reglages-deverrouillage", theme);
+  await p.click("#reglage-classiques");
+  await p.waitForSelector("#dialogue-classiques[open]");
+  if (!(await p.isDisabled("#classiques-autoriser"))) errors.push(`${theme}: enabled without the confirmation`);
+  await p.check("#classiques-compris");
+  await shot(p, "08d-autoriser-windows-hello", theme);
+  await p.click("#classiques-autoriser");
+  await p.waitForSelector("#dialogue-classiques:not([open])", { state: "attached" });
+  await p.waitForSelector("#methodes-ajouter button:has-text('Windows Hello')");
   await p.click("#import-csv");
   await p.waitForSelector("#import-resultat:not([hidden])");
   await p.evaluate(() => document.querySelector("#import-resultat").scrollIntoView({ block: "end" }));

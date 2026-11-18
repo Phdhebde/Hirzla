@@ -68,7 +68,8 @@ hirzla import-kdbx ancienne-base.kdbx
 
 ```sh
 hirzla methods                     # méthodes du coffre et celles qu'on peut ajouter
-hirzla methods add hello           # ou touchid, fido2 (le mot de passe maître est redemandé)
+hirzla methods add fido2           # le mot de passe maître est redemandé
+hirzla methods add hello --accepter-risque-classique   # ou touchid : risque post-quantique résiduel accepté
 hirzla unlock --materiel [RANG]    # ouvre le coffre d'un geste
 hirzla methods remove RANG         # la dernière méthode seulement
 ```

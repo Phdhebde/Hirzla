@@ -1,6 +1,6 @@
 # ADR 0078 — Codes TOTP : calcul dans le noyau et API locale v13
 
-- Statut : proposé
+- Statut : accepté (2026-11-18, Claude par délégation de Max)
 - Date : 2026-11-17
 
 ## Contexte

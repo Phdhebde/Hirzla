@@ -310,6 +310,10 @@ pub fn method_message(code: MethodCode) -> String {
         MethodCode::PinBlocked => "La clé de sécurité est bloquée après trop de codes PIN \
             erronés. Ouvrez le coffre avec le mot de passe maître."
             .into(),
+        MethodCode::ClassicalFactorNotAccepted => "Windows Hello et Touch ID sont désactivés \
+            par défaut. Autorisez-les dans Réglages › Déverrouillage, après avoir lu \
+            l'avertissement."
+            .into(),
     }
 }
 

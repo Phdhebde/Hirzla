@@ -451,13 +451,33 @@ export class SettingsView {
     byId("dialogue-methode").addEventListener("close", () => this.wipeMethodDialog());
     /** @type {import("./api.js").MethodKind | null} */
     this.adding = null;
+    // Windows Hello and Touch ID: off until the user accepts their risk (ADR 0075 § 4).
+    this.classicalAllowed = false;
+    /** @type {import("./api.js").UnlockMethods | null} */
+    this.lastMethods = null;
+    byId("reglage-classiques").addEventListener("change", () => void this.toggleClassical());
+    byId("classiques-compris").addEventListener("change", () => {
+      /** @type {HTMLButtonElement} */ (byId("classiques-autoriser")).disabled =
+        !(/** @type {HTMLInputElement} */ (byId("classiques-compris")).checked);
+    });
+    byId("form-classiques").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.allowClassical();
+    });
+    byId("dialogue-classiques").addEventListener("close", () => {
+      /** @type {HTMLInputElement} */ (byId("classiques-compris")).checked = false;
+      /** @type {HTMLButtonElement} */ (byId("classiques-autoriser")).disabled = true;
+      /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+    });
   }
 
   /** Reads the unlock methods of the vault. */
   async loadMethods() {
     showError(byId("methodes-erreur"), null);
     try {
-      this.renderMethods(await api.unlockMethods());
+      const [methods, allowed] = await Promise.all([api.unlockMethods(), api.classicalUnlock()]);
+      this.classicalAllowed = allowed;
+      this.renderMethods(methods);
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("methodes-erreur"), err.message);
@@ -466,7 +486,9 @@ export class SettingsView {
 
   /** @param {import("./api.js").UnlockMethods} m */
   renderMethods(m) {
+    this.lastMethods = m;
     const last = m.methods[m.methods.length - 1];
+    const classical = (/** @type {string} */ k) => k === "hello" || k === "touchid";
     const hardware = (/** @type {string} */ k) => k === "hello" || k === "touchid" || k === "fido2";
     byId("methodes-liste").replaceChildren(
       ...m.methods.map((method) => {
@@ -485,14 +507,57 @@ export class SettingsView {
         return row;
       }),
     );
+    // The toggle shows where Windows Hello or Touch ID can be added, or once turned on.
+    byId("methodes-classiques").hidden = !this.classicalAllowed && !m.enrollable.some(classical);
+    /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+    const offered = m.enrollable.filter((k) => this.classicalAllowed || !classical(k));
     byId("methodes-ajouter").replaceChildren(
-      ...m.enrollable.map((kind) => {
+      ...offered.map((kind) => {
         const b = h("button", { class: "bouton bouton-secondaire", type: "button", text: `Ajouter ${METHOD_NAMES[kind]}…` });
         b.addEventListener("click", () => this.openMethodDialog(kind));
         return b;
       }),
     );
     byId("methodes-aucune").hidden = m.enrollable.length > 0;
+  }
+
+  /** Turning on asks for the warning first; turning off needs nothing. */
+  async toggleClassical() {
+    const toggle = /** @type {HTMLInputElement} */ (byId("reglage-classiques"));
+    if (toggle.checked) {
+      toggle.checked = false;
+      showError(byId("classiques-erreur"), null);
+      /** @type {HTMLDialogElement} */ (byId("dialogue-classiques")).showModal();
+      byId("classiques-compris").focus();
+      return;
+    }
+    await this.saveClassical(false, byId("methodes-erreur"));
+  }
+
+  async allowClassical() {
+    if (!(/** @type {HTMLInputElement} */ (byId("classiques-compris")).checked)) return;
+    if (await this.saveClassical(true, byId("classiques-erreur"))) {
+      /** @type {HTMLDialogElement} */ (byId("dialogue-classiques")).close();
+      announce("Windows Hello et Touch ID peuvent être ajoutés sur ce poste.", 6000);
+    }
+  }
+
+  /**
+   * @param {boolean} allowed
+   * @param {HTMLElement} error
+   * @returns {Promise<boolean>}
+   */
+  async saveClassical(allowed, error) {
+    try {
+      this.classicalAllowed = await api.setClassicalUnlock(allowed);
+      if (this.lastMethods) this.renderMethods(this.lastMethods);
+      return true;
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(error, err.message);
+      /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+      return false;
+    }
   }
 
   /** @param {import("./api.js").MethodKind} kind */

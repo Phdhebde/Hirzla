@@ -184,6 +184,8 @@
   // Hardware unlock methods (ADR 0075): the master password, then those enrolled.
   const methods = [{ rank: 0, kind: "password", usable: true, needs_pin: false }, ...(cfg.methods || [])];
   const enrollable = cfg.enrollable || ["hello", "fido2"];
+  // Windows Hello and Touch ID, off by default (ADR 0075 § 4).
+  let classical = cfg.classical === true;
   /** @type {string | null} */
   let kdbxKey = null;
   const v = (n) => n.toString(16).padStart(96, "0");
@@ -486,7 +488,12 @@
     recovery_unlock: () => { state = "unlocked"; },
     remove_recovery_kit: () => { kit = null; },
     list_unlock_methods: () => ({ methods, enrollable }),
+    get_classical_unlock: () => classical,
+    set_classical_unlock: (a) => (classical = a.allowed),
     enroll_unlock_method: (a) => {
+      if ((a.kind === "hello" || a.kind === "touchid") && !classical) {
+        return refuse("classical_factor_not_accepted", "Windows Hello et Touch ID sont désactivés par défaut. Autorisez-les dans Réglages › Déverrouillage, après avoir lu l'avertissement.");
+      }
       if (a.password !== "démonstration") return refuse("unlock_failed", "Refusé : mot de passe maître incorrect, réponse refusée par le matériel, ou coffre altéré.");
       const rank = methods.length;
       methods.push({ rank, kind: a.kind, usable: true, needs_pin: false });

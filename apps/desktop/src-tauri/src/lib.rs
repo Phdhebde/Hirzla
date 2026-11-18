@@ -146,6 +146,8 @@ pub fn run() -> Result<(), tauri::Error> {
             methods::enroll_unlock_method,
             methods::unlock_with_method,
             methods::remove_unlock_method,
+            methods::get_classical_unlock,
+            methods::set_classical_unlock,
             selfmode::choose_kdbx_file,
             selfmode::choose_kdbx_key_file,
             selfmode::clear_kdbx_key_file,

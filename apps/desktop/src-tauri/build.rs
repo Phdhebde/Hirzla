@@ -47,6 +47,8 @@ const COMMANDS: &[&str] = &[
     "enroll_unlock_method",
     "unlock_with_method",
     "remove_unlock_method",
+    "get_classical_unlock",
+    "set_classical_unlock",
     "choose_kdbx_file",
     "choose_kdbx_key_file",
     "clear_kdbx_key_file",

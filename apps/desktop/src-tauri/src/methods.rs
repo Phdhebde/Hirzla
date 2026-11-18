@@ -4,13 +4,20 @@
 //!
 //! The gesture is asked by the system, in a dialog of its own, on behalf of the core: the web
 //! view never sees the hardware, a key name, a credential identifier nor the material.
+//!
+//! Windows Hello and Touch ID are classical only (ADR 0075 § 4): they may be added once the
+//! user has turned them on in the settings, after the warning; the enrolment then carries the
+//! acknowledgement the core requires.
 
-use hirzla_core::methods::proto::{MethodEntry, MethodReply, MethodRequest, MAX_PIN};
+use hirzla_core::methods::proto::{
+    is_classical_kind, MethodEntry, MethodReply, MethodRequest, MAX_PIN,
+};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
-use crate::commands::{check_master, AppState, State};
+use crate::commands::{check_master, guard, AppState, State};
 use crate::error::DesktopError;
+use crate::prefs::Preferences;
 
 /// The name of a method kind, for the interface.
 fn kind_name(kind: u8) -> &'static str {
@@ -113,10 +120,17 @@ impl AppState {
         let kind = kind_from_name(kind)?;
         check_master(&password)?;
         let pin = check_pin(pin)?;
+        let accept_classical_risk = is_classical_kind(kind) && self.classical_unlock_allowed();
+        if is_classical_kind(kind) && !accept_classical_risk {
+            return Err(DesktopError::Invalid(
+                "Autorisez d'abord Windows Hello et Touch ID dans Réglages › Déverrouillage.",
+            ));
+        }
         match self.call_methods(&MethodRequest::EnrollMethod {
             kind,
             password,
             pin,
+            accept_classical_risk,
         })? {
             MethodReply::Enrolled { rank } => Ok(rank),
             _ => Err(DesktopError::Protocol),
@@ -135,6 +149,26 @@ impl AppState {
         let pin = check_pin(pin)?;
         self.call_methods(&MethodRequest::UnlockWithMethod { rank, pin })
             .map(drop)
+    }
+
+    /// Whether the user turned Windows Hello and Touch ID on, after the warning.
+    #[must_use]
+    pub fn classical_unlock_allowed(&self) -> bool {
+        guard(&self.prefs).get().allow_classical_unlock
+    }
+
+    /// Turns Windows Hello and Touch ID on or off; kept in the local preferences.
+    ///
+    /// # Errors
+    /// [`DesktopError::Invalid`] if the preferences cannot be written.
+    pub fn set_classical_unlock_allowed(&self, allowed: bool) -> Result<bool, DesktopError> {
+        let mut store = guard(&self.prefs);
+        let prefs = Preferences {
+            allow_classical_unlock: allowed,
+            ..store.get()
+        };
+        store.set(prefs)?;
+        Ok(allowed)
     }
 
     /// Removes the hardware method at `rank` (the last one only).
@@ -162,6 +196,18 @@ pub fn enroll_unlock_method(
     pin: Option<Zeroizing<String>>,
 ) -> Result<u8, DesktopError> {
     state.enroll_method(&kind, password, pin)
+}
+
+/// See [`AppState::classical_unlock_allowed`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn get_classical_unlock(state: State<'_>) -> bool {
+    state.classical_unlock_allowed()
+}
+
+/// See [`AppState::set_classical_unlock_allowed`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn set_classical_unlock(state: State<'_>, allowed: bool) -> Result<bool, DesktopError> {
+    state.set_classical_unlock_allowed(allowed)
 }
 
 /// See [`AppState::unlock_with_method`].
@@ -229,6 +275,10 @@ mod tests {
             (MethodCode::Invalidated, "method_invalidated"),
             (MethodCode::PinRequired, "pin_required"),
             (MethodCode::PinBlocked, "pin_blocked"),
+            (
+                MethodCode::ClassicalFactorNotAccepted,
+                "classical_factor_not_accepted",
+            ),
         ] {
             let e = DesktopError::from_method(code, None);
             assert_eq!(e.code(), name);

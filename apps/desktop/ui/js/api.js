@@ -283,6 +283,11 @@ export const api = {
   unlockWithMethod: (rank, pin) => call("unlock_with_method", { rank, pin }),
   /** @param {number} rank @returns {Promise<void>} */
   removeMethod: (rank) => call("remove_unlock_method", { rank }),
+  // Windows Hello and Touch ID, off by default (ADR 0075 § 4); kept on this workstation.
+  /** @returns {Promise<boolean>} */
+  classicalUnlock: () => call("get_classical_unlock"),
+  /** @param {boolean} allowed @returns {Promise<boolean>} */
+  setClassicalUnlock: (allowed) => call("set_classical_unlock", { allowed }),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
   chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),

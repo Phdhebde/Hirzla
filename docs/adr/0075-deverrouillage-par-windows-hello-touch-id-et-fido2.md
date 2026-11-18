@@ -1,9 +1,9 @@
 # ADR 0075 — Déverrouillage par Windows Hello, Touch ID et clé FIDO2
 
-- Statut : proposé (2026-11-17), à valider par le mainteneur. Une fois accepté, il **amende la
-  décision 1 de l'ADR 0014** (« Secure Enclave seulement en combinaison avec le mot de
-  passe ») et le **§ 3 de l'ADR 0071** (« pas de biométrie seule ») pour les seules méthodes
-  décrites ici. Il complète les ADR 0006 et 0011.
+- Statut : accepté (2026-11-18, décision de Max sur le risque post-quantique ; reste par
+  délégation). Il **amende la décision 1 de l'ADR 0014** (« Secure Enclave seulement en
+  combinaison avec le mot de passe ») et le **§ 3 de l'ADR 0071** (« pas de biométrie
+  seule ») pour les seules méthodes décrites ici. Il complète les ADR 0006 et 0011.
 - Date : 2026-11-17
 
 ## Contexte
@@ -155,12 +155,32 @@ système (RSA pour Hello, P-256 pour l'enclave), sans variante post-quantique di
 - Contre B, Windows Hello et Touch ID sont **classiques** : un adversaire qui a pu exécuter du
   code dans la session (il obtient alors bien plus, hypothèse D) et qui disposera d'un
   ordinateur quantique ouvrira une copie du fichier prise ce jour-là, sans mot de passe. C'est
-  le **risque résiduel que le mainteneur accepte ou refuse en validant cet ADR**. FIDO2 n'a
-  pas ce risque pour le stockage.
+  le **risque résiduel** tranché ci-dessous. FIDO2 n'a pas ce risque pour le stockage.
+- **Décision du mainteneur (2026-11-18)** : Windows Hello et Touch ID sont livrés en 1.1 mais
+  **désactivés par défaut**. L'utilisateur doit les autoriser explicitement dans les réglages,
+  après un avertissement sur ce risque post-quantique résiduel. Les clés FIDO2 (clés de
+  sécurité, clés d'accès) et le mot de passe maître ne sont pas concernés : disponibles
+  directement. Mise en œuvre :
+    - **le noyau est le vrai garde-fou** : `EnrollMethod` porte une clé facultative
+      4 « risque classique accepté » (`api-locale.md` § 21) ; pour `kind` 3 et 5, sans elle à
+      `true`, le noyau répond `ClassicalFactorNotAccepted` (165), avant la vérification du mot
+      de passe et avant tout geste. Une méthode déjà enrôlée ouvre toujours le coffre ;
+    - **application** : Réglages › Déverrouillage, case « Autoriser Windows Hello / Touch ID »,
+      décochée par défaut ; la cocher ouvre l'avertissement, qui demande une case de
+      confirmation. Le choix est gardé dans `preferences.json` (ADR 0071) : c'est un confort
+      d'interface, l'application ne met le drapeau dans la demande que si ce choix est fait ;
+    - **ligne de commande** : `hirzla methods add hello|touchid` exige
+      `--accepter-risque-classique` ; sans elle, l'avertissement s'affiche et la commande
+      échoue, sans demander le mot de passe.
+  Texte de l'avertissement : le fichier du coffre seul reste aussi solide que le mot de passe
+  maître ; mais ces méthodes du système utilisent une cryptographie classique : quelqu'un qui
+  aurait lu la clé publique de la méthode dans la session ouverte, et disposerait plus tard
+  d'un ordinateur quantique, pourrait retrouver le secret de cette méthode ; les clés FIDO2
+  n'ont pas ce risque.
 - Hirzla n'écrit jamais ces clés publiques (règle de code, vérifiée par revue et par les tests
   qui inspectent le `keystore_blob`).
-- **Configuration évaluée** (ADR 0050) : FIDO2 y entre ; Windows Hello et Touch ID en restent
-  hors tant que le mainteneur ne l'a pas décidé (point ouvert 3). Un réglage de politique pour
+- **Configuration évaluée** (ADR 0050) : FIDO2 y entre ; Windows Hello et Touch ID y sont
+  désactivés, comme par défaut (point ouvert 3, tranché le 2026-11-18). Un réglage de politique pour
   les interdire est prévu (point ouvert 4).
 - Le jour où un système offre un oracle symétrique avec le même geste (élément du trousseau
   protégé par biométrie, possible avec un certificat Developer ID), il remplace l'oracle
@@ -206,7 +226,7 @@ Nouvelle famille, comme le mode Self (§ 16) : **version 12** (les versions 9 à
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 160 | `UnlockMethods` | existant | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 161 | `EnrollMethod` | ouvert | `{1: kind, 2: mot de passe maître, 3?: PIN}` | `{1: rang}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind, 2: mot de passe maître, 3?: PIN, 4?: risque classique accepté}` | `{1: rang}` |
 | 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
 | 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
@@ -216,7 +236,9 @@ Erreurs : 160 `MethodUnavailable` (pas de matériel, système trop ancien, fonct
 161 `MethodCancelled` (annulé par l'utilisateur ou délai dépassé), 162 `MethodInvalidated`
 (clé supprimée, empreintes changées, clé FIDO2 réinitialisée : le client propose le mot de
 passe puis le réenrôlement), 163 `PinRequired` (PIN absent ou faux ; le nombre d'essais
-restants n'est pas donné), 164 `PinBlocked` (clé FIDO2 bloquée). Détail dans
+restants n'est pas donné), 164 `PinBlocked` (clé FIDO2 bloquée), 165
+`ClassicalFactorNotAccepted` (Windows Hello ou Touch ID sans l'acceptation du risque
+post-quantique résiduel, § 4). Détail dans
 `api-locale.md` § 21.
 
 ### 7. Interfaces
@@ -275,8 +297,8 @@ tampons non effacés de la caisse restent un risque résiduel déclaré (`modele
   à chaque enrôlement, et en recours.
 - Face au vol du fichier seul, rien ne s'affaiblit. Face à un adversaire qui a eu du code dans
   la session et aura un ordinateur quantique, Windows Hello et Touch ID ouvrent une copie
-  sans mot de passe : risque accepté ou refusé avec cet ADR, documenté dans
-  `modele-de-menace.md`.
+  sans mot de passe : risque que seul l'utilisateur qui les autorise prend, après
+  l'avertissement (décision du 2026-11-18), documenté dans `modele-de-menace.md`.
 - La menace « un logiciel du compte pilote un vrai client signé » (modèle de menace) gagne une
   parade partielle : la méthode matérielle demande un geste ; le mot de passe reste une
   entrée clavier.
@@ -292,7 +314,8 @@ tampons non effacés de la caisse restent un risque résiduel déclaré (`modele
    2026-11-17**, activée dans le noyau livré sous Linux et macOS (§ 8).
 2. Fenêtre de Windows Hello et de `webauthn.dll` appelée par un noyau sans fenêtre : premier
    plan à vérifier (H1, H2) ; repli prévu : passer le handle de la fenêtre du client.
-3. Windows Hello et Touch ID dans la configuration évaluée.
+3. ~~Windows Hello et Touch ID dans la configuration évaluée~~ : **tranché le 2026-11-18**,
+   désactivés par défaut, autorisés seulement après l'avertissement (§ 4).
 4. Réglage de politique « méthodes matérielles interdites » (coffre, puis politique du mode
    Serveur).
 5. Une limite de durée (« mot de passe exigé tous les N jours ») reste possible plus tard sans

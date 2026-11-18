@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use hirzla_core::generator::{rules, Profile, Spec};
 use hirzla_core::proto::classes;
 
-use crate::methods::{kind_from_name, MethodsCommand};
+use crate::methods::{kind_from_name, MethodsCommand, ACCEPT_CLASSICAL_FLAG};
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -92,6 +92,8 @@ Commandes :
   methods add hello|touchid|fido2
                           Ajoute Windows Hello, Touch ID ou une clé de sécurité FIDO2
                           (coffre ouvert ; le mot de passe maître est redemandé).
+                          Windows Hello et Touch ID, cryptographie classique seulement :
+                          --accepter-risque-classique, après lecture de l'avertissement.
   methods remove RANG     Retire la méthode matérielle du RANG (la dernière seulement).
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
@@ -831,6 +833,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "init" => &["--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "ls" => &["--corbeille"],
         "unlock" => &["--materiel"],
+        "methods" => &[ACCEPT_CLASSICAL_FLAG],
         "get" => &["--champ", "--id", "--stdout"],
         "set" => &[
             "--identifiant",
@@ -957,10 +960,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "methods" => {
             let usage = "« methods » attend rien, add hello|touchid|fido2 ou remove RANG.";
             Command::Methods(match positional.as_slice() {
-                [] => MethodsCommand::List,
                 [a, k] if a == "add" => MethodsCommand::Add {
                     kind: kind_from_name(k).ok_or_else(|| usage.to_owned())?,
+                    accept_classical_risk: has(ACCEPT_CLASSICAL_FLAG),
                 },
+                _ if has(ACCEPT_CLASSICAL_FLAG) => {
+                    return Err(format!("{ACCEPT_CLASSICAL_FLAG} va avec « methods add »."))
+                }
+                [] => MethodsCommand::List,
                 [a, r] if a == "remove" => MethodsCommand::Remove {
                     rank: number(r, "RANG")?,
                 },
@@ -1818,12 +1825,29 @@ mod tests {
         );
         assert_eq!(
             p(&["methods", "add", "fido2"]).unwrap().command,
-            Command::Methods(MethodsCommand::Add { kind: 4 })
+            Command::Methods(MethodsCommand::Add {
+                kind: 4,
+                accept_classical_risk: false
+            })
         );
         assert_eq!(
             p(&["methods", "add", "hello"]).unwrap().command,
-            Command::Methods(MethodsCommand::Add { kind: 5 })
+            Command::Methods(MethodsCommand::Add {
+                kind: 5,
+                accept_classical_risk: false
+            })
         );
+        assert_eq!(
+            p(&["methods", "add", "touchid", "--accepter-risque-classique"])
+                .unwrap()
+                .command,
+            Command::Methods(MethodsCommand::Add {
+                kind: 3,
+                accept_classical_risk: true
+            })
+        );
+        assert!(p(&["methods", "--accepter-risque-classique"]).is_err());
+        assert!(p(&["methods", "remove", "2", "--accepter-risque-classique"]).is_err());
         assert_eq!(
             p(&["methods", "remove", "3"]).unwrap().command,
             Command::Methods(MethodsCommand::Remove { rank: 3 })

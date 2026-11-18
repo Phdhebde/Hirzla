@@ -17,6 +17,15 @@ pub const MAX_PIN: usize = 63;
 pub const MAX_RANK: u64 = 7;
 /// Kinds a client may enrol: 3 Secure Enclave, 4 FIDO2, 5 Windows Hello.
 pub const ENROLLABLE_KINDS: [u8; 3] = [3, 4, 5];
+/// Kinds whose oracle is classical only (ADR 0075 § 4): 3 Secure Enclave (Touch ID), 5 Windows
+/// Hello. Enrolling one needs the explicit acknowledgement of the residual post-quantum risk.
+pub const CLASSICAL_KINDS: [u8; 2] = [3, 5];
+
+/// Whether method kind `kind` is classical only, and so needs the acknowledgement.
+#[must_use]
+pub fn is_classical_kind(kind: u8) -> bool {
+    CLASSICAL_KINDS.contains(&kind)
+}
 
 /// Operation codes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +82,9 @@ pub enum MethodCode {
     PinRequired,
     /// 164: the security key is blocked.
     PinBlocked,
+    /// 165: a classical-only method (Windows Hello, Touch ID) without the acknowledgement of
+    /// its residual post-quantum risk.
+    ClassicalFactorNotAccepted,
 }
 
 impl MethodCode {
@@ -86,6 +98,7 @@ impl MethodCode {
             MethodCode::Invalidated => 162,
             MethodCode::PinRequired => 163,
             MethodCode::PinBlocked => 164,
+            MethodCode::ClassicalFactorNotAccepted => 165,
         }
     }
 
@@ -98,6 +111,7 @@ impl MethodCode {
             162 => MethodCode::Invalidated,
             163 => MethodCode::PinRequired,
             164 => MethodCode::PinBlocked,
+            165 => MethodCode::ClassicalFactorNotAccepted,
             n => MethodCode::General(ErrorCode::from_u64(n)?),
         })
     }
@@ -112,6 +126,7 @@ impl MethodCode {
             MethodCode::Invalidated => "method_invalidated",
             MethodCode::PinRequired => "pin_required",
             MethodCode::PinBlocked => "pin_blocked",
+            MethodCode::ClassicalFactorNotAccepted => "classical_factor_not_accepted",
         }
     }
 }
@@ -148,6 +163,10 @@ pub enum MethodRequest {
         password: Zeroizing<String>,
         /// PIN of the security key, when the method asks the client for it.
         pin: Option<Zeroizing<String>>,
+        /// The user accepted the residual post-quantum risk of a classical-only method
+        /// (Windows Hello, Touch ID; ADR 0075 § 4). Required for those kinds, ignored for
+        /// FIDO2.
+        accept_classical_risk: bool,
     },
     /// 162.
     UnlockWithMethod {
@@ -243,6 +262,7 @@ impl MethodRequest {
                 kind,
                 password,
                 pin,
+                accept_classical_risk,
             } => {
                 let mut e = vec![
                     (1, Value::Uint(u64::from(*kind))),
@@ -250,6 +270,9 @@ impl MethodRequest {
                 ];
                 if let Some(p) = pin {
                     e.push((3, Value::text(p)));
+                }
+                if *accept_classical_risk {
+                    e.push((4, Value::Bool(true)));
                 }
                 Some(Value::map(e))
             }
@@ -314,7 +337,7 @@ impl MethodRequest {
                 Some(_) => Err(malformed),
             },
             MethodOp::EnrollMethod => {
-                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
+                let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
                 let kind = m(f.req(1).and_then(uint))?;
                 let kind = u8::try_from(kind)
                     .ok()
@@ -324,6 +347,8 @@ impl MethodRequest {
                     kind,
                     password: secret_text(m(f.req(2))?, MAX_PASSWORD)?,
                     pin: f.opt(3).map(|p| secret_text(p, MAX_PIN)).transpose()?,
+                    accept_classical_risk: f.opt(4).map(|a| m(boolean(a))).transpose()?
+                        == Some(true),
                 })
             }
             MethodOp::UnlockWithMethod => {

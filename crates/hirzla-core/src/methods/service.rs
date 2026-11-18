@@ -5,6 +5,10 @@
 //! - the master password method is listed but never enrolled nor removed here;
 //! - enrolling needs the open vault **and** the master password retyped, under the same brake
 //!   as an unlock;
+//! - enrolling a classical-only method (Windows Hello, Touch ID) also needs the explicit
+//!   acknowledgement of its residual post-quantum risk (ADR 0075 § 4, maintainer decision of
+//!   2026-11-18): refused before the password is checked otherwise. Unlocking with a method
+//!   already enrolled needs nothing more;
 //! - a refused unlock by the hardware counts as a failed unlock; a cancelled gesture, an
 //!   absent device or a deleted key do not (they prove nothing about the user);
 //! - one gesture at a time: a second request that needs one gets `Busy`;
@@ -20,7 +24,9 @@ use hirzla_vault::model::UNLOCK_PASSWORD;
 use hirzla_vault::{unlock_methods, MethodInfo, Vault, VaultError};
 use zeroize::Zeroizing;
 
-use super::proto::{MethodCode, MethodEntry, MethodOp, MethodReply, MethodRequest};
+use super::proto::{
+    is_classical_kind, MethodCode, MethodEntry, MethodOp, MethodReply, MethodRequest,
+};
 use crate::events::Event;
 use crate::proto::{ErrorCode, ErrorReply};
 use crate::service::{vault_error, Core};
@@ -241,9 +247,10 @@ impl Core {
                 kind,
                 password,
                 pin,
+                accept_classical_risk,
             } => (
                 kind_name(kind),
-                self.prepare_enrol(kind, &password, pin)
+                self.prepare_enrol(kind, &password, pin, accept_classical_risk)
                     .map_or_else(Prepared::Done, Prepared::Gesture),
             ),
             MethodRequest::UnlockWithMethod { rank, pin } => {
@@ -313,9 +320,16 @@ impl Core {
         kind: u8,
         password: &str,
         pin: Option<Zeroizing<String>>,
+        accept_classical_risk: bool,
     ) -> Result<PendingGesture, Result<MethodReply, MethodRefusal>> {
         self.check_throttle().map_err(|e| Err(general(e)))?;
         let vault = self.vault().map_err(|e| Err(general(e)))?;
+        // Windows Hello and Touch ID are classical only: off unless the user accepted the
+        // residual post-quantum risk (ADR 0075 § 4). Checked before the password, so that a
+        // client that forgot the flag does not spend an attempt of the brake.
+        if is_classical_kind(kind) && !accept_classical_risk {
+            return Err(Err(method(MethodCode::ClassicalFactorNotAccepted)));
+        }
         match vault.verify_password(password) {
             Ok(()) => {}
             Err(VaultError::Unlock) => {
