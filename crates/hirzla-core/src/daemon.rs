@@ -13,6 +13,7 @@ use hirzla_keystore::platform::{self, HardeningReport, HardeningStatus};
 use zeroize::Zeroizing;
 
 use hirzla_access::hornn::HornnTrust;
+use hirzla_vault::export::ExportCost;
 use hirzla_vault::model::Id16;
 
 use crate::agent::proto::{is_agent_request, AgentCode, AgentReply, AgentRequest};
@@ -21,6 +22,11 @@ use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
 use crate::events::{Event, Log, Refusal};
+use crate::folders::proto::{is_folder_request, FolderReply, FolderRequest};
+use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
+use crate::locker_export::service as export_service;
+use crate::methods::proto::{is_method_request, MethodCode, MethodReply, MethodRequest};
+use crate::methods::service::{run_gesture, Prepared};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
@@ -29,6 +35,7 @@ use crate::selfmode::import;
 use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
 use crate::service::{Config, Core};
+use crate::totp::proto::{is_totp_request, TotpReply, TotpRequest};
 use crate::transport::{Connection, Endpoint, Listener};
 
 /// Most connections served at once.
@@ -575,17 +582,19 @@ fn serve_agent(
 /// Argon2 does not stop the other clients nor the automatic lock.
 fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]) -> bool {
     let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
-    let (id, result) = match SelfRequest::decode(frame) {
+    let (id, version, result) = match SelfRequest::decode_versioned(frame) {
         Ok((
             id,
+            version,
             SelfRequest::ImportKdbx {
                 path,
                 password,
                 locker,
+                key_file,
             },
         )) => {
             let result = if lock().is_unlocked() {
-                import::read_database(&path, &password)
+                import::read_database(&path, &password, key_file.as_deref())
                     .map_err(|c| (c, None))
                     .and_then(|db| lock().import_database(db, locker))
             } else {
@@ -593,20 +602,65 @@ fn serve_self(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]
                     path,
                     password,
                     locker,
+                    key_file,
                 })
+            };
+            (id, version, result)
+        }
+        Ok((id, version, request)) => (id, version, lock().handle_self(request)),
+        Err((id, version, code)) => {
+            log.record(Event::BadMessage);
+            (id, version, Err((code, None)))
+        }
+    };
+    let Ok(body) = SelfReply::encode_versioned(version, id, result.as_ref().map_err(|e| *e)) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
+/// Answers a hardware unlock method request (`docs/api-locale.md` § 21, ADR 0075). The
+/// browser profile is refused. The user's gesture runs outside the core's lock: the other
+/// clients and the automatic lock go on meanwhile. Returns `false` if the connection must
+/// close.
+fn serve_methods(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
+    let (id, result) = match MethodRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = MethodCode::General(ErrorCode::Unauthorized);
+            log.record(Event::MethodRequest {
+                op: request.op(),
+                kind: "-",
+                result: code.name(),
+            });
+            (id, Err((code, None)))
+        }
+        Ok((id, request)) => {
+            let prepared = lock().methods_prepare(request);
+            let result = match prepared {
+                Prepared::Done(r) => r,
+                Prepared::Gesture(pending) => {
+                    let outcome = run_gesture(&pending);
+                    lock().methods_finish(pending, outcome)
+                }
             };
             (id, result)
         }
-        Ok((id, request)) => (id, lock().handle_self(request)),
         Err((id, code)) => {
             log.record(Event::BadMessage);
             (id, Err((code, None)))
         }
     };
-    let Ok(body) = SelfReply::encode_with(id, result.as_ref().map_err(|e| *e)) else {
+    let Ok(body) = MethodReply::encode(id, result.as_ref().map_err(|e| *e)) else {
         return false;
     };
-    drop(result);
     write_frame(conn, &body).is_ok()
 }
 
@@ -682,23 +736,131 @@ fn serve_connection(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a TOTP request (`docs/api-locale.md` § 22). The browser profile is refused
+/// (§ 22.1). Returns `false` if the connection must close.
+fn serve_totp(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let (id, result) = match TotpRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ErrorCode::Unauthorized;
+            log.record(Event::TotpRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_totp(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = TotpReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
+/// Answers an export request (`docs/api-locale.md` § 19). The browser profile is refused
+/// (§ 19.1). Argon2id, the sealing and the file run outside the core's lock. Returns `false`
+/// if the connection must close.
+fn serve_export(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let lock = || core.lock().unwrap_or_else(PoisonError::into_inner);
+    let (id, result) = match ExportRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ExportCode::General(ErrorCode::Unauthorized);
+            log.record(Event::ExportRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            export_service::serve(lock, request, ExportCost::DEFAULT),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = ExportReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
+/// Answers a folder request (`docs/api-locale.md` § 20). The browser profile is refused
+/// (§ 20.1). Returns `false` if the connection must close.
+fn serve_folder(
+    conn: &mut Connection,
+    core: &Mutex<Core>,
+    log: &Log,
+    frame: &[u8],
+    profile: ClientProfile,
+) -> bool {
+    let (id, result) = match FolderRequest::decode(frame) {
+        Ok((id, request)) if profile != ClientProfile::Full => {
+            let code = ErrorCode::Unauthorized;
+            log.record(Event::FolderRequest {
+                op: request.op(),
+                result: code.name(),
+            });
+            (id, Err(code))
+        }
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_folder(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code))
+        }
+    };
+    let Ok(body) = FolderReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
-    let (id, code) = match SelfRequest::decode(frame) {
-        Ok((id, request)) => {
+    let (id, version, code) = match SelfRequest::decode_versioned(frame) {
+        Ok((id, version, request)) => {
             let code = SelfCode::General(ErrorCode::Unauthorized);
             log.record(Event::SelfRequest {
                 op: request.op(),
                 result: code.name(),
             });
-            (id, code)
+            (id, version, code)
         }
-        Err((id, code)) => {
+        Err((id, version, code)) => {
             log.record(Event::BadMessage);
-            (id, code)
+            (id, version, code)
         }
     };
-    match SelfReply::encode(id, &Err(code)) {
+    match SelfReply::encode_versioned(version, id, Err((code, None))) {
         Ok(body) => write_frame(conn, &body).is_ok(),
         Err(_) => false,
     }
@@ -760,8 +922,32 @@ fn serve(
             }
             break;
         }
+        if is_method_request(&frame) {
+            if serve_methods(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
         if is_connection_request(&frame) {
             if serve_connection(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_totp_request(&frame) {
+            if serve_totp(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_export_request(&frame) {
+            if serve_export(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_folder_request(&frame) {
+            if serve_folder(&mut conn, core, log, &frame, profile) {
                 continue;
             }
             break;

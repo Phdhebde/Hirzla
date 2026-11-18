@@ -671,8 +671,8 @@ fn format_and_structure_checks() {
     rewrite_header(&p, |h| {
         let mut body = h.encode().unwrap();
         // key 2 (format_version) is the byte after "02" following the magic text.
-        let at = body.windows(2).position(|w| w == [0x02, 0x02]).unwrap();
-        body[at + 1] = 0x03;
+        let at = body.windows(2).position(|w| w == [0x02, 0x03]).unwrap();
+        body[at + 1] = 0x04;
         body
     });
     assert_eq!(
@@ -680,7 +680,7 @@ fn format_and_structure_checks() {
         Some(VaultError::UnsupportedVersion)
     );
     let (_d, p) = make();
-    tamper(&p, "PRAGMA user_version = 3;");
+    tamper(&p, "PRAGMA user_version = 4;");
     assert_eq!(
         Vault::open(&p, PASSWORD).err(),
         Some(VaultError::UnsupportedVersion)
@@ -1416,5 +1416,33 @@ fn device_revocation_refusals() {
     assert_eq!(
         v.sign_device_revocation(&[7; 16], 1),
         Err(VaultError::Unsupported)
+    );
+}
+
+#[test]
+fn discarded_attachment_leaves_no_chunk() {
+    let (_dir, _path, mut v) = new_vault();
+    let locker = v.personal_locker();
+    let count = |v: &Vault| -> i64 {
+        v.connection()
+            .query_row("SELECT count(*) FROM attachment_chunks", [], |r| r.get(0))
+            .unwrap()
+    };
+    let kept = v
+        .add_attachment(locker, "garde.bin", "application/octet-stream", &[1u8; 10])
+        .unwrap();
+    let dropped = v
+        .add_attachment(locker, "jete.bin", "application/octet-stream", &[2u8; 10])
+        .unwrap();
+    assert_eq!(count(&v), 2);
+    v.discard_attachment(locker, &dropped).unwrap();
+    assert_eq!(count(&v), 1);
+    assert_eq!(
+        v.read_attachment(locker, &kept).unwrap().as_slice(),
+        &[1u8; 10]
+    );
+    assert_eq!(
+        v.read_attachment(locker, &dropped).err(),
+        Some(VaultError::NotFound)
     );
 }

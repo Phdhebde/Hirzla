@@ -60,12 +60,19 @@ function onGlobalError(e) {
   return false;
 }
 
+/** @type {{ locker: string, folder: string } | null} Folder where the secret being created goes (ADR 0076). */
+let createIn = null;
+
 const vault = new VaultView({
   onError: (e) => {
     if (!onGlobalError(e)) announce(e.message, 6000);
   },
+  handles: (e) => onGlobalError(e),
   revealSeconds: () => prefs.reveal_s,
-  onEdit: (entry) => void form.open(entry),
+  onEdit: (entry) => {
+    createIn = null;
+    void form.open(entry);
+  },
   onMembers: (locker, name) => void server.members.open(locker, name),
   onFilter: (filter) => markNav("secrets", filter),
   autoType: new AutoType((e) => onGlobalError(e)),
@@ -75,6 +82,17 @@ void loadAutoType();
 const form = new SecretForm({
   onError: onGlobalError,
   onSaved: async (ref) => {
+    // A secret created while a folder is shown goes into it.
+    const target = createIn;
+    createIn = null;
+    if (ref && target && ref.locker === target.locker) {
+      try {
+        await api.moveSecret(ref, target.folder);
+      } catch (e) {
+        const err = /** @type {ApiError} */ (e);
+        if (!onGlobalError(err)) announce(err.message, 6000);
+      }
+    }
     await vault.refresh();
     if (ref) vault.select(ref.id, false);
   },
@@ -112,10 +130,12 @@ function newSecret() {
       return !!s && s.access && !!s.role && WRITING_ROLES.includes(s.role);
     }),
   );
+  createIn = vault.folderFilter();
   void form.open(null, vault.lockerFilter());
 }
 
 const generator = new GeneratorView(onGlobalError, (value) => {
+  createIn = vault.folderFilter();
   void form.open(null, vault.lockerFilter()).then(() => {
     form.password.value = value;
   });
@@ -195,6 +215,7 @@ async function poll() {
       userLocked = false;
       showScreen("deverrouillage");
       void offerRecovery();
+      void offerHardware();
     } else if (s.state === "unlocked" && currentScreen() !== "coffre") {
       showError(byId("deverrouillage-erreur"), null);
       showScreen("coffre");
@@ -346,6 +367,75 @@ byId("form-deverrouillage").addEventListener("submit", async (ev) => {
     byId("deverrouillage-majuscules").hidden = true;
   });
 }
+
+// --- Hardware unlock methods (ADR 0075) -------------------------------------------------
+
+/** What each hardware method is called on the unlock button. */
+/** @type {Record<string, string>} */
+const HARDWARE_LABELS = {
+  hello: "Ouvrir avec Windows Hello",
+  touchid: "Ouvrir avec Touch ID",
+  fido2: "Ouvrir avec la clé de sécurité",
+};
+
+/** @type {import("./api.js").UnlockMethod | null} */
+let hardwareMethod = null;
+
+/**
+ * Offers the first hardware method usable on this workstation above the master password.
+ * The gesture is never started by itself: the user asks for it.
+ */
+async function offerHardware() {
+  const box = byId("deverrouillage-materiel");
+  /** @type {HTMLInputElement} */ (byId("deverrouillage-pin")).value = "";
+  try {
+    const { methods } = await api.unlockMethods();
+    hardwareMethod = methods.find((m) => m.usable && m.kind in HARDWARE_LABELS) ?? null;
+  } catch {
+    hardwareMethod = null;
+  }
+  box.hidden = !hardwareMethod;
+  if (!hardwareMethod) return;
+  byId("deverrouillage-materiel-bouton").textContent = HARDWARE_LABELS[hardwareMethod.kind];
+  byId("deverrouillage-pin-champ").hidden = !hardwareMethod.needs_pin;
+  (hardwareMethod.needs_pin ? byId("deverrouillage-pin") : byId("deverrouillage-materiel-bouton")).focus();
+}
+
+byId("deverrouillage-materiel-bouton").addEventListener("click", async () => {
+  if (!hardwareMethod) return;
+  const method = hardwareMethod;
+  const pin = /** @type {HTMLInputElement} */ (byId("deverrouillage-pin"));
+  const error = byId("deverrouillage-erreur");
+  const button = /** @type {HTMLButtonElement} */ (byId("deverrouillage-materiel-bouton"));
+  if (method.needs_pin && !pin.value) {
+    showError(error, "Saisissez le code PIN de la clé de sécurité.");
+    pin.focus();
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Suivez la demande du système…";
+  showError(error, null);
+  try {
+    await api.unlockWithMethod(method.rank, method.needs_pin ? pin.value : null);
+    await poll();
+  } catch (e) {
+    const err = /** @type {ApiError} */ (e);
+    if (err.code === "already_unlocked") {
+      await poll();
+    } else if (err.code === "pin_required") {
+      byId("deverrouillage-pin-champ").hidden = false;
+      showError(error, err.message);
+      pin.focus();
+    } else if (!onGlobalError(err)) {
+      showError(error, `${err.message} Le mot de passe maître ouvre toujours le coffre.`);
+      if (err.code !== "method_cancelled") byId("deverrouillage-mdp").focus();
+    }
+  } finally {
+    pin.value = "";
+    button.disabled = false;
+    button.textContent = HARDWARE_LABELS[method.kind];
+  }
+});
 
 // --- Recovery kit (ADR 0034) -----------------------------------------------------------
 

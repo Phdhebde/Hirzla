@@ -74,7 +74,7 @@ fn text_arg(typed: &str) -> Result<String, String> {
 
 /// Explanations go to standard error, so that the text to hand over is alone on standard
 /// output.
-fn note(text: &str) {
+pub(crate) fn note(text: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr(), "{text}");
 }
@@ -608,6 +608,10 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
             say("Membre retiré. Les versions écrites désormais lui sont illisibles.");
             Ok(())
         }
+        LockerCommand::Export { .. } | LockerCommand::Import { .. } => {
+            drop(c);
+            crate::locker_export::run(session, command)
+        }
     }
 }
 
@@ -667,7 +671,7 @@ fn device_revoke_message(code: ServerCode) -> String {
 }
 
 /// Asks a question on the terminal: only « oui » confirms.
-fn confirm(prompt: &str) -> Result<bool, String> {
+pub(crate) fn confirm(prompt: &str) -> Result<bool, String> {
     use std::io::Write;
     let mut err = std::io::stderr();
     let _ = write!(err, "{prompt}");

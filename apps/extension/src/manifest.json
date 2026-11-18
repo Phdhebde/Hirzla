@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Hirzla",
   "short_name": "Hirzla",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Remplit vos identifiants Hirzla sur le site exact où vous les avez enregistrés, à votre demande.",
   "minimum_chrome_version": "120",
   "browser_specific_settings": {

@@ -1,7 +1,8 @@
 //! Secret versions (`SecretBody`, § 7.3), locker metadata (`LockerBody`, § 7.4), the field
 //! schema of the eight secret types (§ 8), the merge rules (`sync-protocol.md` § 8) and the
 //! index entries (§ 10). Types 7 and 8 (SSH and RDP connections) belong to format version 2
-//! (§ 8.5, ADR 0067).
+//! (§ 8.5, ADR 0067); the `folder` field and the folders of a locker to version 3 (§ 7.5,
+//! ADR 0076).
 
 use std::collections::BTreeMap;
 
@@ -10,6 +11,10 @@ use zeroize::Zeroizing;
 use crate::cbor::{
     self, array_max, boolean, bytes_max, check_sorted, fixed, text_max, uint, uint_in, CborError,
     Fields, Value,
+};
+use crate::folder::{
+    edit_folders, folders_from_value, folders_to_value, merge_folders, FolderEdit, FolderTree,
+    Folders,
 };
 use crate::model::{op_ids_value, Dot, Id16, OpId, Stamp};
 
@@ -90,6 +95,8 @@ pub enum Field {
     Notes = 2,
     /// Favourite.
     Favorite = 3,
+    /// Folder of the secret inside its locker (format version 3, ADR 0076).
+    Folder = 4,
     /// User name.
     Username = 10,
     /// Password.
@@ -133,10 +140,11 @@ pub enum Field {
 }
 
 impl Field {
-    const ALL: [Field; 23] = [
+    const ALL: [Field; 24] = [
         Field::Title,
         Field::Notes,
         Field::Favorite,
+        Field::Folder,
         Field::Username,
         Field::Password,
         Field::Totp,
@@ -159,7 +167,9 @@ impl Field {
         Field::HostKey,
     ];
 
-    fn from_u64(n: u64) -> Option<Self> {
+    /// The field from its number (§ 8).
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<Self> {
         Field::ALL.into_iter().find(|f| *f as u64 == n)
     }
 }
@@ -185,7 +195,9 @@ impl SetKind {
         SetKind::Hosts,
     ];
 
-    fn from_u64(n: u64) -> Option<Self> {
+    /// The set from its number (§ 8).
+    #[must_use]
+    pub fn from_u64(n: u64) -> Option<Self> {
         SetKind::ALL.into_iter().find(|s| *s as u64 == n)
     }
 }
@@ -208,6 +220,8 @@ enum Kind {
     Link,
     /// Host key fingerprint, `SHA256:` and 43 base64 characters (§ 8.5).
     HostKey,
+    /// Folder: an `ID16`, or `null` for the root of the locker (§ 7.5).
+    Folder,
 }
 
 /// Longest host of a connection, in bytes.
@@ -272,6 +286,7 @@ fn field_spec(t: SecretType, f: Field) -> Option<FieldSpec> {
         Field::Title => s(Kind::Text(1024), false),
         Field::Notes => s(Kind::Text(MIB), true),
         Field::Favorite => s(Kind::Bool, false),
+        Field::Folder => s(Kind::Folder, false),
         Field::Username if matches!(t, T::Password | T::SshKey | T::Totp | T::Passkey) => {
             s(Kind::Text(1024), false)
         }
@@ -350,6 +365,41 @@ fn required_fields(t: SecretType) -> &'static [Field] {
     }
 }
 
+/// Whether `f` is a field of type `t` that holds a link to another secret (§ 8.5).
+#[must_use]
+pub fn is_link_field(t: SecretType, f: Field) -> bool {
+    field_spec(t, f).is_some_and(|s| s.kind == Kind::Link)
+}
+
+/// Longest element and most elements of a text set `s` of type `t` (tags, URLs, hosts);
+/// `None` if the set is not allowed for the type or does not hold text.
+#[must_use]
+pub fn text_set_bounds(t: SecretType, s: SetKind) -> Option<(usize, usize)> {
+    match set_spec(t, s)? {
+        SetSpec {
+            elem: ElemKind::Text(len),
+            max,
+        } => Some((len, max)),
+        _ => None,
+    }
+}
+
+/// Encodes a field value as stored in a version (§ 8.3, § 8.5).
+#[must_use]
+pub fn field_value_to_value(v: &FieldValue) -> Value {
+    field_to_value(v)
+}
+
+/// Decodes the value of field `f` of a secret of type `t`, under the rules of § 8.3.
+///
+/// # Errors
+/// [`CborError::Malformed`] if the field is not allowed for the type or the value breaks
+/// its rules.
+pub fn field_value_from_value(t: SecretType, f: Field, v: &Value) -> Result<FieldValue, CborError> {
+    let spec = field_spec(t, f).ok_or(CborError::Malformed)?;
+    field_from_value(spec.kind, v)
+}
+
 /// Whether a field never enters the index (§ 8).
 #[must_use]
 pub fn is_sensitive(t: SecretType, f: Field) -> bool {
@@ -418,6 +468,8 @@ pub enum FieldValue {
     Totp(TotpConfig),
     /// Link to another secret.
     Link(SecretLink),
+    /// Folder of the secret; `None` is the root of the locker (ADR 0076).
+    Folder(Option<Id16>),
 }
 
 impl FieldValue {
@@ -485,6 +537,8 @@ fn field_to_value(v: &FieldValue) -> Value {
             (1, Value::bytes(&l.locker)),
             (2, Value::bytes(&l.secret)),
         ]),
+        FieldValue::Folder(Some(f)) => Value::bytes(f),
+        FieldValue::Folder(None) => Value::Null,
     }
 }
 
@@ -549,6 +603,10 @@ fn field_from_value(kind: Kind, v: &Value) -> Result<FieldValue, CborError> {
             }
             FieldValue::Text(Zeroizing::new(t.to_owned()))
         }
+        Kind::Folder => match v {
+            Value::Null => FieldValue::Folder(None),
+            f => FieldValue::Folder(Some(fixed::<16>(f)?)),
+        },
     })
 }
 
@@ -570,6 +628,7 @@ fn kind_matches(kind: Kind, v: &FieldValue) -> bool {
         (Kind::Login(max), FieldValue::Text(t)) => t.len() <= max && is_valid_login(t),
         (Kind::Link, FieldValue::Link(_)) => true,
         (Kind::HostKey, FieldValue::Text(t)) => is_valid_host_key(t),
+        (Kind::Folder, FieldValue::Folder(_)) => true,
         _ => false,
     }
 }
@@ -919,6 +978,27 @@ impl SecretBody {
         Ok(())
     }
 
+    /// The first format version that can hold this version (`docs/format.md` § 5.3): 3 if it
+    /// carries a folder (ADR 0076), else that of its type.
+    #[must_use]
+    pub fn min_format_version(&self) -> u16 {
+        if self.fields.contains_key(&Field::Folder) {
+            3
+        } else {
+            self.secret_type.min_format_version()
+        }
+    }
+
+    /// The `folder` register: the folder the secret was put in, `None` for the root (field
+    /// absent, or set to the root).
+    #[must_use]
+    pub fn folder(&self) -> Option<Id16> {
+        match self.fields.get(&Field::Folder).map(|e| &e.value) {
+            Some(FieldValue::Folder(f)) => *f,
+            _ => None,
+        }
+    }
+
     /// Largest stamp of the secret.
     #[must_use]
     pub fn updated(&self) -> Stamp {
@@ -1198,15 +1278,27 @@ pub struct LockerBody {
     pub parents: Vec<OpId>,
     /// Fields.
     pub fields: BTreeMap<LockerField, FieldEntry>,
+    /// Folders (format version 3, ADR 0076); key 3, omitted when empty.
+    pub folders: Folders,
 }
 
 impl LockerBody {
+    /// The first format version that can hold this version: 3 if it carries folders.
+    #[must_use]
+    pub fn min_format_version(&self) -> u16 {
+        if self.folders.is_empty() {
+            1
+        } else {
+            3
+        }
+    }
+
     /// Canonical value.
     ///
     /// # Errors
     /// [`CborError`].
     pub fn to_value(&self) -> Result<Value, CborError> {
-        Ok(Value::map(vec![
+        let mut entries = vec![
             (1, op_ids_value(&self.parents)?),
             (
                 2,
@@ -1225,7 +1317,11 @@ impl LockerBody {
                         .collect(),
                 ),
             ),
-        ]))
+        ];
+        if !self.folders.is_empty() {
+            entries.push((3, folders_to_value(&self.folders)));
+        }
+        Ok(Value::map(entries))
     }
 
     /// Strict decoding; the name is required.
@@ -1233,7 +1329,7 @@ impl LockerBody {
     /// # Errors
     /// [`CborError`].
     pub fn from_value(v: &Value) -> Result<Self, CborError> {
-        let f = Fields::new(v, &[1, 2])?;
+        let f = Fields::new(v, &[1, 2, 3])?;
         let parent_items = array_max(f.req(1)?, crate::model::MAX_DEPS)?;
         check_sorted(parent_items)?;
         let Value::Map(fm) = f.req(2)? else {
@@ -1272,6 +1368,11 @@ impl LockerBody {
                 .map(fixed::<48>)
                 .collect::<Result<_, _>>()?,
             fields,
+            folders: f
+                .opt(3)
+                .map(folders_from_value)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 
@@ -1288,6 +1389,7 @@ impl LockerBody {
         let mut body = base.cloned().unwrap_or(LockerBody {
             parents: Vec::new(),
             fields: BTreeMap::new(),
+            folders: Folders::new(),
         });
         body.parents = parents;
         for (k, v) in set {
@@ -1302,6 +1404,29 @@ impl LockerBody {
         Ok(body)
     }
 
+    /// Applies folder changes (ADR 0076 § 4) on top of `base`, the merge of the heads.
+    ///
+    /// # Errors
+    /// [`EditError::NotAllowed`] if an edit breaks a writer's rule, [`EditError::Incomplete`]
+    /// without a base (a locker gets its name first).
+    pub fn edit_folders(
+        base: Option<&LockerBody>,
+        parents: Vec<OpId>,
+        edits: Vec<FolderEdit>,
+        stamp: Stamp,
+    ) -> Result<LockerBody, EditError> {
+        let mut body = base.cloned().ok_or(EditError::Incomplete)?;
+        body.parents = parents;
+        edit_folders(&mut body.folders, edits, stamp)?;
+        Ok(body)
+    }
+
+    /// The tree shown to the user (ADR 0076 § 3).
+    #[must_use]
+    pub fn tree(&self) -> FolderTree {
+        FolderTree::of(&self.folders)
+    }
+
     /// The locker name.
     #[must_use]
     pub fn name(&self) -> &str {
@@ -1312,7 +1437,7 @@ impl LockerBody {
     }
 }
 
-/// Merges locker metadata heads (registers only).
+/// Merges locker metadata heads: registers, and folders (ADR 0076).
 #[must_use]
 pub fn merge_locker(heads: &[LockerBody]) -> Option<LockerBody> {
     let mut out = heads.first()?.clone();
@@ -1322,6 +1447,7 @@ pub fn merge_locker(heads: &[LockerBody]) -> Option<LockerBody> {
                 out.fields.insert(*k, e.clone());
             }
         }
+        merge_folders(&mut out.folders, &h.folders);
     }
     Some(out)
 }
@@ -1353,6 +1479,8 @@ pub struct IndexEntry {
     pub state: SecretState,
     /// Largest stamp.
     pub updated: Stamp,
+    /// The `folder` register (format version 3); `None` at the root.
+    pub folder: Option<Id16>,
 }
 
 /// Host of a URL per the WHATWG URL Standard, in ASCII, or `None`.
@@ -1415,6 +1543,7 @@ impl IndexEntry {
             ),
             state: body.state.0,
             updated: body.updated(),
+            folder: body.folder(),
         }
     }
 
@@ -1443,11 +1572,14 @@ impl IndexEntry {
         if let Some(u) = &self.username {
             e.push((5, Value::text(u)));
         }
+        if let Some(f) = &self.folder {
+            e.push((11, Value::bytes(f)));
+        }
         Ok(Value::map(e))
     }
 
     fn from_value(v: &Value) -> Result<Self, CborError> {
-        let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10])?;
+        let f = Fields::new(v, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11])?;
         let texts = |v: &Value, max_len: usize| -> Result<Vec<String>, CborError> {
             let items = array_max(v, 4096)?;
             check_sorted(items)?;
@@ -1481,6 +1613,7 @@ impl IndexEntry {
                 _ => SecretState::Purged,
             },
             updated: Stamp::from_value(f.req(10)?)?,
+            folder: f.opt(11).map(fixed::<16>).transpose()?,
         })
     }
 }
@@ -1498,6 +1631,8 @@ pub struct IndexShard {
     pub meta_heads: Vec<OpId>,
     /// Entries, sorted by secret.
     pub entries: BTreeMap<Id16, IndexEntry>,
+    /// Merged folders of the locker (format version 3); key 6, omitted when empty.
+    pub folders: Folders,
 }
 
 impl IndexShard {
@@ -1511,13 +1646,17 @@ impl IndexShard {
             .values()
             .map(IndexEntry::to_value)
             .collect::<Result<Vec<_>, _>>()?;
-        cbor::encode(&Value::map(vec![
+        let mut map = vec![
             (1, Value::bytes(&self.locker_id)),
             (2, op_ids_value(&self.built_from)?),
             (3, Value::text(&self.name)),
             (4, op_ids_value(&self.meta_heads)?),
             (5, Value::Array(entries)),
-        ]))
+        ];
+        if !self.folders.is_empty() {
+            map.push((6, folders_to_value(&self.folders)));
+        }
+        cbor::encode(&Value::map(map))
     }
 
     /// Strict decoding.
@@ -1526,7 +1665,7 @@ impl IndexShard {
     /// [`CborError`].
     pub fn decode(bytes: &[u8]) -> Result<Self, CborError> {
         let v = cbor::decode(bytes)?;
-        let f = Fields::new(&v, &[1, 2, 3, 4, 5])?;
+        let f = Fields::new(&v, &[1, 2, 3, 4, 5, 6])?;
         let ids = |v: &Value| -> Result<Vec<OpId>, CborError> {
             let items = array_max(v, crate::model::MAX_DEPS)?;
             check_sorted(items)?;
@@ -1548,6 +1687,11 @@ impl IndexShard {
             name: Zeroizing::new(text_max(f.req(3)?, 256)?.to_owned()),
             meta_heads: ids(f.req(4)?)?,
             entries,
+            folders: f
+                .opt(6)
+                .map(folders_from_value)
+                .transpose()?
+                .unwrap_or_default(),
         })
     }
 }

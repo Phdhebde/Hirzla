@@ -19,6 +19,7 @@
     { locker: L, id: id(21), kind: "ssh_connection", title: "Bastion de l'atelier", username: "marie", hosts: ["bastion.atelier-durand.fr"], tags: ["infra"], favorite: false, trash: false },
     { locker: L, id: id(22), kind: "ssh_connection", title: "Serveur de sauvegarde", username: "sauvegarde", hosts: ["10.20.0.14"], tags: ["infra"], favorite: true, trash: false },
     { locker: L, id: id(23), kind: "rdp_connection", title: "Poste de comptabilité", username: "m.durand", hosts: ["compta-01.atelier.lan"], tags: [], favorite: false, trash: false },
+    { locker: L, id: id(25), kind: "totp", title: "Forge logicielle", username: "marie", hosts: [], tags: ["travail"], favorite: false, trash: false },
     { locker: L, id: id(7), kind: "password", title: "Wi-Fi maison", username: null, hosts: [], tags: [], favorite: false, trash: false },
     { locker: L, id: id(8), kind: "password", title: "Ancien forum", username: "mdurand", hosts: ["forum.example"], tags: [], favorite: false, trash: true },
     { locker: W, id: id(9), kind: "password", title: "Console du NAS", username: "atelier", hosts: ["nas.atelier.lan"], tags: ["infra"], favorite: false, trash: false },
@@ -180,6 +181,13 @@
   let trusted = ["C:\\Program Files\\KeePassXC\\KeePassXC.exe"];
   let settings = { auto_lock_s: 300, clipboard_clear_s: 30, lock_on_sleep: true, lock_on_session_lock: true };
   let kit = cfg.kit === undefined ? { kit: "3fa2c901", threshold: 2, count: 3 } : cfg.kit;
+  // Hardware unlock methods (ADR 0075): the master password, then those enrolled.
+  const methods = [{ rank: 0, kind: "password", usable: true, needs_pin: false }, ...(cfg.methods || [])];
+  const enrollable = cfg.enrollable || ["hello", "fido2"];
+  // Windows Hello and Touch ID, off by default (ADR 0075 § 4).
+  let classical = cfg.classical === true;
+  /** @type {string | null} */
+  let kdbxKey = null;
   const v = (n) => n.toString(16).padStart(96, "0");
   const history = [
     { version: v(3), wall_ms: Date.UTC(2026, 9, 2, 8, 14), state: "active", title: "Banque Populaire", username: "m.durand", fields: ["title", "notes", "username", "password"], changed: ["password"], custom: 0 },
@@ -193,6 +201,42 @@
     [id(21)]: { kind: "ssh", port: 2222, effective_port: 2222, domain: null, host_key: "SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8", has_password: false, has_notes: true, ssh_key: keyLink, jumps: [] },
     [id(22)]: { kind: "ssh", port: null, effective_port: 22, domain: null, host_key: "SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM", has_password: true, has_notes: false, ssh_key: keyLink, jumps: [jumpBastion] },
     [id(23)]: { kind: "rdp", port: null, effective_port: 3389, domain: "ATELIER", host_key: null, has_password: true, has_notes: false, ssh_key: null, jumps: [jumpBastion] },
+  };
+  // Folders of the personal locker (ADR 0076), and the folder of some secrets.
+  const folders = [
+    { locker: L, id: id(101), name: "Finances", parent: null },
+    { locker: L, id: id(102), name: "Comptes", parent: id(101) },
+    { locker: L, id: id(103), name: "Maison", parent: null },
+    { locker: L, id: id(104), name: "Infrastructure", parent: null },
+  ];
+  const placed = { [id(1)]: id(102), [id(4)]: id(101), [id(5)]: id(103), [id(7)]: id(103), [id(21)]: id(104), [id(22)]: id(104), [id(24)]: id(104) };
+  const byName = (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id.localeCompare(b.id);
+  const under = (top) => {
+    const out = new Set([top]);
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const f of folders) if (f.parent && out.has(f.parent) && !out.has(f.id)) { out.add(f.id); grew = true; }
+    }
+    return out;
+  };
+  // Fields each secret holds (what `secret_history` lists, never a value): only the bank
+  // account, the tax account and the GitLab note have notes, only the backup server key has
+  // a passphrase. `update_secret` changes them.
+  const changedFields = new Map();
+  const fieldsOf = (sid) => {
+    if (changedFields.has(sid)) return changedFields.get(sid);
+    const e = entries.find((x) => x.id === sid);
+    if (!e) return [];
+    const f = ["title"];
+    if (e.username) f.push("username");
+    if (e.kind === "password") f.push("password");
+    if (e.kind === "ssh_key") f.push("ssh_public_key");
+    if (sid === id(6)) f.push("ssh_passphrase");
+    if (sid === id(1) || sid === id(3) || sid === id(4)) f.push("notes");
+    // TOTP (ADR 0078): the mail account carries one, and the TOTP secret of the forge.
+    if (sid === id(2) || e.kind === "totp") f.push("totp");
+    return f;
   };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
@@ -213,7 +257,7 @@
       return { entries: entries.filter((e) => shown(e) && (a.trash || !e.trash) && hit(e)), lockers };
     },
     reveal_field: (a) => {
-      if (a.field === "notes" && a.target.id !== id(1) && a.target.id !== id(3)) return refuse("not_found", "Secret ou champ introuvable.");
+      if (!fieldsOf(a.target.id).includes(a.field)) return refuse("not_found", "Secret ou champ introuvable.");
       return values[a.field] || "";
     },
     copy_field: () => 30,
@@ -226,10 +270,79 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e && "favorite" in a.changes) e.favorite = a.changes.favorite;
       if (e && a.changes.title) e.title = a.changes.title;
+      if (e) {
+        const f = new Set(fieldsOf(e.id));
+        for (const k of ["username", "password", "notes"]) if (a.changes[k]) f.add(k);
+        for (const k of a.changes.clear || []) f.delete(k);
+        changedFields.set(e.id, [...f]);
+      }
     },
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);
       if (i >= 0) { if (a.purge) entries.splice(i, 1); else entries[i].trash = true; }
+    },
+    folder_trees: () => {
+      if (state !== "unlocked") return refuse("locked", "Le coffre est verrouillé.");
+      return lockerList().map((l) => ({
+        locker: l.id,
+        folders: folders.filter((f) => f.locker === l.id).sort(byName).map(({ id: fid, name, parent }) => ({ id: fid, name, parent })),
+        placements: entries.filter((e) => e.locker === l.id && placed[e.id]).map((e) => [e.id, placed[e.id]]).sort(),
+      }));
+    },
+    create_folder: (a) => {
+      const f = { locker: a.locker, id: id(200 + folders.length), name: a.name, parent: a.parent };
+      folders.push(f);
+      return f.id;
+    },
+    rename_folder: (a) => {
+      const f = folders.find((x) => x.id === a.folder);
+      if (!f) return refuse("not_found", "Introuvable.");
+      f.name = a.name;
+    },
+    move_folder: (a) => {
+      const f = folders.find((x) => x.id === a.folder);
+      if (!f) return refuse("not_found", "Introuvable.");
+      if (a.parent && under(f.id).has(a.parent)) return refuse("invalid_input", "Un dossier ne se range pas sous lui-même.");
+      f.parent = a.parent;
+    },
+    delete_folder: (a) => {
+      const gone = under(a.folder);
+      let n = 0;
+      for (const e of entries) {
+        if (placed[e.id] && gone.has(placed[e.id])) {
+          if (!e.trash) n += 1;
+          e.trash = true;
+          delete placed[e.id];
+        }
+      }
+      for (let i = folders.length - 1; i >= 0; i -= 1) if (gone.has(folders[i].id)) folders.splice(i, 1);
+      return n;
+    },
+    move_secret: (a) => {
+      if (a.folder) placed[a.target.id] = a.folder;
+      else delete placed[a.target.id];
+    },
+    // TOTP codes (local API version 13): made-up codes, never a TOTP secret.
+    totp_code: (a) => {
+      if (state !== "unlocked") return refuse("locked", "Le coffre est verrouillé.");
+      if (!fieldsOf(a.target.id).includes("totp")) return refuse("not_found", "Secret ou champ introuvable.");
+      const forge = a.target.id === id(25);
+      return { code: forge ? "40917253" : "287082", seconds_left: 18, period: 30, digits: forge ? 8 : 6, algorithm: forge ? "SHA-256" : "SHA-1", issuer: forge ? "Forge" : "Proton" };
+    },
+    totp_copy: (a) => (fieldsOf(a.target.id).includes("totp") ? 30 : refuse("not_found", "Secret ou champ introuvable.")),
+    totp_set: (a) => {
+      if (!/^otpauth:\/\/totp\//i.test(a.input.trim()) && !/^[A-Za-z2-7\s=-]{16,}$/.test(a.input.trim())) {
+        return refuse("invalid", "TOTP refusé : collez l'adresse otpauth://totp/… donnée par le site (souvent sous le QR code), ou sa clé secrète en base32 (au moins 16 caractères). Ni HOTP, ni code Steam.");
+      }
+      changedFields.set(a.target.id, [...new Set([...fieldsOf(a.target.id), "totp"])]);
+    },
+    totp_clear: (a) => {
+      changedFields.set(a.target.id, fieldsOf(a.target.id).filter((f) => f !== "totp"));
+    },
+    totp_create: (a) => {
+      const e = { locker: a.totp.locker || L, id: id(entries.length + 30), kind: "totp", title: a.totp.title, username: a.totp.username || null, hosts: [], tags: a.totp.tags || [], favorite: false, trash: false };
+      entries.push(e);
+      return { locker: e.locker, id: e.id };
     },
     connection_card: (a) => {
       const e = entries.find((x) => x.id === a.target.id);
@@ -263,12 +376,15 @@
       if (a.set.port) { c.port = a.set.port; c.effective_port = a.set.port; }
       if (a.set.host_key) c.host_key = a.set.host_key;
       if (a.set.password) c.has_password = true;
+      if (a.set.notes) c.has_notes = true;
       for (const k of a.clear) {
         if (k === "port") { c.port = null; c.effective_port = c.kind === "rdp" ? 3389 : 22; }
         if (k === "username") e.username = null;
         if (k === "host_key") c.host_key = null;
         if (k === "ssh_key") c.ssh_key = null;
         if (k === "jump") c.jumps = [];
+        if (k === "password") c.has_password = false;
+        if (k === "notes") c.has_notes = false;
       }
     },
     choose_ssh_key_file: () => "id_ed25519",
@@ -353,7 +469,12 @@
       const e = entries.find((x) => x.id === a.target.id);
       if (e) e.trash = false;
     },
-    secret_history: () => history,
+    secret_history: (a) => {
+      if (a.target.id === id(1)) return history.map((x, i) => (i === 0 ? { ...x, fields: fieldsOf(id(1)) } : x));
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e) return refuse("not_found", "Secret ou champ introuvable.");
+      return [{ version: v(1), wall_ms: Date.UTC(2026, 0, 12, 9, 30), state: e.trash ? "trash" : "active", title: e.title, username: e.username, fields: fieldsOf(e.id), changed: fieldsOf(e.id), custom: 0 }];
+    },
     reveal_version: (a) => (a.field === "password" ? "ancien-Mot-de-passe-2025" : "Ancienne note."),
     copy_version: () => 30,
     restore_version: () => {},
@@ -366,10 +487,39 @@
     choose_recovery_shares: () => ["hirzla-part-3fa2c901-1.hirzla-part", "hirzla-part-3fa2c901-3.hirzla-part"],
     recovery_unlock: () => { state = "unlocked"; },
     remove_recovery_kit: () => { kit = null; },
-    choose_kdbx_file: () => "Personnel.kdbx",
+    list_unlock_methods: () => ({ methods, enrollable }),
+    get_classical_unlock: () => classical,
+    set_classical_unlock: (a) => (classical = a.allowed),
+    enroll_unlock_method: (a) => {
+      if ((a.kind === "hello" || a.kind === "touchid") && !classical) {
+        return refuse("classical_factor_not_accepted", "Windows Hello et Touch ID sont désactivés par défaut. Autorisez-les dans Réglages › Déverrouillage, après avoir lu l'avertissement.");
+      }
+      if (a.password !== "démonstration") return refuse("unlock_failed", "Refusé : mot de passe maître incorrect, réponse refusée par le matériel, ou coffre altéré.");
+      const rank = methods.length;
+      methods.push({ rank, kind: a.kind, usable: true, needs_pin: false });
+      return delay(rank);
+    },
+    unlock_with_method: () => delay(undefined).then(() => { state = "unlocked"; }),
+    remove_unlock_method: (a) => { methods.splice(a.rank, 1); },
+    choose_kdbx_file: () => { kdbxKey = null; return "Personnel.kdbx"; },
+    choose_kdbx_key_file: () => { kdbxKey = "Personnel.keyx"; return kdbxKey; },
+    clear_kdbx_key_file: () => { kdbxKey = null; },
     import_kdbx: (a) => {
-      if (a.password !== "keepass") return refuse("import", "Mot de passe de la base KeePass incorrect, ou base altérée.");
+      const ok = kdbxKey ? a.password === "" || a.password === "keepass" : a.password === "keepass";
+      if (!ok) return refuse("import", "Mot de passe ou fichier clé de la base KeePass incorrect, ou base altérée.");
+      kdbxKey = null;
       return { imported: 57, empty: 2, recycled: 4, attachments: 1, history: 23, custom_skipped: 0, totp: 1, refused: 0 };
+    },
+    export_locker: (a) => {
+      if (a.password !== null && a.password.length < 16) return refuse("export_password_weak", "Mot de passe trop faible : au moins 16 caractères, dont 8 différents.");
+      const password = a.password === null ? "falaise-orage-brindille-tamis-lanterne-cobalt-vergue-osier" : null;
+      return { password, file: "Atelier.hirzla-export", secrets: 3, trashed: 1, attachments: 0, links_dropped: 0 };
+    },
+    copy_export_password: () => 30,
+    choose_export_file: () => "Equipe-reseau.hirzla-export",
+    import_locker: (a) => {
+      if (a.password !== "falaise-orage-brindille-tamis-lanterne-cobalt-vergue-osier") return refuse("export_key_rejected", "Mot de passe incorrect, ou fichier d'export altéré. Rien n'a été importé.");
+      return { locker: "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b", secrets: 12, attachments: 1, folders: 2, refused: 0 };
     },
     server_status: () => {
       if (!S.joined) return { joined: false, url: null, server_id: null, fingerprint: null, verified: false, last_sync_ms: null, keylog: null, lockers: [] };

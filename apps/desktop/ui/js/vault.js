@@ -3,6 +3,7 @@
 
 import { api } from "./api.js";
 import { announce, byId, h, icon, mask } from "./dom.js";
+import { FolderDialog, Trees } from "./folders.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
 /** @typedef {import("./api.js").Locker} Locker */
@@ -35,7 +36,7 @@ const TYPE_ICONS = /** @type {Record<string, string>} */ ({
 
 /** Types that have their own filter in the navigation, with the kinds each one gathers. */
 const TYPE_FILTERS = /** @type {Record<string, string[]>} */ ({
-  password: ["password"],
+  password: ["password", "totp"],
   ssh_key: ["ssh_key"],
   connexion: ["ssh_connection", "rdp_connection"],
   note: ["note"],
@@ -73,6 +74,7 @@ const VERSION_SECRETS = /** @type {[FieldName, string][]} */ ([
 /**
  * @typedef {object} VaultHooks
  * @property {(e: import("./api.js").ApiError) => void} onError  Refusal not handled here.
+ * @property {(e: import("./api.js").ApiError) => boolean} handles  Refusals that change the screen.
  * @property {() => number} revealSeconds  How long a revealed value stays visible.
  * @property {(entry: Entry) => void} onEdit  Opens the form on this secret.
  * @property {(locker: string, name: string) => void} onMembers  Opens the members of a shared locker.
@@ -95,6 +97,11 @@ export class VaultView {
     this.lockers = [];
     /** @type {Map<string, SharedInfo>} Shared lockers, by identifier (server mode). */
     this.shared = new Map();
+    /** Folders of each locker (ADR 0076). */
+    this.trees = new Trees();
+    /** @type {Set<string>} Lockers and folders folded in the navigation. */
+    this.folded = new Set();
+    this.folderDialog = new FolderDialog(hooks.handles);
     /** @type {Entry[]} */
     this.shown = [];
     this.filter = "tous";
@@ -103,6 +110,8 @@ export class VaultView {
     this.selectedId = null;
     /** @type {Set<() => void>} Clears revealed values and their timers. */
     this.hiders = new Set();
+    /** @type {Set<() => void>} Stops the TOTP codes of the record shown and clears them. */
+    this.tickers = new Set();
     this.searchTimer = 0;
     /** Number of the record being drawn: a record read from the core is dropped when it is no longer the one shown. */
     this.recordToken = 0;
@@ -143,6 +152,11 @@ export class VaultView {
     byId("fiche-supprimer").addEventListener("click", () => void this.deleteSelected());
     byId("fiche-restaurer").addEventListener("click", () => void this.restoreSelected());
     byId("fiche-historique").addEventListener("click", () => void this.openHistory());
+    byId("fiche-deplacer").addEventListener("click", () => this.moveSelected());
+    byId("dossier-nouveau").addEventListener("click", () => this.newFolder());
+    byId("dossier-renommer").addEventListener("click", () => this.renameFolder());
+    byId("dossier-deplacer").addEventListener("click", () => this.moveFolder());
+    byId("dossier-supprimer").addEventListener("click", () => void this.deleteFolder());
     // The menu of the record closes once an action is chosen, or on Escape.
     const menu = /** @type {HTMLDetailsElement} */ (byId("fiche-menu"));
     menu.addEventListener("click", (e) => {
@@ -174,9 +188,26 @@ export class VaultView {
     return this.entries.find((e) => e.id === this.selectedId);
   }
 
-  /** The locker shown alone, if any. @returns {string | null} */
+  /** The locker shown alone, or the locker of the folder shown, if any. @returns {string | null} */
   lockerFilter() {
-    return this.filter.startsWith("casier:") ? this.filter.slice("casier:".length) : null;
+    if (this.filter.startsWith("casier:")) return this.filter.slice("casier:".length);
+    return this.folderFilter()?.locker ?? null;
+  }
+
+  /** The folder shown, if any (`dossier:LOCKER:FOLDER`). @returns {{ locker: string, folder: string } | null} */
+  folderFilter() {
+    if (!this.filter.startsWith("dossier:")) return null;
+    const [locker, folder] = this.filter.slice("dossier:".length).split(":");
+    return locker && folder ? { locker, folder } : null;
+  }
+
+  /** Whether this device may write in a locker. @param {string} locker @returns {boolean} */
+  writes(locker) {
+    const l = this.lockers.find((x) => x.id === locker);
+    if (!l) return false;
+    if (l.personal) return true;
+    const info = this.shared.get(locker);
+    return !!info && info.access && info.writes;
   }
 
   /**
@@ -223,9 +254,11 @@ export class VaultView {
   /** Forgets everything shown: called when the vault locks. */
   wipe() {
     this.hideAll();
+    this.stopTickers();
     this.entries = [];
     this.lockers = [];
     this.shared = new Map();
+    this.trees.clear();
     this.shown = [];
     this.selectedId = null;
     this.query = "";
@@ -233,6 +266,7 @@ export class VaultView {
     this.list.replaceChildren();
     byId("liste-casiers").replaceChildren();
     byId("liste-casier-partage").hidden = true;
+    byId("liste-dossier").hidden = true;
     byId("fiche-champs").replaceChildren();
     byId("fiche-principales").replaceChildren();
     byId("fiche-icone").replaceChildren();
@@ -249,6 +283,12 @@ export class VaultView {
     this.hiders.clear();
   }
 
+  /** Stops and clears the TOTP codes shown. */
+  stopTickers() {
+    for (const stop of [...this.tickers]) stop();
+    this.tickers.clear();
+  }
+
   async refresh() {
     try {
       const listing = await api.list(this.query, this.filter === "corbeille");
@@ -257,6 +297,19 @@ export class VaultView {
     } catch (e) {
       this.hooks.onError(/** @type {any} */ (e));
       return;
+    }
+    try {
+      this.trees.set(await api.folderTrees());
+    } catch (e) {
+      // A core older than version 11 has no folders: the vault is shown without them.
+      this.trees.clear();
+      if (/** @type {any} */ (e).code !== "unsupported_version") this.hooks.onError(/** @type {any} */ (e));
+    }
+    const ff = this.folderFilter();
+    if (ff && !this.trees.get(ff.locker, ff.folder)) {
+      // The folder shown was deleted or moved away by another device: back to its locker.
+      this.filter = `casier:${ff.locker}`;
+      this.hooks.onFilter(this.filter);
     }
     this.renderLockers();
     this.renderCounts();
@@ -296,13 +349,77 @@ export class VaultView {
           button.setAttribute("aria-label", `${l.name}, casier partagé${role}${lost}, ${count} secret${count > 1 ? "s" : ""}`);
         }
         if (this.filter === `casier:${l.id}`) button.setAttribute("aria-current", "page");
-        return h("li", {}, [button]);
+        if (!this.trees.hasFolders(l.id)) return h("li", {}, [button]);
+        const open = !this.folded.has(l.id);
+        return h("li", {}, [
+          h("div", { class: "nav-ligne" }, [this.foldButton(l.id, l.name, open), button]),
+          this.folderList(l.id, null, open, 0),
+        ]);
       }),
     );
   }
 
-  /** Role and members button above the list of a shared locker. */
+  /**
+   * The button that folds or unfolds a node of the navigation.
+   * @param {string} key  Locker or folder.
+   * @param {string} name
+   * @param {boolean} open
+   * @returns {HTMLElement}
+   */
+  foldButton(key, name, open) {
+    const b = h("button", {
+      class: "nav-replier",
+      type: "button",
+      "aria-expanded": open ? "true" : "false",
+      "aria-label": `${open ? "Replier" : "Déplier"} ${name}`,
+      title: open ? "Replier" : "Déplier",
+      text: open ? "▾" : "▸",
+    });
+    b.addEventListener("click", () => {
+      if (this.folded.has(key)) this.folded.delete(key);
+      else this.folded.add(key);
+      this.renderLockers();
+    });
+    return b;
+  }
+
+  /**
+   * The folders of a locker under `parent`, with the number of secrets each holds directly.
+   * @param {string} locker
+   * @param {string | null} parent
+   * @param {boolean} open
+   * @param {number} depth
+   * @returns {HTMLElement}
+   */
+  folderList(locker, parent, open, depth) {
+    const ul = h("ul", { class: "nav-dossiers", hidden: !open });
+    if (depth > 32) return ul;
+    for (const f of this.trees.children(locker, parent)) {
+      const count = this.entries.filter(
+        (e) => e.locker === locker && !e.trash && this.trees.folderOf(locker, e.id) === f.id,
+      ).length;
+      const filter = `dossier:${locker}:${f.id}`;
+      const button = h("button", { class: "nav-lien", type: "button", "data-vue": "secrets", "data-filtre": filter }, [
+        icon("dossier"),
+        h("span", { class: "nav-nom", text: f.name }),
+        h("span", { class: "compte", text: String(count), "aria-hidden": "true" }),
+      ]);
+      button.setAttribute("aria-label", `${f.name}, dossier, ${count} secret${count > 1 ? "s" : ""}`);
+      if (this.filter === filter) button.setAttribute("aria-current", "page");
+      const kids = this.trees.children(locker, f.id).length > 0;
+      const unfolded = !this.folded.has(f.id);
+      const line = h("div", { class: "nav-ligne" }, [
+        kids ? this.foldButton(f.id, f.name, unfolded) : h("span", { class: "nav-replier nav-replier-vide", "aria-hidden": "true" }),
+        button,
+      ]);
+      ul.append(h("li", {}, [line, kids ? this.folderList(locker, f.id, unfolded, depth + 1) : null]));
+    }
+    return ul;
+  }
+
+  /** Role and members button above the list of a shared locker, and the folder actions. */
   renderLockerHeader() {
+    this.renderFolderHeader();
     const id = this.lockerFilter();
     const locker = id ? this.lockers.find((l) => l.id === id) : undefined;
     const box = byId("liste-casier-partage");
@@ -314,6 +431,22 @@ export class VaultView {
       : !info.access
         ? "Accès perdu : le serveur ne vous sert plus ce casier."
         : `Casier partagé · votre rôle : ${info.role ? info.role.toLowerCase() : "aucun"}${info.writes ? "" : " (lecture seule)"}.`;
+  }
+
+  /** Path and actions of the folder shown, or the creation of a folder in the locker shown. */
+  renderFolderHeader() {
+    const locker = this.lockerFilter();
+    const ff = this.folderFilter();
+    const box = byId("liste-dossier");
+    box.hidden = !locker || this.filter === "corbeille" || !this.writes(locker);
+    if (box.hidden || !locker) return;
+    const l = this.lockers.find((x) => x.id === locker);
+    byId("liste-dossier-chemin").textContent = ff
+      ? `${l?.name ?? "Casier"} / ${this.trees.path(ff.locker, ff.folder)}`
+      : this.trees.hasFolders(locker)
+        ? "Secrets à la racine du casier."
+        : "Rangez les secrets de ce casier dans des dossiers.";
+    for (const id of ["dossier-renommer", "dossier-deplacer", "dossier-supprimer"]) byId(id).hidden = !ff;
   }
 
   /** @returns {string} */
@@ -328,6 +461,8 @@ export class VaultView {
       const id = this.filter.slice("casier:".length);
       return this.lockers.find((l) => l.id === id)?.name ?? "Casier";
     }
+    const ff = this.folderFilter();
+    if (ff) return this.trees.get(ff.locker, ff.folder)?.name ?? "Dossier";
     return "Tous les secrets";
   }
 
@@ -338,7 +473,14 @@ export class VaultView {
       if (e.trash) return false;
       if (f === "favoris") return e.favorite;
       if (f.startsWith("type:")) return (TYPE_FILTERS[f.slice("type:".length)] ?? []).includes(e.kind);
-      if (f.startsWith("casier:")) return e.locker === f.slice("casier:".length);
+      // A locker lists the secrets of its root; a folder, those it holds directly (ADR 0076).
+      if (f.startsWith("casier:")) {
+        return e.locker === f.slice("casier:".length) && this.trees.folderOf(e.locker, e.id) === null;
+      }
+      if (f.startsWith("dossier:")) {
+        const ff = this.folderFilter();
+        return !!ff && e.locker === ff.locker && this.trees.folderOf(e.locker, e.id) === ff.folder;
+      }
       return true;
     });
     byId("liste-titre").textContent = this.filterTitle();
@@ -355,7 +497,9 @@ export class VaultView {
           ? "La corbeille est vide."
           : f === "favoris"
             ? "Aucun favori. Marquez un secret comme favori depuis sa fiche."
-            : "Aucun secret. Créez-en un, ou importez un fichier depuis les réglages.";
+            : f.startsWith("dossier:")
+              ? "Ce dossier ne contient aucun secret directement."
+              : "Aucun secret. Créez-en un, ou importez un fichier depuis les réglages.";
     }
     empty.hidden = n !== 0;
     this.list.hidden = n === 0;
@@ -370,7 +514,7 @@ export class VaultView {
             e.favorite
               ? h("span", { class: "element-favori", title: "Favori" }, [icon("favori", "icone-pleine")])
               : h("span"),
-            h("span", { class: "element-sous", text: subtitle(e) }),
+            h("span", { class: "element-sous", text: this.withPath(e, subtitle(e)) }),
           ],
         ),
       ),
@@ -383,6 +527,19 @@ export class VaultView {
     }
     this.markActive();
     this.renderRecord();
+  }
+
+  /**
+   * A line of the list, with the folder of the secret when the list mixes several places
+   * (search, whole vault, type, favourites).
+   * @param {Entry} e
+   * @param {string} text
+   * @returns {string}
+   */
+  withPath(e, text) {
+    if (this.filter.startsWith("casier:") || this.filter.startsWith("dossier:")) return text;
+    const folder = this.trees.folderOf(e.locker, e.id);
+    return folder ? `${text} · ${this.trees.path(e.locker, folder)}` : text;
   }
 
   markActive() {
@@ -431,6 +588,7 @@ export class VaultView {
   renderRecord() {
     this.recordToken += 1;
     this.hideAll();
+    this.stopTickers();
     const entry = this.selected();
     byId("fiche-vide").hidden = !!entry;
     byId("fiche-contenu").hidden = !entry;
@@ -438,9 +596,13 @@ export class VaultView {
     fields.replaceChildren();
     if (!entry) return;
     const locker = this.lockers.find((l) => l.id === entry.locker);
+    const folder = this.trees.folderOf(entry.locker, entry.id);
     byId("fiche-type").textContent =
       (TYPE_NAMES[entry.kind] ?? TYPE_NAMES.unknown) +
-      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "");
+      (locker ? ` · casier ${locker.name}${locker.personal ? "" : ", partagé"}` : "") +
+      (folder ? ` · dossier ${this.trees.path(entry.locker, folder)}` : "");
+    byId("fiche-deplacer").hidden =
+      entry.trash || !this.trees.hasFolders(entry.locker) || !this.writes(entry.locker);
     byId("fiche-icone").replaceChildren(icon(TYPE_ICONS[entry.kind] ?? TYPE_ICONS.unknown));
     byId("fiche-titre").textContent = entry.title;
     /** @type {HTMLDetailsElement} */ (byId("fiche-menu")).open = false;
@@ -450,71 +612,225 @@ export class VaultView {
     fav.title = entry.favorite ? "Retirer des favoris" : "Ajouter aux favoris";
     fav.hidden = entry.trash;
     byId("fiche-modifier").hidden =
-      entry.trash || !["password", "note", "ssh_connection", "rdp_connection"].includes(entry.kind);
+      entry.trash || !["password", "note", "totp", "ssh_connection", "rdp_connection"].includes(entry.kind);
     byId("fiche-supprimer-texte").textContent = entry.trash ? "Supprimer définitivement" : "Mettre à la corbeille";
     byId("fiche-restaurer").hidden = !entry.trash;
 
-    const ref = { locker: entry.locker, id: entry.id };
-    // The most frequent action of each type comes first, above the fields.
     const main = byId("fiche-principales");
     main.replaceChildren();
+    main.hidden = true;
+    if (entry.trash) {
+      fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
+    }
+    if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
+      void this.renderConnection(entry, this.recordToken);
+    } else if (["password", "note", "ssh_key", "totp"].includes(entry.kind)) {
+      void this.renderFields(entry, this.recordToken);
+    } else {
+      fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
+    }
+  }
+
+  /**
+   * Names of the fields the current version of a secret holds, read from its history: the
+   * core lists the fields present, never a value (`docs/api-locale.md` § 16.2). `null` when
+   * the core does not tell (older core, refusal): every field is then drawn as before.
+   * @param {import("./api.js").SecretRef} ref
+   * @returns {Promise<Set<string> | null>}
+   */
+  async presentFields(ref) {
+    try {
+      const versions = await api.history(ref);
+      return versions.length ? new Set(versions[0].fields) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The fields of a password, a note, an SSH key or a TOTP code. An empty optional field
+   * (notes, passphrase, TOTP) is left out; an empty main field says so, without reveal or
+   * copy buttons.
+   * @param {Entry} entry
+   * @param {number} token  Drawing this record belongs to; a later one cancels it.
+   */
+  async renderFields(entry, token) {
+    const ref = { locker: entry.locker, id: entry.id };
+    const present = await this.presentFields(ref);
+    if (token !== this.recordToken) return;
+    /** @param {string} f  A field name of the history (`docs/api-locale.md` § 16.2). */
+    const has = (f) => present === null || present.has(f);
+    const fields = byId("fiche-champs");
+    // The most frequent action of each type comes first, above the fields.
+    const main = byId("fiche-principales");
     const quick = /** @type {Record<string, [FieldName, string]>} */ ({
       password: ["password", "Mot de passe"],
       note: ["notes", "Contenu"],
       ssh_key: ["ssh_public_key", "Clé publique"],
     })[entry.kind];
+    // A TOTP code: its own secret's main action, and the second one of a password.
+    const totp = (entry.kind === "password" || entry.kind === "totp") && has("totp") && !entry.trash;
+    if (totp && entry.kind === "totp") main.append(this.totpCopyButton(ref, "bouton-principal"));
     if (quick && !entry.trash) {
       const [field, label] = quick;
-      const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
-        icon("copier"),
-        `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
-      ]);
-      b.addEventListener("click", () => void this.copy(ref, field, label));
-      main.append(b);
+      if (has(field)) {
+        const b = h("button", { class: "bouton bouton-principal", type: "button" }, [
+          icon("copier"),
+          `Copier ${label === "Contenu" ? "le contenu" : label === "Mot de passe" ? "le mot de passe" : "la clé publique"}`,
+        ]);
+        b.addEventListener("click", () => void this.copy(ref, field, label));
+        main.append(b);
+      }
       if (entry.kind === "password" && entry.username) {
-        const u = h("button", { class: "bouton bouton-secondaire", type: "button" }, [icon("copier"), "Copier l'identifiant"]);
+        const u = h("button", { class: `bouton ${has("password") ? "bouton-secondaire" : "bouton-principal"}`, type: "button" }, [
+          icon("copier"),
+          "Copier l'identifiant",
+        ]);
         u.addEventListener("click", () => void this.copy(ref, "username", "Identifiant"));
         main.append(u);
       }
+      if (totp) main.append(this.totpCopyButton(ref, "bouton-secondaire"));
     }
-    if (!entry.trash && entry.kind !== "ssh_connection" && entry.kind !== "rdp_connection") {
+    if (!entry.trash) {
       /** @type {import("./api.js").TypedWhat[]} */
-      const offered =
-        entry.kind === "password"
-          ? entry.username
-            ? ["username_password", "password", "username", "notes"]
-            : ["password", "notes"]
-          : entry.kind === "note"
-            ? ["notes"]
-            : entry.kind === "ssh_key"
-              ? ["ssh_passphrase"]
-              : [];
+      const offered = [];
+      if (entry.kind === "password") {
+        if (entry.username && has("password")) offered.push("username_password");
+        if (has("password")) offered.push("password");
+        if (entry.username) offered.push("username");
+      }
+      if ((entry.kind === "password" || entry.kind === "note") && has("notes")) offered.push("notes");
+      if (entry.kind === "ssh_key" && has("ssh_passphrase")) offered.push("ssh_passphrase");
+      if (entry.kind === "totp" && entry.username) offered.push("username");
       const type = this.hooks.autoType.button(ref, entry.title, offered);
       if (type) main.append(type);
     }
     main.hidden = main.childElementCount === 0;
-    if (entry.trash) {
-      fields.append(info("État", "Dans la corbeille. Restaurez-le pour le retrouver dans la liste."));
-    }
+    /**
+     * @param {string} label
+     * @param {FieldName} field
+     */
+    const required = (label, field) => (has(field) ? this.secretField(label, ref, field) : emptyField(label));
     if (entry.kind === "password") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
-      fields.append(this.secretField("Mot de passe", ref, "password"));
+      fields.append(required("Mot de passe", "password"));
+      if (totp) fields.append(this.totpField(ref, token));
       if (entry.hosts.length) fields.append(listField("Sites", entry.hosts, "mono"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-      fields.append(this.secretField("Notes", ref, "notes"));
+      if (has("notes")) fields.append(this.secretField("Notes", ref, "notes"));
     } else if (entry.kind === "note") {
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-      fields.append(this.secretField("Contenu", ref, "notes"));
+      fields.append(required("Contenu", "notes"));
+    } else if (entry.kind === "totp") {
+      if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
+      if (entry.trash || !has("totp")) fields.append(emptyField("Code TOTP"));
+      else fields.append(this.totpField(ref, token));
+      if (entry.hosts.length) fields.append(listField("Sites", entry.hosts, "mono"));
+      if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
+      if (has("notes")) fields.append(this.secretField("Notes", ref, "notes"));
     } else if (entry.kind === "ssh_key") {
       if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
-      fields.append(this.secretField("Clé publique", ref, "ssh_public_key"));
-      fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
+      fields.append(required("Clé publique", "ssh_public_key"));
+      if (has("ssh_passphrase")) fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
-    } else if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
-      void this.renderConnection(entry, this.recordToken);
-    } else {
-      fields.append(info("Contenu", "Ce type de secret s'affichera dans une prochaine version de l'application."));
     }
+  }
+
+  /**
+   * The button that copies the current TOTP code, by the Rust process: the page never holds
+   * the copied value.
+   * @param {import("./api.js").SecretRef} ref
+   * @param {string} style  bouton-principal or bouton-secondaire.
+   */
+  totpCopyButton(ref, style) {
+    const b = h("button", { class: `bouton ${style}`, type: "button" }, [icon("totp"), "Copier le code TOTP"]);
+    b.addEventListener("click", () => void this.copyTotp(ref));
+    return b;
+  }
+
+  /** @param {import("./api.js").SecretRef} ref */
+  async copyTotp(ref) {
+    try {
+      const s = await api.totpCopy(ref, false);
+      announce(`Code TOTP copié. Le presse-papiers sera effacé dans ${s} s.`);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "not_found") announce("Ce secret n'a plus de TOTP.");
+      else this.hooks.onError(err);
+    }
+  }
+
+  /**
+   * The TOTP code of a secret: computed by the core, shown grouped (« 287 082 »), with a ring
+   * that empties until the code changes. The code is asked again at the end of each period,
+   * only while the record is shown; the core does not count it as activity, so an open record
+   * does not keep the vault open. The TOTP secret never reaches the page.
+   * @param {import("./api.js").SecretRef} ref
+   * @param {number} token  Drawing this record belongs to; a later one stops the refresh.
+   */
+  totpField(ref, token) {
+    const value = h("span", { class: "code-totp", text: "··· ···" });
+    const ring = svgRing();
+    const left = h("span", { class: "totp-reste", "aria-hidden": "true" });
+    const meta = h("span", { class: "decompte" });
+    const copy = iconButton("copier", "Copier le code TOTP");
+    copy.addEventListener("click", () => void this.copyTotp(ref));
+    const row = h("div", { class: "champ-fiche" }, [
+      h("dt", { text: "Code TOTP" }),
+      h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, meta]), h("span", { class: "totp-minuteur" }, [ring.svg, left])]),
+      h("dd", { class: "actions-champ" }, [copy]),
+    ]);
+    let timer = 0;
+    let fetchToken = 0;
+    let remaining = 0;
+    let period = 30;
+    const stop = () => {
+      clearInterval(timer);
+      timer = 0;
+      fetchToken += 1;
+      value.textContent = "";
+      this.tickers.delete(stop);
+    };
+    const draw = () => {
+      ring.set(remaining / period, remaining <= 5);
+      left.textContent = `${remaining} s`;
+      row.classList.toggle("totp-bientot", remaining <= 5);
+    };
+    const load = async () => {
+      const mine = ++fetchToken;
+      /** @type {import("./api.js").TotpCode} */
+      let c;
+      try {
+        c = await api.totpCode(ref);
+      } catch (e) {
+        if (mine !== fetchToken || token !== this.recordToken) return;
+        stop();
+        const err = /** @type {import("./api.js").ApiError} */ (e);
+        if (err.code === "not_found") row.replaceWith(emptyField("Code TOTP"));
+        else this.hooks.onError(err);
+        return;
+      }
+      if (mine !== fetchToken || token !== this.recordToken) return;
+      value.textContent = groupDigits(c.code);
+      value.setAttribute("aria-label", `Code TOTP ${c.code.split("").join(" ")}`);
+      period = c.period;
+      remaining = c.seconds_left;
+      const what = [c.issuer, `${c.digits} chiffres`, `toutes les ${c.period} s`, c.algorithm === "SHA-1" ? null : c.algorithm];
+      meta.textContent = what.filter(Boolean).join(" · ");
+      draw();
+    };
+    timer = window.setInterval(() => {
+      if (token !== this.recordToken) {
+        stop();
+        return;
+      }
+      if (remaining > 0) remaining -= 1;
+      if (remaining === 0) void load();
+      else draw();
+    }, 1000);
+    this.tickers.add(stop);
+    void load();
+    return row;
   }
 
   /**
@@ -700,13 +1016,15 @@ export class VaultView {
       } catch (e) {
         const err = /** @type {import("./api.js").ApiError} */ (e);
         if (err.code === "not_found") {
-          value.textContent = "Vide";
-          value.classList.add("valeur-masquee");
-          reveal.disabled = true;
-          copy.disabled = true;
+          row.replaceWith(emptyField(label));
           return;
         }
         this.hooks.onError(err);
+        return;
+      }
+      if (text === "") {
+        // Present but empty (written by an older client or an import): nothing to show.
+        row.replaceWith(emptyField(label));
         return;
       }
       value.textContent = text;
@@ -726,11 +1044,12 @@ export class VaultView {
       }, 1000);
     });
     copy.addEventListener("click", () => void this.copy(ref, field, label));
-    return h("div", { class: "champ-fiche" }, [
+    const row = h("div", { class: "champ-fiche" }, [
       h("dt", { text: label }),
       h("dd", { class: "valeur-avec-etat" }, [h("span", {}, [value, countdown]), shape]),
       h("dd", { class: "actions-champ" }, [reveal, copy]),
     ]);
+    return row;
   }
 
   /**
@@ -903,6 +1222,118 @@ export class VaultView {
     }
   }
 
+  /** Puts the selected secret in a folder of its locker, or at its root. */
+  moveSelected() {
+    const entry = this.selected();
+    if (!entry || entry.trash) return;
+    const ref = { locker: entry.locker, id: entry.id };
+    this.folderDialog.open({
+      title: `Déplacer « ${entry.title} »`,
+      text: "Le secret reste dans son casier : seul son rangement change.",
+      submit: "Déplacer",
+      places: this.trees.places(entry.locker),
+      place: this.trees.folderOf(entry.locker, entry.id) ?? "",
+      run: async (_, place) => {
+        await api.moveSecret(ref, place);
+        announce(place ? `Rangé dans « ${this.trees.path(entry.locker, place)} ».` : "Rangé à la racine du casier.");
+        await this.refresh();
+      },
+    });
+  }
+
+  /** A new folder in the folder shown, or at the root of the locker shown. */
+  newFolder() {
+    const locker = this.lockerFilter();
+    if (!locker) return;
+    const parent = this.folderFilter()?.folder ?? null;
+    this.folderDialog.open({
+      title: "Nouveau dossier",
+      text: parent
+        ? `Dans « ${this.trees.path(locker, parent)} ». Le nom du dossier est scellé comme le reste du casier.`
+        : "À la racine du casier. Le nom du dossier est scellé comme le reste du casier.",
+      submit: "Créer le dossier",
+      name: "",
+      run: async (name) => {
+        await api.createFolder(locker, name, parent);
+        if (parent) this.folded.delete(parent);
+        this.folded.delete(locker);
+        announce(`Dossier « ${name} » créé.`);
+        await this.refresh();
+      },
+    });
+  }
+
+  renameFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    this.folderDialog.open({
+      title: "Renommer le dossier",
+      text: this.trees.path(ff.locker, ff.folder),
+      submit: "Renommer",
+      name: folder.name,
+      run: async (name) => {
+        await api.renameFolder(ff.locker, ff.folder, name);
+        announce("Dossier renommé.");
+        await this.refresh();
+      },
+    });
+  }
+
+  moveFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    this.folderDialog.open({
+      title: `Déplacer « ${folder.name} »`,
+      text: "Le dossier part avec ses sous-dossiers et ses secrets.",
+      submit: "Déplacer",
+      places: this.trees.places(ff.locker, this.trees.subtree(ff.locker, ff.folder)),
+      place: folder.parent ?? "",
+      run: async (_, place) => {
+        await api.moveFolder(ff.locker, ff.folder, place);
+        if (place) this.folded.delete(place);
+        announce("Dossier déplacé.");
+        await this.refresh();
+      },
+    });
+  }
+
+  async deleteFolder() {
+    const ff = this.folderFilter();
+    const folder = ff && this.trees.get(ff.locker, ff.folder);
+    if (!ff || !folder) return;
+    const under = this.trees.subtree(ff.locker, ff.folder);
+    const subs = under.size - 1;
+    // Counted from the listing, which holds every active secret when there is no search.
+    const secrets = this.entries.filter((e) => {
+      if (e.locker !== ff.locker || e.trash) return false;
+      const f = this.trees.folderOf(e.locker, e.id);
+      return f !== null && under.has(f);
+    }).length;
+    const what = this.query
+      ? "Les secrets qu'ils contiennent iront à la corbeille."
+      : secrets === 0
+        ? "Aucun secret n'ira à la corbeille."
+        : `${secrets} secret${secrets > 1 ? "s iront" : " ira"} à la corbeille.`;
+    const ok = await confirmDialog(
+      "Supprimer le dossier ?",
+      `« ${this.trees.path(ff.locker, ff.folder)} »${subs > 0 ? ` et ses ${subs} sous-dossier${subs > 1 ? "s" : ""}` : ""} seront supprimés. ${what}`,
+      "Supprimer",
+    );
+    if (!ok) return;
+    try {
+      const n = await api.deleteFolder(ff.locker, ff.folder);
+      announce(n === 0 ? "Dossier supprimé." : `Dossier supprimé ; ${n} secret${n > 1 ? "s" : ""} mis à la corbeille.`);
+      this.filter = `casier:${ff.locker}`;
+      this.hooks.onFilter(this.filter);
+      this.selectedId = null;
+      await this.refresh();
+    } catch (e) {
+      this.hooks.onError(/** @type {any} */ (e));
+    }
+  }
+
   async deleteSelected() {
     const entry = this.selected();
     if (!entry) return;
@@ -950,14 +1381,66 @@ function setIconButton(b, name, label) {
   b.title = label;
 }
 
+/**
+ * A code with its digits grouped by three (six digits) or four (seven or eight), easier to read
+ * and to type: « 287 082 », « 9428 7082 ».
+ * @param {string} code
+ */
+export function groupDigits(code) {
+  const cut = code.length === 6 ? 3 : code.length > 6 ? 4 : 0;
+  return cut ? `${code.slice(0, cut)} ${code.slice(cut)}` : code;
+}
+
+/**
+ * The ring of a TOTP code: full at the start of a period, empty when the code changes.
+ * @returns {{ svg: SVGSVGElement, set: (fraction: number, soon: boolean) => void }}
+ */
+function svgRing() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = /** @type {SVGSVGElement} */ (document.createElementNS(ns, "svg"));
+  svg.setAttribute("class", "totp-anneau");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  const track = document.createElementNS(ns, "circle");
+  const arc = document.createElementNS(ns, "circle");
+  for (const c of [track, arc]) {
+    c.setAttribute("cx", "18");
+    c.setAttribute("cy", "18");
+    c.setAttribute("r", "15");
+  }
+  track.setAttribute("class", "totp-anneau-fond");
+  arc.setAttribute("class", "totp-anneau-arc");
+  const length = 2 * Math.PI * 15;
+  arc.setAttribute("stroke-dasharray", String(length));
+  svg.append(track, arc);
+  return {
+    svg,
+    set: (fraction, soon) => {
+      const f = Math.max(0, Math.min(1, fraction));
+      arc.setAttribute("stroke-dashoffset", String(length * (1 - f)));
+      svg.classList.toggle("totp-anneau-bientot", soon);
+    },
+  };
+}
+
 /** @param {Entry} e */
 function subtitle(e) {
   if (e.kind === "password") return e.username || e.hosts[0] || TYPE_NAMES.password;
+  if (e.kind === "totp") return e.username ? `${TYPE_NAMES.totp} · ${e.username}` : TYPE_NAMES.totp;
   if (e.kind === "ssh_connection" || e.kind === "rdp_connection") {
     const where = `${e.username ? `${e.username}@` : ""}${e.hosts[0] ?? ""}`;
     return where ? `${e.kind === "rdp_connection" ? "RDP" : "SSH"} · ${where}` : TYPE_NAMES[e.kind];
   }
   return TYPE_NAMES[e.kind] ?? TYPE_NAMES.unknown;
+}
+
+/**
+ * A field the secret does not hold: its name and "Vide", with nothing to reveal or copy.
+ * @param {string} label
+ */
+function emptyField(label) {
+  return h("div", { class: "champ-fiche" }, [h("dt", { text: label }), h("dd", { class: "valeur-vide", text: "Vide" })]);
 }
 
 /**

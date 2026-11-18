@@ -15,6 +15,8 @@ pub type Id16 = [u8; 16];
 /// SHA-384 of an encoded operation.
 pub type OpId = [u8; 48];
 
+pub mod hardware;
+
 /// Lengths of the `hirzla-crypto` encodings stored as byte strings.
 pub mod lens {
     /// `KemPublicKey`.

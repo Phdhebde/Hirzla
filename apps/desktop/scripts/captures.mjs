@@ -123,7 +123,25 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.keyboard.press("ArrowDown");
   await p.keyboard.press("ArrowDown");
   await shot(p, "05-recherche", theme);
+  // A secret without notes: no "Notes" row, so nothing to reveal or copy there.
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : mot de passe']");
+  if (await p.$("#fiche-champs button[aria-label^='Révéler : notes']")) {
+    errors.push(`${theme} : la fiche d'un secret sans notes propose de les révéler`);
+  }
   await p.fill("#recherche", "");
+
+  // Clearing the notes of a secret in edit mode: an explicit choice, then no "Notes" row.
+  await p.click("#opt-00000000000000000000000000000004");
+  await p.waitForSelector("#fiche-champs button[aria-label^='Révéler : notes']");
+  await p.click("#fiche-modifier");
+  await p.waitForSelector("#dialogue-secret[open] #secret-notes-effacer-case:not([hidden])");
+  await p.check("#secret-notes-effacer");
+  await p.click("#secret-enregistrer");
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.waitForFunction(
+    () => document.getElementById("fiche-champs")?.textContent?.includes("Identifiant") &&
+      !document.querySelector("#fiche-champs button[aria-label^='Révéler : notes']"),
+  );
 
   // Command palette: secrets and actions from the keyboard.
   await p.keyboard.press("Control+k");
@@ -144,6 +162,26 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await p.fill("#secret-urls", "https://particulier.edf.fr");
   await p.fill("#secret-etiquettes", "maison, énergie");
   await shot(p, "06-nouveau-secret", theme);
+  await p.keyboard.press("Escape");
+
+  // TOTP codes (ADR 0078): the code of a password, the record of a TOTP secret, then a
+  // TOTP refused by the edit form before anything is written.
+  await p.waitForSelector("#dialogue-secret:not([open])", { state: "attached" });
+  await p.click("#opt-00000000000000000000000000000002");
+  await p.waitForFunction(() => document.querySelector("#fiche-champs .code-totp")?.textContent === "287 082");
+  if (!(await p.$("#fiche-principales button:has-text('Copier le code TOTP')"))) {
+    errors.push(`${theme} : la fiche d'un mot de passe avec TOTP ne propose pas de copier le code`);
+  }
+  await shot(p, "06h-code-totp", theme);
+  await p.click("#opt-00000000000000000000000000000019");
+  await p.waitForFunction(() => document.querySelector("#fiche-champs .code-totp")?.textContent === "4091 7253");
+  await shot(p, "06i-secret-totp", theme);
+  await p.click("#fiche-modifier");
+  await p.waitForSelector("#dialogue-secret[open] #secret-totp-effacer-case:not([hidden])");
+  await p.fill("#secret-totp", "pas une clé");
+  await p.click("#secret-enregistrer");
+  await p.waitForSelector("#secret-erreur:not([hidden])");
+  await shot(p, "06j-totp-refuse", theme);
   await p.keyboard.press("Escape");
 
   // Connections: the record of an SSH connection through a jump host, then an RDP one.
@@ -206,6 +244,21 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "08-reglages", theme);
   await p.evaluate(() => document.querySelector("#reglages-poste").scrollIntoView({ block: "start" }));
   await shot(p, "08b-reglages-sur-ce-poste", theme);
+  // Unlock methods: Windows Hello behind its toggle, then the warning (ADR 0075 § 4).
+  await p.evaluate(() => document.querySelector("#reglages-methodes").scrollIntoView({ block: "start" }));
+  await p.waitForSelector("#methodes-classiques:not([hidden])");
+  if ((await p.locator("#methodes-ajouter button", { hasText: "Windows Hello" }).count()) !== 0) {
+    errors.push(`${theme}: Windows Hello offered before the toggle`);
+  }
+  await shot(p, "08c-reglages-deverrouillage", theme);
+  await p.click("#reglage-classiques");
+  await p.waitForSelector("#dialogue-classiques[open]");
+  if (!(await p.isDisabled("#classiques-autoriser"))) errors.push(`${theme}: enabled without the confirmation`);
+  await p.check("#classiques-compris");
+  await shot(p, "08d-autoriser-windows-hello", theme);
+  await p.click("#classiques-autoriser");
+  await p.waitForSelector("#dialogue-classiques:not([open])", { state: "attached" });
+  await p.waitForSelector("#methodes-ajouter button:has-text('Windows Hello')");
   await p.click("#import-csv");
   await p.waitForSelector("#import-resultat:not([hidden])");
   await p.evaluate(() => document.querySelector("#import-resultat").scrollIntoView({ block: "end" }));
@@ -261,6 +314,17 @@ for (const theme of only && only !== "self" ? [] : ["clair", "sombre"]) {
   await shot(p, "15-corbeille", theme);
   await p.click("#fiche-restaurer");
   await p.waitForSelector("#liste-vide:not([hidden])");
+
+  // Folders of a locker (ADR 0076): a folder shown, its actions, then moving it.
+  await p.click("[data-filtre^='dossier:'][data-filtre$=':" + "65".padStart(32, "0") + "']");
+  await p.waitForFunction(() => document.querySelector("#liste-titre").textContent === "Finances");
+  await p.waitForSelector("#liste-dossier:not([hidden]) #dossier-renommer:not([hidden])");
+  await p.click("#liste-secrets li");
+  await shot(p, "15b-dossier", theme);
+  await p.click("#dossier-deplacer");
+  await p.waitForSelector("#dialogue-dossier[open] #dossier-destination");
+  await shot(p, "15c-deplacer-un-dossier", theme);
+  await p.keyboard.press("Escape");
 
   // Lock: everything shown is wiped.
   await p.keyboard.press("Control+l");

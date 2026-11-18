@@ -14,9 +14,13 @@ use std::time::{Duration, Instant};
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
+use hirzla_core::folders::proto::{FolderReply, FolderRequest};
+use hirzla_core::locker_export::proto::{ExportCode, ExportReply, ExportRequest};
+use hirzla_core::methods::proto::{MethodCode, MethodOp, MethodReply, MethodRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
+use hirzla_core::totp::proto::{TotpReply, TotpRequest};
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningReport;
 
@@ -266,6 +270,37 @@ impl CoreLink {
         }
     }
 
+    /// Sends one hardware unlock method request (`docs/api-locale.md` § 21, version 12). Only
+    /// the list is sent again on a new connection: a gesture is never asked for twice.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`DesktopError::from_method`].
+    pub fn call_methods(&mut self, request: &MethodRequest) -> Result<MethodReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_methods(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err((code, retry_after_s))) => {
+                    if code != MethodCode::General(ErrorCode::Unauthorized) {
+                        self.client = Some(client);
+                    }
+                    return Err(DesktopError::from_method(code, retry_after_s));
+                }
+                Err(ClientError::Io(_)) if !retried && request.op() == MethodOp::UnlockMethods => {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
     /// Sends one connection request (`docs/api-locale.md` § 17, version 6). Only the read is
     /// sent again on a new connection.
     ///
@@ -294,6 +329,73 @@ impl CoreLink {
                 }
                 Err(ClientError::Io(_))
                     if !retried && matches!(request, ConnectionRequest::Read { .. }) =>
+                {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one folder request (`docs/api-locale.md` § 20, version 11). Only the tree, which
+    /// changes nothing, is sent again on a new connection.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::folders::refusal`].
+    pub fn call_folder(&mut self, request: &FolderRequest) -> Result<FolderReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_folder(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::folders::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, FolderRequest::Tree { .. }) =>
+                {
+                    retried = true;
+                }
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
+
+    /// Sends one TOTP request (`docs/api-locale.md` § 22, version 13), with the same
+    /// reconnection rule as [`CoreLink::call`]: only a code, which changes nothing, is asked
+    /// again.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::totp::refusal`].
+    pub fn call_totp(&mut self, request: &TotpRequest) -> Result<TotpReply, DesktopError> {
+        let mut retried = false;
+        loop {
+            let mut client = match self.client.take() {
+                Some(c) => c,
+                None => self.connect()?,
+            };
+            match client.call_totp(request) {
+                Ok(Ok(reply)) => {
+                    self.client = Some(client);
+                    return Ok(reply);
+                }
+                Ok(Err(code)) => {
+                    if code != ErrorCode::Unauthorized {
+                        self.client = Some(client);
+                    }
+                    return Err(crate::totp::refusal(code));
+                }
+                Err(ClientError::Io(_))
+                    if !retried && matches!(request, TotpRequest::Code { .. }) =>
                 {
                     retried = true;
                 }
@@ -331,6 +433,31 @@ impl CoreLink {
                 }
                 Err(e) => return Err(e.into()),
             }
+        }
+    }
+
+    /// Sends one export request (`docs/api-locale.md` § 19, version 10). Never sent again:
+    /// an export writes a file, an import creates a locker.
+    ///
+    /// # Errors
+    /// [`DesktopError`]; a refusal of the core through [`crate::locker_export::refusal`].
+    pub fn call_export(&mut self, request: &ExportRequest) -> Result<ExportReply, DesktopError> {
+        let mut client = match self.client.take() {
+            Some(c) => c,
+            None => self.connect()?,
+        };
+        match client.call_export(request) {
+            Ok(Ok(reply)) => {
+                self.client = Some(client);
+                Ok(reply)
+            }
+            Ok(Err(code)) => {
+                if code != ExportCode::General(ErrorCode::Unauthorized) {
+                    self.client = Some(client);
+                }
+                Err(crate::locker_export::refusal(code))
+            }
+            Err(e) => Err(e.into()),
         }
     }
 

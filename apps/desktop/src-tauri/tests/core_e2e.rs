@@ -345,19 +345,65 @@ fn the_self_mode_commands_drive_a_real_core() {
     // KeePass import: the core reads the file.
     let kdbx = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../../crates/hirzla-vault/tests/kdbx/keepassxc-chacha20-argon2id.kdbx");
-    let refused = state.import_kdbx_file(&kdbx, z("faux")).unwrap_err();
+    let refused = state.import_kdbx_file(&kdbx, z("faux"), None).unwrap_err();
     assert_eq!(refused.code(), "import");
     assert!(refused.message().contains("incorrect"));
-    let report =
-        serde_json::to_value(state.import_kdbx_file(&kdbx, z("hirzla-test")).unwrap()).unwrap();
+    let report = serde_json::to_value(
+        state
+            .import_kdbx_file(&kdbx, z("hirzla-test"), None)
+            .unwrap(),
+    )
+    .unwrap();
     assert_eq!(report["imported"], 5);
-    assert_eq!(report["attachments"], 1);
+    // The attachment of « Banque » is imported now.
+    assert_eq!(report["attachments"], 0);
     let list = serde_json::to_value(state.list(Some(z("Banque")), false).unwrap()).unwrap();
     let bank = &list["entries"][0];
     let target = SecretRef {
         locker: bank["locker"].as_str().unwrap().to_owned(),
         id: bank["id"].as_str().unwrap().to_owned(),
     };
+
+    // Encrypted export of the locker (ADR 0077): a drawn passphrase, then the import of the
+    // file into a new locker of the same vault.
+    let file = dir.path().join("perso.hirzla-export");
+    let exported = state
+        .export_locker_to(&target.locker, &file, Some(z("court")))
+        .unwrap_err();
+    assert_eq!(exported.code(), "export_password_weak");
+    let exported =
+        serde_json::to_value(state.export_locker_to(&target.locker, &file, None).unwrap()).unwrap();
+    assert_eq!(exported["secrets"], 5);
+    let phrase = exported["password"].as_str().unwrap().to_owned();
+    assert_eq!(phrase.split('-').count(), 8);
+    assert_eq!(
+        state
+            .export_locker_to(&target.locker, &file, None)
+            .unwrap_err()
+            .code(),
+        "export_file_exists"
+    );
+    // Kept for the copy button; no clipboard on a build machine without a display.
+    assert!(state
+        .copy_export_password()
+        .map_or_else(|e| e.code() == "clipboard", |_| true));
+    let refused = state
+        .import_locker_from(&file, z("une autre phrase assez longue"), None)
+        .unwrap_err();
+    assert_eq!(refused.code(), "export_key_rejected");
+    let imported = serde_json::to_value(
+        state
+            .import_locker_from(&file, z(&phrase), Some(z("Copie")))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(imported["secrets"], 5);
+    let lockers = serde_json::to_value(state.list(None, false).unwrap()).unwrap();
+    assert!(lockers["lockers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|l| l["name"] == "Copie"));
     let field = |name: &str| serde_json::from_value(serde_json::json!(name)).unwrap();
 
     // History: a new password, then back to the imported version.
@@ -487,6 +533,7 @@ fn the_self_mode_commands_drive_a_real_core() {
     ] {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
+    assert!(!log.contains(&phrase), "the core log holds the passphrase");
 }
 
 /// The server mode commands (local API version 4) against a real core, without a server:
@@ -779,4 +826,72 @@ fn a_secret_is_typed_into_another_application() {
     for needle in [USER, TYPED, "xterm", "Poste"] {
         assert!(!log.contains(needle), "the core log holds {needle:?}");
     }
+}
+
+#[test]
+fn totp_codes_are_shown_set_and_removed() {
+    // RFC 6238 appendix B, SHA-1 seed in base32.
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock, true);
+    let state = AppState::new(Ok(CoreLink::new(config(&sock))));
+    CoreLink::new(config(&sock))
+        .call(&Request::Init {
+            password: z(MASTER),
+            kdf: Some(KdfParams {
+                m_kib: 65_536,
+                t: 3,
+                p: 1,
+            }),
+        })
+        .unwrap();
+
+    let new = |input: &str| {
+        serde_json::from_value(serde_json::json!({
+            "locker": null,
+            "title": "Forge",
+            "input": input,
+            "username": "alice",
+            "tags": ["2fa"],
+        }))
+        .unwrap()
+    };
+    // Not a TOTP: refused before anything is stored.
+    assert_eq!(
+        state.totp_create(new("pas un secret")).unwrap_err().code(),
+        "invalid"
+    );
+    let r: SecretRef = state
+        .totp_create(new(&format!(
+            "otpauth://totp/Forge:alice?secret={SEED}&algorithm=SHA256&digits=8&issuer=Forge"
+        )))
+        .unwrap();
+    let code = serde_json::to_value(state.totp_code(&r).unwrap()).unwrap();
+    assert_eq!(code["digits"], 8);
+    assert_eq!(code["period"], 30);
+    assert_eq!(code["algorithm"], "SHA-256");
+    assert_eq!(code["issuer"], "Forge");
+    assert_eq!(code["code"].as_str().unwrap().len(), 8);
+    assert!(code.get("secret").is_none() && code.get("next").is_none());
+    let left = code["seconds_left"].as_u64().unwrap();
+    assert!((1..=30).contains(&left));
+    let list = serde_json::to_value(state.list(None, false).unwrap()).unwrap();
+    assert_eq!(list["entries"][0]["kind"], "totp");
+    assert!(!list.to_string().contains(SEED));
+
+    // Replaced by a base32 secret alone: 6 digits.
+    state.totp_set(&r, z(SEED)).unwrap();
+    let code = serde_json::to_value(state.totp_code(&r).unwrap()).unwrap();
+    assert_eq!(code["code"].as_str().unwrap().len(), 6);
+    assert_eq!(state.totp_set(&r, z("   ")).unwrap_err().code(), "invalid");
+    assert_eq!(
+        state
+            .totp_set(&r, z("https://forge.example"))
+            .unwrap_err()
+            .code(),
+        "invalid"
+    );
+    state.totp_clear(&r).unwrap();
+    assert_eq!(state.totp_code(&r).err().unwrap().code(), "not_found");
 }

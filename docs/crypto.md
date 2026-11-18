@@ -134,6 +134,7 @@ info = len(nom) ‖ nom ‖ len(p1) ‖ p1 ‖ len(p2) ‖ p2 ‖ …
 | --- | --- | --- | --- |
 | Déverrouillage | `hirzla/v1/unlock` | rang de la méthode (1 octet), type de méthode (1 octet) | `0010` ‖ nom ‖ `0001` ‖ rang ‖ `0001` ‖ type |
 | Clé d'emballage locale | `hirzla/v1/device-wrap` | aucun | `0015` ‖ nom |
+| Clé d'export de casier | `hirzla/v1/locker-export-key` | aucun ; sel = `export_id` (ADR 0077) | `001b` ‖ nom |
 
 Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en publie pas pour
 HKDF seul), test croisé avec RustCrypto `hkdf`, vecteurs figés des étiquettes
@@ -191,13 +192,18 @@ refusées. Test de temps constant de type dudect (test t de Welch, deux classes 
 lancé à la demande en mode release : |t| ≤ 2,4 sur trois passes de 50 000 mesures (seuil
 d'alerte 4,5).
 
-### Lecture des bases KeePass (KDBX 4)
+### Lecture des bases KeePass (KDBX 3.1 et 4)
 
 Module `kdbx` (ADR 0025), utilisé **uniquement pour l'import**, jamais pour sceller un coffre
-Hirzla. AES-256-CBC, HMAC-SHA-256 et SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de
-`argon2` ; ChaCha20 brut (RFC 8439) de RustCrypto `chacha20` (version figée `=0.10.2`), faute
-d'un ChaCha20 sans authentification dans AWS-LC. Les HMAC d'en-tête et de blocs sont comparés
-en temps constant avant tout déchiffrement. Risque résiduel accepté par le mainteneur
+Hirzla. AES-256-CBC, AES-256-ECB (dérivation AES-KDF, bornée à 10⁹ tours), HMAC-SHA-256 et
+SHA-256/512 viennent d'AWS-LC ; Argon2d/Argon2id de `argon2` ; ChaCha20 brut (RFC 8439) de
+RustCrypto `chacha20` (version figée `=0.10.2`), faute d'un ChaCha20 sans authentification dans
+AWS-LC ; Salsa20 (flux interne des bases KDBX 3.1) de RustCrypto `salsa20` (version figée
+`=0.11.0`, sans `unsafe`), absent d'AWS-LC. Les secrets TOTP en base32 et les clés de
+fichier clé en hexadécimal sont décodés par `data-encoding` (version figée `=2.11.1`, ADR 0025)
+dans une mémoire effacée. Les HMAC d'en-tête et de blocs (KDBX 4) sont
+comparés en temps constant avant tout déchiffrement ; en KDBX 3.1, qui n'a pas de HMAC, les
+octets de départ, le SHA-256 de chaque bloc et l'empreinte d'en-tête du document le sont. Risque résiduel accepté par le mainteneur
 (2026-11-15) : `chacha20` contient du code SIMD `unsafe` ; c'est la base auditée par NCC Group
 en 2020 avec `chacha20poly1305`.
 
@@ -247,6 +253,13 @@ s'applique pas à eux.
 Règles :
 
 - La liste est exhaustive. RSA est stocké, jamais utilisé, en v1.
+- **TOTP** (ADR 0078) : `hirzla_crypto::totp` prend le HMAC d'AWS-LC
+  (`HMAC_SHA1_FOR_LEGACY_USE_ONLY`, `HMAC_SHA256`, `HMAC_SHA512`) et n'ajoute que la
+  troncature dynamique décimale de la RFC 4226 § 5.3, sans clé ni dérivation. Bornes : graine
+  10 à 128 octets, 6 à 8 chiffres, période 15 à 300 s. Tests : les 18 vecteurs de la RFC 6238
+  annexe B et les 10 de la RFC 4226 annexe D. Le code (`TotpCode`) est effacé à la libération
+  et n'a pas de `Debug`. La clé TOTP saisie (`otpauth://` ou base32) est décodée par
+  `data-encoding` dans une mémoire effacée (`hirzla_vault::totp`).
 - Ces mécanismes ne protègent jamais une donnée Hirzla. Ils ne s'appliquent qu'au secret
   stocké, pour le protocole du tiers.
 - Ils tournent dans le noyau, avec une bibliothèque auditée (ADR 0009). La clé ou la graine

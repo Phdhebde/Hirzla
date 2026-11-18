@@ -362,8 +362,19 @@ button.touche:hover { color: var(--hz-texte); border-color: var(--hz-texte-secon
 .version .actions-champ { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .valeur-secrete { font-family: var(--hz-font-mono); font-size: 13.5px; letter-spacing: 0.02em; white-space: pre-wrap; }
 .valeur-masquee { letter-spacing: 0.15em; color: var(--hz-texte-secondaire); white-space: nowrap; }
+.valeur-vide { color: var(--hz-texte-secondaire); }
 .valeur-grande { font-size: 20px; min-height: 32px; display: block; overflow-wrap: anywhere; }
 .decompte { display: block; font-family: var(--hz-font-texte); font-size: 12px; color: var(--hz-texte-secondaire); letter-spacing: 0; margin-top: 4px; }
+/* TOTP code of a record: grouped digits, and a ring that empties until the code changes. */
+.code-totp { display: block; font-family: var(--hz-font-mono); font-size: 22px; font-weight: 500; letter-spacing: 0.08em; white-space: nowrap; }
+.totp-minuteur { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--hz-texte-secondaire); font-variant-numeric: tabular-nums; }
+.totp-anneau { width: 22px; height: 22px; transform: rotate(-90deg); }
+.totp-anneau circle { fill: none; stroke-width: 4; }
+.totp-anneau-fond { stroke: var(--hz-bordure); }
+.totp-anneau-arc { stroke: var(--hz-glacier); transition: stroke-dashoffset 0.9s linear; }
+.totp-anneau-bientot .totp-anneau-arc { stroke: var(--hz-alerte); }
+.totp-bientot .totp-minuteur { color: var(--hz-alerte); }
+@media (prefers-reduced-motion: reduce) { .totp-anneau-arc { transition: none; } }
 .etiquette {
   display: inline-block; padding: 2px 8px; margin: 2px 6px 2px 0; border-radius: var(--hz-rayon-petit); font-size: 13px;
   border: 1px solid var(--hz-bordure);
@@ -589,5 +600,20 @@ button.lien:hover { color: var(--hz-texte); }
 .cible-saisie { display: flex; flex-direction: column; gap: 4px; padding: 12px; border: 1px solid var(--hz-bordure); border-radius: var(--hz-rayon); margin: 0 0 12px; overflow-wrap: anywhere; }
 .cible-saisie strong { font-size: 17px; }
 .liste-simple { list-style: none; padding: 0; margin: 0 0 12px; display: flex; flex-direction: column; gap: 8px; }
+.separateur-ou { text-align: center; margin: 4px 0 0; }
 .ligne-application { display: flex; align-items: center; justify-content: space-between; gap: 12px; overflow-wrap: anywhere; }
 #reglage-saisie { margin-top: 16px; }
+
+/* Folders of a locker (ADR 0076): a nested list under the locker, foldable. */
+.nav-dossiers { list-style: none; margin: 0; padding: 0 0 0 14px; display: flex; flex-direction: column; gap: 2px; }
+.nav-dossiers[hidden] { display: none; }
+.nav-ligne { display: flex; align-items: center; gap: 2px; }
+.nav-ligne > .nav-lien { flex: 1; min-width: 0; }
+.nav-replier {
+  flex: none; width: 20px; height: 20px; padding: 0; border: 0; border-radius: var(--hz-rayon-petit);
+  background: transparent; color: var(--hz-texte-secondaire); cursor: pointer; font: inherit; font-size: 11px; line-height: 1;
+}
+.nav-replier:hover { background: var(--hz-survol); }
+.nav-replier-vide { visibility: hidden; }
+.entete-dossier { flex-direction: column; align-items: flex-start; }
+.entete-dossier p { margin: 0; }

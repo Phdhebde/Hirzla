@@ -12,6 +12,8 @@
  *   hosts: string[], tags: string[], favorite: boolean, trash: boolean }} Entry
  * @typedef {{ id: string, name: string, personal: boolean }} Locker
  * @typedef {{ entries: Entry[], lockers: Locker[] }} Listing
+ * @typedef {{ locker: string, folders: { id: string, name: string, parent: string | null }[],
+ *   placements: [string, string][] }} FolderTree
  * @typedef {{ locker: string, id: string }} SecretRef
  * @typedef {"title" | "username" | "password" | "notes" | "ssh_public_key" | "ssh_passphrase"} FieldName
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
@@ -23,9 +25,16 @@
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
  *   username: string | null, fields: string[], changed: string[], custom: number }} Version
  * @typedef {{ kit: string, threshold: number, count: number }} RecoveryKit
+ * @typedef {"password" | "tpm" | "touchid" | "fido2" | "hello" | "recovery" | "unknown"} MethodKind
+ * @typedef {{ rank: number, kind: MethodKind, usable: boolean, needs_pin: boolean }} UnlockMethod
+ * @typedef {{ methods: UnlockMethod[], enrollable: MethodKind[] }} UnlockMethods
  * @typedef {{ kit: string, threshold: number, count: number, folder: string, files: string[] }} CreatedKit
  * @typedef {{ imported: number, empty: number, recycled: number, attachments: number, history: number,
  *   custom_skipped: number, totp: number, refused: number }} KdbxReport
+ * @typedef {{ password: string | null, file: string, secrets: number, trashed: number, attachments: number,
+ *   links_dropped: number }} LockerExported
+ * @typedef {{ locker: string, secrets: number, attachments: number, folders: number,
+ *   refused: number }} LockerImported
  * @typedef {"owner" | "manager" | "editor" | "reader" | "blind_user" | "auditor"} RoleName
  * @typedef {"role" | "quorum" | "last_owner" | "access_lost"} Refusal
  * @typedef {{ id: string, name: string | null, role: RoleName | null, unsent: number, pending: number,
@@ -132,6 +141,12 @@ export function toApiError(e) {
  * @typedef {"port" | "username" | "domain" | "password" | "ssh_key" | "jump" | "host_key" | "notes"} ConnectionClear
  */
 
+/**
+ * TOTP codes (local API version 13, ADR 0078). The code comes from the core; never the TOTP secret.
+ * @typedef {{ code: string, seconds_left: number, period: number, digits: number,
+ *   algorithm: "SHA-1" | "SHA-256" | "SHA-512", issuer: string | null }} TotpCode
+ */
+
 export const api = {
   /** @returns {Promise<Status>} */
   status: () => call("app_status"),
@@ -184,6 +199,34 @@ export const api = {
    */
   createSshKey: (key) => call("create_ssh_key", { key }),
 
+  // Folders inside lockers (local API version 11, ADR 0076).
+  /** @returns {Promise<FolderTree[]>} */
+  folderTrees: () => call("folder_trees"),
+  /** @param {string} locker @param {string} name @param {string | null} parent @returns {Promise<string>} */
+  createFolder: (locker, name, parent) => call("create_folder", { locker, name, parent }),
+  /** @param {string} locker @param {string} folder @param {string} name @returns {Promise<void>} */
+  renameFolder: (locker, folder, name) => call("rename_folder", { locker, folder, name }),
+  /** @param {string} locker @param {string} folder @param {string | null} parent @returns {Promise<void>} */
+  moveFolder: (locker, folder, parent) => call("move_folder", { locker, folder, parent }),
+  /** @param {string} locker @param {string} folder @returns {Promise<number>} Secrets sent to the trash. */
+  deleteFolder: (locker, folder) => call("delete_folder", { locker, folder }),
+  /** @param {SecretRef} target @param {string | null} folder @returns {Promise<void>} */
+  moveSecret: (target, folder) => call("move_secret", { target, folder }),
+  // TOTP codes (local API version 13).
+  /** @param {SecretRef} target @returns {Promise<TotpCode>} */
+  totpCode: (target) => call("totp_code", { target }),
+  /** @param {SecretRef} target @param {boolean} next  The code of the next period. @returns {Promise<number>} */
+  totpCopy: (target, next) => call("totp_copy", { target, next }),
+  /** @param {SecretRef} target @param {string} input  otpauth:// URI or base32 secret. @returns {Promise<void>} */
+  totpSet: (target, input) => call("totp_set", { target, input }),
+  /** @param {SecretRef} target @returns {Promise<void>} */
+  totpClear: (target) => call("totp_clear", { target }),
+  /**
+   * @param {{ locker: string | null, title: string, input: string, username?: string, tags: string[] }} totp
+   * @returns {Promise<SecretRef>}
+   */
+  totpCreate: (totp) => call("totp_create", { totp }),
+
   // This workstation (ADR 0071).
   /** @returns {Promise<LocalPreferences>} */
   getPreferences: () => call("get_preferences"),
@@ -231,10 +274,39 @@ export const api = {
   recoveryUnlock: (password, confirmation) => call("recovery_unlock", { password, confirmation }),
   /** @returns {Promise<void>} */
   removeRecoveryKit: () => call("remove_recovery_kit"),
+  // Hardware unlock methods (local API version 12, ADR 0075).
+  /** @returns {Promise<UnlockMethods>} */
+  unlockMethods: () => call("list_unlock_methods"),
+  /** @param {MethodKind} kind @param {string} password @param {string | null} pin @returns {Promise<number>} */
+  enrollMethod: (kind, password, pin) => call("enroll_unlock_method", { kind, password, pin }),
+  /** @param {number} rank @param {string | null} pin @returns {Promise<void>} */
+  unlockWithMethod: (rank, pin) => call("unlock_with_method", { rank, pin }),
+  /** @param {number} rank @returns {Promise<void>} */
+  removeMethod: (rank) => call("remove_unlock_method", { rank }),
+  // Windows Hello and Touch ID, off by default (ADR 0075 § 4); kept on this workstation.
+  /** @returns {Promise<boolean>} */
+  classicalUnlock: () => call("get_classical_unlock"),
+  /** @param {boolean} allowed @returns {Promise<boolean>} */
+  setClassicalUnlock: (allowed) => call("set_classical_unlock", { allowed }),
   /** @returns {Promise<string>} */
   chooseKdbxFile: () => call("choose_kdbx_file"),
+  chooseKdbxKeyFile: () => call("choose_kdbx_key_file"),
+  clearKdbxKeyFile: () => call("clear_kdbx_key_file"),
   /** @param {string} password @returns {Promise<KdbxReport>} */
   importKdbx: (password) => call("import_kdbx", { password }),
+
+  // Encrypted export of a locker (local API version 10, ADR 0077).
+  /**
+   * @param {string} locker @param {string} name  Suggests the file name.
+   * @param {string | null} password  Null: the core draws a passphrase. @returns {Promise<LockerExported>}
+   */
+  exportLocker: (locker, name, password) => call("export_locker", { locker, name, password }),
+  /** @returns {Promise<number>} */
+  copyExportPassword: () => call("copy_export_password"),
+  /** @returns {Promise<string>} */
+  chooseExportFile: () => call("choose_export_file"),
+  /** @param {string} password @param {string | null} name @returns {Promise<LockerImported>} */
+  importLocker: (password, name) => call("import_locker", { password, name }),
 
   // Server mode (local API version 4).
   /** @returns {Promise<ServerStatus>} */

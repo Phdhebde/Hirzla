@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use hirzla_core::generator::{rules, Profile, Spec};
 use hirzla_core::proto::classes;
 
+use crate::methods::{kind_from_name, MethodsCommand, ACCEPT_CLASSICAL_FLAG};
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -15,6 +16,8 @@ Usage : hirzla [OPTIONS GLOBALES] COMMANDE [ARGUMENTS]
 Commandes :
   init                    Crée le coffre. Le mot de passe maître est demandé deux fois.
   unlock                  Ouvre le coffre (démarre le noyau si besoin).
+                          --materiel [RANG] : avec Windows Hello, Touch ID ou une clé de
+                          sécurité FIDO2 (la première méthode utilisable, ou celle du RANG).
   lock                    Verrouille le coffre.
   ls [RECHERCHE]          Liste les secrets. --corbeille : inclut la corbeille.
   get NOM                 Copie un secret dans le presse-papiers (effacement différé),
@@ -43,7 +46,17 @@ Commandes :
                           --version N --champ CHAMP : un champ d'une version (comme get).
   restore NOM             Sort un secret de la corbeille. --id ID.
                           --version N : rétablit la version N (voir history).
-  import-kdbx FICHIER     Importe une base KeePass KDBX 4 ; son mot de passe est demandé.
+  import-kdbx FICHIER     Importe une base KeePass KDBX 3.1 ou 4 ; son mot de passe est demandé.
+                          --fichier-cle FICHIER : fichier clé de la base (mot de passe vide
+                          permis).
+  totp NOM                Copie le code TOTP actuel d'un secret (effacement différé), ou
+                          l'écrit sur la sortie standard si elle n'est pas un terminal.
+                          --id ID, --stdout, --suivant (code de la période suivante).
+  totp NOM --definir      Ajoute ou remplace le TOTP d'un mot de passe ou d'un code TOTP.
+                          L'URI otpauth:// ou le secret base32 est demandé sans écho.
+  totp NOM --retirer      Retire le TOTP d'un secret. --id ID.
+  totp NOM --creer        Range un nouveau secret de type code TOTP (URI ou secret
+                          demandé). --identifiant U, --casier CASIER, --tag T.
   passwd                  Change le mot de passe maître.
   settings                Affiche les réglages ; les change avec --verrouillage S,
                           --presse-papiers S, --veille oui|non, --session oui|non.
@@ -58,10 +71,30 @@ Commandes :
   connexion voir NOM      Fiche d'une connexion, sans son mot de passe. --id ID.
   connexion modifier NOM  Modifie une connexion : options de création (sauf --casier et
                           --tag), --titre T, --effacer CHAMP. --id ID.
+  dossier liste           Arbre des dossiers d'un casier, avec le nombre de secrets de
+                          chacun et leur identifiant (#…). --casier CASIER.
+  dossier creer CHEMIN    Crée le dossier, et ses parents manquants. --casier CASIER.
+  dossier renommer CHEMIN NOM
+                          Renomme un dossier. --casier CASIER.
+  dossier deplacer CHEMIN DESTINATION
+                          Déplace un dossier (« / » : la racine du casier). --casier CASIER.
+  dossier supprimer CHEMIN
+                          Supprime un dossier et ses sous-dossiers ; leurs secrets vont à
+                          la corbeille. --oui (sans question), --casier CASIER.
+  mv NOM DESTINATION      Range un secret dans un dossier de son casier (« / » : la
+                          racine). --id ID.
   cle-ssh ajouter NOM FICHIER
                           Range une clé SSH privée existante (format OpenSSH).
                           --publique FICHIER, --identifiant U, --phrase (demandée),
                           --casier CASIER, --tag T.
+  methods                 Méthodes de déverrouillage du coffre et celles qu'on peut ajouter
+                          sur ce poste. Le mot de passe maître reste toujours valable.
+  methods add hello|touchid|fido2
+                          Ajoute Windows Hello, Touch ID ou une clé de sécurité FIDO2
+                          (coffre ouvert ; le mot de passe maître est redemandé).
+                          Windows Hello et Touch ID, cryptographie classique seulement :
+                          --accepter-risque-classique, après lecture de l'avertissement.
+  methods remove RANG     Retire la méthode matérielle du RANG (la dernière seulement).
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
                           Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
@@ -96,6 +129,14 @@ Mode Serveur :
                           Donne un rôle à un membre (ou change son rôle).
   casier retirer CASIER MEMBRE
                           Retire un membre du casier.
+  casier exporter CASIER FICHIER [--mot-de-passe]
+                          Écrit une copie chiffrée d'un casier du coffre (sans serveur).
+                          Sans --mot-de-passe, une phrase de passe est tirée et affichée
+                          une fois : transmettez-la par un autre canal que le fichier.
+                          --mot-de-passe : choisir le mot de passe (16 caractères au moins).
+  casier importer FICHIER [--nom NOM]
+                          Importe un export dans un nouveau casier du coffre (mot de passe
+                          demandé). --nom : nom du nouveau casier.
   accord preparer CASIER retrait MEMBRE | role MEMBRE ROLE | quorum N
                           Prépare une action qui demande l'accord d'autres propriétaires
                           et écrit la demande (hirzla-demande:…) à leur transmettre.
@@ -140,8 +181,8 @@ Champs : titre, identifiant, mot-de-passe, notes.
 CLÉ, REBOND : titre d'une clé SSH, d'une connexion SSH du coffre. --effacer accepte port,
 identifiant, domaine, mot-de-passe, cle, rebond, empreinte, notes.
 Rôles : proprietaire, gestionnaire, editeur, lecteur, sans-divulgation, auditeur.
-CASIER : nom d'un casier partagé ou début de son identifiant (4 chiffres hexadécimaux au
-moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
+CASIER : nom d'un casier partagé (d'un casier du coffre pour « casier exporter ») ou
+début de son identifiant (4 chiffres hexadécimaux au moins). MEMBRE : identifiant du membre (32 chiffres hexadécimaux).
 DEMANDE, ACCORD, LIEN : le texte lui-même, ou @FICHIER. ID : début de l'identifiant de la
 demande (4 chiffres hexadécimaux au moins). OP : début de l'identifiant d'une opération
 (8 chiffres hexadécimaux au moins). APPAREIL : identifiant de l'appareil (32 chiffres
@@ -261,6 +302,18 @@ pub enum LockerCommand {
         locker: String,
         member: String,
     },
+    /// Encrypted export of a locker of the vault (ADR 0077).
+    Export {
+        locker: String,
+        file: PathBuf,
+        /// The user chooses the password instead of a drawn passphrase.
+        choose_password: bool,
+    },
+    /// Import of an export into a new locker (ADR 0077).
+    Import {
+        file: PathBuf,
+        name: Option<String>,
+    },
 }
 
 /// Fields of a connection given on the command line (`docs/api-locale.md` § 17.5). The
@@ -302,6 +355,34 @@ pub enum ConnectionCommand {
     },
 }
 
+/// `dossier liste|creer|renommer|deplacer|supprimer` (ADR 0076). A CHEMIN separates names
+/// with `/`; a `#` followed by at least 4 hexadecimal digits designates a folder by id.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FolderCommand {
+    List {
+        locker: Option<String>,
+    },
+    Create {
+        path: String,
+        locker: Option<String>,
+    },
+    Rename {
+        path: String,
+        name: String,
+        locker: Option<String>,
+    },
+    Move {
+        path: String,
+        destination: String,
+        locker: Option<String>,
+    },
+    Delete {
+        path: String,
+        locker: Option<String>,
+        yes: bool,
+    },
+}
+
 /// `cle-ssh ajouter NOM FICHIER` (ADR 0067).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SshKeyAdd {
@@ -335,6 +416,11 @@ pub enum Command {
         kdf: Option<(u32, u32, u32)>,
     },
     Unlock,
+    /// `unlock --materiel [RANG]` (ADR 0075).
+    UnlockHardware {
+        rank: Option<u8>,
+    },
+    Methods(MethodsCommand),
     Lock,
     Ls {
         query: Option<String>,
@@ -378,12 +464,21 @@ pub enum Command {
     },
     ImportKdbx {
         file: PathBuf,
+        key_file: Option<PathBuf>,
     },
     Passwd,
     Settings(SettingsChange),
     Recovery(Recovery),
     Connection(ConnectionCommand),
     SshKeyAdd(SshKeyAdd),
+    Folder(FolderCommand),
+    /// `mv NOM|--id ID DESTINATION` (ADR 0076).
+    Mv {
+        name: Option<String>,
+        id: Option<String>,
+        destination: String,
+    },
+    Totp(TotpCommand),
     Status,
     Stop,
     Server(ServerCommand),
@@ -397,6 +492,30 @@ pub enum Command {
     /// Internal: the clipboard helper process (`__clipboard SECONDS`).
     ClipboardHelper {
         seconds: u64,
+    },
+}
+
+/// `hirzla totp` (`docs/api-locale.md` § 22.5): one secret, by name or `--id`, and what to do.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TotpCommand {
+    pub name: Option<String>,
+    pub id: Option<String>,
+    pub action: TotpAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TotpAction {
+    /// The current code, or with `next` the code of the next time step.
+    Code { stdout: bool, next: bool },
+    /// Add or replace the TOTP of the secret.
+    Set,
+    /// Remove the TOTP of the secret.
+    Clear,
+    /// Create a TOTP secret named `name`.
+    Create {
+        username: Option<String>,
+        locker: Option<String>,
+        tags: Vec<String>,
     },
 }
 
@@ -682,6 +801,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--separateur",
         "--chiffres",
         "--modele",
+        "--nom",
+        "--fichier-cle",
     ];
     while let Some(arg) = it.next() {
         let arg = text(arg, "argument")?;
@@ -711,6 +832,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
     let allowed: &[&str] = match command.as_str() {
         "init" => &["--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "ls" => &["--corbeille"],
+        "unlock" => &["--materiel"],
+        "methods" => &[ACCEPT_CLASSICAL_FLAG],
         "get" => &["--champ", "--id", "--stdout"],
         "set" => &[
             "--identifiant",
@@ -735,6 +858,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--titre",
             "--effacer",
         ],
+        "dossier" => &["--casier", "--oui"],
+        "mv" => &["--id"],
         "cle-ssh" => &[
             "--publique",
             "--identifiant",
@@ -743,12 +868,24 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--tag",
         ],
         "serveur" => &["--sortie", "--ac", "--empreinte"],
-        "casier" => &["--empreinte"],
+        "casier" => &["--empreinte", "--mot-de-passe", "--nom"],
         "appareil" => &["--oui"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
+        "totp" => &[
+            "--id",
+            "--stdout",
+            "--suivant",
+            "--definir",
+            "--retirer",
+            "--creer",
+            "--identifiant",
+            "--casier",
+            "--tag",
+        ],
         "history" => &["--id", "--version", "--champ", "--stdout"],
         "restore" => &["--id", "--version"],
+        "import-kdbx" => &["--fichier-cle"],
         "settings" => &[
             "--verrouillage",
             "--presse-papiers",
@@ -807,9 +944,35 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             };
             Command::Init { kdf }
         }
+        "unlock" if has("--materiel") => {
+            max_positional(1)?;
+            Command::UnlockHardware {
+                rank: positional
+                    .first()
+                    .map(|r| number::<u8>(r, "RANG"))
+                    .transpose()?,
+            }
+        }
         "unlock" => {
             max_positional(0)?;
             Command::Unlock
+        }
+        "methods" => {
+            let usage = "« methods » attend rien, add hello|touchid|fido2 ou remove RANG.";
+            Command::Methods(match positional.as_slice() {
+                [a, k] if a == "add" => MethodsCommand::Add {
+                    kind: kind_from_name(k).ok_or_else(|| usage.to_owned())?,
+                    accept_classical_risk: has(ACCEPT_CLASSICAL_FLAG),
+                },
+                _ if has(ACCEPT_CLASSICAL_FLAG) => {
+                    return Err(format!("{ACCEPT_CLASSICAL_FLAG} va avec « methods add »."))
+                }
+                [] => MethodsCommand::List,
+                [a, r] if a == "remove" => MethodsCommand::Remove {
+                    rank: number(r, "RANG")?,
+                },
+                _ => return Err(usage.to_owned()),
+            })
         }
         "lock" => {
             max_positional(0)?;
@@ -868,6 +1031,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             })?;
             Command::ImportKdbx {
                 file: PathBuf::from(file),
+                key_file: one("--fichier-cle")?.map(PathBuf::from),
             }
         }
         "passwd" => {
@@ -927,6 +1091,52 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     purge: has("--purger"),
                 }
             }
+        }
+        "totp" => {
+            max_positional(1)?;
+            let name = positional.first().cloned();
+            let id = one("--id")?;
+            let actions = ["--definir", "--retirer", "--creer"]
+                .iter()
+                .filter(|a| has(a))
+                .count();
+            if actions > 1 {
+                return Err(
+                    "« totp » prend une seule action : --definir, --retirer ou --creer.".into(),
+                );
+            }
+            let creating = has("--creer");
+            if creating && (name.is_none() || id.is_some()) {
+                return Err("« totp --creer » attend le NOM du nouveau secret, sans --id.".into());
+            }
+            if !creating && name.is_some() == id.is_some() {
+                return Err("« totp » attend un NOM ou --id ID, l'un des deux.".into());
+            }
+            let code_only = ["--stdout", "--suivant"];
+            let create_only = ["--identifiant", "--casier", "--tag"];
+            if actions > 0 && code_only.iter().any(|f| has(f)) {
+                return Err("--stdout et --suivant ne valent que pour copier un code.".into());
+            }
+            if !creating && create_only.iter().any(|f| has(f)) {
+                return Err("--identifiant, --casier et --tag ne valent qu'avec --creer.".into());
+            }
+            let action = if creating {
+                TotpAction::Create {
+                    username: one("--identifiant")?,
+                    locker: one("--casier")?,
+                    tags: all("--tag"),
+                }
+            } else if has("--definir") {
+                TotpAction::Set
+            } else if has("--retirer") {
+                TotpAction::Clear
+            } else {
+                TotpAction::Code {
+                    stdout: has("--stdout"),
+                    next: has("--suivant"),
+                }
+            };
+            Command::Totp(TotpCommand { name, id, action })
         }
         "set" => {
             max_positional(1)?;
@@ -1078,6 +1288,73 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             };
             Command::Connection(sub_command)
         }
+        "dossier" => {
+            max_positional(3)?;
+            let sub = positional.first().map(String::as_str).unwrap_or_default();
+            let arg = |i: usize, what: &str| -> Result<String, String> {
+                positional
+                    .get(i)
+                    .cloned()
+                    .ok_or_else(|| format!("« dossier {sub} » attend {what}."))
+            };
+            let at_most = |n: usize| -> Result<(), String> {
+                if positional.len() > n {
+                    Err(format!("trop d'arguments pour « dossier {sub} »."))
+                } else {
+                    Ok(())
+                }
+            };
+            if has("--oui") && sub != "supprimer" {
+                return Err(format!("option inconnue pour « dossier {sub} » : --oui"));
+            }
+            let locker = one("--casier")?;
+            Command::Folder(match sub {
+                "liste" => {
+                    at_most(1)?;
+                    FolderCommand::List { locker }
+                }
+                "creer" => {
+                    at_most(2)?;
+                    FolderCommand::Create {
+                        path: arg(1, "un CHEMIN")?,
+                        locker,
+                    }
+                }
+                "renommer" => FolderCommand::Rename {
+                    path: arg(1, "un CHEMIN et un NOM")?,
+                    name: arg(2, "un CHEMIN et un NOM")?,
+                    locker,
+                },
+                "deplacer" => FolderCommand::Move {
+                    path: arg(1, "un CHEMIN et une DESTINATION")?,
+                    destination: arg(2, "un CHEMIN et une DESTINATION")?,
+                    locker,
+                },
+                "supprimer" => {
+                    at_most(2)?;
+                    FolderCommand::Delete {
+                        path: arg(1, "un CHEMIN")?,
+                        locker,
+                        yes: has("--oui"),
+                    }
+                }
+                _ => return Err(format!("sous-commande de « dossier » inconnue.\n\n{USAGE}")),
+            })
+        }
+        "mv" => {
+            max_positional(2)?;
+            let id = one("--id")?;
+            let (name, destination) = match (positional.as_slice(), &id) {
+                ([name, destination], None) => (Some(name.clone()), destination.clone()),
+                ([destination], Some(_)) => (None, destination.clone()),
+                _ => return Err("« mv » attend NOM DESTINATION, ou --id ID DESTINATION.".into()),
+            };
+            Command::Mv {
+                name,
+                id,
+                destination,
+            }
+        }
         "cle-ssh" => {
             max_positional(3)?;
             let usage = "« cle-ssh » attend ajouter NOM FICHIER.";
@@ -1193,10 +1470,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     .cloned()
                     .ok_or_else(|| format!("« casier {sub} » attend {what}."))
             };
-            if sub != "ajouter" && has("--empreinte") {
-                return Err(format!(
-                    "option inconnue pour « casier {sub} » : --empreinte"
-                ));
+            for (option, owner) in [
+                ("--empreinte", "ajouter"),
+                ("--mot-de-passe", "exporter"),
+                ("--nom", "importer"),
+            ] {
+                if sub != owner && has(option) {
+                    return Err(format!("option inconnue pour « casier {sub} » : {option}"));
+                }
             }
             let sub_command = match sub {
                 "creer" => {
@@ -1225,6 +1506,21 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     LockerCommand::Remove {
                         locker: arg(1, "le CASIER et le MEMBRE")?,
                         member: arg(2, "le CASIER et le MEMBRE")?,
+                    }
+                }
+                "exporter" => {
+                    max_positional(3)?;
+                    LockerCommand::Export {
+                        locker: arg(1, "le CASIER et le FICHIER")?,
+                        file: PathBuf::from(arg(2, "le CASIER et le FICHIER")?),
+                        choose_password: has("--mot-de-passe"),
+                    }
+                }
+                "importer" => {
+                    max_positional(2)?;
+                    LockerCommand::Import {
+                        file: PathBuf::from(arg(1, "le FICHIER")?),
+                        name: one("--nom")?,
                     }
                 }
                 _ => return Err(format!("sous-commande de « casier » inconnue.\n\n{USAGE}")),
@@ -1437,11 +1733,71 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
     use super::*;
 
     fn p(a: &[&str]) -> Result<Args, String> {
         parse(a.iter().map(OsString::from))
+    }
+
+    #[test]
+    fn parses_totp() {
+        let t = |a: &[&str]| match p(a).unwrap().command {
+            Command::Totp(t) => t,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(
+            t(&["totp", "Forge"]),
+            TotpCommand {
+                name: Some("Forge".into()),
+                id: None,
+                action: TotpAction::Code {
+                    stdout: false,
+                    next: false
+                },
+            }
+        );
+        assert_eq!(
+            t(&["totp", "--id", "a1b2", "--stdout", "--suivant"]).action,
+            TotpAction::Code {
+                stdout: true,
+                next: true
+            }
+        );
+        assert_eq!(t(&["totp", "Forge", "--definir"]).action, TotpAction::Set);
+        assert_eq!(
+            t(&["totp", "--id", "a1b2", "--retirer"]).action,
+            TotpAction::Clear
+        );
+        assert_eq!(
+            t(&[
+                "totp",
+                "Forge",
+                "--creer",
+                "--identifiant",
+                "alice",
+                "--tag",
+                "2fa"
+            ])
+            .action,
+            TotpAction::Create {
+                username: Some("alice".into()),
+                locker: None,
+                tags: vec!["2fa".into()],
+            }
+        );
+        for bad in [
+            &["totp"][..],
+            &["totp", "Forge", "--id", "a1b2"],
+            &["totp", "Forge", "--definir", "--retirer"],
+            &["totp", "Forge", "--definir", "--stdout"],
+            &["totp", "Forge", "--identifiant", "alice"],
+            &["totp", "--id", "a1b2", "--creer"],
+            &["totp", "Forge", "Autre"],
+            &["totp", "Forge", "--champ", "titre"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]
@@ -1453,6 +1809,52 @@ mod tests {
     #[test]
     fn parses_commands() {
         assert_eq!(p(&["unlock"]).unwrap().command, Command::Unlock);
+        assert_eq!(
+            p(&["unlock", "--materiel"]).unwrap().command,
+            Command::UnlockHardware { rank: None }
+        );
+        assert_eq!(
+            p(&["unlock", "--materiel", "2"]).unwrap().command,
+            Command::UnlockHardware { rank: Some(2) }
+        );
+        assert!(p(&["unlock", "2"]).is_err());
+        assert!(p(&["unlock", "--materiel", "x"]).is_err());
+        assert_eq!(
+            p(&["methods"]).unwrap().command,
+            Command::Methods(MethodsCommand::List)
+        );
+        assert_eq!(
+            p(&["methods", "add", "fido2"]).unwrap().command,
+            Command::Methods(MethodsCommand::Add {
+                kind: 4,
+                accept_classical_risk: false
+            })
+        );
+        assert_eq!(
+            p(&["methods", "add", "hello"]).unwrap().command,
+            Command::Methods(MethodsCommand::Add {
+                kind: 5,
+                accept_classical_risk: false
+            })
+        );
+        assert_eq!(
+            p(&["methods", "add", "touchid", "--accepter-risque-classique"])
+                .unwrap()
+                .command,
+            Command::Methods(MethodsCommand::Add {
+                kind: 3,
+                accept_classical_risk: true
+            })
+        );
+        assert!(p(&["methods", "--accepter-risque-classique"]).is_err());
+        assert!(p(&["methods", "remove", "2", "--accepter-risque-classique"]).is_err());
+        assert_eq!(
+            p(&["methods", "remove", "3"]).unwrap().command,
+            Command::Methods(MethodsCommand::Remove { rank: 3 })
+        );
+        assert!(p(&["methods", "add", "tpm"]).is_err());
+        assert!(p(&["methods", "remove"]).is_err());
+        assert!(p(&["methods", "add", "fido2", "--materiel"]).is_err());
         let a = p(&["--socket", "/s", "get", "GitHub", "--champ", "identifiant"]).unwrap();
         assert_eq!(a.socket, Some(OsString::from("/s")));
         assert_eq!(
@@ -1507,6 +1909,40 @@ mod tests {
                 fingerprint: Some("E".into()),
             })
         );
+        assert_eq!(
+            p(&["casier", "exporter", "Perso", "/tmp/x.hirzla-export"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Export {
+                locker: "Perso".into(),
+                file: PathBuf::from("/tmp/x.hirzla-export"),
+                choose_password: false,
+            })
+        );
+        assert_eq!(
+            p(&["casier", "exporter", "Perso", "x", "--mot-de-passe"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Export {
+                locker: "Perso".into(),
+                file: PathBuf::from("x"),
+                choose_password: true,
+            })
+        );
+        assert_eq!(
+            p(&["casier", "importer", "x", "--nom", "Reçu"])
+                .unwrap()
+                .command,
+            Command::Locker(LockerCommand::Import {
+                file: PathBuf::from("x"),
+                name: Some("Reçu".into()),
+            })
+        );
+        assert!(p(&["casier", "exporter", "Perso"]).is_err());
+        assert!(p(&["casier", "importer"]).is_err());
+        assert!(p(&["casier", "importer", "x", "--mot-de-passe"]).is_err());
+        assert!(p(&["casier", "exporter", "P", "x", "--nom", "N"]).is_err());
+        assert!(p(&["casier", "creer", "P", "--nom", "N"]).is_err());
         assert!(matches!(
             p(&["set", "x", "--casier", "Ops"]).unwrap().command,
             Command::Set {
@@ -2059,9 +2495,20 @@ mod tests {
         assert_eq!(
             p(&["import-kdbx", "base.kdbx"]).unwrap().command,
             Command::ImportKdbx {
-                file: "base.kdbx".into()
+                file: "base.kdbx".into(),
+                key_file: None,
             }
         );
+        assert_eq!(
+            p(&["import-kdbx", "base.kdbx", "--fichier-cle", "base.keyx"])
+                .unwrap()
+                .command,
+            Command::ImportKdbx {
+                file: "base.kdbx".into(),
+                key_file: Some("base.keyx".into()),
+            }
+        );
+        assert!(p(&["import-kdbx", "base.kdbx", "--fichier-cle"]).is_err());
         assert_eq!(
             p(&["settings", "--veille", "non", "--verrouillage", "600"])
                 .unwrap()
@@ -2089,5 +2536,61 @@ mod tests {
             })
         );
         assert_eq!(p(&["passwd"]).unwrap().command, Command::Passwd);
+    }
+
+    #[test]
+    fn parses_folder_commands() {
+        assert_eq!(
+            p(&["dossier", "liste", "--casier", "Équipe"])
+                .unwrap()
+                .command,
+            Command::Folder(FolderCommand::List {
+                locker: Some("Équipe".into())
+            })
+        );
+        assert_eq!(
+            p(&["dossier", "deplacer", "A/B", "/"]).unwrap().command,
+            Command::Folder(FolderCommand::Move {
+                path: "A/B".into(),
+                destination: "/".into(),
+                locker: None,
+            })
+        );
+        assert_eq!(
+            p(&["dossier", "supprimer", "A", "--oui"]).unwrap().command,
+            Command::Folder(FolderCommand::Delete {
+                path: "A".into(),
+                locker: None,
+                yes: true,
+            })
+        );
+        assert_eq!(
+            p(&["mv", "--id", "abcd", "Banque"]).unwrap().command,
+            Command::Mv {
+                name: None,
+                id: Some("abcd".into()),
+                destination: "Banque".into(),
+            }
+        );
+        assert_eq!(
+            p(&["mv", "GitHub", "/"]).unwrap().command,
+            Command::Mv {
+                name: Some("GitHub".into()),
+                id: None,
+                destination: "/".into(),
+            }
+        );
+        for bad in [
+            &["dossier"][..],
+            &["dossier", "creer"],
+            &["dossier", "renommer", "A"],
+            &["dossier", "creer", "A", "--oui"],
+            &["dossier", "liste", "en-trop"],
+            &["dossier", "liste", "--id", "abcd"],
+            &["mv", "GitHub"],
+            &["mv", "GitHub", "A", "--id", "abcd"],
+        ] {
+            assert!(p(bad).is_err(), "{bad:?}");
+        }
     }
 }

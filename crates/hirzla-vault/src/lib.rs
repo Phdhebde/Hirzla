@@ -7,6 +7,8 @@
 
 pub mod cbor;
 mod error;
+pub mod export;
+pub mod folder;
 pub mod kdbx;
 pub mod model;
 pub mod pad;
@@ -14,19 +16,20 @@ pub mod secret;
 pub mod store;
 #[cfg(test)]
 mod test_support;
+pub mod totp;
 mod vault;
 
-pub use error::VaultError;
+pub use error::{ExportRefusal, VaultError};
 pub use vault::{
-    recovery_params, CreateOptions, KdfCost, LockerInfo, RecoveryKit, RecoveryShare, SecretVersion,
-    Vault, MAX_AUTO_LOCK_S, MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE, MIN_AUTO_LOCK_S,
-    MIN_CLIPBOARD_CLEAR_S,
+    recovery_params, unlock_methods, vault_id_of, CreateOptions, ExportStats, ImportStats, KdfCost,
+    LockerInfo, MethodInfo, RecoveryKit, RecoveryShare, SecretVersion, Vault, MAX_AUTO_LOCK_S,
+    MAX_CLIPBOARD_CLEAR_S, MAX_SHARE_FILE, MIN_AUTO_LOCK_S, MIN_CLIPBOARD_CLEAR_S,
 };
 
 /// Version of the on-disk vault format written for a new vault (`docs/format.md` § 5.3).
-pub const FORMAT_VERSION: u16 = 2;
+pub const FORMAT_VERSION: u16 = 3;
 /// Oldest format version this build reads. A vault of that version stays so until an object
-/// of a later version is written to it (ADR 0067).
+/// of a later version is written to it (ADR 0067, ADR 0076).
 pub const MIN_FORMAT_VERSION: u16 = 1;
 
 /// Whether this build reads format version `v`.

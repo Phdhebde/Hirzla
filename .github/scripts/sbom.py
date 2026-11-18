@@ -43,11 +43,13 @@ def host_triple():
     sys.exit("sbom: host triple not found")
 
 
-def metadata(target, manifest_dir):
+def metadata(target, manifest_dir, features=None):
     cmd = [
         "cargo", "metadata", "--format-version", "1", "--locked", "--offline",
         "--filter-platform", target,
     ]
+    if features:
+        cmd += ["--features", features]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=manifest_dir)
     return json.loads(out.stdout)
 
@@ -62,13 +64,15 @@ def lock_checksums(lock_path):
     }
 
 
-def shipped(meta, package, target, manifest_dir):
+def shipped(meta, package, target, manifest_dir, features=None):
     """Package ids linked into `package` for `target`: `cargo tree` with normal edges only and
     no procedural macro (resolver 2 features of this package alone, not of the workspace)."""
     cmd = [
         "cargo", "tree", "-p", package, "-e", "normal,no-proc-macro", "--target", target,
         "--locked", "--offline", "--prefix", "none", "-f", "{p}",
     ]
+    if features:
+        cmd += ["--features", features]
     out = subprocess.run(cmd, check=True, capture_output=True, text=True, cwd=manifest_dir)
     wanted = set()
     for line in out.stdout.splitlines():
@@ -299,11 +303,15 @@ def main():
     ap.add_argument("--npm", metavar="DIR", help="npm application folder (package-lock.json)")
     ap.add_argument("--target")
     ap.add_argument("--version", help="product version (default: the package version)")
+    ap.add_argument(
+        "--features",
+        help="Cargo features of PACKAGE the shipped executable is built with (comma separated)",
+    )
     ap.add_argument("--output")
     args = ap.parse_args()
     if args.npm:
-        if args.package or args.target:
-            ap.error("--npm takes neither PACKAGE nor --target")
+        if args.package or args.target or args.features:
+            ap.error("--npm takes neither PACKAGE, --target nor --features")
         write(finish(*npm_bom(args.npm, args.version)), args.output)
         return
     if not args.package:
@@ -311,7 +319,7 @@ def main():
 
     root_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     target = args.target or host_triple()
-    meta = metadata(target, root_dir)
+    meta = metadata(target, root_dir, args.features)
     checksums = lock_checksums(os.path.join(meta["workspace_root"], "Cargo.lock"))
     packages = {p["id"]: p for p in meta["packages"]}
     members = set(meta["workspace_members"])
@@ -319,7 +327,7 @@ def main():
     if len(roots) != 1:
         sys.exit(f"sbom: package {args.package!r} is not a workspace member")
     root = roots[0]
-    ids = shipped(meta, args.package, target, root_dir) - {root}
+    ids = shipped(meta, args.package, target, root_dir, args.features) - {root}
 
     rp = packages[root]
     version = args.version or rp["version"]

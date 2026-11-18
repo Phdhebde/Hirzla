@@ -11,13 +11,19 @@
 //! - [`clipboard`]: copy with delayed clearing, outside the web view;
 //! - [`connections`]: SSH and RDP connections, import of an SSH key (local API version 6,
 //!   ADR 0067);
+//! - [`folders`]: folders inside lockers (local API version 11, ADR 0076);
+//! - [`totp`]: TOTP codes shown, copied, set and removed (local API version 13, ADR 0078);
 //! - [`generator`]: settings, profiles and strength of the generator screen (local API
 //!   version 7, ADR 0068);
 //! - [`csv`] and [`import`]: import of CSV exports through the core;
+//! - [`methods`]: unlock with Windows Hello, Touch ID or a FIDO2 security key (local API
+//!   version 12, ADR 0075);
 //! - [`selfmode`]: settings, password change, history, recovery kit and KeePass import
 //!   (local API version 5);
 //! - [`servermode`]: joining a server, synchronisation, shared lockers, members and roles,
 //!   state of the key transparency log (local API version 4, ADR 0041);
+//! - [`locker_export`]: encrypted export of a locker and its import into a new locker
+//!   (local API version 10, ADR 0077);
 //! - [`prefs`]: what belongs to this workstation, in a local file (ADR 0071);
 //! - [`tray`]: notification area icon, window that closes without locking, and the call
 //!   for the window through the core (local API version 8, ADR 0071);
@@ -33,12 +39,16 @@ pub mod csv;
 pub mod error;
 #[cfg(target_os = "linux")]
 pub mod events;
+pub mod folders;
 pub mod generator;
 pub mod import;
 pub mod link;
+pub mod locker_export;
+pub mod methods;
 pub mod prefs;
 pub mod selfmode;
 pub mod servermode;
+pub mod totp;
 pub mod tray;
 
 use commands::AppState;
@@ -104,6 +114,17 @@ pub fn run() -> Result<(), tauri::Error> {
             connections::update_connection,
             connections::choose_ssh_key_file,
             connections::create_ssh_key,
+            folders::folder_trees,
+            folders::create_folder,
+            folders::rename_folder,
+            folders::move_folder,
+            folders::delete_folder,
+            folders::move_secret,
+            totp::totp_code,
+            totp::totp_copy,
+            totp::totp_set,
+            totp::totp_clear,
+            totp::totp_create,
             generator::generator_profiles,
             generator::generate_with,
             generator::copy_generated_at,
@@ -121,8 +142,20 @@ pub fn run() -> Result<(), tauri::Error> {
             selfmode::choose_recovery_shares,
             selfmode::recovery_unlock,
             selfmode::remove_recovery_kit,
+            methods::list_unlock_methods,
+            methods::enroll_unlock_method,
+            methods::unlock_with_method,
+            methods::remove_unlock_method,
+            methods::get_classical_unlock,
+            methods::set_classical_unlock,
             selfmode::choose_kdbx_file,
+            selfmode::choose_kdbx_key_file,
+            selfmode::clear_kdbx_key_file,
             selfmode::import_kdbx,
+            locker_export::export_locker,
+            locker_export::copy_export_password,
+            locker_export::choose_export_file,
+            locker_export::import_locker,
             servermode::server_status,
             servermode::server_identity,
             servermode::export_server_identity,

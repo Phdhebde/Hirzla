@@ -13,6 +13,9 @@
 
 pub mod platform;
 
+// ADR 0075: Windows Hello, Touch ID and FIDO2 as unlock methods of the vault.
+pub mod unlock;
+
 // ADR 0052: behind the `tpm2-prototype` feature, off by default, so that tpm2-tss is not
 // linked into the core while the prototype is wired to nothing.
 #[cfg(all(target_os = "linux", feature = "tpm2-prototype"))]

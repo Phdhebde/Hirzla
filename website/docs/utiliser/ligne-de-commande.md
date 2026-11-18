@@ -43,6 +43,10 @@ hirzla restore Messagerie  # sort de la corbeille
 | `gen [TAILLE]` | Génère un mot de passe, 24 caractères par défaut, et affiche son entropie | `--mode caracteres\|phrase\|prononcable\|pin\|modele`, `--profil`, `--sans-symboles`, `--sans-chiffres`, `--sans-majuscules`, `--min`, `--symboles`, `--exclure`, `--sans-ambigus`, `--memes-touches`, `--sans-repetition`, `--lettre-en-tete`, `--separateur`, `--majuscule`, `--chiffres`, `--modele`, `--stdout` |
 | `history NOM` | Versions d'un secret, la plus récente en premier | `--version N --champ CHAMP` |
 | `restore NOM` | Sort de la corbeille, ou rétablit une version | `--version N` |
+| `totp NOM` | Copie le code TOTP actuel (double authentification), ou l'écrit sur la sortie standard | `--id`, `--stdout`, `--suivant` (code de la période suivante) |
+| `totp NOM --definir` | Ajoute ou remplace le TOTP d'un secret ; l'adresse `otpauth://` ou la clé base32 est demandée | `--id` |
+| `totp NOM --retirer` | Retire le TOTP d'un secret | `--id` |
+| `totp NOM --creer` | Range un nouveau secret de type code TOTP | `--identifiant`, `--casier`, `--tag` |
 
 Champs : `titre`, `identifiant`, `mot-de-passe`, `notes`.
 
@@ -59,6 +63,29 @@ hirzla settings --verrouillage 300 --presse-papiers 20
 hirzla settings --veille oui --session oui
 hirzla import-kdbx ancienne-base.kdbx
 ```
+
+## Windows Hello, Touch ID, clé de sécurité
+
+```sh
+hirzla methods                     # méthodes du coffre et celles qu'on peut ajouter
+hirzla methods add fido2           # le mot de passe maître est redemandé
+hirzla methods add hello --accepter-risque-classique   # ou touchid : risque post-quantique résiduel accepté
+hirzla unlock --materiel [RANG]    # ouvre le coffre d'un geste
+hirzla methods remove RANG         # la dernière méthode seulement
+```
+
+Voir [Ouvrir avec Windows Hello, Touch ID ou une clé de sécurité](deverrouillage.md).
+
+## Export chiffré d'un casier
+
+```sh
+hirzla casier exporter CASIER FICHIER            # phrase de passe tirée, sur la sortie d'erreur
+hirzla casier exporter CASIER FICHIER --mot-de-passe
+hirzla casier importer FICHIER [--nom NOM]       # crée un nouveau casier
+```
+
+CASIER est un casier du coffre (nom ou début de l'identifiant). Voir
+[Remettre un casier à un collègue](exporter-un-casier.md).
 
 ## Kit de recouvrement
 

@@ -1,5 +1,5 @@
 // @ts-check
-// Generator, settings (display, vault, master password, recovery kit) and import.
+// Generator, settings (display, vault, master password, unlock methods, recovery kit) and import.
 
 import { api } from "./api.js";
 import { announce, byId, h, icon, showError } from "./dom.js";
@@ -26,6 +26,28 @@ const DEFAULT_TARGET = 128;
 const GAUGE_MAX = 256;
 
 const FAMILIES = /** @type {const} */ (["minuscules", "majuscules", "chiffres", "symboles"]);
+
+/** Names of the unlock methods (ADR 0075). */
+/** @type {Record<string, string>} */
+const METHOD_NAMES = {
+  password: "Mot de passe maître",
+  hello: "Windows Hello",
+  touchid: "Touch ID",
+  fido2: "Clé de sécurité FIDO2",
+  recovery: "Kit de recouvrement",
+  tpm: "TPM",
+  unknown: "Méthode inconnue",
+};
+
+/** What the system asks for, by method. */
+/** @type {Record<string, string>} */
+const METHOD_GESTURES = {
+  hello: "Confirmez votre mot de passe maître, puis votre visage, votre empreinte ou votre code PIN Windows Hello.",
+  touchid: "Confirmez votre mot de passe maître, puis posez votre doigt sur Touch ID.",
+  fido2:
+    "Confirmez votre mot de passe maître, branchez votre clé de sécurité, puis touchez-la quand elle clignote. " +
+    "Une clé qui ne gère pas l'extension hmac-secret est refusée.",
+};
 
 /** @param {number} millibits */
 function bits(millibits) {
@@ -377,12 +399,33 @@ export class SettingsView {
     byId("import-csv").addEventListener("click", () => void this.importCsv());
     byId("import-kdbx").addEventListener("click", () => this.openKdbx());
     byId("kdbx-choisir").addEventListener("click", () => void this.chooseKdbx());
+    byId("kdbx-cle-choisir").addEventListener("click", () => void this.chooseKdbxKey());
+    byId("kdbx-cle-retirer").addEventListener("click", () => void this.clearKdbxKey());
     byId("form-kdbx").addEventListener("submit", (e) => {
       e.preventDefault();
       void this.importKdbx();
     });
     byId("dialogue-kdbx").addEventListener("close", () => {
       /** @type {HTMLInputElement} */ (byId("kdbx-mdp")).value = "";
+    });
+    for (const r of document.querySelectorAll('input[name="export-mode"]')) {
+      r.addEventListener("change", () => {
+        byId("export-choisi").hidden = !this.exportChosen();
+      });
+    }
+    byId("form-export").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.exportLocker();
+    });
+    byId("export-copier").addEventListener("click", () => void this.copyExportPassword());
+    byId("import-export").addEventListener("click", () => this.openImportExport());
+    byId("import-export-choisir").addEventListener("click", () => void this.chooseExportFile());
+    byId("form-import-export").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.importLocker();
+    });
+    byId("dialogue-import-export").addEventListener("close", () => {
+      /** @type {HTMLInputElement} */ (byId("import-export-mdp")).value = "";
     });
     byId("reglage-zone").addEventListener("change", () => void this.saveTray());
     byId("reglage-saisie-tout").addEventListener("click", () => void this.forgetTrusted(null));
@@ -401,6 +444,191 @@ export class SettingsView {
     byId("recouvrement-retirer").addEventListener("click", () => void this.removeKit());
     /** @type {import("./api.js").RecoveryKit | null} */
     this.kit = null;
+    byId("form-methode").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.addMethod();
+    });
+    byId("dialogue-methode").addEventListener("close", () => this.wipeMethodDialog());
+    /** @type {import("./api.js").MethodKind | null} */
+    this.adding = null;
+    // Windows Hello and Touch ID: off until the user accepts their risk (ADR 0075 § 4).
+    this.classicalAllowed = false;
+    /** @type {import("./api.js").UnlockMethods | null} */
+    this.lastMethods = null;
+    byId("reglage-classiques").addEventListener("change", () => void this.toggleClassical());
+    byId("classiques-compris").addEventListener("change", () => {
+      /** @type {HTMLButtonElement} */ (byId("classiques-autoriser")).disabled =
+        !(/** @type {HTMLInputElement} */ (byId("classiques-compris")).checked);
+    });
+    byId("form-classiques").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.allowClassical();
+    });
+    byId("dialogue-classiques").addEventListener("close", () => {
+      /** @type {HTMLInputElement} */ (byId("classiques-compris")).checked = false;
+      /** @type {HTMLButtonElement} */ (byId("classiques-autoriser")).disabled = true;
+      /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+    });
+  }
+
+  /** Reads the unlock methods of the vault. */
+  async loadMethods() {
+    showError(byId("methodes-erreur"), null);
+    try {
+      const [methods, allowed] = await Promise.all([api.unlockMethods(), api.classicalUnlock()]);
+      this.classicalAllowed = allowed;
+      this.renderMethods(methods);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("methodes-erreur"), err.message);
+    }
+  }
+
+  /** @param {import("./api.js").UnlockMethods} m */
+  renderMethods(m) {
+    this.lastMethods = m;
+    const last = m.methods[m.methods.length - 1];
+    const classical = (/** @type {string} */ k) => k === "hello" || k === "touchid";
+    const hardware = (/** @type {string} */ k) => k === "hello" || k === "touchid" || k === "fido2";
+    byId("methodes-liste").replaceChildren(
+      ...m.methods.map((method) => {
+        const notes = [];
+        if (hardware(method.kind) && !method.usable) notes.push("indisponible sur ce poste");
+        if (method.needs_pin) notes.push("code PIN");
+        const label = h("span", {
+          text: METHOD_NAMES[method.kind] + (notes.length ? ` (${notes.join(", ")})` : ""),
+        });
+        const row = h("li", { class: "ligne-application" }, [label]);
+        if (hardware(method.kind) && method === last) {
+          const remove = h("button", { class: "bouton bouton-secondaire bouton-petit bouton-danger", type: "button", text: "Retirer" });
+          remove.addEventListener("click", () => void this.removeMethod(method));
+          row.append(remove);
+        }
+        return row;
+      }),
+    );
+    // The toggle shows where Windows Hello or Touch ID can be added, or once turned on.
+    byId("methodes-classiques").hidden = !this.classicalAllowed && !m.enrollable.some(classical);
+    /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+    const offered = m.enrollable.filter((k) => this.classicalAllowed || !classical(k));
+    byId("methodes-ajouter").replaceChildren(
+      ...offered.map((kind) => {
+        const b = h("button", { class: "bouton bouton-secondaire", type: "button", text: `Ajouter ${METHOD_NAMES[kind]}…` });
+        b.addEventListener("click", () => this.openMethodDialog(kind));
+        return b;
+      }),
+    );
+    byId("methodes-aucune").hidden = m.enrollable.length > 0;
+  }
+
+  /** Turning on asks for the warning first; turning off needs nothing. */
+  async toggleClassical() {
+    const toggle = /** @type {HTMLInputElement} */ (byId("reglage-classiques"));
+    if (toggle.checked) {
+      toggle.checked = false;
+      showError(byId("classiques-erreur"), null);
+      /** @type {HTMLDialogElement} */ (byId("dialogue-classiques")).showModal();
+      byId("classiques-compris").focus();
+      return;
+    }
+    await this.saveClassical(false, byId("methodes-erreur"));
+  }
+
+  async allowClassical() {
+    if (!(/** @type {HTMLInputElement} */ (byId("classiques-compris")).checked)) return;
+    if (await this.saveClassical(true, byId("classiques-erreur"))) {
+      /** @type {HTMLDialogElement} */ (byId("dialogue-classiques")).close();
+      announce("Windows Hello et Touch ID peuvent être ajoutés sur ce poste.", 6000);
+    }
+  }
+
+  /**
+   * @param {boolean} allowed
+   * @param {HTMLElement} error
+   * @returns {Promise<boolean>}
+   */
+  async saveClassical(allowed, error) {
+    try {
+      this.classicalAllowed = await api.setClassicalUnlock(allowed);
+      if (this.lastMethods) this.renderMethods(this.lastMethods);
+      return true;
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(error, err.message);
+      /** @type {HTMLInputElement} */ (byId("reglage-classiques")).checked = this.classicalAllowed;
+      return false;
+    }
+  }
+
+  /** @param {import("./api.js").MethodKind} kind */
+  openMethodDialog(kind) {
+    this.adding = kind;
+    this.wipeMethodDialog();
+    byId("methode-titre").textContent = `Ajouter ${METHOD_NAMES[kind]}`;
+    byId("methode-texte").textContent = METHOD_GESTURES[kind] ?? "";
+    showError(byId("methode-erreur"), null);
+    /** @type {HTMLDialogElement} */ (byId("dialogue-methode")).showModal();
+    byId("methode-mdp").focus();
+  }
+
+  wipeMethodDialog() {
+    /** @type {HTMLInputElement} */ (byId("methode-mdp")).value = "";
+    /** @type {HTMLInputElement} */ (byId("methode-pin")).value = "";
+    byId("methode-pin-champ").hidden = true;
+  }
+
+  async addMethod() {
+    const kind = this.adding;
+    if (!kind) return;
+    const pw = /** @type {HTMLInputElement} */ (byId("methode-mdp"));
+    const pin = /** @type {HTMLInputElement} */ (byId("methode-pin"));
+    const error = byId("methode-erreur");
+    const button = /** @type {HTMLButtonElement} */ (byId("methode-ajouter"));
+    if (!pw.value) {
+      showError(error, "Saisissez votre mot de passe maître.");
+      pw.focus();
+      return;
+    }
+    button.disabled = true;
+    button.textContent = "Suivez la demande du système…";
+    showError(error, null);
+    try {
+      await api.enrollMethod(kind, pw.value, pin.value || null);
+      /** @type {HTMLDialogElement} */ (byId("dialogue-methode")).close();
+      announce(`${METHOD_NAMES[kind]} ajouté. Le mot de passe maître reste valable.`, 6000);
+      await this.loadMethods();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "pin_required") {
+        byId("methode-pin-champ").hidden = false;
+        showError(error, err.message);
+        pin.value = "";
+        pin.focus();
+      } else if (!this.onError(err)) {
+        showError(error, err.message);
+      }
+    } finally {
+      button.disabled = false;
+      button.textContent = "Ajouter";
+    }
+  }
+
+  /** @param {import("./api.js").UnlockMethod} method */
+  async removeMethod(method) {
+    const ok = await confirmDialog(
+      `Retirer ${METHOD_NAMES[method.kind]} ?`,
+      "Cette méthode n'ouvrira plus le coffre. Le mot de passe maître reste valable.",
+      "Retirer",
+    );
+    if (!ok) return;
+    try {
+      await api.removeMethod(method.rank);
+      announce(`${METHOD_NAMES[method.kind]} retiré.`);
+      await this.loadMethods();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("methodes-erreur"), err.message);
+    }
   }
 
   /** @param {import("./api.js").LocalPreferences} p */
@@ -468,18 +696,171 @@ export class SettingsView {
       /** @type {HTMLInputElement} */ (byId("reglage-veille")).checked = s.lock_on_sleep;
       /** @type {HTMLInputElement} */ (byId("reglage-session")).checked = s.lock_on_session_lock;
       this.renderKit(await api.recoveryStatus());
+      await this.loadMethods();
+      this.renderLockers((await api.list("", false)).lockers);
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("reglages-coffre-erreur"), err.message);
     }
   }
 
+  /**
+   * The lockers of the vault, for the export.
+   * @param {import("./api.js").Locker[]} lockers
+   */
+  renderLockers(lockers) {
+    const select = /** @type {HTMLSelectElement} */ (byId("export-casier"));
+    const kept = select.value;
+    select.replaceChildren(...lockers.map((l) => h("option", { value: l.id, text: l.name })));
+    if (lockers.some((l) => l.id === kept)) select.value = kept;
+    /** @type {HTMLButtonElement} */ (byId("export-lancer")).disabled = lockers.length === 0;
+  }
+
+  /** @returns {boolean} The user chooses the password of the export. */
+  exportChosen() {
+    const r = /** @type {HTMLInputElement | null} */ (document.querySelector('input[name="export-mode"]:checked'));
+    return r?.value === "choisi";
+  }
+
+  /** Hides the result of the last export, and its passphrase. */
+  clearExportResult() {
+    byId("export-phrase").textContent = "";
+    byId("export-phrase-bloc").hidden = true;
+    byId("export-compte").textContent = "";
+    byId("export-resultat").hidden = true;
+  }
+
+  async exportLocker() {
+    const select = /** @type {HTMLSelectElement} */ (byId("export-casier"));
+    const pw = /** @type {HTMLInputElement} */ (byId("export-mdp"));
+    const confirmation = /** @type {HTMLInputElement} */ (byId("export-confirmation"));
+    const button = /** @type {HTMLButtonElement} */ (byId("export-lancer"));
+    const error = byId("export-erreur");
+    showError(error, null);
+    this.clearExportResult();
+    if (!select.value) return;
+    /** @type {string | null} */
+    let password = null;
+    if (this.exportChosen()) {
+      if (pw.value !== confirmation.value) {
+        showError(error, "Les deux saisies du mot de passe diffèrent.");
+        return;
+      }
+      password = pw.value;
+    }
+    const name = select.selectedOptions[0]?.textContent ?? "";
+    button.disabled = true;
+    button.textContent = "Chiffrement…";
+    try {
+      const r = await api.exportLocker(select.value, name, password);
+      pw.value = "";
+      confirmation.value = "";
+      /** @type {string[]} */
+      const parts = [`Export écrit : ${r.file}. ${r.secrets} secret(s), ${r.attachments} pièce(s) jointe(s).`];
+      if (r.trashed) parts.push(`${r.trashed} secret(s) de la corbeille non exporté(s).`);
+      if (r.links_dropped) parts.push(`${r.links_dropped} lien(s) vers un autre casier retiré(s).`);
+      byId("export-compte").textContent = parts.join(" ");
+      if (r.password) {
+        byId("export-phrase").textContent = r.password;
+        byId("export-phrase-bloc").hidden = false;
+      }
+      byId("export-resultat").hidden = false;
+      announce("Export chiffré écrit.");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(error, err.message);
+    } finally {
+      button.disabled = false;
+      button.textContent = "Exporter…";
+    }
+  }
+
+  async copyExportPassword() {
+    try {
+      const s = await api.copyExportPassword();
+      announce(`Phrase de passe copiée. Le presse-papiers sera effacé dans ${s} s.`);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (!this.onError(err)) showError(byId("export-erreur"), err.message);
+    }
+  }
+
+  openImportExport() {
+    showError(byId("import-export-erreur"), null);
+    byId("import-export-fichier").textContent = "";
+    /** @type {HTMLInputElement} */ (byId("import-export-nom")).value = "";
+    /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = true;
+    /** @type {HTMLDialogElement} */ (byId("dialogue-import-export")).showModal();
+    byId("import-export-choisir").focus();
+  }
+
+  async chooseExportFile() {
+    showError(byId("import-export-erreur"), null);
+    try {
+      byId("import-export-fichier").textContent = await api.chooseExportFile();
+      /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = false;
+      byId("import-export-mdp").focus();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("import-export-erreur"), err.message);
+    }
+  }
+
+  async importLocker() {
+    const pw = /** @type {HTMLInputElement} */ (byId("import-export-mdp"));
+    const name = /** @type {HTMLInputElement} */ (byId("import-export-nom"));
+    const button = /** @type {HTMLButtonElement} */ (byId("import-export-importer"));
+    const error = byId("import-export-erreur");
+    showError(error, null);
+    button.disabled = true;
+    button.textContent = "Import…";
+    try {
+      const r = await api.importLocker(pw.value, name.value.trim() || null);
+      pw.value = "";
+      /** @type {HTMLDialogElement} */ (byId("dialogue-import-export")).close();
+      /** @type {string[]} */
+      const lines = [`Nouveau casier créé : ${r.secrets} secret(s), ${r.attachments} pièce(s) jointe(s).`];
+      if (r.folders) lines.push(`${r.folders} dossier(s) recréé(s).`);
+      if (r.refused) lines.push(`${r.refused} élément(s) non repris (étiquette trop longue ou trop nombreuses).`);
+      const box = byId("import-resultat");
+      box.replaceChildren(...lines.map((t) => h("p", { text: t })));
+      box.hidden = false;
+      this.onImported();
+      this.renderLockers((await api.list("", false)).lockers);
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      pw.value = "";
+      if (!this.onError(err)) {
+        showError(error, err.message);
+        pw.focus();
+      }
+    } finally {
+      button.disabled = !byId("import-export-fichier").textContent;
+      button.textContent = "Importer";
+    }
+  }
+
   /** Forgets what the settings view holds: called when the vault locks. */
   wipe() {
-    for (const id of ["mdp-actuel", "mdp-nouveau", "mdp-confirmation", "kdbx-mdp"]) {
+    for (const id of [
+      "mdp-actuel",
+      "mdp-nouveau",
+      "mdp-confirmation",
+      "kdbx-mdp",
+      "export-mdp",
+      "export-confirmation",
+      "import-export-mdp",
+      "import-export-nom",
+    ]) {
       /** @type {HTMLInputElement} */ (byId(id)).value = "";
     }
+    this.clearExportResult();
+    byId("import-export-fichier").textContent = "";
+    /** @type {HTMLButtonElement} */ (byId("import-export-importer")).disabled = true;
     byId("recouvrement-resultat").hidden = true;
+    this.wipeMethodDialog();
     byId("kdbx-fichier").textContent = "";
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
   }
@@ -640,6 +1021,7 @@ export class SettingsView {
   openKdbx() {
     showError(byId("kdbx-erreur"), null);
     byId("kdbx-fichier").textContent = "";
+    this.showKdbxKey("");
     /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = true;
     /** @type {HTMLDialogElement} */ (byId("dialogue-kdbx")).showModal();
     byId("kdbx-choisir").focus();
@@ -650,11 +1032,41 @@ export class SettingsView {
     try {
       const name = await api.chooseKdbxFile();
       byId("kdbx-fichier").textContent = name;
+      // The core forgets the key file of another database.
+      this.showKdbxKey("");
       /** @type {HTMLButtonElement} */ (byId("kdbx-importer")).disabled = false;
       byId("kdbx-mdp").focus();
     } catch (e) {
       const err = /** @type {import("./api.js").ApiError} */ (e);
       if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
+    }
+  }
+
+  /** @param {string} name */
+  showKdbxKey(name) {
+    byId("kdbx-cle").textContent = name;
+    byId("kdbx-cle-retirer").hidden = !name;
+  }
+
+  async chooseKdbxKey() {
+    showError(byId("kdbx-erreur"), null);
+    try {
+      this.showKdbxKey(await api.chooseKdbxKeyFile());
+      byId("kdbx-mdp").focus();
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
+      if (err.code === "cancelled") return;
+      if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
+    }
+  }
+
+  async clearKdbxKey() {
+    try {
+      await api.clearKdbxKeyFile();
+      this.showKdbxKey("");
+    } catch (e) {
+      const err = /** @type {import("./api.js").ApiError} */ (e);
       if (!this.onError(err)) showError(byId("kdbx-erreur"), err.message);
     }
   }
@@ -676,13 +1088,13 @@ export class SettingsView {
       ];
       /** @type {[number, string][]} */
       const notes = [
-        [r.empty, "entrée(s) vide(s) ignorée(s) (ni mot de passe ni notes)."],
+        [r.empty, "entrée(s) vide(s) ignorée(s) (titre seul : ni identifiant, mot de passe, adresse, notes, champ ni pièce jointe)."],
         [r.recycled, "entrée(s) de la corbeille KeePass ignorée(s)."],
         [r.refused, "entrée(s) refusée(s) par le coffre (valeur trop longue ou non permise)."],
-        [r.attachments, "pièce(s) jointe(s) non importée(s)."],
+        [r.attachments, "pièce(s) jointe(s) non importée(s) (plus de 100 Mio, nom trop long ou au-delà de 64 par entrée)."],
         [r.history, "version(s) antérieure(s) d'entrées non importée(s)."],
         [r.custom_skipped, "champ(s) personnalisé(s) au-delà des limites du coffre, non importé(s)."],
-        [r.totp, "configuration(s) TOTP non importée(s) : ce type arrive dans une prochaine version."],
+        [r.totp, "configuration(s) TOTP non convertible(s) (HOTP, Steam, hors limites…) gardée(s) telle(s) quelle(s) dans un champ masqué."],
       ];
       for (const [n, text] of notes) if (n) lines.push(`${n} ${text}`);
       const box = byId("import-resultat");

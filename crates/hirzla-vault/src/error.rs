@@ -40,6 +40,28 @@ pub enum VaultError {
     /// A KeePass (KDBX) database could not be read for import.
     #[error("KeePass database refused")]
     Kdbx(KdbxRefusal),
+    /// An encrypted locker export could not be written or read (ADR 0077).
+    #[error("locker export refused")]
+    Export(ExportRefusal),
+}
+
+/// Why a locker export was refused (ADR 0077). Says no more than needed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExportRefusal {
+    /// Not an export file (no magic).
+    NotExport,
+    /// An export of a version this build does not read.
+    Unsupported,
+    /// The password is wrong, or the manifest was altered (the cause is not given).
+    WrongKey,
+    /// The file is malformed, was altered after its manifest, or carries a secret the vault
+    /// would refuse.
+    Malformed,
+    /// A size exceeds the bounds of the format.
+    TooLarge,
+    /// The export password chosen by the user is below the floor.
+    WeakPassword,
 }
 
 /// Why a KeePass database was refused by the import (ADR 0025). Says no more than needed.
@@ -48,10 +70,11 @@ pub enum VaultError {
 pub enum KdbxRefusal {
     /// Not a KeePass database (no KeePass signature).
     NotKdbx,
-    /// A KeePass database this reader does not handle (KDBX 3, AES-KDF, Twofish, Salsa20,
-    /// key file, unknown field).
+    /// A KeePass database this reader does not handle (KDBX 2 or earlier, Twofish, ArcFour
+    /// inner stream, cost beyond the bounds, unknown field).
     Unsupported,
-    /// The password is wrong, or the header was altered (the cause is not given).
+    /// The password or key file is wrong, or the header was altered (the cause is not
+    /// given).
     WrongKey,
     /// The database is malformed or was altered after its header.
     Malformed,

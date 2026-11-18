@@ -28,6 +28,7 @@
     <symbol id="i-totp" viewBox="0 0 24 24"><path d="M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16zM12 8v4l3 2"/></symbol>
     <symbol id="i-secret" viewBox="0 0 24 24"><path d="M6 11h12v9H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3"/></symbol>
     <symbol id="i-casier" viewBox="0 0 24 24"><path d="M4 8l8-4 8 4v8l-8 4-8-4zM4 8l8 4 8-4M12 12v8"/></symbol>
+    <symbol id="i-dossier" viewBox="0 0 24 24"><path d="M3 6h7l2 2h9v11H3z"/></symbol>
     <symbol id="i-generateur" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9M20 4v4h-4"/></symbol>
     <symbol id="i-serveur" viewBox="0 0 24 24"><path d="M4 4h16v6H4zM4 14h16v6H4zM7.5 7h.01M7.5 17h.01"/></symbol>
     <symbol id="i-reglages" viewBox="0 0 24 24"><path d="M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1"/></symbol>
@@ -102,6 +103,16 @@
       </div>
       <p class="etat etat-scelle"><span class="forme forme-carre" aria-hidden="true"></span>Le coffre est verrouillé.</p>
       <h1 class="titre-ecran" tabindex="-1">Ouvrir le coffre</h1>
+      <!-- Hardware method first, when one is usable on this workstation (ADR 0075). -->
+      <div id="deverrouillage-materiel" hidden>
+        <label id="deverrouillage-pin-champ" class="champ" hidden>
+          <span class="champ-libelle">Code PIN de la clé de sécurité</span>
+          <input id="deverrouillage-pin" class="saisie saisie-mono" type="password" autocomplete="off"
+                 spellcheck="false" maxlength="63">
+        </label>
+        <button id="deverrouillage-materiel-bouton" class="bouton bouton-principal bouton-large" type="button">Ouvrir avec Windows Hello</button>
+        <p class="texte-secondaire separateur-ou">ou avec le mot de passe maître</p>
+      </div>
       <label class="champ">
         <span class="champ-libelle">Mot de passe maître</span>
         <span class="saisie-groupe">
@@ -190,6 +201,15 @@
           <p id="liste-casier-role" class="texte-secondaire"></p>
           <button id="liste-membres" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-membres"/></svg>Membres et rôles</button>
         </div>
+        <div id="liste-dossier" class="entete-casier entete-dossier" hidden>
+          <p id="liste-dossier-chemin" class="texte-secondaire"></p>
+          <div class="ligne-actions">
+            <button id="dossier-nouveau" class="bouton bouton-secondaire bouton-petit" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-plus"/></svg>Nouveau dossier</button>
+            <button id="dossier-renommer" class="bouton bouton-secondaire bouton-petit" type="button">Renommer</button>
+            <button id="dossier-deplacer" class="bouton bouton-secondaire bouton-petit" type="button">Déplacer…</button>
+            <button id="dossier-supprimer" class="bouton bouton-secondaire bouton-petit" type="button">Supprimer…</button>
+          </div>
+        </div>
         <ul id="liste-secrets" class="liste-secrets" role="listbox" aria-labelledby="liste-titre" tabindex="0"></ul>
         <p id="liste-vide" class="vide" hidden></p>
       </section>
@@ -212,6 +232,7 @@
               <details id="fiche-menu" class="menu">
                 <summary class="bouton bouton-icone" aria-label="Autres actions"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-menu"/></svg></summary>
                 <div class="menu-liste">
+                  <button id="fiche-deplacer" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-dossier"/></svg>Déplacer…</button>
                   <button id="fiche-historique" class="menu-action" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-historique"/></svg>Historique</button>
                   <button id="fiche-supprimer" class="menu-action menu-danger" type="button"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-corbeille"/></svg><span id="fiche-supprimer-texte">Mettre à la corbeille</span></button>
                 </div>
@@ -732,6 +753,27 @@
         <p class="aide">Le noyau rescelle la clé du coffre sous le nouveau mot de passe ; vos secrets ne sont pas
           rechiffrés. L'ancien mot de passe n'ouvre plus le coffre.</p>
       </section>
+      <section class="carte" aria-labelledby="reglages-methodes">
+        <h2 id="reglages-methodes" class="titre-carte">Déverrouillage</h2>
+        <p class="texte-secondaire">Ouvrez le coffre avec Windows Hello, Touch ID ou une clé de sécurité FIDO2, sans
+          saisir le mot de passe maître. Le mot de passe maître reste toujours valable : gardez-le.</p>
+        <ul id="methodes-liste" class="liste-simple"></ul>
+        <div id="methodes-classiques" hidden>
+          <label class="case"><input type="checkbox" id="reglage-classiques" aria-describedby="reglage-classiques-aide">
+            Autoriser Windows Hello / Touch ID</label>
+          <p id="reglage-classiques-aide" class="aide">Désactivés par défaut : ces méthodes du système reposent sur une
+            cryptographie classique. Une méthode déjà ajoutée ouvre toujours le coffre.</p>
+        </div>
+        <div id="methodes-ajouter" class="ligne-actions"></div>
+        <p id="methodes-aucune" class="encadre" role="status" hidden>Aucune méthode matérielle n'est disponible sur ce
+          poste.</p>
+        <div id="methodes-erreur" class="alerte" role="alert" hidden>
+          <span class="forme forme-triangle" aria-hidden="true"></span>
+          <p></p>
+        </div>
+        <p class="aide">La clé matérielle ne quitte jamais l'appareil ; le coffre n'en garde qu'une référence publique.
+          Seule la dernière méthode de la liste peut être retirée.</p>
+      </section>
       <section class="carte" aria-labelledby="reglages-recouvrement">
         <h2 id="reglages-recouvrement" class="titre-carte">Kit de recouvrement</h2>
         <p class="texte-secondaire">Le kit partage une clé de secours en plusieurs parts : il en faut un nombre choisi
@@ -776,10 +818,61 @@
         <div class="ligne-actions">
           <button id="import-csv" class="bouton bouton-secondaire" type="button">Importer un fichier CSV…</button>
           <button id="import-kdbx" class="bouton bouton-secondaire" type="button">Importer depuis KeePass (KDBX)…</button>
+          <button id="import-export" class="bouton bouton-secondaire" type="button">Importer un export de casier…</button>
         </div>
         <p class="aide">CSV reconnus : KeePass, KeePassXC, Bitwarden, Firefox, Chrome et les tableurs dont la
           première ligne nomme les colonnes (titre, identifiant, mot de passe, URL, notes, groupe).</p>
         <div id="import-resultat" class="encadre" role="status" hidden></div>
+      </section>
+      <section class="carte" aria-labelledby="reglages-export">
+        <h2 id="reglages-export" class="titre-carte">Export chiffré d'un casier</h2>
+        <p class="texte-secondaire">Une copie chiffrée d'un casier de ce coffre, à remettre à un collègue qui
+          l'importe dans son propre coffre, sans serveur. Le noyau scelle le fichier ; la corbeille et l'historique
+          ne sont pas exportés.</p>
+        <form id="form-export" novalidate>
+          <label class="champ">
+            <span class="champ-libelle">Casier</span>
+            <select id="export-casier" class="saisie"></select>
+          </label>
+          <fieldset class="cases">
+            <legend class="champ-libelle">Mot de passe de l'export</legend>
+            <label class="case"><input type="radio" name="export-mode" value="tire" checked> Phrase de passe tirée
+              par Hirzla (huit mots, recommandé)</label>
+            <label class="case"><input type="radio" name="export-mode" value="choisi"> Mot de passe choisi</label>
+          </fieldset>
+          <div id="export-choisi" hidden>
+            <label class="champ">
+              <span class="champ-libelle">Mot de passe (16 caractères au moins)</span>
+              <input id="export-mdp" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                     spellcheck="false" minlength="16" maxlength="1024">
+            </label>
+            <label class="champ">
+              <span class="champ-libelle">Confirmation</span>
+              <input id="export-confirmation" class="saisie saisie-mono" type="password" autocomplete="new-password"
+                     spellcheck="false" minlength="16" maxlength="1024">
+            </label>
+          </div>
+          <p class="aide">Transmettez le mot de passe par un autre canal que le fichier : quiconque détient les deux
+            lit tout le casier. Le fichier ne se révoque pas : retirer plus tard l'accès à un collègue ne lui reprend
+            pas sa copie. Elle ne se synchronise pas : les changements faits ensuite n'y figurent pas.</p>
+          <div id="export-erreur" class="alerte" role="alert" hidden>
+            <span class="forme forme-triangle" aria-hidden="true"></span>
+            <p></p>
+          </div>
+          <div class="ligne-actions">
+            <button id="export-lancer" class="bouton bouton-principal" type="submit">Exporter…</button>
+          </div>
+        </form>
+        <div id="export-resultat" class="encadre" role="status" hidden>
+          <p id="export-compte"></p>
+          <div id="export-phrase-bloc" hidden>
+            <p>Phrase de passe de l'export, affichée une seule fois :</p>
+            <p id="export-phrase" class="mono"></p>
+            <div class="ligne-actions">
+              <button id="export-copier" class="bouton bouton-secondaire" type="button">Copier</button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -795,6 +888,7 @@
         <label class="case"><input type="radio" name="secret-type" value="ssh"> Connexion SSH</label>
         <label class="case"><input type="radio" name="secret-type" value="rdp"> Connexion RDP</label>
         <label class="case"><input type="radio" name="secret-type" value="ssh_key"> Clé SSH</label>
+        <label class="case"><input type="radio" name="secret-type" value="totp"> Code TOTP</label>
       </fieldset>
       <label class="champ">
         <span class="champ-libelle">Titre</span>
@@ -828,7 +922,7 @@
         <span class="champ-libelle">Phrase de passe de la clé (si elle en a une)</span>
         <input id="secret-phrase" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
-      <label class="champ" data-pour="password ssh rdp ssh_key">
+      <label class="champ" data-pour="password ssh rdp ssh_key totp">
         <span class="champ-libelle">Identifiant</span>
         <input id="secret-identifiant" class="saisie saisie-mono" type="text" maxlength="4096" autocomplete="off" spellcheck="false">
       </label>
@@ -844,6 +938,14 @@
           <button id="secret-mdp-generer" class="bouton bouton-secondaire" type="button">Générer</button>
         </div>
         <p id="secret-mdp-aide" class="aide" hidden>Laissez vide pour garder le mot de passe actuel.</p>
+        <label id="secret-mdp-effacer-case" class="case" hidden><input type="checkbox" id="secret-mdp-effacer"> Effacer le mot de passe actuel</label>
+      </div>
+      <div class="champ" data-pour="password totp">
+        <label class="champ-libelle" for="secret-totp" id="secret-totp-libelle">Double authentification (TOTP)</label>
+        <input id="secret-totp" class="saisie saisie-mono" type="password" maxlength="4096" autocomplete="off" spellcheck="false" aria-describedby="secret-totp-explication">
+        <p id="secret-totp-explication" class="aide">Collez l'adresse « otpauth://totp/… » donnée par le site (souvent sous le QR code, « saisie manuelle »), ou sa clé secrète en base32. Hirzla calcule ensuite le code ; la clé reste scellée.</p>
+        <p id="secret-totp-aide" class="aide" hidden>Laissez vide pour garder le TOTP actuel.</p>
+        <label id="secret-totp-effacer-case" class="case" hidden><input type="checkbox" id="secret-totp-effacer"> Retirer le TOTP actuel</label>
       </div>
       <label class="champ" data-pour="ssh">
         <span class="champ-libelle">Clé SSH du coffre</span>
@@ -866,12 +968,13 @@
         <span class="champ-libelle">Étiquettes (séparées par des virgules)</span>
         <input id="secret-etiquettes" class="saisie" type="text" maxlength="2048" autocomplete="off">
       </label>
-      <label class="champ" data-pour="password note ssh rdp">
+      <label class="champ" data-pour="password note ssh rdp totp">
         <span class="champ-libelle">Notes</span>
         <textarea id="secret-notes" class="saisie" rows="3" maxlength="65536"></textarea>
       </label>
       <p id="secret-notes-aide" class="aide" hidden>Laissez vide pour garder la note actuelle.</p>
-      <label class="case" data-pour="password note ssh rdp"><input type="checkbox" id="secret-favori"> Favori</label>
+      <label id="secret-notes-effacer-case" class="case" hidden><input type="checkbox" id="secret-notes-effacer"> Effacer les notes actuelles</label>
+      <label class="case" data-pour="password note ssh rdp totp"><input type="checkbox" id="secret-favori"> Favori</label>
       <div id="secret-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -895,13 +998,38 @@
     </form>
   </dialog>
 
+  <!-- Folder actions (ADR 0076): a name, a destination, or both. -->
+  <dialog id="dialogue-dossier" class="dialogue dialogue-etroit" aria-labelledby="dossier-titre" aria-describedby="dossier-texte">
+    <form id="form-dossier" method="dialog" novalidate>
+      <h2 id="dossier-titre" class="titre-carte"></h2>
+      <p id="dossier-texte" class="texte-secondaire"></p>
+      <label id="dossier-champ-nom" class="champ">
+        <span class="champ-libelle">Nom du dossier</span>
+        <input id="dossier-nom" class="saisie" type="text" maxlength="255" autocomplete="off" spellcheck="false">
+      </label>
+      <label id="dossier-champ-destination" class="champ">
+        <span class="champ-libelle">Destination</span>
+        <select id="dossier-destination" class="saisie"></select>
+      </label>
+      <div id="dossier-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="dossier-valider" class="bouton bouton-principal" type="submit"></button>
+      </div>
+    </form>
+  </dialog>
+
   <!-- KeePass import (ADR 0025): the file is chosen by the application, read by the core. -->
   <dialog id="dialogue-kdbx" class="dialogue dialogue-etroit" aria-labelledby="kdbx-titre">
     <form id="form-kdbx" method="dialog" novalidate>
       <h2 id="kdbx-titre" class="titre-carte">Importer depuis KeePass (KDBX)</h2>
-      <p class="texte-secondaire">Bases KDBX 4 (KeePass 2.35 et suivants, KeePassXC) protégées par un mot de passe
-        seul, chiffrées en AES-256 ou ChaCha20 avec Argon2. Le noyau lit la base et crée les entrées dans votre
-        casier personnel.</p>
+      <p class="texte-secondaire">Bases KDBX 3.1 et 4 (KeePass 2, KeePassXC) protégées par un mot de passe,
+        chiffrées en AES-256 ou ChaCha20 (AES-KDF ou Argon2). Le noyau lit la base et crée les entrées dans votre
+        casier personnel, avec leurs pièces jointes. Une base protégée aussi, ou seulement, par un fichier clé
+        s'ouvre avec ce fichier ; seul son chemin est transmis au noyau, qui le lit.</p>
       <div class="ligne-actions">
         <button id="kdbx-choisir" class="bouton bouton-secondaire" type="button">Choisir la base…</button>
         <span id="kdbx-fichier" class="mono"></span>
@@ -911,8 +1039,13 @@
         <input id="kdbx-mdp" class="saisie saisie-mono" type="password" autocomplete="off" spellcheck="false"
                maxlength="1024">
       </label>
-      <p class="aide">Les pièces jointes, l'historique des entrées et les codes TOTP ne sont pas importés ;
-        le compte rendu les signale.</p>
+      <div class="ligne-actions">
+        <button id="kdbx-cle-choisir" class="bouton bouton-secondaire" type="button">Fichier clé…</button>
+        <span id="kdbx-cle" class="mono"></span>
+        <button id="kdbx-cle-retirer" class="bouton bouton-secondaire" type="button" hidden>Retirer</button>
+      </div>
+      <p class="aide">Avec un fichier clé, laissez le mot de passe vide si la base n'en a pas. L'historique des
+        entrées n'est pas importé ; le compte rendu signale ce qui n'a pas pu l'être.</p>
       <div id="kdbx-erreur" class="alerte" role="alert" hidden>
         <span class="forme forme-triangle" aria-hidden="true"></span>
         <p></p>
@@ -920,6 +1053,37 @@
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
         <button id="kdbx-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Import of a locker export (ADR 0077): the file is chosen by the application, read by the core. -->
+  <dialog id="dialogue-import-export" class="dialogue dialogue-etroit" aria-labelledby="import-export-titre">
+    <form id="form-import-export" method="dialog" novalidate>
+      <h2 id="import-export-titre" class="titre-carte">Importer un export de casier</h2>
+      <p class="texte-secondaire">Le noyau vérifie le fichier entier, puis crée un nouveau casier dans votre coffre
+        avec de nouvelles clés. Rien n'est fusionné avec vos casiers existants.</p>
+      <div class="ligne-actions">
+        <button id="import-export-choisir" class="bouton bouton-secondaire" type="button">Choisir le fichier…</button>
+        <span id="import-export-fichier" class="mono"></span>
+      </div>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe de l'export</span>
+        <input id="import-export-mdp" class="saisie saisie-mono" type="password" autocomplete="off"
+               spellcheck="false" maxlength="1024">
+      </label>
+      <label class="champ">
+        <span class="champ-libelle">Nom du nouveau casier (facultatif)</span>
+        <input id="import-export-nom" class="saisie" type="text" autocomplete="off" maxlength="256"
+               placeholder="Celui de l'export">
+      </label>
+      <div id="import-export-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="import-export-importer" class="bouton bouton-principal" type="submit" disabled>Importer</button>
       </div>
     </form>
   </dialog>
@@ -1159,6 +1323,59 @@
       <ol id="historique-liste" class="versions"></ol>
       <div class="ligne-actions ligne-actions-fin">
         <button class="bouton bouton-principal" value="ok">Fermer</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Add a hardware unlock method (ADR 0075): the master password is asked again. -->
+  <dialog id="dialogue-methode" class="dialogue dialogue-etroit" aria-labelledby="methode-titre">
+    <form id="form-methode" method="dialog" novalidate>
+      <h2 id="methode-titre" class="titre-carte">Ajouter une méthode de déverrouillage</h2>
+      <p id="methode-texte" class="texte-secondaire">Confirmez votre mot de passe maître, puis suivez la demande du
+        système.</p>
+      <label class="champ">
+        <span class="champ-libelle">Mot de passe maître</span>
+        <input id="methode-mdp" class="saisie saisie-mono" type="password" autocomplete="current-password"
+               spellcheck="false" maxlength="1024">
+      </label>
+      <label id="methode-pin-champ" class="champ" hidden>
+        <span class="champ-libelle">Code PIN de la clé de sécurité</span>
+        <input id="methode-pin" class="saisie saisie-mono" type="password" autocomplete="off"
+               spellcheck="false" maxlength="63">
+      </label>
+      <div id="methode-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="methode-ajouter" class="bouton bouton-principal" type="submit">Ajouter</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Windows Hello and Touch ID, off by default (ADR 0075 § 4): the warning, then a confirmation. -->
+  <dialog id="dialogue-classiques" class="dialogue dialogue-etroit" aria-labelledby="classiques-titre" aria-describedby="classiques-texte">
+    <form id="form-classiques" method="dialog" novalidate>
+      <h2 id="classiques-titre" class="titre-carte">Autoriser Windows Hello et Touch ID ?</h2>
+      <div id="classiques-texte">
+        <p>Le fichier du coffre seul reste aussi solide que votre mot de passe maître : ces méthodes ne retirent
+          rien à sa protection.</p>
+        <p>Mais Windows Hello et Touch ID utilisent une cryptographie classique. Quelqu'un qui aurait lu la clé
+          publique de la méthode dans votre session ouverte, et qui disposerait plus tard d'un ordinateur quantique,
+          pourrait retrouver le secret de cette méthode et ouvrir une copie du coffre prise ce jour-là, sans le mot
+          de passe maître.</p>
+        <p>Les clés de sécurité FIDO2 n'ont pas ce risque.</p>
+      </div>
+      <label class="case"><input type="checkbox" id="classiques-compris"> J'ai compris ce risque et j'autorise ces
+        méthodes sur ce poste.</label>
+      <div id="classiques-erreur" class="alerte" role="alert" hidden>
+        <span class="forme forme-triangle" aria-hidden="true"></span>
+        <p></p>
+      </div>
+      <div class="ligne-actions ligne-actions-fin">
+        <button class="bouton bouton-secondaire" type="button" data-fermer>Annuler</button>
+        <button id="classiques-autoriser" class="bouton bouton-principal" type="submit" disabled>Autoriser</button>
       </div>
     </form>
   </dialog>

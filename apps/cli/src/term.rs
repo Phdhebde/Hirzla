@@ -32,6 +32,21 @@ pub fn interactive() -> bool {
 /// Reads one secret: typed without echo when the standard input is a terminal (asked twice
 /// when `confirm`), otherwise the first line of the standard input.
 pub fn read_secret(prompt: &str, confirm: bool, max: usize) -> Result<Zeroizing<String>, String> {
+    read(prompt, confirm, max, false)
+}
+
+/// Like [`read_secret`] without confirmation, an empty value accepted (the password of a
+/// KeePass database opened by its key file alone).
+pub fn read_optional_secret(prompt: &str, max: usize) -> Result<Zeroizing<String>, String> {
+    read(prompt, false, max, true)
+}
+
+fn read(
+    prompt: &str,
+    confirm: bool,
+    max: usize,
+    allow_empty: bool,
+) -> Result<Zeroizing<String>, String> {
     if interactive() {
         let first = platform::read_password_from_terminal(prompt, max)
             .map_err(|_| "lecture du terminal impossible.".to_owned())?;
@@ -42,7 +57,7 @@ pub fn read_secret(prompt: &str, confirm: bool, max: usize) -> Result<Zeroizing<
                 return Err("les deux saisies diffèrent.".to_owned());
             }
         }
-        if first.is_empty() {
+        if first.is_empty() && !allow_empty {
             return Err("valeur vide.".to_owned());
         }
         Ok(first)
@@ -53,7 +68,7 @@ pub fn read_secret(prompt: &str, confirm: bool, max: usize) -> Result<Zeroizing<
             io::ErrorKind::InvalidData => "valeur non valide (UTF-8 attendu).".to_owned(),
             _ => "entrée standard illisible.".to_owned(),
         })?;
-        if line.is_empty() {
+        if line.is_empty() && !allow_empty {
             return Err("valeur vide sur l'entrée standard.".to_owned());
         }
         Ok(line)

@@ -8,12 +8,13 @@ use hirzla_access::Role;
 use hirzla_crypto::sym::SymmetricKey;
 use hirzla_crypto::util::random_array;
 use hirzla_vault::cbor::Value;
+use hirzla_vault::folder::{Folder, FolderEdit, FolderTree, Folders};
 use hirzla_vault::model::{
     DeviceCert, Dot, Id16, KeyEnvelopeEntry, MemberKeys, OpId, OpRef, SealedPayload, Stamp,
     KIND_CONTROL, KIND_LOCKER_META_PUT, KIND_SECRET_PUT, MAX_DEPS, MAX_OPERATION_LEN,
 };
 use hirzla_vault::secret::{
-    apply_edit, FieldValue, LockerBody, LockerField, SecretBody, SecretEdit, SecretType,
+    apply_edit, EditError, FieldValue, LockerBody, LockerField, SecretBody, SecretEdit, SecretType,
 };
 
 use super::{Body, Content, Entry, OpStatus, Replica};
@@ -334,6 +335,15 @@ impl<A: Authorizer> Replica<A> {
         &mut self,
         set: Vec<(LockerField, FieldValue)>,
     ) -> Result<OpId, SyncError> {
+        self.put_meta_with(|base, parents, stamp| LockerBody::edit(base, parents, set, stamp))
+    }
+
+    /// Emits a `LockerMetaPut` built by `edit` from the merged metadata, its heads and the
+    /// stamp of the new operation.
+    fn put_meta_with(
+        &mut self,
+        edit: impl FnOnce(Option<&LockerBody>, Vec<OpId>, Stamp) -> Result<LockerBody, EditError>,
+    ) -> Result<OpId, SyncError> {
         if self.frozen {
             return Err(SyncError::Frozen);
         }
@@ -348,9 +358,28 @@ impl<A: Authorizer> Replica<A> {
             member: p.opref.member,
             device: p.opref.device,
         };
-        let body = LockerBody::edit(base.as_ref(), parents, set, stamp)
-            .map_err(|_| SyncError::EditRefused)?;
+        let body = edit(base.as_ref(), parents, stamp).map_err(|_| SyncError::EditRefused)?;
         self.finish(p, None, KIND_LOCKER_META_PUT, Some(body.to_value()?), None)
+    }
+
+    /// Applies folder edits in one `LockerMetaPut` (`format.md` § 7.5, ADR 0076).
+    ///
+    /// # Errors
+    /// [`SyncError::EditRefused`] if an edit breaks a writer's rule, or
+    /// [`SyncError::NoCurrentEpoch`].
+    pub fn put_folders(&mut self, edits: Vec<FolderEdit>) -> Result<OpId, SyncError> {
+        self.put_meta_with(|base, parents, stamp| {
+            LockerBody::edit_folders(base, parents, edits, stamp)
+        })
+    }
+
+    /// The tree of folders shown for this locker (ADR 0076 § 3); empty before any metadata.
+    #[must_use]
+    pub fn folder_tree(&self) -> FolderTree {
+        self.meta
+            .as_ref()
+            .map(|(_, b)| b.tree())
+            .unwrap_or_default()
     }
 
     /// Secrets with a head version sealed under an epoch that is no longer current (§ 8.4).
@@ -976,20 +1005,76 @@ impl<A: Authorizer> Replica<A> {
                         member: r.member,
                         device: r.device,
                     };
-                    let set = b
+                    let set: Vec<(LockerField, FieldValue)> = b
                         .fields
                         .iter()
                         .filter(|(_, e)| e.stamp == own)
                         .map(|(k, e)| (*k, e.value.clone()))
                         .collect();
-                    self.put_locker_meta(set)?
+                    // The folder registers it wrote, carried over as they were (ADR 0076).
+                    let folders = b.folders;
+                    match self.put_meta_with(|base, parents, stamp| {
+                        let mut body = LockerBody::edit(base, parents, set, stamp)?;
+                        rewrite_folders(&mut body.folders, &folders, own, stamp);
+                        Ok(body)
+                    }) {
+                        Ok(new) => new,
+                        Err(SyncError::EditRefused) => {
+                            report.refused.push(old);
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             };
             report.reissued.push((old, new));
         }
         Ok(report)
     }
+}
 
+/// Writes onto `into` the folder registers of `old` that carry `own`, with `stamp`
+/// (re-emission of a stale local `LockerMetaPut`, § 5). A folder created by `old` comes back
+/// whole. The writer's rules are not checked again: the shown tree resolves what the newer
+/// state makes odd (ADR 0076 § 3), and every parent is in the map (folders are never removed).
+fn rewrite_folders(into: &mut Folders, old: &Folders, own: Stamp, stamp: Stamp) {
+    for (id, f) in old {
+        let created = f.name.1 == own && f.parent.1 == own && f.deleted.1 == own;
+        match into.get_mut(id) {
+            None if created => {
+                into.insert(
+                    *id,
+                    Folder {
+                        name: (f.name.0.clone(), stamp),
+                        parent: (f.parent.0, stamp),
+                        deleted: (f.deleted.0, stamp),
+                    },
+                );
+            }
+            None => {}
+            Some(cur) => {
+                if f.name.1 == own {
+                    cur.name = (f.name.0.clone(), stamp);
+                }
+                if f.parent.1 == own {
+                    cur.parent = (f.parent.0, stamp);
+                }
+                if f.deleted.1 == own {
+                    cur.deleted = (f.deleted.0, stamp);
+                }
+            }
+        }
+    }
+    // A parent the newer state does not hold would make the version unreadable.
+    let known: BTreeSet<Id16> = into.keys().copied().collect();
+    for f in into.values_mut() {
+        if f.parent.0.is_some_and(|p| !known.contains(&p)) {
+            f.parent = (None, stamp);
+        }
+    }
+}
+
+impl<A: Authorizer> Replica<A> {
     /// Emits a removed control operation again on the current state: new envelopes for
     /// the current readers, new wraps; approvals are carried over (they sign the request,
     /// not the operation).

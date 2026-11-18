@@ -252,14 +252,21 @@ fn self_mode_from_the_command_line() {
     // Usage errors.
     assert_eq!(hirzla(&sock, &["frobnicate"], None).status.code(), Some(2));
 
-    // Stop: the core locks and exits.
+    // Stop: the core locks and exits. While it exits, a `status` can reach the socket and
+    // lose the connection before the handshake ends: that is retried, not a failure.
     ok(&hirzla(&sock, &["stop"], None));
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let s = ok(&hirzla(&sock, &["status"], None));
-        if s.contains("arrêté") {
+        let out = hirzla(&sock, &["status"], None);
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("arrêté") {
             break;
         }
+        assert!(
+            out.status.success()
+                || String::from_utf8_lossy(&out.stderr).contains("la connexion au noyau a échoué"),
+            "stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert!(Instant::now() < deadline, "the core did not stop");
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -483,6 +490,31 @@ fn locked_core_refuses_reads_without_starting() {
     assert!(ok(&hirzla(&sock, &["lock"], None)).contains("verrouillé"));
 }
 
+/// ADR 0075 § 4, maintainer decision of 2026-11-18: Windows Hello and Touch ID are added only
+/// with `--accepter-risque-classique`. Without it, the warning is printed and the command fails
+/// before asking for the password or reaching the core; FIDO2 needs nothing more.
+#[test]
+fn classical_methods_need_the_flag() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    for kind in ["hello", "touchid"] {
+        let err = fails(&hirzla(&sock, &["methods", "add", kind], None));
+        assert!(err.contains("--accepter-risque-classique"), "{err}");
+        assert!(err.contains("ordinateur quantique"), "{err}");
+        assert!(err.contains("FIDO2"), "{err}");
+        assert!(!err.contains("pas démarré"), "{err}");
+        // With the flag, the command goes on (and stops here: no core).
+        let err = fails(&hirzla(
+            &sock,
+            &["methods", "add", kind, "--accepter-risque-classique"],
+            Some(MASTER),
+        ));
+        assert!(!err.contains("ordinateur quantique"), "{err}");
+    }
+    let err = fails(&hirzla(&sock, &["methods", "add", "fido2"], Some(MASTER)));
+    assert!(!err.contains("ordinateur quantique"), "{err}");
+}
+
 #[test]
 fn self_mode_v5_commands() {
     let dir = private_dir();
@@ -499,8 +531,28 @@ fn self_mode_v5_commands() {
     assert!(fails(&hirzla(&sock, &["import-kdbx", kdbx], Some("faux"))).contains("incorrect"));
     let out = ok(&hirzla(&sock, &["import-kdbx", kdbx], Some("hirzla-test")));
     assert!(out.contains("5 secret(s) importé(s)"), "{out}");
-    assert!(out.contains("1 pièce(s) jointe(s)"), "{out}");
+    // The attachment of « Banque » is imported now: nothing to report.
+    assert!(!out.contains("pièce(s) jointe(s)"), "{out}");
     assert_eq!(ok(&hirzla(&sock, &["get", "Banque"], None)), "Pa55w0rd!\n");
+    // A database opened by its key file alone: an empty password on the standard input.
+    let fixtures =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../crates/hirzla-vault/tests/kdbx");
+    let only = fixtures.join("pykeepass-keyfile-only.kdbx");
+    let key = fixtures.join("keyfile-raw.bin");
+    let (only, key) = (only.to_str().unwrap(), key.to_str().unwrap());
+    assert!(fails(&hirzla(&sock, &["import-kdbx", only], Some(""))).contains("vide"));
+    let out = ok(&hirzla(
+        &sock,
+        &["import-kdbx", only, "--fichier-cle", key],
+        Some(""),
+    ));
+    assert!(out.contains("secret(s) importé(s)"), "{out}");
+    assert!(fails(&hirzla(
+        &sock,
+        &["import-kdbx", only, "--fichier-cle", "/absent.keyx"],
+        Some(""),
+    ))
+    .contains("fichier clé introuvable"));
 
     // History and restore of a version.
     ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));
@@ -814,4 +866,232 @@ fn connections_from_the_command_line() {
     for secret in [MASTER, SECRET, PRIVATE_BODY, "exemple.test"] {
         assert!(!log.contains(secret));
     }
+}
+
+/// Encrypted export of a locker (ADR 0077): a drawn passphrase on the error output only,
+/// a chosen password, the refusals, and the import into a new locker of another vault.
+#[test]
+fn locker_export_from_the_command_line() {
+    const CHOSEN: &str = "une phrase choisie assez longue e2e";
+    let dir = private_dir();
+    let (dir_a, dir_b) = (private_dir(), private_dir());
+    let (a, b) = (dir_a.path(), dir_b.path());
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    let sock_a = socket(a);
+    let _core_a = start_core(a, &sock_a);
+    wait_ready(&sock_a);
+    ok(&hirzla(&sock_a, init, Some(MASTER)));
+    ok(&hirzla(&sock_a, &["set", "Routeur"], Some(SECRET)));
+
+    // Drawn passphrase: on the error output, never on the standard output.
+    let drawn = dir.path().join("tire.hirzla-export");
+    let out = hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", drawn.to_str().unwrap()],
+        None,
+    );
+    let stdout = ok(&out);
+    let stderr = String::from_utf8(out.stderr.clone()).unwrap();
+    assert!(stdout.contains("1 secret(s)"), "{stdout}");
+    let phrase = stderr
+        .lines()
+        .find(|l| l.starts_with("  "))
+        .unwrap()
+        .trim()
+        .to_owned();
+    assert_eq!(phrase.split('-').count(), 8, "{stderr}");
+    assert!(!stdout.contains(&phrase));
+    // Never replaces a file; a weak chosen password is refused.
+    let refused = fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", drawn.to_str().unwrap()],
+        None,
+    ));
+    assert!(refused.contains("existe déjà"), "{refused}");
+    let chosen = dir.path().join("choisi.hirzla-export");
+    let path = chosen.to_str().unwrap();
+    let refused = fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", path, "--mot-de-passe"],
+        Some("court"),
+    ));
+    assert!(refused.contains("trop faible"), "{refused}");
+    assert!(!chosen.exists());
+    ok(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Personnel", path, "--mot-de-passe"],
+        Some(CHOSEN),
+    ));
+    assert!(fails(&hirzla(
+        &sock_a,
+        &["casier", "exporter", "Absent", path],
+        None
+    ))
+    .contains("introuvable"));
+
+    let sock_b = socket(b);
+    let _core_b = start_core(b, &sock_b);
+    wait_ready(&sock_b);
+    ok(&hirzla(&sock_b, init, Some(MASTER)));
+    let refused = fails(&hirzla(
+        &sock_b,
+        &["casier", "importer", path],
+        Some("une autre phrase assez longue"),
+    ));
+    assert!(refused.contains("incorrect"), "{refused}");
+    let out = ok(&hirzla(
+        &sock_b,
+        &["casier", "importer", path, "--nom", "Reçu"],
+        Some(CHOSEN),
+    ));
+    assert!(
+        out.contains("Casier importé") && out.contains("1 secret(s)"),
+        "{out}"
+    );
+    assert_eq!(
+        ok(&hirzla(&sock_b, &["get", "Routeur"], None)),
+        format!("{SECRET}\n")
+    );
+    ok(&hirzla(
+        &sock_b,
+        &["casier", "importer", drawn.to_str().unwrap()],
+        Some(&phrase),
+    ));
+    assert_eq!(
+        ok(&hirzla(&sock_b, &["ls"], None))
+            .matches("Routeur")
+            .count(),
+        2
+    );
+    for log in [a.join("core.log"), b.join("core.log")] {
+        let log = std::fs::read_to_string(log).unwrap();
+        for leak in [SECRET, CHOSEN, phrase.as_str(), "Routeur", "Reçu"] {
+            assert!(!log.contains(leak), "{leak} in the log");
+        }
+    }
+}
+
+/// Folders from the command line (ADR 0076): a path created with its parents, a secret
+/// put in it, the tree with its counts, a rename, a move to the root, then a deletion that
+/// sends the secret to the trash.
+#[test]
+fn folders_from_the_command_line() {
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+    ok(&hirzla(&sock, &["set", "Banque"], Some(SECRET)));
+
+    let out = ok(&hirzla(
+        &sock,
+        &["dossier", "creer", "Finances/Comptes"],
+        None,
+    ));
+    assert!(out.contains("Dossier créé"), "{out}");
+    let refused = fails(&hirzla(&sock, &["dossier", "creer", "Finances"], None));
+    assert!(refused.contains("existe déjà"), "{refused}");
+    ok(&hirzla(&sock, &["mv", "Banque", "/Finances/Comptes"], None));
+    let tree = ok(&hirzla(&sock, &["dossier", "liste"], None));
+    assert!(tree.contains("0 secret(s) à la racine"), "{tree}");
+    assert!(tree.contains("Finances  (0)"), "{tree}");
+    assert!(tree.contains("  Comptes  (1)"), "{tree}");
+
+    ok(&hirzla(
+        &sock,
+        &["dossier", "renommer", "Finances", "Argent"],
+        None,
+    ));
+    let refused = fails(&hirzla(
+        &sock,
+        &["dossier", "deplacer", "Argent", "Argent/Comptes"],
+        None,
+    ));
+    assert!(refused.contains("sous lui-même"), "{refused}");
+    ok(&hirzla(
+        &sock,
+        &["dossier", "deplacer", "Argent/Comptes", "/"],
+        None,
+    ));
+    let tree = ok(&hirzla(&sock, &["dossier", "liste"], None));
+    assert!(tree.contains("Argent  (0)"), "{tree}");
+    assert!(
+        tree.lines()
+            .any(|l| l.ends_with("  Comptes  (1)") && !l.contains("    ")),
+        "{tree}"
+    );
+
+    // Not a terminal: deleting needs --oui.
+    let refused = fails(&hirzla(&sock, &["dossier", "supprimer", "Comptes"], None));
+    assert!(refused.contains("--oui"), "{refused}");
+    let out = ok(&hirzla(
+        &sock,
+        &["dossier", "supprimer", "Comptes", "--oui"],
+        None,
+    ));
+    assert!(out.contains("1 secret(s) mis à la corbeille"), "{out}");
+    let listed = ok(&hirzla(&sock, &["ls", "--corbeille"], None));
+    assert!(
+        listed.contains("Banque") && listed.contains("(corbeille)"),
+        "{listed}"
+    );
+    let refused = fails(&hirzla(&sock, &["mv", "Inconnu", "/"], None));
+    assert!(refused.contains("introuvable"), "{refused}");
+}
+
+#[test]
+fn totp_codes_from_the_command_line() {
+    // RFC 6238 appendix B, SHA-1 seed in base32.
+    const SEED: &str = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+    let dir = private_dir();
+    let sock = socket(dir.path());
+    let _core = start_core(dir.path(), &sock);
+    wait_ready(&sock);
+    let init = &["init", "--kdf-memory", "65536", "--kdf-passes", "3"];
+    ok(&hirzla(&sock, init, Some(MASTER)));
+    ok(&hirzla(&sock, &["set", "Banque e2e"], Some(SECRET)));
+
+    // No TOTP yet.
+    let err = fails(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    assert!(err.contains("sans TOTP"), "{err}");
+    // Not a TOTP: refused, with what is expected.
+    let err = fails(&hirzla(
+        &sock,
+        &["totp", "Banque e2e", "--definir"],
+        Some("https://banque.exemple.test\n"),
+    ));
+    assert!(err.contains("otpauth"), "{err}");
+    let uri = format!("otpauth://totp/Banque:max?secret={SEED}&digits=8&issuer=Banque\n");
+    let out = ok(&hirzla(
+        &sock,
+        &["totp", "Banque e2e", "--definir"],
+        Some(&uri),
+    ));
+    assert!(out.contains("TOTP enregistré"), "{out}");
+    // Standard output is not a terminal: the code is written there, alone.
+    let code = ok(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    let code = code.trim_end();
+    assert_eq!(code.len(), 8, "{code}");
+    assert!(code.bytes().all(|b| b.is_ascii_digit()));
+    let next = ok(&hirzla(&sock, &["totp", "Banque e2e", "--suivant"], None));
+    assert_eq!(next.trim_end().len(), 8);
+
+    // A TOTP secret of its own, from a base32 secret.
+    let out = ok(&hirzla(
+        &sock,
+        &["totp", "Forge e2e", "--creer", "--identifiant", "max"],
+        Some(&format!("{SEED}\n")),
+    ));
+    assert!(out.contains("Code TOTP rangé"), "{out}");
+    let listing = ok(&hirzla(&sock, &["ls"], None));
+    assert!(listing.contains("code TOTP"), "{listing}");
+    let code = ok(&hirzla(&sock, &["totp", "Forge e2e", "--stdout"], None));
+    assert_eq!(code.trim_end().len(), 6);
+
+    // Removed: no more code; the password stays.
+    ok(&hirzla(&sock, &["totp", "Banque e2e", "--retirer"], None));
+    fails(&hirzla(&sock, &["totp", "Banque e2e"], None));
+    let pw = ok(&hirzla(&sock, &["get", "Banque e2e"], None));
+    assert_eq!(pw.trim_end(), SECRET);
 }

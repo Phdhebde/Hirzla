@@ -8,7 +8,85 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
-## [Non publié]
+## [1.1.0] — 2026-11-18
+
+### Déverrouillage par Windows Hello, Touch ID et clé de sécurité FIDO2 (ADR 0075)
+
+- Le coffre s'ouvre d'un geste : Windows Hello, Touch ID (clé de la Secure Enclave) ou une clé
+  de sécurité FIDO2 avec `hmac-secret` (sémantique WebAuthn PRF). Le mot de passe maître reste
+  toujours valable ; il est redemandé pour ajouter une méthode.
+- Windows Hello et Touch ID, à cryptographie classique seulement, sont **désactivés par
+  défaut** (décision du mainteneur du 2026-11-18, ADR 0075 § 4) : on les autorise après un
+  avertissement sur le risque post-quantique résiduel. Le noyau refuse leur ajout sans
+  acceptation explicite (`EnrollMethod`, clé 4 ; erreur 165 `ClassicalFactorNotAccepted`) ;
+  une méthode déjà enrôlée ouvre toujours le coffre. FIDO2 et le mot de passe ne sont pas
+  concernés.
+- Application : Réglages › Déverrouillage (liste, ajout, retrait ; case « Autoriser Windows
+  Hello / Touch ID », gardée dans `preferences.json`) ; l'écran de déverrouillage propose la
+  méthode matérielle en premier, le mot de passe dessous.
+- Ligne de commande : `hirzla methods`, `hirzla methods add hello|touchid|fido2`
+  (`hello` et `touchid` avec `--accepter-risque-classique`), `hirzla methods remove RANG`,
+  `hirzla unlock --materiel [RANG]`.
+- API locale version 12 (`docs/api-locale.md` § 21) : `UnlockMethods`, `EnrollMethod`,
+  `UnlockWithMethod`, `RemoveMethod` ; profil complet seulement ; le geste se fait hors du
+  verrou du noyau.
+- Format : contenu du `keystore_blob` des méthodes 3, 4 et 5 et étiquette
+  `hirzla/v1/hardware-secret` (`docs/format.md` § 4.2.1). Pas de nouvelle version du format :
+  un noyau 1.0.0 ouvre toujours le coffre avec le mot de passe.
+- FIDO2 sous Linux et macOS : fonctionnalité Cargo `fido2-hid` (`ctap-hid-fido2`), activée dans
+  le noyau livré sur ces deux systèmes (la ligne de commande, l'hôte natif et l'application ne
+  l'embarquent pas). Sous Windows, FIDO2 passe par `webauthn.dll`. Le paquet Linux dépend de
+  `libudev`.
+- À vérifier sur du vrai matériel avant livraison : tests H1, H2, M2, F1 et F2 de
+  `docs/keystore-prototypes.md`.
+
+### Codes TOTP (ADR 0078)
+
+- La fiche d'un mot de passe ou d'un code TOTP affiche le code de double authentification,
+  groupé, avec un anneau et les secondes restantes ; « Copier le code TOTP » le copie avec
+  effacement du presse-papiers. Les TOTP importés de KeePass deviennent utilisables.
+- Ajout, remplacement et retrait d'un TOTP depuis le formulaire, par l'adresse
+  `otpauth://totp/…` ou la clé base32 que donne le site ; nouveau type « Code TOTP ».
+- Calcul RFC 6238 dans le noyau, sur le HMAC d'AWS-LC (SHA-1, SHA-256, SHA-512), vérifié par
+  les vecteurs de la RFC. La clé du TOTP ne quitte jamais le noyau ; un code n'est jamais
+  journalisé. Afficher un code ne retarde pas le verrouillage automatique.
+- API locale version 13 (`docs/api-locale.md` § 22) : `TotpCode`, `TotpSet`, `TotpClear`,
+  `TotpCreate` (opérations 170 à 173), profil complet seulement.
+- Ligne de commande : `hirzla totp NOM [--suivant]`, `--definir`, `--retirer`, `--creer`.
+
+### Export chiffré d'un casier (ADR 0077)
+
+- Un casier du coffre s'exporte dans un fichier `.hirzla-export`, protégé par un mot de passe
+  (Argon2id à 256 Mio, HKDF-SHA-512, sceau AES-256-GCM de la suite V1), et s'importe dans un
+  autre coffre comme un nouveau casier, sous les clés de celui qui importe. Sans serveur.
+- Par défaut, le noyau tire une phrase de passe de 8 mots (88 bits), montrée une seule fois ;
+  un mot de passe choisi doit compter 16 caractères au moins.
+- Exportés : secrets actifs, champs, fichiers joints, liens internes, description du casier,
+  dossiers (ADR 0076 : l'import les recrée). Ni corbeille, ni historique, ni clés, ni identifiants. Les casiers partagés d'un serveur ne
+  s'exportent pas encore.
+- Format : `docs/format.md` § 16. API locale version 10 (`docs/api-locale.md` § 19) :
+  `LockerExport` (140), `LockerImport` (141), profil complet seulement.
+- Ligne de commande : `casier exporter`, `casier importer`. Application : réglages.
+- Nouvelle cible de fuzzing `decode_locker_export`.
+
+### Dossiers dans les casiers (ADR 0076)
+
+- Chaque casier peut ranger ses secrets dans une arborescence de dossiers. Le casier reste
+  l'unité de partage et de droits ; un dossier ne porte ni clé ni droit. Noms et rangement
+  sont scellés : le serveur ne les voit jamais.
+- Fusion déterministe des modifications concurrentes : deux déplacements croisés ne forment
+  jamais de boucle à l'affichage, un secret rangé dans un dossier supprimé ailleurs reste
+  visible dans le dossier parent.
+- Format du coffre v3, sur-ensemble du v2 : un coffre v1 ou v2 s'ouvre sans changement et ne
+  passe en v3 qu'à l'écriture de son premier dossier, dans la même transaction.
+- API locale version 11 (`docs/api-locale.md` § 20) : `FolderTree`, `FolderCreate`,
+  `FolderRename`, `FolderMove`, `FolderDelete`, `SecretMove`, profil complet seulement.
+- Ligne de commande : `dossier liste|creer|renommer|deplacer|supprimer`, `mv`.
+- Application de poste : arbre des dossiers sous chaque casier, actions sur un dossier,
+  « Déplacer… » sur la fiche d'un secret.
+- **Casiers partagés** : tous les postes d'un casier partagé qui utilise des dossiers doivent
+  avoir un noyau 1.1.0 ou plus. Un noyau plus ancien met de côté les écritures qui portent des
+  dossiers, puis les applique une fois mis à jour.
 
 ### Connexions SSH et RDP (ADR 0067)
 

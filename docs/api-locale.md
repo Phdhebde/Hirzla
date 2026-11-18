@@ -1,4 +1,4 @@
-# API locale du noyau — spécification v7
+# API locale du noyau — spécification v9
 
 Le noyau `hirzla-core` est le seul processus qui détient des clés et des secrets en clair
 (ADR 0007). La ligne de commande `hirzla`, puis l'application de poste et l'hôte de messagerie
@@ -10,7 +10,10 @@ sont tranchés par l'ADR 0015 ; le presse-papiers de la ligne de commande par l'
 l'ADR 0026 (accepté) ; le profil agent (version 3) par l'ADR 0031 ; le mode Serveur (version 4) par
 l'ADR 0032 (accepté), étendue par l'ADR 0041 ; le mode Self (version 5) par les ADR 0025, 0033 et 0034 ;
 les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (version 7,
-§ 6.2) par l'ADR 0068.
+§ 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
+chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
+matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
+l'ADR 0078.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -224,7 +227,7 @@ Les tampons de trame et les textes décodés sont effacés à leur libération d
 | Nom | Encodage |
 | --- | --- |
 | Identifiant de casier ou de secret | `bstr(16)` |
-| Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées, plus tard (ADR 0010) : `Unsupported` |
+| Champ | `uint`, numérotation de `format.md` § 8 : 1 titre, 2 notes, 3 favori, 10 identifiant, 11 mot de passe, 21 clé publique SSH, 22 phrase de passe SSH. Les autres champs (octets, TOTP, clés d'accès) passent par des opérations dédiées (ADR 0010) : `Unsupported`. Le TOTP (12) n'est jamais lu : son code s'obtient par `TotpCode` (§ 22) |
 | Valeur de champ | `tstr` (≤ 1 Mio ; le coffre applique ses propres limites par champ), `bool` pour le favori |
 | Sélecteur | `{1: casier, 2: secret}` **ou** `{3: titre}` (exactement l'un des deux) |
 | Type de secret | `uint` de `format.md` § 8.1 ; création possible en v1 : 1 mot de passe, 5 note. Les connexions (7, 8) et les clés SSH (2) se créent par la version 6 (§ 17) |
@@ -439,6 +442,7 @@ identifiant de secret, ni chemin).
 | `auto_type` | `what` (`username`, `password`, `username_and_password`, `other`), `target` (`terminal`, `application`) ; § 18.1 |
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 | `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
+| `totp_request` | `op` (`totp_code`, `totp_set`, `totp_clear`, `totp_create`), `result` (`ok` ou nom de l'erreur, § 22) ; jamais un code |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
@@ -476,7 +480,10 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (version 5, § 16) et les connexions (version 6, § 17) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12, celle des méthodes de déverrouillage matérielles (§ 21).
+- La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
+- La version 11 ajoute les opérations de dossiers 150 à 155 (§ 20, ADR 0076). Elle ne change rien aux autres opérations.
 - La version 8 ajoute `ShowApp` (130) et `AppPoll` (131) (§ 18, ADR 0071), puis `AutoTyped` (132) (§ 18.1, ADR 0072). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`.
 - La version 7 ajoute `GenerateWith` (14, § 6.2, ADR 0068). Elle ne change rien aux opérations 1 à 13. `GenerateWith` dans une requête v1 ou v2 : `UnknownOperation`. Un client l'envoie en version 7 et continue d'envoyer les autres opérations dans leur plus petite version.
 - La version 2 ajoute `Match` (12), `Fill` (13), le type « origine » et les profils de client
@@ -507,7 +514,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
-RDP au § 17.5.
+RDP au § 17.5, celles des méthodes de déverrouillage matérielles au § 21.5, celle des codes
+TOTP au § 22.5.
 
 - **Aucune clé** dans la ligne de commande ; elle ne garde un secret que le temps de le
   transmettre, dans un tampon effacé.
@@ -571,9 +579,26 @@ Décisions : ADR 0024. Code : `apps/desktop`.
 - Mode Self (§ 16) : `GetSettings`, `SetSettings`, `ChangePassword`, `RestoreSecret`,
   `History`, `ReadVersion` (révélation ou copie), `RestoreVersion`, `RecoveryStatus` (aussi sur
   l'écran de déverrouillage), `RecoveryCreate`, `RecoveryUnlock`, `RecoveryRemove`,
-  `ImportKdbx`. La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
+  `ImportKdbx`. La fiche d'un mot de passe, d'une note ou d'une clé SSH lit `History` pour
+  savoir quels champs la version actuelle contient (numéros des champs, § 16.2, jamais une
+  valeur) : un champ facultatif absent (notes, phrase de passe) n'est pas affiché, un champ
+  principal absent est marqué « Vide », sans bouton de révélation ni de copie. Si `History`
+  est refusé, la fiche affiche tous les champs comme avant. Le formulaire de modification
+  s'en sert aussi (et de `has_password`, `has_notes` pour une connexion) pour proposer
+  « Effacer le mot de passe actuel » et « Effacer les notes actuelles » : le champ part alors
+  dans les champs à effacer d'`Update` (§ 6, clé 3). Aucun changement du protocole.
+  La base KeePass et les parts sont choisies par le sélecteur du système, ouvert
   par le processus Rust ; la vue web ne reçoit que leurs noms, et les parts vont du noyau au
   dossier choisi (`0600`, sans en remplacer) sans passer par elle.
+- Méthodes de déverrouillage (§ 21) : `UnlockMethods` (écran de déverrouillage et Réglages ›
+  Déverrouillage), `EnrollMethod`, `UnlockWithMethod`, `RemoveMethod`. L'écran de
+  déverrouillage propose la première méthode matérielle utilisable au-dessus du mot de passe
+  maître ; le geste n'est lancé que sur demande. Seule `UnlockMethods` est renvoyée sur une
+  nouvelle connexion : un geste n'est jamais demandé deux fois.
+- Export de casier (§ 19) : `LockerExport` et `LockerImport`, depuis les réglages. Le fichier
+  est choisi par le sélecteur du système ; la vue web reçoit son nom, les nombres du compte
+  rendu et, une fois, la phrase de passe tirée, que le bouton « Copier » copie par le processus
+  Rust.
 - Sous Linux, elle écoute logind (`PrepareForSleep`, `Lock` et `LockedHint` de sa session) et
   `ActiveChanged` de l'économiseur d'écran sur D-Bus, et envoie `SystemEvent` (ADR 0033).
 - Elle verrouille le coffre (`Lock`) et efface sa copie du presse-papiers quand elle
@@ -586,6 +611,11 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   elle-même dans la fenêtre au premier plan, puis envoie `AutoTyped`. La vue web ne reçoit que
   le nom de l'application cible. La liste « Ne plus m'avertir » est dans son fichier de
   préférences local, hors du coffre.
+- Codes TOTP (§ 22) : `TotpCode` pour la fiche d'un secret qui porte un TOTP (à l'ouverture,
+  puis à chaque fin de période), `TotpCode` et copie par le processus Rust pour « Copier le
+  code TOTP », `TotpSet` et `TotpClear` depuis le formulaire de modification, `TotpCreate`
+  pour le type « Code TOTP » et `TotpSet` après le `Create` d'un mot de passe saisi avec un
+  TOTP. La fiche sait qu'un secret porte un TOTP par `History` (champ 12).
 - Elle envoie `AppPoll` (§ 18) toutes les deux secondes, et `ShowApp` à son démarrage : si
   une autre instance écoute, elle s'arrête aussitôt.
 
@@ -1118,21 +1148,22 @@ Détails :
    l'initiateur, et ce poste a pu être volé. La ligne de commande affiche le rappel et demande
    « oui ».
 
-## 16. Mode Self (version 5)
+## 16. Mode Self (versions 5 et 9)
 
 Décisions : ADR 0025 (import KeePass, option 2), ADR 0033 (verrouillage à la mise en veille et
 au verrouillage de session), ADR 0034 (kit de recouvrement à quorum). Le noyau parle en plus la
 **version 5**, qui porte ce dont l'application de poste et la ligne de commande ont besoin pour
 tenir un coffre seules, au-delà des versions 1 et 2 : réglages, changement du mot de passe
 maître, corbeille, historique des versions, recouvrement, import KeePass, événements du
-système. Codes : opérations **60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du
-mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
+système. La **version 9** n'ajoute que le fichier clé d'`ImportKdbx` (§ 10). Codes : opérations
+**60 à 79**, erreurs **60 à 69** (les plages 40 à 49 sont celles du mode Serveur, § 15). Code : `crates/hirzla-core/src/selfmode`.
 
 ### 16.1 Aiguillage
 
 Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
-60 à 79 va au mode Self ; elle doit porter `v = 5`, sinon `UnsupportedVersion` avec `{2: [5]}`.
-Un code de la plage sans opération : `UnknownOperation`. Les réponses portent `v = 5`. Ces
+60 à 79 va au mode Self ; elle doit porter `v = 5` ou `v = 9`, sinon `UnsupportedVersion` avec
+`{2: [5, 9]}`. Un code de la plage sans opération : `UnknownOperation`. Une réponse porte la
+version de sa requête (5 quand la requête n'en porte aucune d'acceptée). Ces
 opérations sont réservées au profil complet : le profil navigateur reçoit `Unauthorized`, et le
 refus est journalisé. `Status` (§ 6) n'annonce pas la version 5 : un client la découvre en
 l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
@@ -1144,7 +1175,7 @@ l'essayant (un noyau plus ancien répond `UnsupportedVersion`).
 | Réglages | `{1: auto_lock_s uint, 2: clipboard_clear_s uint, 3: lock_on_sleep bool, 4: lock_on_session_lock bool}`, les quatre clés toujours présentes |
 | Version | `{1: op_id bstr(48), 2: lamport uint, 3: wall_ms uint, 4: état uint (0 actif, 1 corbeille, 2 purgé), 5: titre tstr, 6?: identifiant tstr, 7: [champ uint], 8: [champ uint], 9: champs personnalisés uint}` ; titre et identifiant de 4 096 octets au plus |
 | Fichier de part | `bstr` (≤ 16 Kio), le fichier `.hirzla-part` tel quel (`format.md` § 4.4) |
-| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP, 8: refusés}`, tous `uint` |
+| Compte rendu d'import | `{1: importés, 2: vides, 3: corbeille, 4: pièces jointes non importées, 5: versions antérieures, 6: champs personnalisés écartés, 7: TOTP non convertis, 8: refusés}`, tous `uint` |
 
 Une version liste les **numéros** des champs présents (clé 7, `format.md` § 8) et ceux qui ont
 changé depuis la version précédente (clé 8) : un champ compte comme changé quand l'écriture qui
@@ -1168,7 +1199,7 @@ d'une version par `ReadVersion`.
 | 69 | `RecoveryCreate` | ouvert | `{1: seuil uint, 2: parts uint}`, 2 ≤ seuil ≤ parts ≤ 16 | `{1: kit_id bstr(16), 2: [fichier de part]}` |
 | 70 | `RecoveryUnlock` | verrouillé | `{1: [fichier de part] (1 à 16), 2: nouveau mot de passe tstr}` | — |
 | 71 | `RecoveryRemove` | ouvert | — | — |
-| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier}` | compte rendu d'import |
+| 72 | `ImportKdbx` | ouvert | `{1: chemin absolu tstr (≤ 4 096 octets), 2: mot de passe tstr (vide permis), 3?: casier, 4?: chemin absolu du fichier clé tstr (≤ 4 096 octets, version 9)}` | compte rendu d'import |
 
 Détails :
 
@@ -1212,20 +1243,33 @@ Détails :
 11. **`ImportKdbx`** — le noyau lit le fichier lui-même (le client n'en transmet que le chemin),
     le déchiffre et crée un secret par entrée dans le casier donné (le casier personnel par
     défaut ; inconnu : `NotFound`). Chemin relatif : `InvalidInput` ; fichier illisible :
-    `NotFound`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
-    clients et le verrouillage automatique ne l'attendent pas. Correspondance : entrée sans mot
-    de passe, ni notes, ni champ personnalisé : ignorée (« vides ») ; sans mot de passe, ni
-    identifiant, ni adresse : note ; titre absent : hôte de l'adresse, puis identifiant, puis
-    « Sans titre » ; chemin du groupe (sans la racine) en étiquette, plus les étiquettes
-    KeePass ; champs personnalisés gardés, sensibles s'ils sont protégés dans KeePass ; corbeille
-    KeePass, pièces jointes, historique et TOTP comptés, non importés ; entrée refusée par le
-    coffre (valeur trop longue) comptée dans « refusés ».
+    `NotFound`. **Fichier clé** (clé 4, version 9 ; inconnue en version 5 : `Malformed`) : lu
+    par le noyau comme la base, mêmes refus (chemin vide ou relatif : `InvalidInput`,
+    illisible : `NotFound`) ; formats XML 1.0 et 2.0, 32 octets, 64 chiffres hexadécimaux,
+    sinon empreinte du fichier. Avec un fichier clé et un mot de passe vide, le noyau essaie
+    le fichier seul (KeePassXC), puis le fichier avec le mot de passe vide (KeePass 2) ; un
+    refus des deux : `ImportKeyRejected`. La dérivation Argon2 de la base se fait **hors du verrou du noyau** : les autres
+    clients et le verrouillage automatique ne l'attendent pas. Bases KDBX 3.1 et 4, AES-KDF ou
+    Argon2 (ADR 0025). Correspondance (détail dans l'ADR 0025) : entrée qui n'a qu'un titre :
+    ignorée (« vides ») ; avec mot de passe, identifiant, adresse ou TOTP : mot de passe (type 1),
+    même sans mot de passe ; sinon : note ; titre absent : hôte de l'adresse, puis identifiant,
+    puis « Sans titre » ; identifiant fait d'espaces : absent ; références `{REF:…@I:…}`
+    remplacées par la valeur visée ; chaque groupe devient un dossier du casier (le groupe
+    racine en est la racine), créés en une écriture avant les entrées, chaque entrée rangée dans
+    le sien (ADR 0076 § 11 : au-delà de 32 niveaux ou de 2 048 groupes, fondus dans un ancêtre ;
+    noms nettoyés) ; étiquettes KeePass gardées comme étiquettes ; champs personnalisés gardés, sensibles s'ils sont protégés dans
+    KeePass ; pièces jointes importées (64 au plus, 100 Mio chacune) ; TOTP convertis (KeePassXC `otp`,
+    KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP), les autres
+    (HOTP, Steam, hors bornes, plusieurs secrets) gardés tels quels en champs sensibles et
+    comptés dans « TOTP » ; expiration, saisie automatique et valeurs au-delà d'une limite gardées en
+    champs personnalisés ; corbeille KeePass et historique comptés, non importés ; entrée
+    refusée par le coffre comptée dans « refusés ».
 
 ### 16.4 Erreurs
 
 | Code | Nom | Sens | Détails |
 | --- | --- | --- | --- |
-| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 3 ou antérieur, AES-KDF, Twofish, Salsa20, fichier clé | — |
+| 60 | `ImportUnsupported` | Base KeePass hors du périmètre : KDBX 2 ou antérieur, Twofish, flux interne ArcFour, coût de dérivation au-delà des bornes | — |
 | 61 | `ImportKeyRejected` | Mot de passe de la base faux, ou en-tête altéré | — |
 | 62 | `ImportMalformed` | Pas une base KeePass, ou base malformée, altérée ou trop grande | — |
 
@@ -1243,7 +1287,7 @@ cryptographique ; le journal du noyau n'écrit que l'opération et le nom du ré
 | `history NOM \| --id ID --version N --champ C [--stdout]` | `List`, `History`, `ReadVersion`, `Status` (presse-papiers comme `get`) |
 | `restore NOM \| --id ID` | `List` (corbeille comprise), `RestoreSecret` |
 | `restore NOM \| --id ID --version N` | `List`, `History`, `RestoreVersion` |
-| `import-kdbx FICHIER` | `ImportKdbx` (mot de passe de la base demandé sans écho) |
+| `import-kdbx FICHIER [--fichier-cle FICHIER]` | `ImportKdbx` (mot de passe de la base demandé sans écho, vide permis avec un fichier clé ; version 9 avec un fichier clé) |
 | `passwd` | `ChangePassword` (actuel, puis nouveau deux fois en terminal) |
 | `settings [--verrouillage S] [--presse-papiers S] [--veille oui\|non] [--session oui\|non]` | `GetSettings`, (`SetSettings`) |
 | `recovery status` | `RecoveryStatus` |
@@ -1263,6 +1307,9 @@ remontant le temps (l'application de poste numérote de même). Un nouveau mot d
    (ADR 0025) ; ceux du noyau le sont.
 3. Pas de notification poussée : l'application apprend le verrouillage par son sondage de
    `Status`.
+4. De nouveaux compteurs au compte rendu d'import (références non résolues, réglages de
+   saisie automatique) demanderaient une nouvelle version du mode Self (§ 10), à spécifier
+   ici d'abord.
 
 ## 17. Connexions SSH et RDP (version 6)
 
@@ -1483,3 +1530,415 @@ après un `Read` par champ : le noyau ne tape rien. Systèmes pris en charge : W
 2. **Tout client complet peut prendre l'appel** : le noyau distingue deux profils, pas
    `hirzla-desktop` de la ligne de commande. La ligne de commande n'envoie pas `AppPoll`.
 
+## 19. Export chiffré d'un casier (version 10)
+
+Décision : ADR 0077. Format du fichier : `format.md` § 16. Le noyau parle en plus la
+**version 10**, qui écrit une copie chiffrée d'un casier du coffre et importe une telle copie
+comme un nouveau casier. Codes : opérations **140 à 149**, erreurs **140 à 149** réservées.
+Code : `crates/hirzla-core/src/locker_export`, `hirzla_vault::export`.
+
+La version 9 est celle du mode Self (fichier clé d'`ImportKdbx`, § 16) : l'export prend la
+version 10. Une requête d'export en version 9 reçoit `UnsupportedVersion`.
+
+### 19.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+140 à 149 va à l'export ; elle doit porter `v = 10`, sinon `UnsupportedVersion` avec `{2: [10]}`. Un code de la
+plage sans opération : `UnknownOperation`. Les réponses portent `v = 10`. Réservé au profil
+complet : le profil navigateur reçoit `Unauthorized`, et le refus est journalisé. `Status` (§ 6)
+n'annonce pas la version 10 : un noyau plus ancien répond `UnknownOperation` dans sa propre
+version.
+
+Le noyau lit et écrit **lui-même** le fichier, au chemin absolu donné (4 096 octets au plus) : un
+export peut dépasser la taille d'une trame (8 Mio). Il l'écrit en `0600`, sans jamais remplacer
+un fichier existant (création exclusive), et l'efface si l'écriture échoue. Argon2id, le sceau
+et l'accès au fichier se font **hors du verrou du noyau** : les autres requêtes ne
+l'attendent pas. Ces opérations comptent comme une activité pour le verrouillage automatique.
+
+### 19.2 Opérations
+
+| Code | Nom | Arguments | Réponse |
+| --- | --- | --- | --- |
+| 140 | `LockerExport` | `{1: casier bstr(16), 2: chemin tstr, 3?: mot de passe tstr}` | `{1?: phrase tstr, 2: {1: secrets, 2: corbeille, 3: fichiers joints, 4: liens écartés}}` |
+| 141 | `LockerImport` | `{1: chemin tstr, 2: mot de passe tstr, 3?: nom tstr}` | `{1: casier bstr(16), 2: {1: secrets, 2: fichiers joints, 3: dossiers créés, 4: refusés}}` |
+
+- **`LockerExport`** : sans mot de passe, le noyau tire une phrase de 8 mots de la liste
+  française du générateur, séparés par `-` (88 bits), et la rend dans la clé 1, **une seule
+  fois** ; il ne la garde pas. Avec un mot de passe, il exige 16 caractères au moins après NFC,
+  dont 8 distincts (`ExportPasswordWeak`), et la clé 1 est absente. Le casier doit être un
+  casier du coffre : un casier partagé d'un serveur reçoit `ExportUnsupported` (ADR 0077 § 6).
+  Les nombres disent ce qui a été écrit, ce qui est resté à la corbeille et les liens vers
+  d'autres casiers retirés.
+- **`LockerImport`** : le fichier est entièrement vérifié avant la première écriture
+  (`format.md` § 16.4). Le nouveau casier prend le nom donné (1 à 256 octets) ou celui du
+  fichier. Importer deux fois crée deux casiers.
+- Chemin relatif ou vide, mot de passe vide, nom vide : `InvalidInput`. Casier inconnu ou
+  fichier absent : `NotFound`. Coffre verrouillé : `Locked`, avant toute lecture ou écriture.
+
+### 19.3 Erreurs et journal
+
+| Code | Nom | Sens |
+| --- | --- | --- |
+| 140 | `ExportPasswordWeak` | Mot de passe choisi sous le plancher |
+| 141 | `ExportKeyRejected` | Mot de passe faux, ou manifeste altéré |
+| 142 | `ExportMalformed` | Pas un export, ou fichier altéré, tronqué ou incohérent |
+| 143 | `ExportTooLarge` | Casier ou fichier au-delà des limites (`format.md` § 16.5) |
+| 144 | `ExportFileExists` | Un fichier existe déjà au chemin d'export |
+| 145 | `ExportUnsupported` | Casier partagé d'un serveur, ou fichier d'une version plus récente |
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de mot de passe, de chemin ni de nom. Le journal n'écrit que l'opération et le nom du résultat :
+`event=export_request op=<locker_export|locker_import> result=<ok|nom>`.
+
+### 19.4 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `casier exporter CASIER FICHIER [--mot-de-passe]` | `List` (résolution de CASIER parmi les casiers du coffre), `LockerExport` |
+| `casier importer FICHIER [--nom NOM]` | `LockerImport` |
+
+- Sans `--mot-de-passe`, la phrase tirée est écrite sur la **sortie d'erreur**, jamais sur la
+  sortie standard. Avec, le mot de passe est demandé deux fois sans écho (ou lu sur l'entrée
+  standard). Aucun secret en argument (§ 11).
+- `casier importer` demande le mot de passe sans écho.
+- La ligne de commande rend le chemin absolu avant de l'envoyer.
+
+### 19.5 Points ouverts
+
+1. **Casiers partagés** : l'action 4 de `roles.md` (export par un `Owner` avec quorum, événement
+   `locker_exported`) attend un ADR qui l'ajoute au courrier des accords.
+2. **Variante scellée pour la clé publique d'un collègue** : version 2 du fichier (ADR 0077 § 7).
+
+## 20. Dossiers dans les casiers (version 11)
+
+Décision : ADR 0076. Format : `format.md` § 7.5 (dossiers d'un casier, champ `folder` d'un
+secret, format du coffre v3). Le noyau parle en plus la **version 11**, qui lit l'arbre des
+dossiers de chaque casier, crée, renomme, déplace et supprime un dossier, et range un secret.
+Codes : opérations **150 à 159**, erreurs **150 à 159** réservées (aucune n'est définie : les
+codes généraux du § 7 suffisent). Code : `crates/hirzla-core/src/folders`.
+
+Un dossier range les secrets d'un casier ; il ne porte ni clé ni droit. Les mêmes opérations
+valent pour les casiers du coffre et pour les casiers partagés du mode Serveur.
+
+### 20.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+150 à 159 va aux dossiers ; elle doit porter `v = 11`, sinon `UnsupportedVersion` avec
+`{2: [11]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 11`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé. `Status` n'annonce pas la version 11 : un client la
+découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`, et le client montre le coffre sans dossiers).
+
+### 20.2 Types
+
+**Dossier** : `{1: id bstr(16), 2: nom tstr, 3?: parent bstr(16)}`. Clé 3 absente : à la
+racine du casier. C'est le dossier tel que l'**arbre affiché** le place (`format.md` § 7.5 :
+cycles rattachés à la racine, dossiers supprimés absents, leur contenu remonté à l'ancêtre
+actif le plus proche).
+
+**Arbre d'un casier** : `{1: casier bstr(16), 2: [dossier], 3: [{1: secret bstr(16), 2: dossier
+bstr(16)}]}`. La clé 2 liste les dossiers actifs, triés par nom sans tenir compte de la casse,
+puis par identifiant. La clé 3 donne, pour chaque secret non purgé qui ne s'affiche pas à la
+racine, le dossier où il s'affiche ; triée par secret. Un secret absent de la clé 3 est à la
+racine.
+
+### 20.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 150 | `FolderTree` | ouvert | `{1?: casier}` | `{1: [arbre]}` |
+| 151 | `FolderCreate` | ouvert | `{1: casier, 2: nom, 3?: parent}` | `{1: dossier}` |
+| 152 | `FolderRename` | ouvert | `{1: casier, 2: dossier, 3: nom}` | — |
+| 153 | `FolderMove` | ouvert | `{1: casier, 2: dossier, 3?: parent}` | — |
+| 154 | `FolderDelete` | ouvert | `{1: casier, 2: dossier}` | `{1: secrets mis à la corbeille uint}` |
+| 155 | `SecretMove` | ouvert | `{1: casier, 2: secret, 3?: dossier}` | — |
+
+Détails :
+
+1. **`FolderTree`** — sans casier : un arbre par casier que ce poste détient, ceux du coffre
+   puis les casiers partagés. Avec un casier inconnu : `NotFound`.
+2. **Nom** — 1 à 255 octets UTF-8, sans caractère de contrôle ; `/` est permis. Deux frères
+   peuvent porter le même nom. Sinon `InvalidInput`.
+3. **`FolderCreate`** — le noyau tire l'identifiant. Parent absent : à la racine. Le parent
+   doit être un dossier actif du même casier ; 2 048 dossiers au plus par casier, supprimés
+   compris ; profondeur de 32 au plus. Sinon `InvalidInput`. Dans un coffre v1 ou v2, le
+   premier dossier passe le fichier en v3 dans la même transaction (`format.md` § 5.3).
+4. **`FolderMove`** — parent absent : à la racine. Un dossier ne se range ni sous lui-même ni
+   sous un de ses descendants, ni au-delà de 32 niveaux (`InvalidInput`).
+5. **`FolderDelete`** — met à la corbeille chaque secret actif affiché dans le dossier ou un de
+   ses sous-dossiers (une version par secret, qui garde son champ `folder`), puis marque le
+   dossier et ses sous-dossiers supprimés. Rend le nombre de secrets mis à la corbeille.
+   Restaurer un de ces secrets le montre dans l'ancêtre actif le plus proche.
+6. **`SecretMove`** — dossier absent : à la racine (le champ est écrit `null`). Le dossier doit
+   être actif dans le casier du secret (`InvalidInput`) ; un secret purgé ou absent :
+   `NotFound`. Ranger un secret là où il est déjà n'écrit rien. Déplacer un secret vers un
+   **autre casier** n'est pas un rangement et n'existe pas ici.
+7. **Casiers partagés** — créer, renommer, déplacer ou supprimer un dossier écrit les
+   métadonnées du casier : il faut un rôle qui écrit (`Editor` et plus) ; ranger un secret est
+   une écriture de ce secret. Un rôle qui ne le permet pas : `InvalidInput`, comme les autres
+   écritures refusées d'un casier partagé (§ 15.4). Les noms restent scellés : le serveur ne
+   les voit jamais.
+8. **Autres opérations** — `List` (5) et `Create` (7) ne changent pas : un client combine
+   `List` et `FolderTree`, et crée un secret dans un dossier par `Create` puis `SecretMove`.
+   La recherche de `List` porte sur tout le coffre, sans critère de dossier. `RestoreVersion`
+   (67) garde le dossier **actuel** du secret. `History` compte un rangement comme un changement
+   du champ 4.
+
+### 20.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de nom de dossier ni d'identifiant. Le journal du noyau n'écrit que l'opération et le nom du
+résultat : `event=folder_request op=<nom> result=<ok|nom>`, avec les noms `folder_tree`,
+`folder_create`, `folder_rename`, `folder_move`, `folder_delete`, `secret_move`.
+
+### 20.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `dossier liste [--casier C]` | `List`, `FolderTree` |
+| `dossier creer CHEMIN [--casier C]` | `List`, `FolderTree`, `FolderCreate` (un par dossier manquant) |
+| `dossier renommer CHEMIN NOM [--casier C]` | `List`, `FolderTree`, `FolderRename` |
+| `dossier deplacer CHEMIN DESTINATION [--casier C]` | `List`, `FolderTree`, `FolderMove` |
+| `dossier supprimer CHEMIN [--casier C] [--oui]` | `List`, `FolderTree`, `FolderDelete` |
+| `mv NOM \| --id ID DESTINATION` | `List`, `FolderTree`, `SecretMove` |
+
+- Sans `--casier`, le casier personnel. C : nom d'un casier, sans tenir compte de la casse, ou
+  début de son identifiant (4 chiffres hexadécimaux au moins).
+- Un CHEMIN sépare les noms par `/` ; `/` seul désigne la racine. Un élément `#` suivi d'au
+  moins 4 chiffres hexadécimaux désigne un dossier par le début de son identifiant (affiché
+  par `dossier liste`) : en tête de chemin, dans tout le casier ; plus loin, parmi les
+  sous-dossiers du précédent. C'est ainsi qu'on désigne un nom qui contient `/` ou deux frères
+  de même nom.
+- `dossier liste` affiche chaque dossier avec son identifiant abrégé et le nombre de secrets
+  actifs qu'il contient directement, et le nombre de secrets à la racine.
+- `dossier supprimer` dit combien de secrets iront à la corbeille et demande « oui » ; hors
+  terminal, `--oui` est obligatoire.
+- `mv` range le secret dans un dossier de **son** casier.
+
+### 20.6 Points ouverts
+
+1. **Création dans un dossier en une écriture** : `Create` ne prend pas de dossier ; créer un
+   secret dans un dossier en écrit deux versions. Une clé de `Create` demanderait une nouvelle
+   version de l'opération 7.
+2. **Glisser-déposer** dans l'application de poste : hors de ce lot (ADR 0076 § 10).
+
+L'export de casier (§ 19) écrit le chemin du dossier où chaque secret est affiché ; l'import
+recrée ces dossiers dans le nouveau casier (ADR 0076 § 8, `format.md` § 16.4) et compte les
+dossiers créés (clé 3 du compte rendu de `LockerImport`).
+
+## 21. Méthodes de déverrouillage matérielles (version 12)
+
+Décision : ADR 0075. Le coffre s'ouvre avec Windows Hello, Touch ID (clé de la Secure Enclave)
+ou une clé de sécurité FIDO2 (`hmac-secret`, sémantique WebAuthn PRF), **à côté** du mot de
+passe maître, qui reste toujours. Le format est au `format.md` § 4.2.1. Codes : opérations
+**160 à 169**, erreurs **160 à 169**. Code : `crates/hirzla-core/src/methods`, facteurs
+matériels dans `crates/hirzla-keystore/src/unlock`.
+
+### 21.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+160 à 169 va à cette famille ; elle doit porter `v = 12`, sinon `UnsupportedVersion` avec
+`{2: [12]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 12`. Profil complet seulement : le profil navigateur reçoit `Unauthorized`, et le refus est
+journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'essayant.
+
+### 21.2 Types
+
+| Nom | Encodage |
+| --- | --- |
+| Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement (`format.md` § 4.2) |
+| PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
+
+« Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
+facteur de ce type, disponible maintenant, et lit son `keystore_blob`. « PIN à demander » : le
+client doit demander le PIN de la clé de sécurité et le transmettre (FIDO2 sous Linux et
+macOS) ; sous Windows, le système le demande lui-même.
+
+### 21.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
+| 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
+| 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+
+- `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
+- `EnrollMethod` : frein (§ 6) ; coffre ouvert ; pour Windows Hello (5) et Touch ID (3),
+  méthodes à cryptographie classique seulement, la clé 4 doit valoir `true`, sinon
+  `ClassicalFactorNotAccepted`, **avant** la vérification du mot de passe (aucun essai du frein
+  consommé) et avant tout geste (ADR 0075 § 4, décision du mainteneur du 2026-11-18) ; la clé
+  4 est ignorée pour FIDO2, et absente vaut `false`. Puis vérification du mot de passe maître (un mot de passe faux
+  compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
+  geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
+  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
+  remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+- `UnlockWithMethod` : frein ; méthode lue dans l'en-tête en clair ; geste ; ouverture avec
+  tous les contrôles de `format.md` § 5.3. Un refus du matériel ou une ouverture qui échoue
+  comptent comme un échec de déverrouillage (même frein que le mot de passe) ; une
+  annulation, un matériel absent ou une clé disparue ne comptent pas.
+- `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
+  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello est ensuite supprimée du
+  système.
+- Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
+  le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
+  exige un reçoit `Busy`. Le système abandonne après 60 s.
+
+### 21.4 Erreurs et journal
+
+| Code | Nom | Sens |
+| --- | --- | --- |
+| 160 | `MethodUnavailable` | Pas de matériel, système trop ancien, prise en charge non compilée, ou `keystore_blob` illisible par ce poste |
+| 161 | `MethodCancelled` | Annulé par l'utilisateur, ou délai du système dépassé |
+| 162 | `MethodInvalidated` | La clé matérielle n'existe plus ou ne correspond plus (supprimée, empreintes changées, Windows Hello réinitialisé, clé FIDO2 réinitialisée ou autre clé présentée) : le client propose le mot de passe puis le réenrôlement |
+| 163 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
+| 164 | `PinBlocked` | Clé de sécurité bloquée |
+| 165 | `ClassicalFactorNotAccepted` | Ajout de Windows Hello ou Touch ID sans l'acceptation explicite du risque post-quantique résiduel (clé 4 d'`EnrollMethod`) ; le client affiche l'avertissement et fait confirmer |
+
+Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
+matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
+`NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
+journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
+ni nom de clé, ni identifiant de clé, ni rang, ni PIN. Un ajout refusé faute d'acceptation
+s'écrit `result=classical_factor_not_accepted`.
+
+Une méthode Windows Hello ou Touch ID déjà enrôlée continue d'ouvrir le coffre
+(`UnlockWithMethod` ne demande aucune acceptation).
+
+### 21.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `methods` | `UnlockMethods` |
+| `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`). `hello` et `touchid` exigent `--accepter-risque-classique` : sans elle, l'avertissement s'affiche et la commande échoue sans rien demander |
+| `methods remove RANG` | `RemoveMethod` |
+| `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
+
+### 21.6 Points ouverts
+
+Voir l'ADR 0075 : FIDO2 sous Linux et macOS par la fonctionnalité `fido2-hid`, activée dans le
+noyau livré (une compilation sans elle répond `MethodUnavailable` pour FIDO2) ; premier plan de la fenêtre Windows Hello ou WebAuthn ouverte par un noyau sans
+fenêtre.
+
+## 22. Codes TOTP (version 13)
+
+Décision : ADR 0078. Format : `format.md` § 8.3 (champ 12 `totp`, `TotpConfig`, types 1 et 3 ;
+aucun changement). Le noyau parle en plus la **version 13**, qui calcule le code TOTP d'un
+secret (RFC 6238, `hirzla_crypto::totp`, HMAC d'AWS-LC) et pose, retire ou crée un TOTP. Codes :
+opérations **170 à 179**, erreurs **170 à 179** réservées (aucune n'est définie : les codes
+généraux du § 7 suffisent). Code : `crates/hirzla-core/src/totp`.
+
+Numérotation : la version 10 et la section 19 sont l'export de casier, la version 11 et la
+section 20 les dossiers (ADR 0076), la version 12 et la section 21 le déverrouillage
+matériel (ADR 0075).
+
+**La graine TOTP ne quitte jamais le noyau.** Aucune opération ne la rend ; `Read` (6) du
+champ 12 répond `Unsupported` (§ 5.3).
+
+### 22.1 Aiguillage
+
+Mêmes trames, même profil CBOR, même décodage strict (§ 4, § 5). Une trame dont la clé 3 vaut
+170 à 179 va aux codes TOTP ; elle doit porter `v = 13`, sinon `UnsupportedVersion` avec
+`{2: [13]}`. Un code de la plage sans opération : `UnknownOperation`. Les réponses portent
+`v = 13`. Ces opérations sont réservées au profil complet : le profil navigateur reçoit
+`Unauthorized`, et le refus est journalisé (ADR 0026 ne donne au profil navigateur que des
+opérations liées à une origine). `Status` (§ 6) n'annonce pas la version 13 : un client la
+découvre en l'essayant (un noyau plus ancien répond `UnknownOperation` ou
+`UnsupportedVersion`).
+
+### 22.2 Types
+
+**Saisie TOTP** — `tstr`, 4 096 octets au plus (`Malformed` au-delà), non vide après retrait
+des blancs (`InvalidInput`). Écriture seulement. Le noyau accepte :
+
+- une adresse `otpauth://totp/LIBELLÉ?secret=…` ; paramètres lus : `secret` (base32,
+  obligatoire), `algorithm` (`SHA1`, `SHA256`, `SHA512`), `digits`, `period`, `issuer` (à
+  défaut, le préfixe `Émetteur:` du libellé) ; les autres paramètres sont ignorés ;
+- une clé secrète seule en base32 (casse indifférente ; espaces, tirets et `=` ignorés), avec
+  HMAC-SHA-1, 6 chiffres et 30 s.
+
+Refusés (`InvalidInput`) : un autre schéma, `otpauth://hotp/`, `encoder=steam`, deux
+paramètres `secret`, un base32 non valide, toute valeur hors des bornes de `TotpConfig`
+(graine 10 à 128 octets, 6 à 8 chiffres, période 15 à 300 s, émetteur 256 octets au plus).
+
+**Code** — résultat de `TotpCode` :
+
+| Clé | Nom | Type | Règle |
+| --- | --- | --- | --- |
+| 1 | code | `tstr` | Chiffres décimaux seuls, autant que la clé 4 |
+| 2 | secondes restantes | `uint` | 1 à la période : secondes avant le changement de code |
+| 3 | période | `uint` | 15 à 300 |
+| 4 | chiffres | `uint` | 6 à 8 |
+| 5 | algorithme | `uint` | 1 SHA-1, 2 SHA-256, 3 SHA-512 |
+| 6 | émetteur | `tstr` | Si la configuration en a un |
+| 7 | code suivant | `tstr` | Si la requête l'a demandé ; même longueur que la clé 1 |
+
+### 22.3 Opérations
+
+| Code | Nom | Coffre | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 170 | `TotpCode` | ouvert | `{1: casier, 2: secret, 3?: suivant bool}` | code |
+| 171 | `TotpSet` | ouvert | `{1: casier, 2: secret, 3: saisie}` | — |
+| 172 | `TotpClear` | ouvert | `{1: casier, 2: secret}` | — |
+| 173 | `TotpCreate` | ouvert | `{1?: casier, 2: titre tstr, 3: saisie, 4?: identifiant tstr, 5?: [étiquette]}` | `{1: casier, 2: secret}` |
+
+Détails :
+
+1. **`TotpCode`** — le secret doit exister dans un casier que ce poste détient, ne pas être
+   purgé et porter un TOTP, sinon `NotFound` (un secret à la corbeille donne encore son code).
+   Le code est calculé sur l'horloge du système à l'instant de la requête ; une horloge
+   antérieure à 1970 : `Internal`. Aucune correction de décalage : le site tolère d'ordinaire
+   la période voisine (RFC 6238 § 5.2), et la clé 7 donne le code suivant à qui le demande.
+   **`TotpCode` ne compte pas comme une activité** pour le verrouillage automatique (§ 6,
+   point 4) : une fiche ouverte qui redemande le code à chaque période ne tient pas le coffre
+   ouvert.
+2. **`TotpSet`** — pose ou remplace le TOTP d'un secret de type 1 (mot de passe) ou 3 (code
+   TOTP) ; un autre type : `InvalidInput`. Une saisie refusée n'écrit rien. Vaut pour un casier
+   partagé selon le rôle du membre (§ 15.4). Une nouvelle version du secret est écrite, comme
+   par `Update`.
+3. **`TotpClear`** — retire le TOTP. `NotFound` si le secret n'en a pas. Un secret de type 3
+   sans TOTP reste un secret valide (titre, identifiant, notes).
+4. **`TotpCreate`** — crée un secret de type 3 avec le titre (non vide, sinon `InvalidInput`),
+   le TOTP, l'identifiant et les étiquettes donnés (64 au plus). Casier personnel par défaut ;
+   un casier partagé est permis selon le rôle du membre (§ 15.4). Les notes et le favori
+   s'ajoutent ensuite par `Update` (8).
+5. **Autres opérations** — `List` (5) rend les secrets de type 3 avec leur identifiant ;
+   `History` (65) nomme le champ 12 par son numéro, ce qui dit à un client qu'un secret porte
+   un TOTP sans en rien révéler. `Delete`, `RestoreSecret`, `ReadVersion` et `RestoreVersion`
+   valent pour les secrets de type 3 comme pour tout secret. `Match` et `Fill` ne rendent
+   jamais un code.
+
+### 22.4 Erreurs et journal
+
+Les codes généraux 1 à 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. Aucun message ne contient
+de code, de saisie, d'émetteur, de titre ni d'identifiant de secret. Le journal du noyau
+n'écrit que l'opération et le nom du résultat : `event=totp_request op=<nom> result=<ok|nom>`,
+avec les noms `totp_code`, `totp_set`, `totp_clear`, `totp_create` (§ 8).
+
+### 22.5 Ligne de commande
+
+| Commande | Requêtes |
+| --- | --- |
+| `totp NOM \| --id ID [--stdout] [--suivant]` | `List` (résolution), `TotpCode`, `Status` |
+| `totp NOM \| --id ID --definir` | `List`, `TotpSet` |
+| `totp NOM \| --id ID --retirer` | `List`, `TotpClear` |
+| `totp NOM --creer [--identifiant U] [--casier C] [--tag T]…` | (`List` pour C), `TotpCreate` |
+
+- Le code suit la règle de `get` (§ 11) : copié avec effacement après `clipboard_clear_s`, ou
+  écrit sur la sortie standard si elle n'est pas un terminal ou avec `--stdout`. Le temps qui
+  reste s'écrit sur la **sortie d'erreur** ; dans les 5 dernières secondes, la commande
+  rappelle `--suivant`, qui donne le code de la période suivante.
+- `--definir` et `--creer` **demandent** la saisie sans écho (ou la lisent sur l'entrée
+  standard) : aucun secret en argument.
+- Une seule action par commande ; `--creer` prend un NOM et refuse `--id`.
+
+### 22.6 Points ouverts
+
+1. **Extension** : pas de code TOTP pour le profil navigateur. Il faudrait une opération liée
+   à l'origine (ADR 0026), un message de l'hôte natif et une interface ; ADR à venir.
+2. **Lecture d'un QR code** : pas faite (dépendance de traitement d'image qui verrait la
+   graine).
+3. **Horloge déréglée** : le noyau ne peut pas la détecter sans réseau ; un code refusé par le
+   site en est le seul signe.

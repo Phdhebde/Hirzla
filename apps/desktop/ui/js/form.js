@@ -2,20 +2,37 @@
 // Creating and changing a secret. The form never loads an existing password or note: to
 // change one, the user types or generates a new value; left empty, it stays as it is.
 // A connection (SSH, RDP) is stored and shown; the application opens no session (ADR 0067).
+// A TOTP is set from the otpauth:// address or the base32 key the site gives, sent to the core,
+// which keeps it sealed and computes the codes; the form never loads it back (ADR 0078).
 
 import { api } from "./api.js";
 import { announce, byId, h, showError } from "./dom.js";
 
 /** @typedef {import("./api.js").Entry} Entry */
-/** @typedef {"password" | "note" | "ssh" | "rdp" | "ssh_key"} FormKind */
+/** @typedef {"password" | "note" | "ssh" | "rdp" | "ssh_key" | "totp"} FormKind */
 
-const KINDS = /** @type {FormKind[]} */ (["password", "note", "ssh", "rdp", "ssh_key"]);
+const KINDS = /** @type {FormKind[]} */ (["password", "note", "ssh", "rdp", "ssh_key", "totp"]);
+
+/**
+ * Whether a typed TOTP looks like something the core may accept: an otpauth:// address, or at
+ * least 16 base32 characters (10 bytes). The core decides; this only catches a slip early.
+ * @param {string} text
+ */
+export function looksLikeTotp(text) {
+  const t = text.trim();
+  if (/^otpauth:\/\/totp\//i.test(t)) return true;
+  const b32 = t.replace(/[\s=-]/g, "");
+  return b32.length >= 16 && /^[A-Za-z2-7]+$/.test(b32);
+}
+
+const TOTP_HELP = "Collez l'adresse « otpauth://totp/… » ou la clé secrète en base32 (au moins 16 caractères) donnée par le site.";
 
 /** Kind of the form that changes an entry of the list. @param {Entry | null} entry @returns {FormKind} */
 function kindOf(entry) {
   if (entry?.kind === "note") return "note";
   if (entry?.kind === "ssh_connection") return "ssh";
   if (entry?.kind === "rdp_connection") return "rdp";
+  if (entry?.kind === "totp") return "totp";
   return "password";
 }
 
@@ -57,6 +74,13 @@ export class SecretForm {
     this.jump = /** @type {HTMLSelectElement} */ (byId("secret-rebond"));
     this.hostKey = /** @type {HTMLInputElement} */ (byId("secret-empreinte"));
     this.passphrase = /** @type {HTMLInputElement} */ (byId("secret-phrase"));
+    /** Ticked: the current password is cleared, not kept. */
+    this.clearPassword = /** @type {HTMLInputElement} */ (byId("secret-mdp-effacer"));
+    /** Ticked: the current notes are cleared, not kept. */
+    this.clearNotes = /** @type {HTMLInputElement} */ (byId("secret-notes-effacer"));
+    this.totp = /** @type {HTMLInputElement} */ (byId("secret-totp"));
+    /** Ticked: the current TOTP is removed. */
+    this.clearTotp = /** @type {HTMLInputElement} */ (byId("secret-totp-effacer"));
     /** @type {import("./api.js").ConnectionCard | null} Card of the connection being changed. */
     this.card = null;
     /** True once a private key file was chosen for this form. */
@@ -85,6 +109,17 @@ export class SecretForm {
       show.setAttribute("aria-pressed", visible ? "false" : "true");
     });
     byId("secret-mdp-generer").addEventListener("click", () => void this.generate());
+    // An empty input keeps the current value: clearing it takes an explicit choice.
+    for (const [box, input] of /** @type {[HTMLInputElement, HTMLInputElement | HTMLTextAreaElement][]} */ ([
+      [this.clearPassword, this.password],
+      [this.clearNotes, this.notes],
+      [this.clearTotp, this.totp],
+    ])) {
+      box.addEventListener("change", () => {
+        if (box.checked) input.value = "";
+        input.disabled = box.checked;
+      });
+    }
     byId("secret-fichier-choisir").addEventListener("click", () => void this.chooseKey());
   }
 
@@ -159,13 +194,27 @@ export class SecretForm {
   async open(entry, locker = null) {
     this.clear();
     this.editing = entry;
-    if (entry && kindOf(entry) !== "password" && kindOf(entry) !== "note") {
+    if (entry && ["ssh", "rdp"].includes(kindOf(entry))) {
       try {
         this.card = await api.connectionCard({ locker: entry.locker, id: entry.id });
       } catch (e) {
         const err = /** @type {import("./api.js").ApiError} */ (e);
         if (!this.hooks.onError(err)) announce(err.message, 6000);
         return;
+      }
+    }
+    /** @type {Set<string> | null} Fields the secret holds, as far as the core tells. */
+    let present = null;
+    if (this.card) {
+      present = new Set();
+      if (this.card.has_password) present.add("password");
+      if (this.card.has_notes) present.add("notes");
+    } else if (entry) {
+      try {
+        const versions = await api.history({ locker: entry.locker, id: entry.id });
+        if (versions.length) present = new Set(versions[0].fields);
+      } catch {
+        // Unknown: no clearing offered, an empty input keeps the value as before.
       }
     }
     if (!(await this.loadLinks())) return;
@@ -179,6 +228,7 @@ export class SecretForm {
     byId("secret-type-groupe").hidden = !!entry;
     byId("secret-mdp-aide").hidden = !entry;
     byId("secret-notes-aide").hidden = !entry;
+    byId("secret-totp-aide").hidden = !entry || !present?.has("totp");
     const kind = kindOf(entry);
     for (const r of this.form.querySelectorAll('input[name="secret-type"]')) {
       /** @type {HTMLInputElement} */ (r).checked = /** @type {HTMLInputElement} */ (r).value === kind;
@@ -196,6 +246,10 @@ export class SecretForm {
       this.hostKey.value = this.card.host_key ?? "";
     }
     this.syncType();
+    // Clearing is offered only for a field the secret holds; the content of a note stays.
+    byId("secret-mdp-effacer-case").hidden = !present?.has("password");
+    byId("secret-notes-effacer-case").hidden = kind === "note" || !present?.has("notes");
+    byId("secret-totp-effacer-case").hidden = !present?.has("totp");
     this.dialog.showModal();
     this.title.focus();
   }
@@ -204,12 +258,20 @@ export class SecretForm {
   clear() {
     for (const el of [
       this.title, this.username, this.password, this.urls, this.tags, this.notes,
-      this.host, this.port, this.domain, this.hostKey, this.passphrase,
+      this.host, this.port, this.domain, this.hostKey, this.passphrase, this.totp,
     ]) {
       el.value = "";
     }
     this.card = null;
     this.keyChosen = false;
+    for (const box of [this.clearPassword, this.clearNotes, this.clearTotp]) box.checked = false;
+    this.password.disabled = false;
+    this.notes.disabled = false;
+    this.totp.disabled = false;
+    byId("secret-mdp-effacer-case").hidden = true;
+    byId("secret-notes-effacer-case").hidden = true;
+    byId("secret-totp-effacer-case").hidden = true;
+    byId("secret-totp-aide").hidden = true;
     const file = byId("secret-fichier-nom");
     file.textContent = "Aucun fichier choisi";
     file.classList.remove("choisi");
@@ -308,8 +370,10 @@ export class SecretForm {
     text("host_key", this.hostKey.value.trim());
     if (kind === "ssh") link("ssh_key", this.sshKey.value, c?.ssh_key ?? null);
     link("jump", this.jump.value, c?.jumps[0] ?? null);
-    if (this.password.value) set.password = this.password.value;
-    if (this.notes.value) set.notes = this.notes.value;
+    if (this.clearPassword.checked) clear.push("password");
+    else if (this.password.value) set.password = this.password.value;
+    if (this.clearNotes.checked) clear.push("notes");
+    else if (this.notes.value) set.notes = this.notes.value;
     if (this.favorite.checked !== (c?.favorite ?? false)) set.favorite = this.favorite.checked;
     return { set, clear };
   }
@@ -320,6 +384,18 @@ export class SecretForm {
     if (!title) {
       showError(this.error, "Le titre est obligatoire.");
       this.title.focus();
+      return;
+    }
+    const kindNow = this.kind();
+    const typedTotp = (kindNow === "password" || kindNow === "totp") && !this.clearTotp.checked ? this.totp.value : "";
+    if (kindNow === "totp" && !this.editing && !typedTotp.trim()) {
+      showError(this.error, TOTP_HELP);
+      this.totp.focus();
+      return;
+    }
+    if (typedTotp.trim() && !looksLikeTotp(typedTotp)) {
+      showError(this.error, TOTP_HELP);
+      this.totp.focus();
       return;
     }
     this.saving = true;
@@ -358,30 +434,57 @@ export class SecretForm {
         if (this.username.value.trim()) key.username = this.username.value.trim();
         ref = await api.createSshKey(key);
         announce("Clé SSH rangée dans le coffre.");
+      } else if (kind === "totp" && !this.editing) {
+        /** @type {{ locker: string | null, title: string, input: string, username?: string, tags: string[] }} */
+        const totp = { locker, title, input: typedTotp, tags: tags() };
+        if (this.username.value.trim()) totp.username = this.username.value.trim();
+        ref = await api.totpCreate(totp);
+        // Notes and favourite are written next, as on any secret.
+        /** @type {Record<string, unknown>} */
+        const rest = {};
+        if (this.notes.value) rest.notes = this.notes.value;
+        if (this.favorite.checked) rest.favorite = true;
+        if (Object.keys(rest).length) await api.update(ref, rest);
+        announce("Code TOTP rangé dans le coffre.");
       } else if (this.editing) {
         /** @type {Record<string, unknown>} */
         const changes = {};
         /** @type {string[]} */
         const clear = [];
         const e = this.editing;
+        const target = { locker: e.locker, id: e.id };
+        // The TOTP first: it is the change most likely to be refused, and nothing else is
+        // written when it is.
+        let totpChanged = false;
+        if (this.clearTotp.checked) {
+          await api.totpClear(target);
+          totpChanged = true;
+        } else if (typedTotp.trim()) {
+          await api.totpSet(target, typedTotp);
+          totpChanged = true;
+        }
         if (title !== e.title) changes.title = title;
-        if (e.kind === "password") {
+        if (e.kind === "password" || e.kind === "totp") {
           const u = this.username.value;
           if (u !== (e.username ?? "")) {
             if (u) changes.username = u;
             else clear.push("username");
           }
-          if (this.password.value) changes.password = this.password.value;
         }
-        if (this.notes.value) changes.notes = this.notes.value;
+        if (e.kind === "password") {
+          if (this.clearPassword.checked) clear.push("password");
+          else if (this.password.value) changes.password = this.password.value;
+        }
+        if (this.clearNotes.checked) clear.push("notes");
+        else if (this.notes.value) changes.notes = this.notes.value;
         if (this.favorite.checked !== e.favorite) changes.favorite = this.favorite.checked;
         if (clear.length) changes.clear = clear;
-        if (Object.keys(changes).length === 0) {
+        if (Object.keys(changes).length === 0 && !totpChanged) {
           this.dialog.close();
           return;
         }
-        await api.update({ locker: e.locker, id: e.id }, changes);
-        ref = { locker: e.locker, id: e.id };
+        if (Object.keys(changes).length) await api.update(target, changes);
+        ref = target;
         announce("Secret modifié.");
       } else {
         /** @type {Record<string, unknown>} */
@@ -399,6 +502,18 @@ export class SecretForm {
           secret.urls = this.urls.value.split("\n").map((u) => u.trim()).filter(Boolean);
         }
         ref = await api.create(secret);
+        if (typedTotp.trim()) {
+          try {
+            await api.totpSet(ref, typedTotp);
+          } catch (e) {
+            // The secret exists: say what was not stored, and let the user fix it from its record.
+            const err = /** @type {import("./api.js").ApiError} */ (e);
+            this.dialog.close();
+            this.hooks.onSaved(ref);
+            announce(`Secret créé, sans TOTP. ${err.message}`, 8000);
+            return;
+          }
+        }
         announce("Secret créé.");
       }
       this.dialog.close();

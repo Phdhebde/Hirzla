@@ -100,7 +100,7 @@ provenance de compilation, et Hirzla vérifie ensuite lui-même ses exécutables
 Comme KeePass, Hirzla est libre, gratuit et garde un coffre local utilisable hors ligne.
 Hirzla y ajoute une cryptographie hybride post-quantique, un noyau isolé qui garde seul les
 clés, et un mode Serveur pour partager des casiers avec des droits par rôle et un journal
-d'audit. Hirzla importe directement les bases KeePass KDBX 4.
+d'audit. Hirzla importe directement les bases KeePass KDBX 3.1 et 4.
 
 ### Quelle différence avec Bitwarden ou Vaultwarden ?
 
@@ -112,7 +112,7 @@ ce jour.
 
 ### Puis-je migrer depuis un autre gestionnaire de mots de passe ?
 
-Oui. Hirzla importe directement une base KeePass ou KeePassXC au format KDBX 4, et les exports
+Oui. Hirzla importe directement une base KeePass ou KeePassXC au format KDBX 3.1 ou 4, et les exports
 CSV de KeePass, KeePassXC, Bitwarden, Firefox et Chrome. Voir
 [Importer](../utiliser/importer.md).
 

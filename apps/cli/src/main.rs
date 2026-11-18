@@ -9,9 +9,13 @@
 mod args;
 mod clipboard;
 mod connections;
+mod folders;
+mod locker_export;
+mod methods;
 mod selfmode;
 mod server;
 mod term;
+mod totp;
 mod update;
 
 use std::io::{IsTerminal, Write};
@@ -415,6 +419,8 @@ fn run(args: &Args) -> Result<(), String> {
             ));
             Ok(())
         }
+        Command::UnlockHardware { rank } => methods::unlock(&session, *rank),
+        Command::Methods(command) => methods::run(&session, command),
         Command::Lock => match session.try_connect() {
             Err(ClientError::NotRunning) => {
                 say("Le coffre est verrouillé (noyau arrêté).");
@@ -568,6 +574,9 @@ fn run(args: &Args) -> Result<(), String> {
         }
         command @ Command::Set { .. } => set(&session, command),
         Command::Server(command) => server::run_server(&session, command),
+        Command::Locker(
+            command @ (args::LockerCommand::Export { .. } | args::LockerCommand::Import { .. }),
+        ) => locker_export::run(&session, command),
         Command::Locker(command) => server::run_locker(&session, command),
         Command::Quorum(command) => server::run_quorum(&session, command),
         Command::Quarantine(command) => server::run_quarantine(&session, command),
@@ -587,12 +596,21 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Restore { name, id, version } => {
             selfmode::restore(&session, name.as_deref(), id.as_deref(), *version)
         }
-        Command::ImportKdbx { file } => selfmode::import_kdbx(&session, file),
+        Command::ImportKdbx { file, key_file } => {
+            selfmode::import_kdbx(&session, file, key_file.as_deref())
+        }
         Command::Passwd => selfmode::change_password(&session),
         Command::Settings(change) => selfmode::settings(&session, change),
         Command::Recovery(what) => selfmode::recovery(&session, what),
         Command::Connection(command) => connections::run(&session, command),
         Command::SshKeyAdd(command) => connections::add_ssh_key(&session, command),
+        Command::Folder(command) => folders::run(&session, command),
+        Command::Mv {
+            name,
+            id,
+            destination,
+        } => folders::move_secret(&session, name.as_deref(), id.as_deref(), destination),
+        Command::Totp(command) => totp::run(&session, command),
         Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
     }
 }

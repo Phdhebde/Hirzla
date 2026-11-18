@@ -433,6 +433,7 @@ Fusionner les têtes `H₁ … Hₙ`, champ par champ :
 | **S** ensemble (`sets`) | `elems` = union, dédupliquée par `dot` ; `removed` = union ; visibles = éléments dont le `dot` n'est pas dans `removed` | Un ensemble |
 | Champ personnalisé supprimé | Registre dont la valeur est `null` | Absent de l'affichage |
 | `state` | Si une tête vaut 2 (purgé) : 2, et l'état fusionné ne garde **aucun** contenu (`fields`, `sets`, `custom` vides). Sinon registre | Actif, corbeille ou purgé |
+| Dossiers (`folders` de `LockerBody`, v3) | Union des identifiants ; chaque registre d'un dossier (`name`, `parent`, `state`) en R. Un dossier n'est jamais retiré (§ 8.5) | Un map de dossiers |
 
 Une `Stamp` est unique pour un champ donné : deux entrées concurrentes d'un même champ ont
 toujours des `Stamp` différentes. La règle n'a donc jamais d'égalité à départager.
@@ -470,6 +471,39 @@ les secrets dont une version de tête est scellée sous une époque qui n'est pl
 4. Les anciennes versions restent sous l'ancienne époque jusqu'à leur élagage (§ 10).
 
 Un rescellement ne change aucune valeur : deux rescellements concurrents fusionnent sans effet.
+
+### 8.5 Dossiers d'un casier (ADR 0076)
+
+Les dossiers (`format.md` § 7.5) voyagent dans les `LockerMetaPut` du casier ; le dossier d'un
+secret est son champ `folder`, registre ordinaire de ses `SecretPut`. Aucune opération
+nouvelle, aucun type de contrôle nouveau : le serveur ne voit qu'une opération de données
+scellée.
+
+Contrôles d'une `LockerMetaPut`, en plus de ceux de ses `fields` :
+
+- chaque dossier de la fusion des `parents` est présent dans la version (un dossier n'est
+  jamais retiré ; le supprimer, c'est poser `state = 1`) ;
+- chaque registre d'un dossier qui ne porte pas la `Stamp` de l'opération est identique à
+  celui de la fusion des `parents` ;
+- un dossier absent de cette fusion ne porte que la `Stamp` de l'opération.
+
+Une version qui manque à l'un d'eux est rejetée (`TypeRule`). La fusion est l'union des
+dossiers, registre par registre : elle reste commutative, associative et idempotente, et
+l'arbre affiché se calcule ensuite de façon déterministe à partir de l'état fusionné
+(`format.md` § 7.5), sans aucune écriture. Les cycles nés de déplacements concurrents et les
+dossiers supprimés pendant qu'un autre poste y rangeait un secret n'appellent donc ni
+arbitrage, ni opération de réparation.
+
+Droits : une `LockerMetaPut` demande le droit d'écrire les métadonnées du casier (`Editor` et
+plus, `roles.md`) ; ranger un secret est une écriture de ce secret.
+
+Un intent `LockerMetaPut` non envoyé, réémis après un changement d'époque (§ 8.4), garde ses
+registres de dossiers : ceux que l'auteur avait écrits reçoivent la `Stamp` de la nouvelle
+opération, les autres sont repris de la fusion courante.
+
+Un noyau qui ne lit pas la version 3 rejette (`TypeRule`) la `LockerMetaPut` portant des
+dossiers et la version portant un `folder`, comme tout contenu qu'il ne sait pas décoder. Les
+opérations restent stockées ; après mise à jour, il les réexamine (§ 6) et les applique.
 
 ## 9. Autorisations, révocation, quarantaine
 
@@ -1044,7 +1078,7 @@ voit partir un paquet vers chaque autre propriétaire et ne peut pas désigner l
 | Liste des casiers, de leurs membres, de leurs rôles, de leurs clés publiques et des certificats de leurs appareils | Corps de contrôle en clair | Filtrer et distribuer (ADR 0004) | Les noms de casiers sont scellés. Les identifiants sont aléatoires |
 | Nombre, heure, auteur et appareil de chaque opération, par casier | En-tête d'opération | Ordonner, vérifier les chaînes | — |
 | Classe de l'opération (donnée ou contrôle) et type des opérations de contrôle | En-tête | Filtrer | Le type d'une opération de données (secret ou métadonnées) est scellé |
-| Taille arrondie des opérations | Trames | Inévitable | Bourrage Padmé, minimum de 512 octets (`format.md` § 11) |
+| Taille arrondie des opérations | Trames | Inévitable | Bourrage Padmé, minimum de 512 octets (`format.md` § 11). Une `LockerMetaPut` grandit avec le nombre de dossiers du casier (ADR 0076) |
 | Nombre et taille arrondie des fichiers joints, heure d'accès | `PutChunk`, `GetChunk` | Stocker | Morceaux de taille fixe |
 | Qui tire quel casier, et quand | `Pull` | Distribuer | Un poste tire tout le casier, jamais un secret isolé |
 | Opérations en quarantaine (`late`) | Son propre filtrage | Limiter la diffusion | — |
@@ -1055,7 +1089,7 @@ voit partir un paquet vers chaque autre propriétaire et ne peut pas désigner l
 | Quels appareils ont accusé quelle `Compact` ; jour de la dernière authentification de chaque appareil | `Ack`, session (§ 10.2, ADR 0040) | Décider de la stabilité, écarter les appareils inactifs | Le `CompactPast` reste scellé ; dernière authentification gardée au jour près |
 
 Il n'apprend **pas** : les titres, adresses, noms d'utilisateur, valeurs, notes, noms de
-casiers, types de secrets, le secret visé par une opération (`secret_id` scellé, `block_id`
+casiers, noms et arborescence des dossiers, dossier de chaque secret, types de secrets, le secret visé par une opération (`secret_id` scellé, `block_id`
 aléatoire à chaque opération), le nombre de secrets d'un casier, les dépendances causales,
 l'horloge logique, la lecture d'un secret sur un poste (aucun échange réseau).
 
@@ -1212,7 +1246,8 @@ Décisions prises seul pendant la rédaction. Chacune est à confirmer ou à cor
     `Checkpoint` : type 34 (`transparence.md`, ADR 0019). Changement de clé d'un membre : type
     30, toujours réservé.
 20. **Partage par export chiffré pour un destinataire en mode Self** (`architecture.md`) :
-    non spécifié ici.
+    hors du protocole de synchronisation. Export d'un casier par fichier protégé par mot de
+    passe, importé comme nouveau casier : ADR 0077, `format.md` § 16, `api-locale.md` § 19.
 21. **`LockerCreate` épinglée** par chaque poste (§ 7.3), décidé à l'étape 10.
 22. **Enveloppes de `Grant`, `DeviceAdd` et `EnvelopeAdd`** : `KeyEnvelope` ne porte pas
     d'époque ; elles visent l'époque `epoch` de leur opération, donc l'époque courante de leur

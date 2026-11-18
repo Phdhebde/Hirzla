@@ -1,6 +1,6 @@
 ---
 title: Importer depuis KeePass ou un fichier CSV
-description: Migrer vers Hirzla depuis KeePass, KeePassXC, Bitwarden, Firefox ou Chrome - import direct d'une base KDBX 4 ou d'un export CSV, et ce qui n'est pas repris.
+description: Migrer vers Hirzla depuis KeePass, KeePassXC, Bitwarden, Firefox ou Chrome - import direct d'une base KDBX ou d'un export CSV, et ce qui n'est pas repris.
 ---
 
 # Importer depuis KeePass ou un fichier CSV
@@ -17,18 +17,24 @@ C'est la voie à préférer : la base reste chiffrée jusqu'au noyau, qui la lit
 lui-même.
 
 1. Cliquez sur **Importer depuis KeePass (KDBX)…**
-2. **Choisir la base…**, puis saisissez le mot de passe de la base KeePass.
+2. **Choisir la base…**, puis saisissez le mot de passe de la base KeePass. Si la base est
+   protégée par un **fichier clé**, choisissez-le avec **Fichier clé…** ; laissez le mot de
+   passe vide si la base n'en a pas.
 3. Cliquez sur **Importer**. Un compte rendu indique ce qui a été créé.
 
 | | |
 | --- | --- |
-| Bases acceptées | KDBX 4 (KeePass 2.35 et suivants, KeePassXC), protégées par un mot de passe seul, chiffrées en AES-256 ou ChaCha20 avec Argon2 |
-| Non importés | Pièces jointes, historique des entrées, codes TOTP. Le compte rendu les signale |
+| Bases acceptées | KDBX 3.1 et 4 (KeePass 2, KeePassXC), protégées par un mot de passe, un fichier clé ou les deux, chiffrées en AES-256 ou ChaCha20, dérivation AES-KDF ou Argon2 |
+| Repris | Titre, identifiant (même sans mot de passe), mot de passe, adresse, notes, étiquettes, champs personnalisés, pièces jointes, références entre entrées (`{REF:…@I:…}`), TOTP (KeePassXC `otp`, KeePass 2 `TimeOtp-*` en base32, hexadécimal, base64 ou texte, KeeTrayTOTP). |
+| Groupes | Chaque groupe devient un dossier du casier, à la même place ; les étiquettes KeePass restent des étiquettes |
+| Gardés dans des champs | Expiration, saisie automatique, HOTP, TOTP non convertibles (Steam, hors limites) |
+| Non importés | Historique des entrées, corbeille KeePass, Twofish. Le compte rendu les signale |
 
 En ligne de commande :
 
 ```sh
 hirzla import-kdbx ancienne-base.kdbx
+hirzla import-kdbx ancienne-base.kdbx --fichier-cle ancienne-base.keyx
 ```
 
 ## Depuis un fichier CSV

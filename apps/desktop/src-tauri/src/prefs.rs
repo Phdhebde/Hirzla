@@ -39,6 +39,12 @@ pub struct Preferences {
     /// on this workstation.
     #[serde(default)]
     pub auto_type_trusted: Vec<String>,
+    /// Windows Hello and Touch ID may be added (ADR 0075 § 4, maintainer decision of
+    /// 2026-11-18): off by default, turned on after the warning about their residual
+    /// post-quantum risk. A convenience of the interface: the core checks the acknowledgement
+    /// carried by each enrolment.
+    #[serde(default)]
+    pub allow_classical_unlock: bool,
 }
 
 impl Default for Preferences {
@@ -46,6 +52,7 @@ impl Default for Preferences {
         Preferences {
             keep_in_tray: true,
             auto_type_trusted: Vec::new(),
+            allow_classical_unlock: false,
         }
     }
 }
@@ -186,6 +193,12 @@ mod tests {
         // An absent key takes its default.
         fs::write(d.join(FILE_NAME), b"{}").unwrap();
         assert!(PrefsStore::load(&d).get().keep_in_tray);
+        // Windows Hello and Touch ID stay off unless turned on (ADR 0075 § 4).
+        assert!(!PrefsStore::load(&d).get().allow_classical_unlock);
+        fs::write(d.join(FILE_NAME), br#"{"allow_classical_unlock":"oui"}"#).unwrap();
+        assert!(!PrefsStore::load(&d).get().allow_classical_unlock);
+        fs::write(d.join(FILE_NAME), br#"{"allow_classical_unlock":true}"#).unwrap();
+        assert!(PrefsStore::load(&d).get().allow_classical_unlock);
         fs::remove_dir_all(&d).unwrap();
     }
 

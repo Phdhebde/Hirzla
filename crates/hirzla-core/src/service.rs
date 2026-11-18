@@ -2,10 +2,12 @@
 //! transport: the vault, its lock state, automatic locking and unlock throttling.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
 use hirzla_keystore::platform::HardeningReport;
+use hirzla_keystore::unlock::{system_factors, UnlockFactor};
 use hirzla_vault::model::{Id16, Settings};
 use hirzla_vault::secret::{
     Field, FieldValue, IndexEntry, SecretBody, SecretEdit, SecretState, SecretType, SetKind,
@@ -69,6 +71,12 @@ pub struct Core {
     server_clock: Option<fn() -> u64>,
     /// The call for the desktop application's window (ADR 0071).
     app_window: AppWindow,
+    /// Hardware unlock factors of this build (ADR 0075).
+    pub(crate) factors: Vec<Arc<dyn UnlockFactor>>,
+    /// Set while a hardware gesture runs: one at a time.
+    pub(crate) gesture_busy: Arc<AtomicBool>,
+    /// Clock of the TOTP codes, replaced by tests that need a fixed time (ADR 0078).
+    pub(crate) totp_clock: Option<fn() -> Option<u64>>,
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -202,6 +210,9 @@ impl Core {
             last_tick: None,
             server_clock: None,
             app_window: AppWindow::default(),
+            factors: system_factors(),
+            gesture_busy: Arc::new(AtomicBool::new(false)),
+            totp_clock: None,
         }
     }
 
@@ -411,6 +422,19 @@ impl Core {
                     })
                 }),
             _ => Err(ErrorReply::new(ErrorCode::NotFound)),
+        }
+    }
+
+    /// Changes the folders of a shared locker (`docs/api-locale.md` § 20, ADR 0076).
+    pub(crate) fn edit_shared_folders(
+        &mut self,
+        locker: &Id16,
+        edits: Vec<hirzla_vault::folder::FolderEdit>,
+    ) -> Result<(), ServerCode> {
+        self.vault().map_err(|e| ServerCode::General(e.code))?;
+        match (self.vault.as_ref(), self.server.as_mut()) {
+            (Some(vault), Some(Ok(server))) => server.edit_folders(vault, locker, edits),
+            _ => Err(ServerCode::General(ErrorCode::NotFound)),
         }
     }
 
