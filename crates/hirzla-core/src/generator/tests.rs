@@ -419,8 +419,8 @@ fn pin_count_matches_enumeration() {
                     s.push(b'0' + (n % 10) as u8);
                     n /= 10;
                 }
-                kept +=
-                    u64::from(!(no_repeat && repeats(&s)) && !(no_sequence && has_sequence(&s)));
+                let refused = (no_repeat && repeats(&s)) || (no_sequence && has_sequence(&s));
+                kept += u64::from(!refused);
             }
             assert_eq!(
                 pin_count(length as usize, no_repeat, no_sequence),
