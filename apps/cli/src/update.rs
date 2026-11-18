@@ -77,8 +77,10 @@ fn describe(m: &Manifest) {
 fn install_dir(dir: Option<&PathBuf>) -> Result<PathBuf, String> {
     match dir {
         Some(d) => Ok(d.clone()),
+        // Through a symbolic link (Homebrew), the installation is where the link points.
         None => std::env::current_exe()
             .ok()
+            .and_then(|p| std::fs::canonicalize(&p).ok().or(Some(p)))
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .ok_or_else(|| "répertoire d'installation introuvable ; utilisez --repertoire.".into()),
     }

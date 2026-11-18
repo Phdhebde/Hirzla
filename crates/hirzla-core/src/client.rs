@@ -49,10 +49,16 @@ impl From<TransportError> for ClientError {
     }
 }
 
-/// The core executable expected next to `client_executable`.
+/// The core executable expected next to `client_executable`, once symbolic links are resolved:
+/// a client started through a link (Homebrew's `/opt/homebrew/bin/hirzla`) finds the core of
+/// its installation, not one next to the link. The core is still checked on connection
+/// (ADR 0055).
 #[must_use]
 pub fn sibling_core(client_executable: &Path) -> PathBuf {
-    client_executable
+    let resolved = std::fs::canonicalize(client_executable);
+    resolved
+        .as_deref()
+        .unwrap_or(client_executable)
         .parent()
         .unwrap_or(Path::new("."))
         .join(format!("{CORE_EXECUTABLE}{}", std::env::consts::EXE_SUFFIX))
@@ -344,5 +350,49 @@ impl Client {
             return Err(ClientError::Protocol);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+    use super::*;
+
+    #[test]
+    fn sibling_core_of_a_plain_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = dir.path().join("hirzla");
+        std::fs::write(&client, b"").unwrap();
+        let expected = std::fs::canonicalize(dir.path())
+            .unwrap()
+            .join(format!("{CORE_EXECUTABLE}{}", std::env::consts::EXE_SUFFIX));
+        assert_eq!(sibling_core(&client), expected);
+    }
+
+    /// Started through a symbolic link elsewhere (Homebrew's `bin`), the client looks for the
+    /// core next to its real executable, not next to the link.
+    #[cfg(unix)]
+    #[test]
+    fn sibling_core_follows_a_symbolic_link() {
+        let install = tempfile::tempdir().unwrap();
+        let bin = tempfile::tempdir().unwrap();
+        let client = install.path().join("hirzla");
+        std::fs::write(&client, b"").unwrap();
+        let link = bin.path().join("hirzla");
+        std::os::unix::fs::symlink(&client, &link).unwrap();
+        let expected = std::fs::canonicalize(install.path())
+            .unwrap()
+            .join(CORE_EXECUTABLE);
+        assert_eq!(sibling_core(&link), expected);
+    }
+
+    #[test]
+    fn sibling_core_of_a_missing_path_keeps_it() {
+        let p = Path::new("/nonexistent-hirzla-dir/hirzla");
+        assert_eq!(
+            sibling_core(p),
+            Path::new("/nonexistent-hirzla-dir")
+                .join(format!("{CORE_EXECUTABLE}{}", std::env::consts::EXE_SUFFIX))
+        );
     }
 }
