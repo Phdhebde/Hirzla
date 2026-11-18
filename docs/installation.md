@@ -119,6 +119,20 @@ Désinstaller. Votre coffre n'est pas supprimé (§ 6).
    autorisation au premier lancement de Hirzla, refaites la manipulation du point 2 pour
    l'application. Cette approbation n'est demandée qu'une fois.
 
+**Avec Homebrew.** Le même paquet `.pkg` s'installe par un cask, que Homebrew met à jour avec
+`brew upgrade` à chaque version publiée :
+
+```sh
+brew tap phdhebde/hirzla
+brew trust phdhebde/hirzla        # Homebrew refuse les taps tiers non approuvés
+brew install --cask hirzla        # le mot de passe d'administrateur est demandé
+```
+
+Le cask lie la ligne de commande dans `/opt/homebrew/bin/hirzla`. Il vérifie l'empreinte
+SHA-256 du paquet, reprise de `SHA256SUMS` à la publication (workflow `homebrew.yml`), mais pas
+la signature GPG : pour un poste sensible, faites d'abord les vérifications du § 2.
+`brew uninstall hirzla` retire l'application et le manifeste, jamais le coffre.
+
 **Touch ID et Secure Enclave.** Comme sous Windows, le déverrouillage matériel n'est pas
 disponible dans la version 1 : le coffre s'ouvre par le mot de passe maître.
 
