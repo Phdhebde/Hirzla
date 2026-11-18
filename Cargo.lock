@@ -1958,7 +1958,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-access"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hirzla-crypto",
  "hirzla-vault",
@@ -1970,7 +1970,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-audit"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "cbor4ii",
  "hirzla-crypto",
@@ -1980,7 +1980,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-cli"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "arboard",
  "hirzla-core",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-core"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hirzla-access",
  "hirzla-crypto",
@@ -2011,7 +2011,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-crypto"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "aes-gcm",
  "aes-kw",
@@ -2033,7 +2033,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-desktop"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "arboard",
  "gio",
@@ -2054,7 +2054,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-keystore"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "anyhow",
  "core-foundation",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-native-host"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hirzla-core",
  "hirzla-keystore",
@@ -2085,7 +2085,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-release-signer"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hirzla-core",
  "hirzla-crypto",
@@ -2095,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-server"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "hirzla-access",
  "hirzla-audit",
@@ -2111,7 +2111,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-sync"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "base64 0.23.1",
  "hirzla-access",
@@ -2125,7 +2125,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-vault"
-version = "1.1.0"
+version = "1.1.1"
 dependencies = [
  "base64 0.23.1",
  "cbor4ii",
