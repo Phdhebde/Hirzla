@@ -6,7 +6,7 @@ name: Homebrew
 # rewritten here, after the .pkg of the release was checked against the release's SHA256SUMS.
 #
 # Configuration:
-#   - repository variable HOMEBREW_TAP: the tap repository, `owner/homebrew-hirzla`;
+#   - repository variable HOMEBREW_TAP: the tap repository (`Hirzla/homebrew-hirzla`);
 #   - secret HOMEBREW_TAP_DEPLOY_KEY: private SSH key whose public half is a deploy key WITH
 #     write access on that repository only. It is read by one step and never echoed.
 # Without either, the job explains what is missing and does nothing.
