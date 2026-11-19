@@ -151,6 +151,92 @@ fn the_window_may_call_only_the_application_commands() {
     }
 }
 
+/// Text between double quotes, one entry per quoted word.
+fn quoted(text: &str) -> Vec<String> {
+    text.split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn every_command_the_interface_calls_is_declared_allowed_and_registered() {
+    // A command missing from the build manifest or the capability is refused by Tauri at run
+    // time with a bare string, which the interface can only show as an unexpected error.
+    let api = fs::read_to_string(desktop().join("ui/js/api.js")).unwrap();
+    let called: Vec<String> = api
+        .split("call(\"")
+        .skip(1)
+        .map(|s| s.split('"').next().unwrap().to_owned())
+        .collect();
+    assert!(called.len() > 50, "the parser found too few commands");
+
+    let build = fs::read_to_string(desktop().join("src-tauri/build.rs")).unwrap();
+    let list = build
+        .split("const COMMANDS: &[&str] = &[")
+        .nth(1)
+        .unwrap()
+        .split("];")
+        .next()
+        .unwrap();
+    let declared = quoted(list);
+
+    let cap: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(desktop().join("src-tauri/capabilities/main.json")).unwrap(),
+    )
+    .unwrap();
+    let allowed: Vec<String> = cap["permissions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| {
+            p.as_str()
+                .unwrap()
+                .trim_start_matches("allow-")
+                .replace('-', "_")
+        })
+        .collect();
+
+    let mut sources = Vec::new();
+    files(&desktop().join("src-tauri/src"), &mut sources);
+    let rust: String = sources
+        .iter()
+        .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+        .map(|p| fs::read_to_string(p).unwrap())
+        .collect();
+    let handler = rust
+        .split("generate_handler![")
+        .nth(1)
+        .unwrap()
+        .split(']')
+        .next()
+        .unwrap();
+    let registered: Vec<&str> = handler
+        .split(',')
+        .map(|s| s.trim().rsplit("::").next().unwrap())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    for c in &called {
+        assert!(
+            declared.contains(c),
+            "{c}: missing from COMMANDS in build.rs"
+        );
+        assert!(
+            allowed.contains(c),
+            "{c}: missing from capabilities/main.json"
+        );
+        assert!(
+            registered.contains(&c.as_str()),
+            "{c}: missing from generate_handler!"
+        );
+    }
+    for c in &declared {
+        assert!(allowed.contains(c), "{c}: declared but not allowed");
+    }
+}
+
 #[test]
 fn the_executable_name_is_in_the_core_allow_list() {
     assert!(hirzla_core::auth::DEFAULT_CLIENTS.contains(&"hirzla-desktop"));
