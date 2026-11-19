@@ -78,7 +78,10 @@ fn refusal_message(e: &ErrorReply) -> String {
             "le noyau ne prend pas en charge cette version de la commande.".into()
         }
         ErrorCode::Unauthorized => {
-            "accès refusé : ce programme n'est pas autorisé à parler au noyau.".into()
+            "accès refusé : ce programme n'est pas autorisé à parler au noyau. Si Hirzla vient \
+             d'être mis à jour, le noyau de la version précédente tourne encore : fermez votre \
+             session ou redémarrez le poste. Sinon, réinstallez Hirzla."
+                .into()
         }
         ErrorCode::NoVault => "aucun coffre. Créez-le avec « hirzla init ».".into(),
         ErrorCode::VaultExists => "un coffre existe déjà à cet emplacement.".into(),

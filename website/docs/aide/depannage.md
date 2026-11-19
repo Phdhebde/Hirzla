@@ -9,7 +9,8 @@ description: Résoudre les problèmes courants de Hirzla - accès refusé par le
 
 | Message | Cause probable | Que faire |
 | --- | --- | --- |
-| « accès refusé : ce programme n'est pas autorisé à parler au noyau. » | Un exécutable a été déplacé ou remplacé | Réinstallez Hirzla |
+| « accès refusé : ce programme n'est pas autorisé à parler au noyau… » | Juste après une mise à jour : le noyau de la version précédente tourne encore | Fermez votre session ou redémarrez le poste |
+| « accès refusé : ce programme n'est pas autorisé à parler au noyau… » | Un exécutable a été déplacé ou remplacé | Réinstallez Hirzla |
 | « la signature du noyau n'est pas reconnue… » | Le noyau installé ne correspond pas au manifeste des clients | Réinstallez depuis un fichier [vérifié](../installer/index.md) |
 | « le noyau n'est pas démarré. » | Le coffre n'est pas ouvert | Ouvrez le coffre avec l'application ou `hirzla unlock` |
 | « déverrouillage refusé : mot de passe incorrect, ou coffre altéré. » | Mot de passe erroné | Vérifiez la disposition du clavier et le verrouillage des majuscules. Après plusieurs essais, le noyau impose un délai |

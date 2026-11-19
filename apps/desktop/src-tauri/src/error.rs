@@ -326,8 +326,9 @@ pub fn refusal_message(e: &ErrorReply) -> String {
             "Le noyau ne prend pas en charge cette version de l'application.".into()
         }
         ErrorCode::Unauthorized => {
-            "Accès refusé : cette application n'est pas autorisée à parler au noyau. Installez-la \
-             à côté de hirzla-core."
+            "Accès refusé : cette application n'est pas autorisée à parler au noyau. Si Hirzla \
+             vient d'être mis à jour, le noyau de la version précédente tourne encore : fermez \
+             votre session ou redémarrez le poste. Sinon, réinstallez Hirzla."
                 .into()
         }
         ErrorCode::NoVault => "Aucun coffre. Créez-le pour commencer.".into(),
