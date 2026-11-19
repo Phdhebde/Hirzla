@@ -225,7 +225,8 @@ plus » (`BiometryCurrentSet`) et le mot de passe ouvre le coffre.
 Avec une clé qui gère `hmac-secret` (YubiKey 5, SoloKey 2, Token2…) et un PIN :
 `hirzla methods add fido2`, puis `hirzla unlock --materiel`. Vérifier : Windows demande le PIN
 et le contact ; deux clés enrôlées ouvrent chacune le coffre (rangs 1 et 2) ; une autre clé
-présentée donne « n'existe plus » ; une clé sans `hmac-secret` est refusée à l'ajout.
+présentée donne « n'existe plus » ; une clé sans `hmac-secret` est refusée à l'ajout ; la fenêtre de
+Windows ne propose pas « Cet appareil Windows » (Windows Hello) à l'ajout ni à l'ouverture.
 
 ### F2 — Clé FIDO2 sous Linux et macOS (`fido2-hid`)
 

@@ -8,6 +8,21 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [1.1.2] — 2026-11-19
+
+### Corrections
+
+- **Barre latérale** : sous Windows, Linux et macOS, chaque clic dans les sections Coffre,
+  Types et Casiers affichait « Erreur inattendue de l'application. ». Les six commandes des
+  dossiers ajoutées en 1.1.0 n'étaient pas autorisées pour la fenêtre principale ; elles le
+  sont, et un test vérifie maintenant que chaque commande appelée par l'interface est
+  déclarée, autorisée et enregistrée.
+- **Clé FIDO2 sous Windows** : l'ajout d'une clé de sécurité échouait sous Windows 11 avec
+  « Un problème s'est produit lors de la connexion avec votre clé d'accès ». Cause probable :
+  Windows pouvait enregistrer l'identifiant comme clé d'accès Windows Hello au lieu de la clé. Hirzla ne
+  demande plus que des authentificateurs itinérants (clé USB, NFC, Bluetooth, ou téléphone)
+  et indique à Windows où chercher l'identifiant.
+
 ## [1.1.1] — 2026-11-18
 
 ### Corrections

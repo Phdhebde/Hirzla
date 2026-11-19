@@ -1,7 +1,9 @@
 //! FIDO2 under Windows through the system's WebAuthn API (`webauthn.dll`, ADR 0075 § 3). Raw
-//! HID access to security keys needs administrator rights on Windows; this API does not, and
-//! its window also offers passkeys on a phone (hybrid) and Windows Hello as an authenticator
-//! when they support PRF.
+//! HID access to security keys needs administrator rights on Windows; this API does not.
+//! Only roaming authenticators are asked for (a security key over USB, NFC or Bluetooth, or a
+//! phone over hybrid): left free, Windows 11 saves the credential as a Windows Hello passkey,
+//! which then fails the PRF assertion, and Windows Hello has its own method behind the
+//! classical-risk warning anyway.
 //!
 //! - enrolment: `WebAuthNAuthenticatorMakeCredential` creates a non-discoverable credential
 //!   with PRF enabled and user verification required, then one assertion evaluates the PRF
@@ -19,7 +21,7 @@ use windows_sys::Win32::Networking::WindowsWebServices::{
     WebAuthNAuthenticatorGetAssertion, WebAuthNAuthenticatorMakeCredential, WebAuthNFreeAssertion,
     WebAuthNFreeCredentialAttestation, WebAuthNGetApiVersionNumber, WEBAUTHN_ASSERTION,
     WEBAUTHN_ASSERTION_VERSION_3, WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
-    WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
+    WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM, WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS,
     WEBAUTHN_AUTHENTICATOR_GET_ASSERTION_OPTIONS_VERSION_6,
     WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS,
     WEBAUTHN_AUTHENTICATOR_MAKE_CREDENTIAL_OPTIONS_VERSION_6, WEBAUTHN_CLIENT_DATA,
@@ -27,8 +29,11 @@ use windows_sys::Win32::Networking::WindowsWebServices::{
     WEBAUTHN_COSE_ALGORITHM_RSASSA_PKCS1_V1_5_WITH_SHA256, WEBAUTHN_COSE_CREDENTIAL_PARAMETER,
     WEBAUTHN_COSE_CREDENTIAL_PARAMETERS, WEBAUTHN_COSE_CREDENTIAL_PARAMETER_CURRENT_VERSION,
     WEBAUTHN_CREDENTIAL, WEBAUTHN_CREDENTIALS, WEBAUTHN_CREDENTIAL_ATTESTATION,
-    WEBAUTHN_CREDENTIAL_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY, WEBAUTHN_EXTENSION,
-    WEBAUTHN_EXTENSIONS, WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET,
+    WEBAUTHN_CREDENTIAL_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_EX,
+    WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION, WEBAUTHN_CREDENTIAL_LIST,
+    WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY, WEBAUTHN_CTAP_TRANSPORT_BLE,
+    WEBAUTHN_CTAP_TRANSPORT_HYBRID, WEBAUTHN_CTAP_TRANSPORT_NFC, WEBAUTHN_CTAP_TRANSPORT_USB,
+    WEBAUTHN_EXTENSION, WEBAUTHN_EXTENSIONS, WEBAUTHN_EXTENSIONS_IDENTIFIER_HMAC_SECRET,
     WEBAUTHN_HASH_ALGORITHM_SHA_256, WEBAUTHN_HMAC_SECRET_SALT, WEBAUTHN_HMAC_SECRET_SALT_VALUES,
     WEBAUTHN_RP_ENTITY_INFORMATION, WEBAUTHN_RP_ENTITY_INFORMATION_CURRENT_VERSION,
     WEBAUTHN_USER_ENTITY_INFORMATION, WEBAUTHN_USER_ENTITY_INFORMATION_CURRENT_VERSION,
@@ -46,6 +51,13 @@ use super::{
 const MIN_API_VERSION: u32 = 4;
 /// Longest credential identifier accepted from the authenticator (CTAP 2.1).
 const MAX_CREDENTIAL_ID: u32 = 1023;
+
+/// Transports of a roaming authenticator, given with the credential so that Windows looks for
+/// it on a security key or a phone and not among its own passkeys.
+const ROAMING_TRANSPORTS: u32 = WEBAUTHN_CTAP_TRANSPORT_USB
+    | WEBAUTHN_CTAP_TRANSPORT_NFC
+    | WEBAUTHN_CTAP_TRANSPORT_BLE
+    | WEBAUTHN_CTAP_TRANSPORT_HYBRID;
 
 /// FIDO2 through `webauthn.dll`.
 pub struct WindowsFido2;
@@ -95,11 +107,25 @@ fn prf(credential_id: &[u8], salt: &[u8; 32], fresh: &[u8; 32]) -> Result<Materi
         pbClientDataJSON: json.as_mut_ptr(),
         pwszHashAlgId: WEBAUTHN_HASH_ALGORITHM_SHA_256,
     };
+    let id_len = u32::try_from(id.len()).map_err(|_| FactorError::Invalidated)?;
+    // The legacy list is still filled: `webauthn.dll` expects it next to the extended one.
     let mut credential = WEBAUTHN_CREDENTIAL {
         dwVersion: WEBAUTHN_CREDENTIAL_CURRENT_VERSION,
-        cbId: u32::try_from(id.len()).map_err(|_| FactorError::Invalidated)?,
+        cbId: id_len,
         pbId: id.as_mut_ptr(),
         pwszCredentialType: WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY,
+    };
+    let mut credential_ex = WEBAUTHN_CREDENTIAL_EX {
+        dwVersion: WEBAUTHN_CREDENTIAL_EX_CURRENT_VERSION,
+        cbId: id_len,
+        pbId: id.as_mut_ptr(),
+        pwszCredentialType: WEBAUTHN_CREDENTIAL_TYPE_PUBLIC_KEY,
+        dwTransports: ROAMING_TRANSPORTS,
+    };
+    let mut allowed: [*mut WEBAUTHN_CREDENTIAL_EX; 1] = [&mut credential_ex];
+    let mut allow_list = WEBAUTHN_CREDENTIAL_LIST {
+        cCredentials: 1,
+        ppCredentials: allowed.as_mut_ptr(),
     };
     let mut prf_salt = WEBAUTHN_HMAC_SECRET_SALT {
         cbFirst: 32,
@@ -119,14 +145,16 @@ fn prf(credential_id: &[u8], salt: &[u8; 32], fresh: &[u8; 32]) -> Result<Materi
             cCredentials: 1,
             pCredentials: &mut credential,
         },
-        dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY,
+        dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
         dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
+        pAllowCredentialList: &mut allow_list,
         pHmacSecretSaltValues: &mut salt_values,
         ..Default::default()
     };
     let mut assertion: *mut WEBAUTHN_ASSERTION = std::ptr::null_mut();
     // SAFETY: every pointer passed points to a local above (strings terminated by zero, byte
-    // buffers whose lengths are given), all alive until the call returns; `assertion` is a
+    // buffers whose lengths are given, the allow list and its one entry), all alive until the
+    // call returns; `assertion` is a
     // valid out-pointer. The foreground window only parents the system dialog.
     #[allow(unsafe_code)]
     let hr = unsafe {
@@ -239,7 +267,7 @@ impl UnlockFactor for WindowsFido2 {
                 cExtensions: 1,
                 pExtensions: &mut extension,
             },
-            dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_ANY,
+            dwAuthenticatorAttachment: WEBAUTHN_AUTHENTICATOR_ATTACHMENT_CROSS_PLATFORM,
             bRequireResidentKey: 0,
             dwUserVerificationRequirement: WEBAUTHN_USER_VERIFICATION_REQUIREMENT_REQUIRED,
             dwAttestationConveyancePreference: WEBAUTHN_ATTESTATION_CONVEYANCE_PREFERENCE_NONE,
