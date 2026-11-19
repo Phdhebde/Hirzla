@@ -346,7 +346,11 @@ pas à root ou est inscriptible par un groupe ou par les autres. Ordre de produc
    l'empreinte de chaque exécutable du paquet, puis que le manifeste du `.pkg` est à root en
    `0644`. Le `.pkg` installe `Hirzla.app` dans `/Applications` (non relogeable) et le manifeste
    dans `/Library/Application Support/Hirzla/` (répertoire `0755`), sur le volume système
-   seulement.
+   seulement. Avant de remplacer `Hirzla.app`, son script `preinstall` arrête, pour tous les
+   utilisateurs, le noyau, l'application et l'hôte natif lancés depuis
+   `/Applications/Hirzla.app` (SIGTERM, puis SIGKILL après 10 s) : un noyau lit le manifeste
+   des clients à son démarrage seulement, et celui de la version précédente refuserait tous les
+   clients de la nouvelle. Le client suivant démarre le nouveau noyau.
 
 Sans certificat « Developer ID Installer », Gatekeeper avertit à l'ouverture du `.pkg` : clic
 droit › *Ouvrir*, ou `sudo installer -pkg Hirzla_<version>_<arch>.pkg -target /`.
