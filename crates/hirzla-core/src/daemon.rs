@@ -27,6 +27,7 @@ use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, Ex
 use crate::locker_export::service as export_service;
 use crate::methods::proto::{is_method_request, MethodCode, MethodReply, MethodRequest};
 use crate::methods::service::{run_gesture, Prepared};
+use crate::passkey::proto::{is_passkey_request, PasskeyReply, PasskeyRequest};
 use crate::proto::{
     read_frame, write_frame, ErrorCode, ErrorReply, FrameError, Op, Reply, Request,
 };
@@ -772,6 +773,29 @@ fn serve_totp(
     write_frame(conn, &body).is_ok()
 }
 
+/// Answers a passkey request (`docs/api-locale.md` § 23, ADR 0079). Both the full and the
+/// browser profiles are served: the core checks the relying party against the origin
+/// itself. Returns `false` if the connection must close.
+fn serve_passkey(conn: &mut Connection, core: &Mutex<Core>, log: &Log, frame: &[u8]) -> bool {
+    let (id, result) = match PasskeyRequest::decode(frame) {
+        Ok((id, request)) => (
+            id,
+            core.lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .handle_passkey(request),
+        ),
+        Err((id, code)) => {
+            log.record(Event::BadMessage);
+            (id, Err(code.into()))
+        }
+    };
+    let Ok(body) = PasskeyReply::encode(id, &result) else {
+        return false;
+    };
+    drop(result);
+    write_frame(conn, &body).is_ok()
+}
+
 /// Answers an export request (`docs/api-locale.md` § 19). The browser profile is refused
 /// (§ 19.1). Argon2id, the sealing and the file run outside the core's lock. Returns `false`
 /// if the connection must close.
@@ -936,6 +960,12 @@ fn serve(
         }
         if is_totp_request(&frame) {
             if serve_totp(&mut conn, core, log, &frame, profile) {
+                continue;
+            }
+            break;
+        }
+        if is_passkey_request(&frame) {
+            if serve_passkey(&mut conn, core, log, &frame) {
                 continue;
             }
             break;

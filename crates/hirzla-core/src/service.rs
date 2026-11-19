@@ -77,6 +77,9 @@ pub struct Core {
     pub(crate) gesture_busy: Arc<AtomicBool>,
     /// Clock of the TOTP codes, replaced by tests that need a fixed time (ADR 0078).
     pub(crate) totp_clock: Option<fn() -> Option<u64>>,
+    /// When the vault was last opened (master password or hardware method): the user counts
+    /// as verified for a passkey shortly after (ADR 0079 § 2). Erased when it locks.
+    pub(crate) verified_at: Option<Instant>,
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -213,6 +216,7 @@ impl Core {
             factors: system_factors(),
             gesture_busy: Arc::new(AtomicBool::new(false)),
             totp_clock: None,
+            verified_at: None,
         }
     }
 
@@ -245,6 +249,7 @@ impl Core {
     /// Locks the vault: every key and unsealed index fragment is erased as it is dropped.
     pub fn lock(&mut self, reason: LockReason) {
         self.server = None;
+        self.verified_at = None;
         if let Some(v) = self.vault.take() {
             v.close();
             self.log.record(Event::Locked { reason });
@@ -332,6 +337,7 @@ impl Core {
         self.vault = Some(vault);
         self.password_proven();
         self.last_activity = Instant::now();
+        self.verified_at = Some(self.last_activity);
         self.log.record(Event::Unlocked);
     }
 
@@ -614,6 +620,7 @@ impl Core {
         self.log.record(Event::VaultCreated);
         self.vault = Some(vault);
         self.last_activity = Instant::now();
+        self.verified_at = Some(self.last_activity);
         self.log.record(Event::Unlocked);
         Ok(Reply::Done)
     }

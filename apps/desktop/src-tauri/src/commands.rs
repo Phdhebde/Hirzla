@@ -199,6 +199,10 @@ pub enum FieldName {
     SshPublicKey,
     /// SSH key passphrase.
     SshPassphrase,
+    /// Relying party of a passkey (not secret).
+    RpId,
+    /// Display name of a passkey's account (not secret).
+    DisplayName,
 }
 
 impl FieldName {
@@ -210,6 +214,8 @@ impl FieldName {
             FieldName::Notes => Field::Notes,
             FieldName::SshPublicKey => Field::SshPublicKey,
             FieldName::SshPassphrase => Field::SshPassphrase,
+            FieldName::RpId => Field::RpId,
+            FieldName::DisplayName => Field::DisplayName,
         }
     }
 }

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Hirzla — clé d’accès</title>
+    <link rel="stylesheet" href="popup.css" />
+    <script type="module" src="passkey.js"></script>
+  </head>
+  <body class="consent">
+    <header>
+      <img src="icons/hirzla-32.png" alt="" width="22" height="22" />
+      <span class="brand">HIRZLA</span>
+    </header>
+
+    <p class="site verified">
+      <span class="square" aria-hidden="true"></span>
+      <span class="site-text"><code id="origin"></code><span id="site-note" class="site-note"></span></span>
+    </p>
+
+    <main>
+      <h1 id="heading">Clé d’accès</h1>
+      <p id="message" class="message" role="status" hidden></p>
+
+      <section id="create" hidden>
+        <p>Créer une clé d’accès Hirzla pour ce site :</p>
+        <p class="card account"><span id="create-name" class="title"></span><span id="create-user" class="user"></span></p>
+        <p class="hint">La clé est gardée dans votre coffre et synchronisée comme vos autres secrets. Elle est moins protégée qu’une clé de sécurité matérielle.</p>
+      </section>
+
+      <section id="choose" hidden>
+        <p>Se connecter avec :</p>
+        <ul id="accounts"></ul>
+      </section>
+
+      <div class="row stack">
+        <button id="use" type="button" class="primary" hidden>Créer la clé d’accès</button>
+        <button id="retry" type="button" class="primary" hidden>Réessayer</button>
+        <button id="other" type="button">Utiliser un autre appareil</button>
+        <button id="cancel" type="button">Annuler</button>
+      </div>
+    </main>
+  </body>
+</html>

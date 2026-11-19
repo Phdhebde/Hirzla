@@ -8,6 +8,29 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [Non publié]
+
+### Clés d'accès (passkeys, ADR 0079)
+
+- Hirzla crée et utilise des clés d'accès WebAuthn dans le navigateur. La clé privée est
+  gardée dans le coffre, synchronisée comme les autres secrets, et ne quitte jamais le
+  noyau : il signe lui-même les défis des sites (ES256 ou Ed25519).
+- Extension : nouveau réglage **Clés d'accès**, désactivé par défaut. Activé, il demande
+  l'accès aux sites `https` et intercepte `navigator.credentials` dans le cadre principal.
+  Chaque création ou connexion se confirme dans une fenêtre de Hirzla. « Utiliser un autre
+  appareil » rend la main à l'authentificateur du navigateur.
+- Protection contre l'hameçonnage : le noyau ne signe que pour le site lui-même ou l'un de
+  ses domaines parents, jamais pour un suffixe public (liste des suffixes publics compilée,
+  sans réseau). Il construit lui-même le `clientDataJSON` à partir de l'origine donnée par
+  le navigateur.
+- Vérification de l'utilisateur annoncée au site seulement si le coffre a été ouvert il y a
+  moins de 5 minutes. Compteur de signatures toujours à 0, clé déclarée sauvegardée, AAGUID
+  propre à Hirzla.
+- Application : fiche « Clé d'accès » (site, compte, nom affiché), sans jamais montrer la
+  clé privée.
+- API locale version 14 (`docs/api-locale.md` § 23) ; dépendances `coset` (COSE, CBOR) et
+  `psl` (liste des suffixes publics). Hors de la configuration évaluée CSPN.
+
 ## [1.1.2] — 2026-11-19
 
 ### Corrections

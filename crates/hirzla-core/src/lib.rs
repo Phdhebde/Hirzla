@@ -18,6 +18,7 @@
 //!   FIDO2;
 //! - [`locker_export`]: encrypted export and import of a locker (version 9, ADR 0077);
 //! - [`totp`]: TOTP codes (version 13, ADR 0078);
+//! - [`passkey`]: passkeys (version 14, ADR 0079);
 //! - [`codesign`]: the signature of the core's clients (ADR 0042);
 //! - [`release`]: documents signed by the publisher key, client manifest and offline update
 //!   package (ADR 0042, 0043).
@@ -36,6 +37,7 @@ pub mod generator;
 pub mod locker_export;
 pub mod methods;
 pub mod origin;
+pub mod passkey;
 pub mod proto;
 pub mod release;
 pub mod selfmode;

@@ -260,6 +260,14 @@ Règles :
   annexe B et les 10 de la RFC 4226 annexe D. Le code (`TotpCode`) est effacé à la libération
   et n'a pas de `Debug`. La clé TOTP saisie (`otpauth://` ou base32) est décodée par
   `data-encoding` dans une mémoire effacée (`hirzla_vault::totp`).
+- **Clés d'accès** (ADR 0079) : `hirzla_crypto::webauthn` génère et signe par AWS-LC
+  (`ECDSA_P256_SHA256_ASN1_SIGNING`, Ed25519), encode les COSE_Key et l'objet d'attestation
+  `none` par `coset` (et le `ciborium` qu'il fournit), et juxtapose les octets de
+  `authenticatorData` dans l'ordre de la norme (WebAuthn niveau 3, § 6.1). La clé privée
+  (COSE_Key) vit en mémoire effacée ; les valeurs CBOR qui la portent pendant l'encodage
+  sont effacées avant d'être libérées. Tests : vecteur Ed25519 de la RFC 8032 § 7.1,
+  signatures ES256 vérifiées par `p256` (RustCrypto, tests seulement), structure de
+  `authenticatorData` et de l'objet d'attestation. AAGUID : `2fa85023-8b77-4fd4-8f96-909ee56f3895`.
 - Ces mécanismes ne protègent jamais une donnée Hirzla. Ils ne s'appliquent qu'au secret
   stocké, pour le protocole du tiers.
 - Ils tournent dans le noyau, avec une bibliothèque auditée (ADR 0009). La clé ou la graine

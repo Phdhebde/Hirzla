@@ -38,9 +38,17 @@ thiserror = "2.0"
 # Same parser as the vault index hosts (WHATWG URL Standard), already in the graph.
 url = "2.5.8"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
+# Public Suffix List compiled in, for the relying party identifier of a passkey (ADR 0079
+# § 3): no network. Pinned: the list changes with the version, a reviewed change.
+psl = { version = "=2.1.258", default-features = false }
+# Base64url of the challenge in the passkey `clientDataJSON` (ADR 0079 § 3). Same version as
+# hirzla-vault (ADR 0025).
+data-encoding = { version = "=2.11.1", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Independent ES256 verification of the passkey signatures (ADR 0079 § 1); tests only.
+p256 = { version = "0.14.0", features = ["ecdsa"] }
 # In-memory relay and test identities, for the Hornn control plane simulator (tests only).
 hirzla-sync = { path = "../hirzla-sync", features = ["net", "test-support"] }
 # A second device of the same member for the device revocation test (ADR 0059).

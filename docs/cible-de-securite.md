@@ -130,8 +130,10 @@ Propriétés distinctives :
   implémentation).
 - La garde matérielle de la clé du poste (TPM, Secure Enclave, FIDO2) : prototypes non
   branchés (**écart**, ADR 0050 point 2).
-- Les mécanismes d'interopérabilité (TOTP, WebAuthn, agent SSH) : non implémentés dans le
-  noyau (**écart**, ADR 0050 point 3 ; voir § 3.4).
+- Les mécanismes d'interopérabilité (TOTP, WebAuthn, agent SSH) : hors des fonctions de
+  sécurité évaluées (**écart**, ADR 0050 point 3 ; voir § 3.4). Les clés d'accès (ADR 0079)
+  sont codées ; le mode « Clés d'accès » de l'extension est désactivé dans la configuration
+  évaluée.
 - La disponibilité face à un déni de service volontaire (hypothèse H4).
 - Les canaux auxiliaires physiques (hypothèse H3).
 
