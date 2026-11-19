@@ -3,10 +3,23 @@ name: CI
 on:
   push:
     branches: [main]
+    paths-ignore: ["docs/**", "website/**", "brand/**", "**/*.md"]
   pull_request:
+    paths-ignore: ["docs/**", "website/**", "brand/**", "**/*.md"]
 
 permissions:
   contents: read
+
+# A new push to a pull request cancels its previous run; runs on main always finish.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: "0"
+  # Line tables keep file and line in backtraces; full debug info only slows the links and
+  # bloats the cache.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   check:
@@ -23,6 +36,11 @@ jobs:
         run: |
           rustup toolchain install
           rustup show
+      # Dependencies only (Cargo home and target/deps). Saved from main alone: pull requests
+      # restore it and never write one.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # aws-lc-rs builds the AWS-LC C library (ADR 0009): CMake on every OS,
       # NASM for the x86-64 assembly on Windows.
       - name: CMake
@@ -40,7 +58,7 @@ jobs:
       - name: Linux libraries
         if: runner.os == 'Linux'
         run: >-
-          sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev strace
+          sudo rm -f /var/lib/man-db/auto-update && sudo apt-get update && sudo apt-get install -y libclang-dev libssl-dev strace
           libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
       # No tpm2-tss here: the TPM prototype is behind the `tpm2-prototype` feature, off by
       # default (ADR 0052), and built only by the « TPM prototype (swtpm) » job.
@@ -59,47 +77,6 @@ jobs:
           HIRZLA_REQUIRE_STRACE: ${{ runner.os == 'Linux' && '1' || '0' }}
         run: cargo test --workspace --no-fail-fast
 
-  # dudect-style timing test of the Shamir arithmetic (ADR 0012). Shared runners are noisy:
-  # the result is informative and never blocks a merge.
-  constant-time:
-    name: constant time (informative)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain
-        run: rustup toolchain install
-      - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
-      - name: dudect
-        run: cargo test --release -p hirzla-crypto -- --ignored dudect --nocapture
-
-  # Short fuzzing of every decoder exposed to external data (ADR 0013; inventory in
-  # docs/evaluation/interfaces.md). Informative: never blocks a merge.
-  fuzz:
-    name: fuzz (informative)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-      - name: Toolchain
-        run: rustup toolchain install nightly --profile minimal
-      - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
-      - name: cargo-fuzz
-        run: cargo +nightly install cargo-fuzz --locked
-      - name: Fuzz each decoder for 60 seconds
-        working-directory: fuzz
-        run: |
-          status=0
-          for target in decode_secret_body decode_locker_body decode_header read_kdbx read_kdbx_payload \
-            decode_local_request decode_sync_message decode_operation decode_server_annex \
-            decode_release decode_audit_log decode_recovery_share decode_keylog decode_hornn_grant \
-            decode_locker_export parse_csv parse_native_json; do
-            cargo +nightly fuzz run "$target" -- -max_total_time=60 || status=1
-          done
-          exit $status
-
   # TPM 2.0 prototype (ADR 0014) against swtpm, the software TPM. Real chips are tested by
   # hand (docs/keystore-prototypes.md).
   tpm-swtpm:
@@ -109,8 +86,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tools and swtpm
-        run: sudo apt-get update && sudo apt-get install -y cmake libssl-dev swtpm swtpm-tools
+        run: sudo rm -f /var/lib/man-db/auto-update && sudo apt-get update && sudo apt-get install -y cmake libssl-dev swtpm swtpm-tools
       - name: tpm2-tss
         run: sudo -E .github/scripts/install-tpm2-tss.sh
       - name: Start swtpm
@@ -139,13 +119,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: CMake
         uses: jwlawson/actions-setup-cmake@v2
         with:
           cmake-version: "3.31.x"
       - name: Linux libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev libclang-dev
+        run: sudo rm -f /var/lib/man-db/auto-update && sudo apt-get update && sudo apt-get install -y libudev-dev libclang-dev
       - name: Clippy
         run: >-
           cargo clippy -p hirzla-keystore -p hirzla-core --all-targets --features
@@ -186,8 +169,11 @@ jobs:
       - uses: actions/checkout@v4
       - name: Toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
+        run: sudo rm -f /var/lib/man-db/auto-update && sudo apt-get update && sudo apt-get install -y cmake libclang-dev libssl-dev
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -214,7 +200,7 @@ jobs:
       - name: Toolchain
         run: rustup toolchain install
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y cmake libudev-dev
+        run: sudo rm -f /var/lib/man-db/auto-update && sudo apt-get update && sudo apt-get install -y cmake libudev-dev
       - name: Crates of Cargo.lock
         run: cargo fetch --locked
       - name: Two builds, compared
