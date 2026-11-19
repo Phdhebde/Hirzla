@@ -121,10 +121,11 @@ Précisions :
   calcule la même transformation (`SHA-256` de `hirzla-crypto`, pas de code maison). Une même
   clé donne donc la même sortie sous les trois systèmes. La vérification de l'utilisateur est
   **toujours exigée** : une clé CTAP 2.1 rend une sortie différente avec et sans vérification,
-  et la mélanger rendrait la méthode inutilisable. Sous Windows, la fenêtre du système propose
-  aussi les clés d'accès d'un téléphone (hybride) et Windows Hello comme authentificateur,
-  quand ils gèrent PRF ; l'enrôlement refuse un authentificateur qui ne rend pas de sortie
-  PRF. Sous Linux et macOS, le PIN de la clé est tapé dans le client et passe au noyau comme
+  et la mélanger rendrait la méthode inutilisable. Sous Windows, seuls les authentificateurs
+  itinérants sont demandés (clé de sécurité en USB, NFC ou Bluetooth, ou clé d'accès d'un
+  téléphone en hybride) : laissé libre, Windows 11 enregistre l'identifiant comme clé d'accès
+  Windows Hello, cause probable de l'échec d'ajout constaté le 2026-11-19 sous Windows 11 25H2), et Windows Hello a déjà sa propre méthode, derrière l'avertissement du § 4 ;
+  l'enrôlement refuse un authentificateur qui ne rend pas de sortie PRF. Sous Linux et macOS, le PIN de la clé est tapé dans le client et passe au noyau comme
   le mot de passe maître (un champ texte effacé, jamais journalisé).
 
 ### 4. Règle 2 et posture post-quantique

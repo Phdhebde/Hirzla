@@ -8,6 +8,16 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [Non publié]
+
+### Corrections
+
+- **Clé FIDO2 sous Windows** : l'ajout d'une clé de sécurité échouait sous Windows 11 avec
+  « Un problème s'est produit lors de la connexion avec votre clé d'accès ». Cause probable : Windows pouvait
+  enregistrer l'identifiant comme clé d'accès Windows Hello au lieu de la clé. Hirzla ne
+  demande plus que des authentificateurs itinérants (clé USB, NFC, Bluetooth, ou téléphone)
+  et indique à Windows où chercher l'identifiant.
+
 ## [1.1.1] — 2026-11-18
 
 ### Corrections
