@@ -31,8 +31,15 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
 - API locale version 14 (`docs/api-locale.md` § 23) ; dépendances `coset` (COSE, CBOR) et
   `psl` (liste des suffixes publics). Hors de la configuration évaluée CSPN.
 
+## [1.1.2] — 2026-11-19
+
 ### Corrections
 
+- **Mise à jour sous macOS** : après une mise à jour, l'application et la ligne de commande
+  étaient refusées (« Accès refusé : cette application n'est pas autorisée à parler au
+  noyau ») tant que le noyau de la version précédente tournait encore. Le paquet `.pkg`, donc
+  aussi `brew upgrade`, arrête maintenant le noyau, l'application et l'hôte natif avant de les
+  remplacer. Le message d'accès refusé nomme aussi ce cas et dit quoi faire.
 - **Barre latérale** : sous Windows, Linux et macOS, chaque clic dans les sections Coffre,
   Types et Casiers affichait « Erreur inattendue de l'application. ». Les six commandes des
   dossiers ajoutées en 1.1.0 n'étaient pas autorisées pour la fenêtre principale ; elles le
