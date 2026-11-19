@@ -8,6 +8,7 @@
 
 use hirzla_core::client::ClientError;
 use hirzla_core::origin::origin_host;
+use hirzla_core::passkey::proto::{PasskeyCode, PasskeyReply, PasskeyRequest};
 use hirzla_core::proto::{
     classes, ApiValue, ListEntry, Reply, Request, VaultState, GENERATE_LENGTH,
 };
@@ -35,6 +36,16 @@ pub trait CoreLink {
     /// # Errors
     /// [`ClientError`].
     fn call(&mut self, request: &Request) -> Result<Reply, ClientError>;
+
+    /// Sends one passkey request (version 14, ADR 0079); the inner result is the core's
+    /// refusal.
+    ///
+    /// # Errors
+    /// [`ClientError`].
+    fn call_passkey(
+        &mut self,
+        request: &PasskeyRequest,
+    ) -> Result<Result<PasskeyReply, PasskeyCode>, ClientError>;
 }
 
 /// A message of the extension, checked.
@@ -77,6 +88,8 @@ pub enum HostRequest {
     Lock,
     /// Ask the desktop application to bring its window to the front (ADR 0071).
     Show,
+    /// A passkey request (ADR 0079), already checked.
+    Passkey(PasskeyRequest),
 }
 
 impl std::fmt::Debug for HostRequest {
@@ -90,6 +103,7 @@ impl std::fmt::Debug for HostRequest {
             HostRequest::Generate { .. } => "HostRequest::Generate",
             HostRequest::Lock => "HostRequest::Lock",
             HostRequest::Show => "HostRequest::Show",
+            HostRequest::Passkey(_) => "HostRequest::Passkey",
         })
     }
 }
@@ -106,7 +120,7 @@ pub enum HostError {
 }
 
 impl HostError {
-    fn name(self) -> &'static str {
+    pub(crate) fn name(self) -> &'static str {
         match self {
             HostError::BadRequest => "bad_request",
             HostError::InvalidOrigin => "invalid_origin",
@@ -115,7 +129,10 @@ impl HostError {
     }
 }
 
-fn text<'a>(o: &'a Object, key: &str) -> Result<Option<&'a Zeroizing<String>>, HostError> {
+pub(crate) fn text<'a>(
+    o: &'a Object,
+    key: &str,
+) -> Result<Option<&'a Zeroizing<String>>, HostError> {
     match o.get(key) {
         None => Ok(None),
         Some(JsonValue::Text(t)) => Ok(Some(t)),
@@ -123,13 +140,13 @@ fn text<'a>(o: &'a Object, key: &str) -> Result<Option<&'a Zeroizing<String>>, H
     }
 }
 
-fn origin(o: &Object) -> Result<String, HostError> {
+pub(crate) fn origin(o: &Object) -> Result<String, HostError> {
     let t = text(o, "origin")?.ok_or(HostError::BadRequest)?;
     origin_host(t).ok_or(HostError::InvalidOrigin)?;
     Ok(t.as_str().to_owned())
 }
 
-fn id16(o: &Object, key: &str) -> Result<Id16, HostError> {
+pub(crate) fn id16(o: &Object, key: &str) -> Result<Id16, HostError> {
     let t = text(o, key)?.ok_or(HostError::BadRequest)?;
     let b = t.as_bytes();
     if b.len() != 32 {
@@ -172,6 +189,9 @@ pub fn parse_request(input: &[u8]) -> Result<HostRequest, HostError> {
         "fill" => &["type", "origin", "locker", "id"],
         "save" => &["type", "origin", "title", "username", "password"],
         "generate" => &["type", "length", "symbols"],
+        k if k.starts_with("passkey_") => {
+            return crate::passkey::parse(k, &o).map(HostRequest::Passkey);
+        }
         _ => return Err(HostError::BadRequest),
     };
     if !o.only(keys) {
@@ -221,13 +241,13 @@ pub fn parse_request(input: &[u8]) -> Result<HostRequest, HostError> {
     })
 }
 
-fn error_json(name: &str) -> Zeroizing<String> {
+pub(crate) fn error_json(name: &str) -> Zeroizing<String> {
     let mut w = Writer::with_capacity(64);
     w.raw("{\"ok\":false,\"error\":").string(name).raw("}");
     w.finish()
 }
 
-fn client_error(e: &ClientError) -> Zeroizing<String> {
+pub(crate) fn client_error(e: &ClientError) -> Zeroizing<String> {
     error_json(match e {
         ClientError::Refused(r) => r.code.name(),
         ClientError::NotRunning => "core_not_running",
@@ -236,7 +256,7 @@ fn client_error(e: &ClientError) -> Zeroizing<String> {
     })
 }
 
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     bytes
         .iter()
@@ -294,6 +314,7 @@ pub fn respond(core: &mut impl CoreLink, input: &[u8]) -> Zeroizing<String> {
         Err(e) => return error_json(e.name()),
     };
     match request {
+        HostRequest::Passkey(request) => crate::passkey::respond(core, &request),
         HostRequest::Status => match core.call(&Request::Status) {
             Ok(Reply::Status(s)) => {
                 let state = match s.state {

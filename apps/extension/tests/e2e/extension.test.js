@@ -13,7 +13,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import crypto, { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,6 +63,8 @@ function route(url) {
     'https://bank.test/embed': pages('bank-embeds-evil.html'),
     'https://bank.test/decoy': pages('decoy.html'),
     'https://shop.test/signup': pages('signup.html'),
+    'https://forge.test/passkey': pages('passkey.html'),
+    'https://login.forge.test/passkey': pages('passkey.html'),
   };
   if (u.host === 'bank.test' && u.pathname.startsWith('/hidden/')) {
     return pages('hidden.html').replace('__VARIANT__', u.pathname.slice('/hidden/'.length));
@@ -338,6 +340,127 @@ test('the browser profile cannot list, read or unlock: only what the host expose
 test('calling for the application window: the host starts nothing', async () => {
   assert.deepEqual(await ask({ type: 'show' }), { ok: false, error: 'no_app' });
   assert.deepEqual(await ask({ type: 'show', origin: 'https://bank.test' }), { ok: false, error: 'bad_request' });
+});
+
+// ---- Passkeys (ADR 0079) -----------------------------------------------------------------
+
+/** Turns the passkey mode on, as the popup does, for the test origins only. */
+async function passkeyModeOn() {
+  await extPage.evaluate(async () => {
+    const { CONTENT_SCRIPTS, SCRIPT_IDS } = await import('./lib/passkey.js');
+    await chrome.scripting.unregisterContentScripts({ ids: SCRIPT_IDS }).catch(() => {});
+    await chrome.scripting.registerContentScripts(
+      CONTENT_SCRIPTS.map((s) => ({ ...s, matches: ['https://*.test/*'] })),
+    );
+  });
+}
+
+/** Runs `fn` in the page and, meanwhile, answers the consent window with `click`. */
+async function withConsent(page, fn, click) {
+  const consent = context.waitForEvent('page', (p) => p.url().includes('/passkey.html'));
+  const result = page.evaluate(fn);
+  const win = await consent;
+  await win.waitForLoadState();
+  await click(win);
+  return result;
+}
+
+const fromB64u = (s) => Buffer.from(s, 'base64url');
+
+/** Opens `url` once the registered scripts are in the page (the first navigation right
+ * after a registration may come before it takes effect). */
+async function openWrapped(url) {
+  const opened = await open(url);
+  for (let i = 0; i < 5; i += 1) {
+    const wrapped = await opened.page.evaluate(() => !navigator.credentials.get.toString().includes('[native code]'));
+    if (wrapped) return opened;
+    await opened.page.reload();
+  }
+  assert.fail('the passkey scripts were not injected');
+}
+
+test('passkeys: off by default, no script in the page', async () => {
+  const registered = await extPage.evaluate(async () => {
+    const { SCRIPT_IDS } = await import('./lib/passkey.js');
+    return (await chrome.scripting.getRegisteredContentScripts({ ids: SCRIPT_IDS })).length;
+  });
+  assert.equal(registered, 0);
+  const { page } = await open('https://forge.test/passkey');
+  // The browser's own function: not wrapped.
+  assert.equal(await page.evaluate(() => navigator.credentials.get.toString().includes('[native code]')), true);
+  await page.close();
+});
+
+let passkey;
+
+test('passkeys: a site registers one after consent, then signs in with it', async () => {
+  await passkeyModeOn();
+  const { page } = await openWrapped('https://forge.test/passkey');
+  const created = await withConsent(
+    page,
+    () => window.register(),
+    async (win) => {
+      // The window fills itself from the background script: wait for it.
+      await win.locator('#use:not([hidden])').waitFor();
+      assert.equal(await win.locator('#origin').textContent(), 'https://forge.test');
+      assert.equal(await win.locator('#create-name').textContent(), 'Forge de test');
+      assert.equal(await win.locator('#create-user').textContent(), 'max@forge.test');
+      await win.locator('#use').click();
+    },
+  );
+  assert.equal(created.isCredential, true);
+  assert.equal(created.type, 'public-key');
+  assert.equal(created.id, created.rawId);
+  assert.equal(created.alg, -7);
+  assert.deepEqual(created.ext, { credProps: { rk: true } });
+  assert.deepEqual(JSON.parse(created.clientData), {
+    type: 'webauthn.create',
+    challenge: Buffer.alloc(32, 0x42).toString('base64url'),
+    origin: 'https://forge.test',
+    crossOrigin: false,
+  });
+  const auth = fromB64u(created.authData);
+  assert.deepEqual(auth.subarray(0, 32), createHash('sha256').update('forge.test').digest());
+  assert.equal(auth[32] & 0x41, 0x41, 'UP and AT');
+  assert.equal(created.json.response.publicKeyAlgorithm, -7);
+  passkey = created;
+
+  const signed = await withConsent(
+    page,
+    () => window.signIn(),
+    async (win) => {
+      await win.locator('#accounts button').first().waitFor();
+      assert.equal(await win.locator('#accounts button').count(), 1);
+      assert.match(await win.locator('#accounts').textContent(), /max@forge\.test/);
+      await win.locator('#accounts button').first().click();
+    },
+  );
+  assert.equal(signed.isCredential, true);
+  assert.equal(signed.id, created.id);
+  assert.equal(signed.userHandle, 'BwcHBw');
+  assert.equal(JSON.parse(signed.clientDataText).type, 'webauthn.get');
+  // The site checks the signature with the public key it received at registration.
+  const key = crypto.createPublicKey({ key: fromB64u(created.publicKey), format: 'der', type: 'spki' });
+  const message = Buffer.concat([
+    fromB64u(signed.authData),
+    createHash('sha256').update(fromB64u(signed.clientData)).digest(),
+  ]);
+  assert.equal(crypto.verify('sha256', message, key, fromB64u(signed.signature)), true);
+  await page.close();
+});
+
+test('passkeys: closing the consent window refuses; a subdomain is offered the key', async () => {
+  const { page } = await openWrapped('https://login.forge.test/passkey');
+  const name = await withConsent(
+    page,
+    () => window.refused(),
+    async (win) => {
+      await win.locator('#accounts button').first().waitFor();
+      await win.locator('#cancel').click();
+    },
+  );
+  assert.equal(name, 'NotAllowedError');
+  await page.close();
 });
 
 test('locking from the extension; nothing is filled while locked', async () => {

@@ -15,7 +15,7 @@
  * @typedef {{ locker: string, folders: { id: string, name: string, parent: string | null }[],
  *   placements: [string, string][] }} FolderTree
  * @typedef {{ locker: string, id: string }} SecretRef
- * @typedef {"title" | "username" | "password" | "notes" | "ssh_public_key" | "ssh_passphrase"} FieldName
+ * @typedef {"title" | "username" | "password" | "notes" | "ssh_public_key" | "ssh_passphrase" | "rp_id" | "display_name"} FieldName
  * @typedef {{ imported: number, empty: number, refused_lines: number[], totp_skipped: number }} ImportReport
  * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
  *   lock_on_session_lock: boolean }} VaultSettings

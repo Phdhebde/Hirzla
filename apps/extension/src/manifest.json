@@ -3,8 +3,8 @@
   "name": "Hirzla",
   "short_name": "Hirzla",
   "version": "1.1.1",
-  "description": "Remplit vos identifiants Hirzla sur le site exact où vous les avez enregistrés, à votre demande.",
-  "minimum_chrome_version": "120",
+  "description": "Remplit vos identifiants Hirzla sur le site exact où vous les avez enregistrés, à votre demande, et sert vos clés d’accès si vous l’activez.",
+  "minimum_chrome_version": "121",
   "browser_specific_settings": {
     "gecko": {
       "id": "extension@hirzla.invalid",
@@ -12,6 +12,12 @@
     }
   },
   "permissions": ["activeTab", "scripting", "nativeMessaging"],
+  "optional_host_permissions": ["https://*/*"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"],
+    "type": "module"
+  },
   "action": {
     "default_title": "Hirzla",
     "default_popup": "popup.html",

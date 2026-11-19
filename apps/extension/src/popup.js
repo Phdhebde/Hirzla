@@ -15,6 +15,7 @@ import {
   useGeneratedForTab,
 } from './lib/actions.js';
 import { messageFor } from './lib/decide.js';
+import { CONTENT_SCRIPTS, ORIGINS, SCRIPT_IDS } from './lib/passkey.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -136,6 +137,43 @@ async function refresh() {
   if (r.entries.length === 0) sayText('Aucun identifiant enregistré pour ce site exact.');
 }
 
+/** Whether the passkey mode is on: permission granted and scripts registered. */
+async function passkeysOn() {
+  try {
+    const granted = await api.permissions.contains({ origins: ORIGINS });
+    const scripts = await api.scripting.getRegisteredContentScripts({ ids: SCRIPT_IDS });
+    return granted && scripts.length === SCRIPT_IDS.length;
+  } catch {
+    return false;
+  }
+}
+
+function showPasskeys(on) {
+  $('passkeys-toggle').textContent = on ? 'Désactiver' : 'Activer';
+  $('passkeys-state').textContent = on
+    ? 'Activées : Hirzla propose ses clés d’accès sur les sites en https.'
+    : 'Désactivées : Hirzla ne lit aucune page.';
+  show('passkeys-help', !on);
+}
+
+async function togglePasskeys() {
+  const button = $('passkeys-toggle');
+  button.disabled = true;
+  try {
+    if (await passkeysOn()) {
+      await api.scripting.unregisterContentScripts({ ids: SCRIPT_IDS }).catch(() => {});
+      await api.permissions.remove({ origins: ORIGINS }).catch(() => {});
+    } else {
+      await api.scripting.unregisterContentScripts({ ids: SCRIPT_IDS }).catch(() => {});
+      await api.scripting.registerContentScripts(CONTENT_SCRIPTS);
+    }
+  } catch {
+    sayText('Les clés d’accès n’ont pas pu être activées.');
+  }
+  showPasskeys(await passkeysOn());
+  button.disabled = false;
+}
+
 async function main() {
   const [active] = await api.tabs.query({ active: true, currentWindow: true });
   tab = active ?? null;
@@ -183,6 +221,20 @@ async function main() {
     // The window of the application takes the focus; nothing more to do here.
     window.close();
   });
+
+  $('passkeys-toggle').addEventListener('click', () => {
+    // The permission is asked first, in the click itself: browsers only show their prompt
+    // for a user gesture.
+    if ($('passkeys-toggle').textContent === 'Activer') {
+      api.permissions
+        .request({ origins: ORIGINS })
+        .then((granted) => (granted ? togglePasskeys() : showPasskeys(false)))
+        .catch(() => showPasskeys(false));
+    } else {
+      togglePasskeys();
+    }
+  });
+  showPasskeys(await passkeysOn());
 
   $('lock').addEventListener('click', async () => {
     const r = await lockVault();

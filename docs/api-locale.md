@@ -13,7 +13,7 @@ les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (
 § 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
 chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
 matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
-l'ADR 0078.
+l'ADR 0078 ; les clés d'accès (version 14, § 23) par l'ADR 0079.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -481,6 +481,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 ## 10. Versions
 
 - Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 14 porte les clés d'accès (§ 23, ADR 0079) : opérations 180 à 182, erreurs 185 à 187, profils complet **et navigateur**. Elle a sa propre plage et n'est pas annoncée par `Status`.
 - La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12, celle des méthodes de déverrouillage matérielles (§ 21).
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
 - La version 11 ajoute les opérations de dossiers 150 à 155 (§ 20, ADR 0076). Elle ne change rien aux autres opérations.
@@ -1942,3 +1943,82 @@ avec les noms `totp_code`, `totp_set`, `totp_clear`, `totp_create` (§ 8).
    graine).
 3. **Horloge déréglée** : le noyau ne peut pas la détecter sans réseau ; un code refusé par le
    site en est le seul signe.
+
+## 23. Clés d'accès (version 14)
+
+Décision : ADR 0079. Format : `format.md` § 8.3 (type 4 `Passkey`, champs 40 à 47 ; aucun
+changement). Le noyau parle en plus la **version 14**, qui crée une clé d'accès WebAuthn, dit
+lesquelles un site peut utiliser et signe un défi (`hirzla_crypto::webauthn`, ES256 et EdDSA
+d'AWS-LC, COSE par `coset`). Codes : opérations **180 à 182**, erreurs **185 à 187**, plage
+**180 à 189** réservée. Code : `crates/hirzla-core/src/passkey`.
+
+**La clé privée ne quitte jamais le noyau.** Aucune opération ne la rend ; `Read` (6) du
+champ 44 répond `Unsupported` (§ 5.3).
+
+### 23.1 Aiguillage et profils
+
+Une requête dont l'opération est dans 180 à 189 va aux clés d'accès ; elle doit porter
+`v = 14`, sinon `UnsupportedVersion` avec `{2: [14]}`. Les trois opérations sont permises au
+profil complet **et au profil navigateur** : le noyau vérifie lui-même le `rp_id` contre
+l'origine (§ 23.3).
+
+### 23.2 Opérations
+
+| Code | Nom | Arguments | Résultat |
+| --- | --- | --- | --- |
+| 180 | `PasskeyCreate` | `{1: origine tstr, 2: rp_id tstr, 3: défi bstr(16..1024), 4: user.id bstr(1..64), 5: user.name tstr, 6?: user.displayName tstr, 7: [alg int] (1 à 16), 8?: [identifiant bstr], 9: uv uint, 10?: rp.name tstr}` | `{1: casier, 2: secret, 3: identifiant bstr, 4: clientDataJSON bstr, 5: attestationObject bstr, 6: authenticatorData bstr, 7: clé publique SPKI bstr, 8: alg int}` |
+| 181 | `PasskeyCandidates` | `{1: origine, 2: rp_id, 3?: [identifiant bstr]}` | `[{1: casier, 2: secret, 3: identifiant bstr, 4: titre tstr, 5?: user.name tstr, 6?: user.displayName tstr}]` (256 au plus) |
+| 182 | `PasskeyAssert` | `{1: origine, 2: rp_id, 3: défi bstr(16..1024), 4: casier, 5: secret, 6: uv uint}` | `{1: identifiant bstr, 2: clientDataJSON bstr, 3: authenticatorData bstr, 4: signature bstr, 5?: user.handle bstr}` |
+
+`uv` : 1 `discouraged`, 2 `preferred`, 3 `required`. Identifiants de clé : 1 à 1 023 octets,
+64 au plus par liste. Textes : 1 024 octets au plus sur le canal ; le coffre applique ses
+propres limites (§ 8.3 de `format.md`), au-delà `InvalidInput`.
+
+### 23.3 Règles
+
+1. **`rp_id`** : l'origine est une origine `https` canonique (§ 6.1) ; le `rp_id` est un nom
+   de domaine ASCII en minuscules (lettres, chiffres, `-`, `.`), sans adresse IP, de
+   255 octets au plus ; l'hôte de l'origine est le `rp_id` ou se termine par `.rp_id` ; le
+   `rp_id` n'est pas un suffixe public (liste compilée dans le noyau, sections ICANN et
+   privée). Sinon `InvalidInput`, avant toute lecture du coffre.
+2. **`clientDataJSON`** construit par le noyau :
+   `{"type":"webauthn.create"|"webauthn.get","challenge":<base64url>,"origin":<origine>,"crossOrigin":false}`.
+3. **Drapeaux** : UP, BE et BS toujours ; UV si le coffre a été ouvert il y a moins de
+   5 minutes. Avec `uv = 3` hors de ce délai : `VerificationRequired` (185). AT à la
+   création. Compteur de signatures toujours 0.
+4. **Création** : premier algorithme admis (−7, −8) dans l'ordre du site, sinon
+   `AlgorithmUnsupported` (187) ; une clé du coffre pour ce `rp_id` dont l'identifiant est
+   dans la liste 8 : `CredentialExcluded` (186). Le secret est créé dans le casier
+   personnel : titre `rp.name` (sinon `rp_id`), champ 10 `user.name`, champs 40 à 45 et 47
+   (vrai) ; le champ 46 n'est pas écrit. Attestation `none`, AAGUID de Hirzla.
+5. **Candidats** : clés actives de type 4 dont le champ 40 est exactement le `rp_id` ; avec
+   la liste 3, celles dont l'identifiant y figure ; sans elle, celles qui sont
+   découvrables.
+6. **Signature** : la clé doit être une clé active de type 4 de ce `rp_id`, sinon
+   `NotFound` sans autre détail ; message signé `authenticatorData ‖ SHA-256(clientDataJSON)`,
+   ECDSA DER pour −7, Ed25519 pour −8.
+7. Les trois opérations comptent comme une activité pour le verrouillage automatique.
+
+### 23.4 Erreurs et journal
+
+| Statut | Nom |
+| --- | --- |
+| 185 | `VerificationRequired` |
+| 186 | `CredentialExcluded` |
+| 187 | `AlgorithmUnsupported` |
+
+Les codes généraux 1 à 5, 7, 11, 13, 16 et 17 gardent leur sens. Le journal n'écrit que
+`event=passkey_request op=<passkey_create|passkey_candidates|passkey_assert> result=<ok|nom>` :
+jamais le site, le compte, le défi, l'identifiant ni la signature.
+
+### 23.5 Hôte natif
+
+Messages `passkey_create` (`origin`, `rpId`, `rpName`, `challenge`, `userId`, `userName`,
+`displayName`, `algs`, `exclude`, `uv`), `passkey_candidates` (`origin`, `rpId`, `allow`) et
+`passkey_assert` (`origin`, `rpId`, `challenge`, `locker`, `id`, `uv`). Octets en base64url
+sans remplissage ; listes en texte séparé par des virgules (ADR 0027 : JSON plat) ; `uv` en
+toutes lettres. Réponses : `credential`, `clientData`, `attestation`, `authData`,
+`publicKey`, `alg` ; `candidates` (`locker`, `id`, `credential`, `title`, `userName`,
+`displayName`) ; `credential`, `clientData`, `authData`, `signature`, `userHandle`. Refus :
+le nom du code (`verification_required`, `credential_excluded`, `algorithm_unsupported`,
+`invalid_input`…).

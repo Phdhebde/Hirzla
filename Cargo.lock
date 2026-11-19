@@ -795,6 +795,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f8f80099a98041a3d1622845c271458a2d73e688351bf3cb999266764b81d48"
 
 [[package]]
+name = "coset"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1eb98d5e9155e2cf7cd942c8b3033097d4563b6fb0a00b9caecb74669555c058"
+dependencies = [
+ "ciborium",
+ "ciborium-io",
+]
+
+[[package]]
 name = "cpubits"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1995,12 +2005,15 @@ dependencies = [
 name = "hirzla-core"
 version = "1.1.1"
 dependencies = [
+ "data-encoding",
  "hirzla-access",
  "hirzla-crypto",
  "hirzla-keystore",
  "hirzla-server",
  "hirzla-sync",
  "hirzla-vault",
+ "p256",
+ "psl",
  "rcgen",
  "rustls",
  "tempfile",
@@ -2019,9 +2032,11 @@ dependencies = [
  "argon2-kdf",
  "aws-lc-rs",
  "chacha20",
+ "coset",
  "hkdf",
  "ml-dsa",
  "ml-kem",
+ "p256",
  "p384",
  "rand_core",
  "salsa20",
@@ -2076,6 +2091,7 @@ dependencies = [
 name = "hirzla-native-host"
 version = "1.1.1"
 dependencies = [
+ "data-encoding",
  "hirzla-core",
  "hirzla-keystore",
  "hirzla-vault",
@@ -3321,6 +3337,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "p256"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "primefield",
+ "primeorder",
+ "sha2 0.11.1",
+]
+
+[[package]]
 name = "p384"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3789,6 +3818,21 @@ dependencies = [
  "tempfile",
  "unarray",
 ]
+
+[[package]]
+name = "psl"
+version = "2.1.258"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3dd856c90936a531c75647b54c4222b4745ceedf60d0a0f14853bb9458d69af9"
+dependencies = [
+ "psl-types",
+]
+
+[[package]]
+name = "psl-types"
+version = "2.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
 
 [[package]]
 name = "quick-error"

@@ -624,6 +624,8 @@ export class VaultView {
     }
     if (entry.kind === "ssh_connection" || entry.kind === "rdp_connection") {
       void this.renderConnection(entry, this.recordToken);
+    } else if (entry.kind === "passkey") {
+      void this.renderPasskey(entry, this.recordToken);
     } else if (["password", "note", "ssh_key", "totp"].includes(entry.kind)) {
       void this.renderFields(entry, this.recordToken);
     } else {
@@ -734,6 +736,43 @@ export class VaultView {
       if (has("ssh_passphrase")) fields.append(this.secretField("Phrase de passe", ref, "ssh_passphrase"));
       if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
     }
+  }
+
+  /**
+   * A passkey (ADR 0079): the site and the account it signs in to. The private key is never
+   * shown: it only signs, in the core, for this site, through the browser extension.
+   * @param {Entry} entry
+   * @param {number} token  Drawing this record belongs to; a later one cancels it.
+   */
+  async renderPasskey(entry, token) {
+    const ref = { locker: entry.locker, id: entry.id };
+    /** @param {FieldName} f */
+    const read = async (f) => {
+      try {
+        return await api.reveal(ref, f);
+      } catch {
+        return "";
+      }
+    };
+    const [site, display] = [await read("rp_id"), await read("display_name")];
+    if (token !== this.recordToken) return;
+    const fields = byId("fiche-champs");
+    if (site) fields.append(listField("Site", [site], "mono"));
+    if (entry.username) fields.append(this.plainField("Identifiant", entry.username, ref, "username"));
+    if (display) fields.append(info("Nom affiché", display));
+    fields.append(
+      info(
+        "Clé privée",
+        "Gardée dans le coffre, jamais affichée ni copiée. Elle signe pour ce site seulement, depuis l'extension Hirzla.",
+      ),
+    );
+    fields.append(
+      info(
+        "Protection",
+        "Une clé d'accès gardée dans un coffre est moins protégée qu'une clé de sécurité matérielle : elle est aussi exposée qu'un fichier de votre poste.",
+      ),
+    );
+    if (entry.tags.length) fields.append(listField("Étiquettes", entry.tags, "etiquette"));
   }
 
   /**
@@ -1428,6 +1467,7 @@ function svgRing() {
 function subtitle(e) {
   if (e.kind === "password") return e.username || e.hosts[0] || TYPE_NAMES.password;
   if (e.kind === "totp") return e.username ? `${TYPE_NAMES.totp} · ${e.username}` : TYPE_NAMES.totp;
+  if (e.kind === "passkey") return e.username ? `${TYPE_NAMES.passkey} · ${e.username}` : TYPE_NAMES.passkey;
   if (e.kind === "ssh_connection" || e.kind === "rdp_connection") {
     const where = `${e.username ? `${e.username}@` : ""}${e.hosts[0] ?? ""}`;
     return where ? `${e.kind === "rdp_connection" ? "RDP" : "SSH"} · ${where}` : TYPE_NAMES[e.kind];

@@ -75,18 +75,23 @@ Le manifeste (`src/manifest.json`) demande trois permissions, rien d'autre.
 | `scripting` | Exécuter, dans le cadre principal de cet onglet, la fonction qui vérifie les champs, remplit ou lit l'identifiant saisi (`src/lib/page.js`). | Il faudrait un script de contenu injecté dans toutes les pages, en permanence. |
 | `nativeMessaging` | Parler à `hirzla-native-host`, seul chemin vers le noyau. | L'extension ne peut rien faire. |
 
+Une permission **optionnelle**, `https://*/*` (`optional_host_permissions`), n'est demandée que
+si vous activez les clés d'accès (ci-dessous), et rendue quand vous les désactivez.
+
 Volontairement absents :
 
-- **Permissions d'hôte** (`host_permissions`, `<all_urls>`) et **scripts de contenu** : aucune
-  page ne voit l'extension, aucune ne peut lui parler ni déclencher un remplissage.
+- **Permissions d'hôte permanentes** (`host_permissions`, `<all_urls>`) et **scripts de
+  contenu déclarés** : clés d'accès désactivées, aucune page ne voit l'extension, aucune ne
+  peut lui parler ni déclencher un remplissage.
 - **`tabs`** : `activeTab` suffit, et seulement pour l'onglet choisi.
 - **`storage`**, **`unlimitedStorage`** : rien n'est conservé par l'extension, pas même une
   liste de sites.
 - **`clipboardWrite`** : pas de presse-papiers ; le mot de passe va directement dans le champ.
 - **`webRequest`**, **`webNavigation`**, **`cookies`**, **`history`**, **`notifications`**,
   **`contextMenus`**, **`alarms`**, **`identity`** : sans usage.
-- **`background`** (script d'arrière-plan) : aucun état, aucune écoute ; tout part de la
-  fenêtre.
+- **État en arrière-plan** : le script d'arrière-plan (`background.js`) ne sert que les clés
+  d'accès ; clés d'accès désactivées, aucune page ne peut l'atteindre. Il ne garde rien
+  au-delà d'une demande en cours.
 - **`externally_connectable`**, **`web_accessible_resources`** : aucun site ni autre
   extension ne peut lui envoyer de message ni charger ses fichiers (pas de détection de
   l'extension par une page).
@@ -265,3 +270,29 @@ fonctions que la fenêtre (`src/lib/actions.js`).
   une page de l'origine enregistrée peut le lire ; c'est le site auquel il appartient.
 - En JavaScript, une chaîne ne peut pas être effacée : le mot de passe reçu de l'hôte reste
   en mémoire de la fenêtre de l'extension jusqu'à sa fermeture (qui suit le remplissage).
+
+## Clés d'accès (ADR 0079)
+
+Désactivées par défaut. **Activer** dans la fenêtre Hirzla (section « Clés d'accès ») :
+
+1. le navigateur demande l'accès aux sites `https` (`https://*/*`) ;
+2. l'extension enregistre deux scripts, dans le cadre principal seulement :
+   `passkey-page.js` (monde de la page) remplace `navigator.credentials.create` et `get`
+   pour les demandes `publicKey`, `passkey-relay.js` (monde isolé) relaie vers
+   `background.js` ;
+3. à chaque création ou connexion, une fenêtre de Hirzla (`passkey.html`) montre le site, tel
+   que le navigateur le donne, et le ou les comptes ; rien n'est demandé au noyau avant un
+   clic. « Utiliser un autre appareil » rend la main à l'authentificateur du navigateur ;
+   fermer la fenêtre refuse.
+
+| Règle | Où elle est vérifiée |
+| --- | --- |
+| L'origine est celle de l'expéditeur, donnée par le navigateur, cadre 0, `https` ; jamais celle que dit la page | `background.js` (`senderOrigin`) |
+| Le `rp_id` est le site ou un domaine parent, jamais un suffixe public | Noyau (`docs/api-locale.md` § 23.3) |
+| Le `clientDataJSON` porte cette origine | Noyau (il le construit) |
+| La clé privée ne sort pas du noyau ; la page reçoit ce que la norme lui destine | Noyau, hôte natif |
+| Aucun site connu de Hirzla, coffre absent : l'authentificateur du navigateur, sans fenêtre | `background.js` |
+
+**Désactiver** retire les scripts et rend la permission. Retirer la permission dans les
+réglages du navigateur désactive aussi le mode.
+

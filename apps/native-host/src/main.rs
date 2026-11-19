@@ -10,6 +10,7 @@
 
 mod host;
 mod json;
+mod passkey;
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -17,6 +18,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use hirzla_core::client::{sibling_core, Client, ClientError};
+use hirzla_core::passkey::proto::{PasskeyCode, PasskeyReply, PasskeyRequest};
 use hirzla_core::proto::{Reply, Request};
 use hirzla_core::transport::Endpoint;
 use zeroize::Zeroizing;
@@ -68,8 +70,9 @@ fn copy(e: &ClientError) -> ClientError {
     }
 }
 
-impl CoreLink for Link {
-    fn call(&mut self, request: &Request) -> Result<Reply, ClientError> {
+impl Link {
+    /// The connection, opened at the first request; a failure to open is kept for the run.
+    fn client(&mut self) -> Result<&mut Client, ClientError> {
         if let Some(e) = &self.failed {
             return Err(copy(e));
         }
@@ -83,10 +86,20 @@ impl CoreLink for Link {
                 }
             }
         }
-        match self.client.as_mut() {
-            Some(c) => c.call(request),
-            None => Err(ClientError::NotRunning),
-        }
+        self.client.as_mut().ok_or(ClientError::NotRunning)
+    }
+}
+
+impl CoreLink for Link {
+    fn call(&mut self, request: &Request) -> Result<Reply, ClientError> {
+        self.client()?.call(request)
+    }
+
+    fn call_passkey(
+        &mut self,
+        request: &PasskeyRequest,
+    ) -> Result<Result<PasskeyReply, PasskeyCode>, ClientError> {
+        self.client()?.call_passkey(request)
     }
 }
 

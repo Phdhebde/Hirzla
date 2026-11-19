@@ -14,6 +14,7 @@ use crate::connections::proto::ConnectionOp;
 use crate::folders::proto::FolderOp;
 use crate::locker_export::proto::ExportOp;
 use crate::methods::proto::MethodOp;
+use crate::passkey::proto::PasskeyOp;
 use crate::proto::{ErrorCode, Op, Typed};
 use crate::selfmode::proto::SelfOp;
 use crate::server_mode::proto::ServerOp;
@@ -184,6 +185,14 @@ pub enum Event {
         /// Outcome.
         result: &'static str,
     },
+    /// A passkey request was answered (`docs/api-locale.md` § 23). `result` is `ok` or the
+    /// name of the error: fixed words only. Never the site, the account or a signature.
+    PasskeyRequest {
+        /// Operation.
+        op: PasskeyOp,
+        /// Outcome.
+        result: &'static str,
+    },
     /// An export request was answered (`docs/api-locale.md` § 19). `result` is `ok` or the
     /// name of the error: fixed words only. Neither the path nor the locker is written.
     ExportRequest {
@@ -300,6 +309,13 @@ impl Event {
             ),
             Event::TotpRequest { op, result } => {
                 write!(out, "event=totp_request op={} result={result}", op.name())
+            }
+            Event::PasskeyRequest { op, result } => {
+                write!(
+                    out,
+                    "event=passkey_request op={} result={result}",
+                    op.name()
+                )
             }
             Event::ExportRequest { op, result } => {
                 write!(out, "event=export_request op={} result={result}", op.name())
@@ -468,6 +484,11 @@ mod tests {
         for op in TotpOp::ALL {
             for result in ["ok", "invalid_input", "not_found", "unauthorized", "locked"] {
                 events.push(Event::TotpRequest { op, result });
+            }
+        }
+        for op in PasskeyOp::ALL {
+            for result in ["ok", "invalid_input", "not_found", "verification_required"] {
+                events.push(Event::PasskeyRequest { op, result });
             }
         }
         for op in ExportOp::ALL {

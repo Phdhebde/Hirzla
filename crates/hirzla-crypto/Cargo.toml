@@ -28,6 +28,9 @@ thiserror = "2.0"
 # Shamir over GF(2^8) (ADR 0012). Pinned: any upgrade is a reviewed change.
 vsss-rs = { version = "=6.0.1", default-features = false, features = ["alloc", "zeroize"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
+# COSE_Key and CBOR encodings of passkeys (ADR 0079 § 1): Google, no `unsafe`, no I/O.
+# Pinned: it handles a private key, any upgrade is a reviewed change.
+coset = { version = "=0.4.2", default-features = false }
 
 [dev-dependencies]
 # Second, independent implementation for cross tests and NIST vectors only (ADR 0009).
@@ -37,6 +40,8 @@ aes-kw = "0.3.1"
 hkdf = "0.13.0"
 ml-dsa = "0.1.2"
 ml-kem = { version = "0.3.4", features = ["hazmat"] }
+# Independent ES256 verification of the passkey signatures (ADR 0079 § 1); tests only.
+p256 = { version = "0.14.0", features = ["ecdsa"] }
 p384 = { version = "0.14.0", features = ["ecdh", "ecdsa"] }
 sha2 = "0.11.1"
 
