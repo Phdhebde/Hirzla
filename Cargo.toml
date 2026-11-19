@@ -53,3 +53,10 @@ opt-level = 3
 
 [profile.dev.package.blake2]
 opt-level = 3
+
+# AWS-LC (ADR 0009) runs every hybrid signature and encapsulation of the tests. Unoptimised,
+# its C code is built in the Debug configuration (MSVC /Od /RTC1 on Windows), where the tests
+# of hirzla-sync, hirzla-access and hirzla-audit run 10 to 18 times slower than on Linux.
+# Optimise it like argon2: this changes the build profile of tests only, not the code.
+[profile.dev.package.aws-lc-sys]
+opt-level = 3

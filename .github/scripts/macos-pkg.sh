@@ -96,7 +96,28 @@ output="${4:-$PWD/Hirzla_${version}_${arch}.pkg}"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-mkdir -p "$work/app-root" "$work/manifest-root" "$work/pkgs"
+mkdir -p "$work/app-root" "$work/manifest-root" "$work/pkgs" "$work/app-scripts"
+
+# Before the bundle is replaced, stop the Hirzla processes still running from it, for every
+# user. A core reads the client manifest once, when it starts: a core of the previous version
+# left running would refuse every client of the new one ("accès refusé"), and an application
+# of the previous version would be refused by the next core. Matched on the exact path of the
+# installed executables only; SIGTERM, then SIGKILL after 10 s. The vault on disk stays
+# consistent (every write is one SQLite transaction), and the next client starts the new
+# core. Never fails the installation.
+cat >"$work/app-scripts/preinstall" <<'EOF'
+#!/bin/sh
+pattern='^/Applications/Hirzla\.app/Contents/MacOS/hirzla-(core|desktop|native-host)( |$)'
+/usr/bin/pkill -TERM -f "$pattern" || exit 0
+i=0
+while [ "$i" -lt 10 ] && /usr/bin/pgrep -f "$pattern" >/dev/null; do
+  sleep 1
+  i=$((i + 1))
+done
+/usr/bin/pkill -KILL -f "$pattern"
+exit 0
+EOF
+chmod 0755 "$work/app-scripts/preinstall"
 
 # Component 1: the bundle, copied with its signatures and attributes, into /Applications,
 # never relocated to another copy of Hirzla.app found on the disk, always written (no
@@ -112,7 +133,7 @@ while plutil -extract "$i" xml1 -o /dev/null "$work/app.plist" 2>/dev/null; do
 done
 [ "$i" -ge 1 ] || die "pkgbuild found no bundle in APP."
 pkgbuild --root "$work/app-root" --component-plist "$work/app.plist" \
-  --identifier "$identifier.app" --version "$version" --ownership recommended \
+  --scripts "$work/app-scripts" --identifier "$identifier.app" --version "$version" --ownership recommended \
   --install-location /Applications "$work/pkgs/hirzla-app.pkg"
 
 # Component 2: the manifest, root:wheel 0644, in a directory root:wheel 0755.
@@ -154,6 +175,8 @@ echo "$bom" | grep -Eq "^\./hirzla-clients\.manifest[[:space:]]+10*644[[:space:]
   || die "the manifest in the package is not owned by root with mode 0644."
 echo "$bom" | grep -Eq "^\.[[:space:]]+40*755[[:space:]]+0[[:space:]]+[0-9]+\$" \
   || die "the manifest directory in the package is not owned by root with mode 0755."
+[ -x "$work/expanded/hirzla-app.pkg/Scripts/preinstall" ] \
+  || die "the application package has no preinstall script."
 
 if [ "${#sign[@]}" -gt 0 ]; then
   pkgutil --check-signature "$output"

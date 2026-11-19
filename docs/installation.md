@@ -341,7 +341,7 @@ Hirzla ne cherche jamais de mise à jour en ligne. Trois voies :
 
 | Message | Cause probable |
 | --- | --- |
-| « accès refusé : ce programme n'est pas autorisé à parler au noyau. » | Un exécutable a été déplacé ou remplacé : réinstallez |
+| « accès refusé : ce programme n'est pas autorisé à parler au noyau… » | Juste après une mise à jour : le noyau de la version précédente tourne encore, fermez la session ou redémarrez le poste. Sinon, un exécutable a été déplacé ou remplacé : réinstallez |
 | « la signature du noyau n'est pas reconnue… » | Le noyau installé ne correspond pas au manifeste des clients : réinstallez depuis un fichier vérifié (§ 2) |
 | « le noyau n'est pas démarré. » | Ouvrez le coffre avec l'application ou `hirzla unlock` |
 | « déverrouillage refusé : mot de passe incorrect, ou coffre altéré. » | Mot de passe erroné ; après plusieurs essais, le noyau impose un délai |

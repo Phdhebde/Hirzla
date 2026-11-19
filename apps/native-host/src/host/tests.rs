@@ -10,6 +10,8 @@ use super::*;
 struct Fake {
     seen: Vec<Request>,
     reply: Option<Result<Reply, ErrorReply>>,
+    passkeys: Vec<PasskeyRequest>,
+    passkey_reply: Option<Result<PasskeyReply, PasskeyCode>>,
 }
 
 impl CoreLink for Fake {
@@ -20,6 +22,17 @@ impl CoreLink for Fake {
             Some(Err(e)) => Err(ClientError::Refused(e)),
             None => Ok(Reply::Done),
         }
+    }
+
+    fn call_passkey(
+        &mut self,
+        request: &PasskeyRequest,
+    ) -> Result<Result<PasskeyReply, PasskeyCode>, ClientError> {
+        self.passkeys.push(request.clone());
+        Ok(self
+            .passkey_reply
+            .take()
+            .unwrap_or(Err(PasskeyCode::General(ErrorCode::NotFound))))
     }
 }
 
@@ -322,4 +335,191 @@ fn debug_hides_what_the_extension_sent() {
     )
     .unwrap();
     assert!(!format!("{r:?}").contains("hunter2"));
+}
+
+// -----------------------------------------------------------------------------------------
+// Passkeys (ADR 0079 § 5)
+// -----------------------------------------------------------------------------------------
+
+mod passkeys {
+    use hirzla_core::passkey::proto::{
+        Assertion, Candidate, CreateArgs, Created, PasskeyCode, PasskeyReply, PasskeyRequest,
+        UserVerification,
+    };
+
+    use super::*;
+
+    const ORIGIN: &str = "https://login.example.com";
+    /// 32 bytes of 0x11, base64url.
+    const CHALLENGE: &str = "ERERERERERERERERERERERERERERERERERERERERERE";
+
+    #[test]
+    fn create_is_translated() {
+        let mut fake = Fake {
+            passkey_reply: Some(Ok(PasskeyReply::Created(Box::new(Created {
+                locker: [1; 16],
+                id: [2; 16],
+                credential_id: vec![0xfb; 3],
+                client_data_json: b"{}".to_vec(),
+                attestation_object: vec![0xa0],
+                authenticator_data: vec![0; 3],
+                public_key: vec![0x30],
+                algorithm: -7,
+            })))),
+            ..Fake::default()
+        };
+        let out = run(
+            &mut fake,
+            &format!(
+                r#"{{"type":"passkey_create","origin":"{ORIGIN}","rpId":"example.com","rpName":"Exemple","challenge":"{CHALLENGE}","userId":"AQID","userName":"alice","displayName":"Alice","algs":"-8,-7","exclude":"AQ,Ag","uv":"required"}}"#
+            ),
+        );
+        assert_eq!(
+            out,
+            r#"{"ok":true,"credential":"-_v7","clientData":"e30","attestation":"oA","authData":"AAAA","publicKey":"MA","alg":-7}"#
+        );
+        let expected = PasskeyRequest::Create(Box::new(CreateArgs {
+            origin: ORIGIN.to_owned(),
+            rp_id: "example.com".to_owned(),
+            challenge: vec![0x11; 32],
+            user_id: vec![1, 2, 3],
+            user_name: z("alice"),
+            display_name: Some(z("Alice")),
+            algorithms: vec![-8, -7],
+            exclude: vec![vec![1], vec![2]],
+            uv: UserVerification::Required,
+            rp_name: Some(z("Exemple")),
+        }));
+        assert!(fake.passkeys == vec![expected]);
+    }
+
+    #[test]
+    fn candidates_and_assert_are_translated() {
+        let mut fake = Fake {
+            passkey_reply: Some(Ok(PasskeyReply::Candidates(vec![Candidate {
+                locker: [1; 16],
+                id: [2; 16],
+                credential_id: vec![7; 2],
+                title: z("Exemple \"pro\""),
+                user_name: Some(z("alice")),
+                display_name: None,
+            }]))),
+            ..Fake::default()
+        };
+        let out = run(
+            &mut fake,
+            &format!(r#"{{"type":"passkey_candidates","origin":"{ORIGIN}","rpId":"example.com"}}"#),
+        );
+        assert_eq!(
+            out,
+            format!(
+                r#"{{"ok":true,"candidates":[{{"locker":"{LOCKER}","id":"{ID}","credential":"Bwc","title":"Exemple \"pro\"","userName":"alice"}}]}}"#
+            )
+        );
+
+        fake.passkey_reply = Some(Ok(PasskeyReply::Assertion(Box::new(Assertion {
+            credential_id: vec![7; 2],
+            client_data_json: b"{}".to_vec(),
+            authenticator_data: vec![0; 3],
+            signature: vec![9; 3],
+            user_handle: Some(vec![1]),
+        }))));
+        let out = run(
+            &mut fake,
+            &format!(
+                r#"{{"type":"passkey_assert","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}","locker":"{LOCKER}","id":"{ID}","uv":"preferred"}}"#
+            ),
+        );
+        assert_eq!(
+            out,
+            r#"{"ok":true,"credential":"Bwc","clientData":"e30","authData":"AAAA","signature":"CQkJ","userHandle":"AQ"}"#
+        );
+        assert!(matches!(
+            fake.passkeys.last(),
+            Some(PasskeyRequest::Assert {
+                uv: UserVerification::Preferred,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn refusals_of_the_core_are_named() {
+        for (code, name) in [
+            (PasskeyCode::VerificationRequired, "verification_required"),
+            (PasskeyCode::CredentialExcluded, "credential_excluded"),
+            (PasskeyCode::AlgorithmUnsupported, "algorithm_unsupported"),
+            (PasskeyCode::General(ErrorCode::Locked), "locked"),
+        ] {
+            let mut fake = Fake {
+                passkey_reply: Some(Err(code)),
+                ..Fake::default()
+            };
+            let out = run(
+                &mut fake,
+                &format!(
+                    r#"{{"type":"passkey_candidates","origin":"{ORIGIN}","rpId":"example.com"}}"#
+                ),
+            );
+            assert_eq!(out, format!(r#"{{"ok":false,"error":"{name}"}}"#));
+        }
+    }
+
+    #[test]
+    fn malformed_passkey_messages_never_reach_the_core() {
+        let mut fake = Fake::default();
+        for (input, error) in [
+            (r#"{"type":"passkey_sign"}"#.to_owned(), "bad_request"),
+            (
+                format!(r#"{{"type":"passkey_candidates","origin":"{ORIGIN}"}}"#),
+                "bad_request",
+            ),
+            (
+                r#"{"type":"passkey_candidates","origin":"http://example.com","rpId":"example.com"}"#
+                    .to_owned(),
+                "invalid_origin",
+            ),
+            (
+                format!(r#"{{"type":"passkey_candidates","origin":"{ORIGIN}","rpId":"example.com","extra":"x"}}"#),
+                "bad_request",
+            ),
+            (
+                format!(r#"{{"type":"passkey_candidates","origin":"{ORIGIN}","rpId":"example.com","allow":"!!"}}"#),
+                "invalid_input",
+            ),
+            // A challenge too short, padding, a bad uv.
+            (
+                format!(r#"{{"type":"passkey_assert","origin":"{ORIGIN}","rpId":"example.com","challenge":"AQID","locker":"{LOCKER}","id":"{ID}"}}"#),
+                "invalid_input",
+            ),
+            (
+                format!(r#"{{"type":"passkey_assert","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}=","locker":"{LOCKER}","id":"{ID}"}}"#),
+                "invalid_input",
+            ),
+            (
+                format!(r#"{{"type":"passkey_assert","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}","locker":"{LOCKER}","id":"{ID}","uv":"always"}}"#),
+                "invalid_input",
+            ),
+            // No algorithm, a non-numeric one, an empty user handle.
+            (
+                format!(r#"{{"type":"passkey_create","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}","userId":"AQ","algs":""}}"#),
+                "invalid_input",
+            ),
+            (
+                format!(r#"{{"type":"passkey_create","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}","userId":"AQ","algs":"ES256"}}"#),
+                "invalid_input",
+            ),
+            (
+                format!(r#"{{"type":"passkey_create","origin":"{ORIGIN}","rpId":"example.com","challenge":"{CHALLENGE}","userId":"","algs":"-7"}}"#),
+                "invalid_input",
+            ),
+        ] {
+            assert_eq!(
+                run(&mut fake, &input),
+                format!(r#"{{"ok":false,"error":"{error}"}}"#),
+                "{input}"
+            );
+        }
+        assert!(fake.passkeys.is_empty());
+    }
 }

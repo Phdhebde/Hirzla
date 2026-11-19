@@ -270,6 +270,62 @@ fn browser_flow_against_a_real_core() {
     let generated = one(&sock, r#"{"type":"generate","length":32,"symbols":false}"#);
     assert_eq!(member(&generated, "password").chars().count(), 32);
 
+    // Passkeys (ADR 0079), with the browser profile: created, offered, used; never for
+    // another site.
+    let challenge = "ERERERERERERERERERERERERERERERERERERERERERE";
+    let created = one(
+        &sock,
+        &format!(
+            r#"{{"type":"passkey_create","origin":"https://login.forge.example.com","rpId":"forge.example.com","challenge":"{challenge}","userId":"AQID","userName":"max@forge","algs":"-7","uv":"preferred"}}"#
+        ),
+    );
+    assert!(
+        created.starts_with(r#"{"ok":true,"credential":""#),
+        "{created}"
+    );
+    let credential = member(&created, "credential");
+    let offered = one(
+        &sock,
+        r#"{"type":"passkey_candidates","origin":"https://login.forge.example.com","rpId":"forge.example.com"}"#,
+    );
+    assert!(
+        offered.contains(&format!(r#""credential":"{credential}""#)),
+        "{offered}"
+    );
+    assert!(offered.contains(r#""userName":"max@forge""#), "{offered}");
+    let pk_locker = member(&offered, "locker");
+    let pk_id = member(&offered, "id");
+    let signed = one(
+        &sock,
+        &format!(
+            r#"{{"type":"passkey_assert","origin":"https://forge.example.com","rpId":"forge.example.com","challenge":"{challenge}","locker":"{pk_locker}","id":"{pk_id}","uv":"required"}}"#
+        ),
+    );
+    assert_eq!(member(&signed, "credential"), credential);
+    assert_eq!(member(&signed, "userHandle"), "AQID");
+    assert!(!member(&signed, "signature").is_empty());
+    // Another site: refused by the core. A valid parent domain that is not the
+    // credential's: not found.
+    for (origin, rp_id, error) in [
+        (
+            "https://evil.example.org",
+            "forge.example.com",
+            "invalid_input",
+        ),
+        ("https://forge.example.com", "example.com", "not_found"),
+    ] {
+        assert_eq!(
+            one(
+                &sock,
+                &format!(
+                    r#"{{"type":"passkey_assert","origin":"{origin}","rpId":"{rp_id}","challenge":"{challenge}","locker":"{pk_locker}","id":"{pk_id}"}}"#
+                )
+            ),
+            format!(r#"{{"ok":false,"error":"{error}"}}"#),
+            "{origin} {rp_id}"
+        );
+    }
+
     // Locking from the browser; then nothing more until the vault is opened elsewhere.
     assert_eq!(one(&sock, r#"{"type":"lock"}"#), r#"{"ok":true}"#);
     assert_eq!(
@@ -308,7 +364,19 @@ fn browser_flow_against_a_real_core() {
         log.contains("event=request op=fill result=not_found"),
         "{log}"
     );
-    for s in [MASTER, SECRET, SAVED, "bank.example", "max@shop"] {
+    assert!(
+        log.contains("event=passkey_request op=passkey_assert result=ok"),
+        "{log}"
+    );
+    for s in [
+        MASTER,
+        SECRET,
+        SAVED,
+        "bank.example",
+        "max@shop",
+        "forge.example",
+        "max@forge",
+    ] {
         assert!(!log.contains(s), "{s} in the log");
     }
 }

@@ -26,6 +26,8 @@ signature-systeme = ["hirzla-core/signature-systeme"]
 hirzla-core = { path = "../../crates/hirzla-core" }
 hirzla-keystore = { path = "../../crates/hirzla-keystore" }
 hirzla-vault = { path = "../../crates/hirzla-vault" }
+# Base64url of the passkey messages (ADR 0079 § 5). Same version as hirzla-vault (ADR 0025).
+data-encoding = { version = "=2.11.1", default-features = false, features = ["alloc"] }
 zeroize = "1.8"
 
 [dev-dependencies]

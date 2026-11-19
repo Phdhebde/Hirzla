@@ -2,7 +2,7 @@
 //!
 //! This crate assembles audited primitives; it never implements one.
 //! It performs no I/O and depends on no other Hirzla crate.
-//! See `docs/crypto.md` and ADRs 0002, 0009, 0011 and 0012; ADR 0078 for TOTP codes.
+//! See `docs/crypto.md` and ADRs 0002, 0009, 0011 and 0012; ADR 0078 for TOTP codes; ADR 0079 for passkeys.
 
 #![forbid(unsafe_code)]
 
@@ -19,6 +19,7 @@ pub mod sym;
 mod test_support;
 pub mod totp;
 pub mod util;
+pub mod webauthn;
 
 pub use error::Error;
 
