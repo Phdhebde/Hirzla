@@ -46,7 +46,9 @@ Recommandation : **évaluer ce qui existe et est testé, et le dire**. La cible 
    La garde matérielle (F3 matériel) sort de la configuration évaluée tant que `Keystore`
    n'est pas branché ; elle reviendra par un avenant ou une évaluation ultérieure.
 3. **F15 (TOTP, WebAuthn, agent SSH) retirée des fonctions de sécurité** tant qu'elle n'est
-   pas codée. Le stockage de ces données reste couvert par F1.
+   pas codée. Le stockage de ces données reste couvert par F1. Les clés d'accès (ADR 0079),
+   codées depuis, restent hors de la configuration évaluée : le mode « Clés d'accès » de
+   l'extension y est désactivé.
 4. **TLS** : la configuration évaluée déclare `X25519MLKEM768` (hybride, ML-KEM-768,
    catégorie 3) et le dit comme écart au dossier cryptographique ; passage à
    `SecP384r1MLKEM1024` dès qu'une version publiée de `rustls`/`aws-lc-rs` le fournit. Le
