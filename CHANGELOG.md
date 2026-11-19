@@ -8,6 +8,16 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [Non publié]
+
+### Corrections
+
+- **Barre latérale** : sous Windows, Linux et macOS, chaque clic dans les sections Coffre,
+  Types et Casiers affichait « Erreur inattendue de l'application. ». Les six commandes des
+  dossiers ajoutées en 1.1.0 n'étaient pas autorisées pour la fenêtre principale ; elles le
+  sont, et un test vérifie maintenant que chaque commande appelée par l'interface est
+  déclarée, autorisée et enregistrée.
+
 ## [1.1.1] — 2026-11-18
 
 ### Corrections
