@@ -8,7 +8,7 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
-## [Non publié]
+## [1.1.2] — 2026-11-19
 
 ### Corrections
 
