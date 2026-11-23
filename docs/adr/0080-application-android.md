@@ -85,7 +85,8 @@ chaque bloc avec `// SAFETY:`, comme sous Windows et macOS. Il expose :
 
 - `core_service_start(env, files_dir)` et `core_service_stop()`, appelés par le service
   `:core` ;
-- l'appel au Keystore du § 4, qui rend le matériau dans un tampon `zeroize`.
+- l'appel au Keystore du § 4 (création de la clé, HMAC, suppression), qui rend le matériau
+  dans un tampon `zeroize`.
 
 Dépendance nouvelle, à valider : **`jni`** (crate de la communauté Rust Android, MIT ou
 Apache-2.0, comprend du `unsafe`). C'est l'ajout qui exige l'accord du mainteneur selon
@@ -100,8 +101,8 @@ le mot de passe reste au rang 0, ajouter la méthode exige le mot de passe retap
 | | Android Keystore (`kind` 7) |
 | --- | --- |
 | Clé | HMAC-SHA-256 créée **dans StrongBox** (`setIsStrongBoxBacked(true)`), alias `hirzla-<vault_id>`, non exportable |
-| Contrôle d'accès | `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(0, AUTH_BIOMETRIC_STRONG)` : une authentification par usage, biométrie de classe 3 seulement ; `setInvalidatedByBiometricEnrollment(true)` ; `setUnlockedDeviceRequired(true)` |
-| Matériau | `HMAC(clé, challenge)`, 32 octets, **déterministe**, calculé dans le Titan M2 après `BiometricPrompt` avec `CryptoObject(Mac)` |
+| Contrôle d'accès | `setUserAuthenticationRequired(true)`, `setUserAuthenticationParameters(5, AUTH_BIOMETRIC_STRONG)` : utilisable 5 secondes après une empreinte, biométrie de classe 3 seulement (§ 4.1) ; `setInvalidatedByBiometricEnrollment(true)` ; `setUnlockedDeviceRequired(true)` |
+| Matériau | `HMAC(clé, challenge)`, 32 octets, **déterministe**, calculé dans le Titan M2 par le noyau, dans les 5 secondes qui suivent `BiometricPrompt` |
 | `keystore_blob` | `{1: 1 (version), 2: alias tstr ≤ 128, 3: challenge bstr(32)}` |
 | Secret de méthode | Celui de l'ADR 0075 § 2, `kind` = 7 : aucune construction nouvelle |
 | Limite d'essais | Celle de la biométrie du système (verrouillage après 5 échecs) |
@@ -109,12 +110,44 @@ le mot de passe reste au rang 0, ajouter la méthode exige le mot de passe retap
 | Invalidée par | Ajout ou retrait d'une empreinte, réinitialisation du téléphone |
 
 À l'enrôlement, deux calculs de HMAC sont comparés à temps constant, comme pour Windows Hello.
+
+**Pas d'acceptation du risque classique** : contrairement à Windows Hello (RSA) et Touch ID
+(P-256), l'oracle est un HMAC-SHA-256, symétrique. Sa clé de 256 bits garde 128 bits de
+sécurité face à un attaquant quantique (Grover). `kind = 7` n'entre donc pas dans les
+`CLASSICAL_KINDS` (ADR 0075 § 4).
+
+#### 4.1 Qui affiche l'empreinte, qui calcule (amendement du 2026-11-23)
+
+Le noyau tourne dans le processus `:core`, sans fenêtre. `BiometricPrompt` ne peut s'afficher
+que depuis une activité du processus de l'interface, et une clé à authentification « par
+usage » (durée 0) ne sert qu'avec le `CryptoObject` présenté à cette fenêtre, donc dans ce
+processus : le HMAC serait calculé hors du noyau, contre la règle 4.
+
+D'où une clé **à durée** : après une empreinte de classe 3, le Keystore admet l'usage de la clé
+par tout processus de l'application pendant 5 secondes. Le parcours devient :
+
+1. Le client (interface) affiche `BiometricPrompt` (`BIOMETRIC_STRONG`, sans `CryptoObject`,
+   sans repli sur le code de l'appareil).
+2. Aussitôt l'empreinte acceptée, il envoie `EnrollMethod` ou `UnlockWithMethod` au noyau,
+   comme aujourd'hui.
+3. Le noyau calcule le HMAC dans StrongBox par `hirzla_keystore::platform::android`. Au-delà de
+   5 secondes, le Keystore refuse (`UserNotAuthenticatedException`) : le noyau répond
+   `MethodCancelled` et le client propose de recommencer.
+
+Ce que la durée concède : pendant 5 secondes, un autre code de l'UID de l'application pourrait
+se servir de la clé. Ce code est par construction celui de l'APK signé (§ 2), qui peut déjà
+demander l'ouverture au noyau. L'API locale ne change pas ; seul le geste passe avant la
+requête au lieu de pendant.
 Sans StrongBox (autre appareil), **la méthode est refusée** dans ce lot plutôt que repliée sur
 le TEE : le choix d'admettre le TEE est laissé à un ADR ultérieur.
 
-**Changement de format** : `kind = 7` est une valeur nouvelle du registre (`format.md` § 4.2),
-dans le format v2 et sans changement de version, comme les `kind` 3 à 5 (ADR 0075 § 1.6). Un
-lecteur qui ne la connaît pas ouvre le coffre par son mot de passe.
+**Changement de format** : `kind = 7` est une valeur nouvelle du registre (`format.md` § 4.2).
+Le format reste en v2, mais la borne de `kind` passe de 6 à 7 : un lecteur antérieur
+**refuse** l'en-tête d'un coffre qui porte cette méthode (il échoue fermé, il ne l'ouvre pas
+par le mot de passe). C'est sans conséquence pratique : la méthode n'est écrite que par
+l'application Android, et le coffre d'un appareil ne quitte pas cet appareil (les autres
+appareils reçoivent les opérations, pas le fichier, ADR 0011). Retirer la méthode rend le
+coffre de nouveau lisible par un lecteur antérieur.
 
 Le mot de passe maître sur téléphone : Argon2id avec les paramètres du coffre (en-tête). Sur un
 Pixel 8, les paramètres par défaut tiennent en mémoire ; à mesurer (point ouvert 3).

@@ -179,7 +179,7 @@ Un journal refuse un événement d'une autre origine, à l'émission comme à la
 | `OpClass` | 1 `data`, 2 `control` |
 | `ControlKind` | Codes de `sync-protocol.md` § 7.2 : 10 `locker_create` à 18 `policy`, 20 `device_add`, 21 `device_remove` |
 | `RejectReason` | 1 `bad_signature`, 2 `not_authorized`, 3 `broken_chain`, 4 `malformed`, 5 `unknown_locker`, 6 `quota` |
-| `UnlockMethod` | 1 `password`, 2 `tpm`, 3 `secure_enclave`, 4 `fido2`, 5 `windows_hello` (codes de `format.md` § 4.2), 6 `recovery` |
+| `UnlockMethod` | 1 `password`, 2 `tpm`, 3 `secure_enclave`, 4 `fido2`, 5 `windows_hello` (codes de `format.md` § 4.2), 6 `recovery`, 7 `android_keystore` |
 | `LockCause` | 1 `user`, 2 `idle`, 3 `session_locked`, 4 `shutdown` |
 | `UsageAction` | 1 `reveal`, 2 `copy`, 3 `fill`, 4 `totp`, 5 `passkey_sign`, 6 `ssh_sign`, 7 `blind_use` |
 | `PolicyKind` | 1 `accounts`, 2 `sessions`, 3 `retention`, 4 `export`, 5 `audit` |

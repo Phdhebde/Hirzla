@@ -1749,7 +1749,7 @@ journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'
 | Nom | Encodage |
 | --- | --- |
 | Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
-| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement (`format.md` § 4.2) |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement, 7 Android Keystore (`format.md` § 4.2) |
 | PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
 
 « Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
@@ -1762,7 +1762,7 @@ macOS) ; sous Windows, le système le demande lui-même.
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4, 5 ou 7), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
 | 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
 | 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
@@ -1774,15 +1774,19 @@ macOS) ; sous Windows, le système le demande lui-même.
   4 est ignorée pour FIDO2, et absente vaut `false`. Puis vérification du mot de passe maître (un mot de passe faux
   compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
   geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
-  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
-  remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello, Touch ID et
+  Android Keystore remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+- Android Keystore (7, ADR 0080 § 4.1) : le noyau n'a pas de fenêtre ; le **client** affiche
+  `BiometricPrompt` **avant** d'envoyer `EnrollMethod` ou `UnlockWithMethod`, et le noyau
+  calcule le HMAC dans les 5 secondes qui suivent. Passé ce délai, `MethodCancelled`. La clé 4
+  est ignorée : la méthode n'est pas classique seulement.
 - `UnlockWithMethod` : frein ; méthode lue dans l'en-tête en clair ; geste ; ouverture avec
   tous les contrôles de `format.md` § 5.3. Un refus du matériel ou une ouverture qui échoue
   comptent comme un échec de déverrouillage (même frein que le mot de passe) ; une
   annulation, un matériel absent ou une clé disparue ne comptent pas.
 - `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
-  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello est ensuite supprimée du
-  système.
+  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello ou Android Keystore est
+  ensuite supprimée du système.
 - Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
   le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
   exige un reçoit `Busy`. Le système abandonne après 60 s.
@@ -1801,7 +1805,7 @@ macOS) ; sous Windows, le système le demande lui-même.
 Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
 matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
 `NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
-journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
+journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|android|-> result=<ok|nom>` :
 ni nom de clé, ni identifiant de clé, ni rang, ni PIN. Un ajout refusé faute d'acceptation
 s'écrit `result=classical_factor_not_accepted`.
 
