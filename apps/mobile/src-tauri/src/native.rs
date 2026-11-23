@@ -52,8 +52,9 @@ struct Copy<'a> {
     clear_s: u64,
 }
 
-#[derive(Deserialize)]
-struct Done {}
+/// What `invoke.resolve()` sends without data: an empty object or nothing at all. Any
+/// value is accepted; only the rejection matters.
+type Done = serde_json::Value;
 
 impl<R: Runtime> Native<R> {
     #[cfg(target_os = "android")]
@@ -100,7 +101,7 @@ impl<R: Runtime> Native<R> {
         }
         #[cfg(not(target_os = "android"))]
         {
-            let _ = (prompt.title, prompt.subtitle, Done {});
+            let _ = (prompt.title, prompt.subtitle, Done::Null);
             Err(MobileError::NoFingerprint)
         }
     }
