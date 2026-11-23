@@ -26,3 +26,14 @@ adb install -r apps/mobile/src-tauri/gen/android/app/build/outputs/apk/universal
 ```
 
 Journal du noyau (APK de développement) : `adb shell run-as app.hirzla.mobile cat files/core/core.log`.
+
+## Android Studio
+
+```sh
+apps/mobile/scripts/studio.sh
+```
+
+Ouvre le projet Gradle avec l'environnement des constructions Rust (cargo, NDK, SDK). Un
+« Run » sur le Pixel construit tout : l'interface (tâche `rustBuild…` de Tauri) et le noyau
+(tâche `buildHirzlaCore`, toujours en release). Lancé depuis le Dock, Studio ne voit pas cargo
+ni le NDK.

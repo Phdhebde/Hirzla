@@ -81,3 +81,29 @@ dependencies {
 }
 
 apply(from = file("tauri.build.gradle.kts"))
+
+// The core (ADR 0080 § 2): `libhirzla_core_android.so`, always in release (Argon2id in debug
+// is far too slow), built by cargo-ndk into src/main/jniLibs before the native libraries are
+// merged. The NDK is the one of local.properties (ndk.dir) or of ANDROID_NDK_HOME.
+val buildCore = tasks.register<Exec>("buildHirzlaCore") {
+    group = "rust"
+    description = "Builds libhirzla_core_android.so (release, arm64-v8a)"
+    val props = Properties().apply {
+        val f = rootProject.file("local.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    val ndk = props.getProperty("ndk.dir") ?: System.getenv("ANDROID_NDK_HOME") ?: ""
+    workingDir = rootProject.file("../../../../..")
+    environment("ANDROID_NDK_HOME", ndk)
+    val home = System.getProperty("user.home")
+    environment("PATH", "$home/.cargo/bin:/opt/homebrew/bin:" + System.getenv("PATH"))
+    // A GUI-launched Android Studio does not see the shell's PATH: rustup's cargo by default.
+    val cargo = File("$home/.cargo/bin/cargo").takeIf { it.canExecute() }?.path ?: "cargo"
+    commandLine(
+        cargo, "ndk", "-t", "arm64-v8a", "-P", "34",
+        "-o", "apps/mobile/src-tauri/gen/android/app/src/main/jniLibs",
+        "build", "--release", "-p", "hirzla-mobile-core",
+    )
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("JniLibFolders") }
+    .configureEach { dependsOn(buildCore) }
