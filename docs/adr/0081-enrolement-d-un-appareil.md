@@ -95,7 +95,7 @@ N affiche « Ce serveur ne permet pas encore l'enrôlement ; mettez-le à jour �
 
 ### 4. API locale (`api-locale.md`, famille serveur)
 
-Opérations 130 à 136, détaillées dans `api-locale.md` § 15.11 :
+Opérations 190 à 196, détaillées dans `api-locale.md` § 15.11 :
 
 - `DeviceEnrolStart {1: link}` → `{1: code}` (N, sans coffre) ;
 - `DeviceEnrolWait` → `{1?: member_fingerprint}`, absente en attente (N) ;

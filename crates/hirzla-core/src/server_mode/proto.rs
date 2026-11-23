@@ -23,6 +23,8 @@ pub const GOVERNANCE_OPS: std::ops::RangeInclusive<u64> = 90..=99;
 /// Operation codes of the member directory, also version 4 (ADR 0069). 120 to 129 are
 /// reserved for the server mode.
 pub const DIRECTORY_OPS: std::ops::RangeInclusive<u64> = 120..=129;
+/// Operation codes of the enrolment of a device, also version 4 (ADR 0081).
+pub const ENROL_OPS: std::ops::RangeInclusive<u64> = 190..=199;
 /// Shortest text searched in the directory, in bytes (`sync-protocol.md` § 11.11).
 pub const MIN_SEARCH: usize = hirzla_sync::net::proto::MIN_FIND_QUERY;
 /// Most members in the result of a search.
@@ -100,19 +102,19 @@ pub enum ServerOp {
     /// Sign or decline a received request, and send the answer.
     QuorumRespond = 125,
     /// New device, without vault: start an enrolment with an invitation link (ADR 0081).
-    DeviceEnrolStart = 130,
+    DeviceEnrolStart = 190,
     /// New device: look once for the package of the certification device.
-    DeviceEnrolWait = 131,
+    DeviceEnrolWait = 191,
     /// New device: create the vault from the package, join and synchronise.
-    DeviceEnrolFinish = 132,
+    DeviceEnrolFinish = 192,
     /// New device: abandon the enrolment in progress.
-    DeviceEnrolCancel = 133,
+    DeviceEnrolCancel = 193,
     /// Certification device: fetch the keys of the new device by its control code.
-    DeviceEnrolFetch = 134,
+    DeviceEnrolFetch = 194,
     /// Certification device: certify the new device and send its package.
-    DeviceEnrolApprove = 135,
+    DeviceEnrolApprove = 195,
     /// Certification device: add the new device to the shared lockers, once inscribed.
-    DeviceEnrolComplete = 136,
+    DeviceEnrolComplete = 196,
 }
 
 impl ServerOp {
@@ -434,33 +436,33 @@ pub enum ServerRequest {
         /// Sign (or decline).
         accept: bool,
     },
-    /// 130 (ADR 0081).
+    /// 190 (ADR 0081).
     DeviceEnrolStart {
         /// Invitation link of the server, `hirzla-invitation:…`.
         link: String,
     },
-    /// 131.
+    /// 191.
     DeviceEnrolWait,
-    /// 132.
+    /// 192.
     DeviceEnrolFinish {
         /// Master password of the new vault.
         password: Zeroizing<String>,
         /// Explicit derivation cost; calibrated on the device when absent (as `Init`).
         kdf: Option<crate::proto::KdfParams>,
     },
-    /// 133.
+    /// 193.
     DeviceEnrolCancel,
-    /// 134.
+    /// 194.
     DeviceEnrolFetch {
         /// Control code shown by the new device, as typed.
         code: String,
     },
-    /// 135.
+    /// 195.
     DeviceEnrolApprove {
         /// The device fetched by `DeviceEnrolFetch`.
         device: Id16,
     },
-    /// 136.
+    /// 196.
     DeviceEnrolComplete {
         /// The device approved by `DeviceEnrolApprove`.
         device: Id16,
@@ -1019,24 +1021,24 @@ pub enum ServerReply {
     },
     /// 124: received requests, oldest first.
     Inbox(Vec<ReceivedRequest>),
-    /// 130: the control code to show on the new device (ADR 0081).
+    /// 190: the control code to show on the new device (ADR 0081).
     EnrolCode(String),
-    /// 131: the package arrived, with the member fingerprint to compare; `None` while waiting.
+    /// 191: the package arrived, with the member fingerprint to compare; `None` while waiting.
     EnrolState(Option<String>),
-    /// 134: the new device fetched: member fingerprint to compare, its identifier.
+    /// 194: the new device fetched: member fingerprint to compare, its identifier.
     EnrolPeer {
         /// Fingerprint of the member key (`format.md` § 3.1).
         fingerprint: String,
         /// Identifier of the new device.
         device: Id16,
     },
-    /// 136: shared lockers the new device was added to; `None` while it has not
+    /// 196: shared lockers the new device was added to; `None` while it has not
     /// authenticated yet (its certificate is not inscribed in the key log).
     EnrolCompleted(Option<u64>),
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
-/// [`SERVER_OPS`], [`GOVERNANCE_OPS`] or [`DIRECTORY_OPS`]. Anything else, readable or not, goes to the other decoders.
+/// [`SERVER_OPS`], [`GOVERNANCE_OPS`], [`DIRECTORY_OPS`] or [`ENROL_OPS`]. Anything else, readable or not, goes to the other decoders.
 #[must_use]
 pub fn is_server_request(frame: &[u8]) -> bool {
     let Ok(v) = cbor::decode(frame) else {
@@ -1046,7 +1048,10 @@ pub fn is_server_request(frame: &[u8]) -> bool {
         return false;
     };
     f.req(3).and_then(uint).is_ok_and(|op| {
-        SERVER_OPS.contains(&op) || GOVERNANCE_OPS.contains(&op) || DIRECTORY_OPS.contains(&op)
+        SERVER_OPS.contains(&op)
+            || GOVERNANCE_OPS.contains(&op)
+            || DIRECTORY_OPS.contains(&op)
+            || ENROL_OPS.contains(&op)
     })
 }
 
@@ -2401,6 +2406,64 @@ mod tests {
         let (id, back) = ServerRequest::decode(&f).unwrap();
         assert_eq!(id, 7);
         back
+    }
+
+    /// Every operation reaches this family through the router, and no number belongs to
+    /// another family (ADR 0081: 130 to 132 were taken by general operations).
+    #[test]
+    fn every_operation_is_routed_here_and_only_here() {
+        for op in ServerOp::ALL {
+            let n = op as u64;
+            let frame = cbor::encode(&Value::map(vec![
+                (1, Value::Uint(SERVER_VERSION)),
+                (2, Value::Uint(1)),
+                (3, Value::Uint(n)),
+            ]))
+            .unwrap();
+            assert!(is_server_request(&frame), "{n} not routed");
+            assert!(
+                crate::proto::Op::from_u64(n).is_none(),
+                "{n} is a general operation"
+            );
+            for other in [
+                crate::methods::proto::METHOD_OPS,
+                crate::passkey::proto::PASSKEY_OPS,
+                crate::selfmode::proto::SELF_OPS,
+                crate::agent::proto::AGENT_OPS,
+                crate::connections::proto::CONNECTION_OPS,
+                crate::locker_export::proto::EXPORT_OPS,
+                crate::folders::proto::FOLDER_OPS,
+                crate::totp::proto::TOTP_OPS,
+            ] {
+                assert!(!other.contains(&n), "{n} belongs to another family");
+            }
+        }
+    }
+
+    #[test]
+    fn enrolment_requests_round_trip() {
+        for r in [
+            ServerRequest::DeviceEnrolStart {
+                link: "hirzla-invitation:x".into(),
+            },
+            ServerRequest::DeviceEnrolWait,
+            ServerRequest::DeviceEnrolFinish {
+                password: Zeroizing::new("mot de passe".into()),
+                kdf: Some(crate::proto::KdfParams {
+                    m_kib: 65536,
+                    t: 3,
+                    p: 1,
+                }),
+            },
+            ServerRequest::DeviceEnrolCancel,
+            ServerRequest::DeviceEnrolFetch {
+                code: "ABCDE FGHIJ".into(),
+            },
+            ServerRequest::DeviceEnrolApprove { device: [3; 16] },
+            ServerRequest::DeviceEnrolComplete { device: [3; 16] },
+        ] {
+            assert!(round(&r) == r, "{r:?}");
+        }
     }
 
     #[test]

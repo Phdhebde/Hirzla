@@ -904,7 +904,7 @@ Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. A
 contient de secret, de clé ni de détail cryptographique.
 
 **Compatibilité** (ADR 0070) : les clés 10 à 12 de l'état d'une demande et les opérations
-123 à 125 étendent la version 4 de la même façon. Les opérations 130 à 136 (ADR 0081) aussi.
+123 à 125 étendent la version 4 de la même façon. Les opérations 190 à 196 (ADR 0081) aussi.
 
 **Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
 clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
@@ -2029,21 +2029,21 @@ toutes lettres. Réponses : `credential`, `clientData`, `attestation`, `authData
 le nom du code (`verification_required`, `credential_excluded`, `algorithm_unsupported`,
 `invalid_input`…).
 
-### 15.11 Enrôlement d'un appareil par le serveur (opérations 130 à 136)
+### 15.11 Enrôlement d'un appareil par le serveur (opérations 190 à 196)
 
 Décision : ADR 0081 (`sync-protocol.md` § 14). Le nouvel appareil N n'a pas de coffre ; ses
-opérations (130 à 133) sont servies sans coffre ouvert. Celles de l'appareil de
-certification E (134 à 136) exigent un coffre ouvert et un serveur rattaché et vérifié.
+opérations (190 à 193) sont servies sans coffre ouvert. Celles de l'appareil de
+certification E (194 à 196) exigent un coffre ouvert et un serveur rattaché et vérifié.
 
 | Code | Nom | Appareil | Réseau | Arguments | Résultat |
 | --- | --- | --- | --- | --- | --- |
-| 130 | `DeviceEnrolStart` | N | oui | `{1: lien d'invitation}` | `{1: code de contrôle tstr(20)}` |
-| 131 | `DeviceEnrolWait` | N | oui | — | `{1?: empreinte du membre}`, absente tant que le paquet n'est pas arrivé |
-| 132 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`)}` | — |
-| 133 | `DeviceEnrolCancel` | N | non | — | — |
-| 134 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
-| 135 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
-| 136 | `DeviceEnrolComplete` | E | oui | `{1: appareil}` | `{1?: casiers uint}`, absente tant que N ne s'est pas authentifié |
+| 190 | `DeviceEnrolStart` | N | oui | `{1: lien d'invitation}` | `{1: code de contrôle tstr(20)}` |
+| 191 | `DeviceEnrolWait` | N | oui | — | `{1?: empreinte du membre}`, absente tant que le paquet n'est pas arrivé |
+| 192 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`)}` | — |
+| 193 | `DeviceEnrolCancel` | N | non | — | — |
+| 194 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
+| 195 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
+| 196 | `DeviceEnrolComplete` | E | oui | `{1: appareil}` | `{1?: casiers uint}`, absente tant que N ne s'est pas authentifié |
 
 Détails :
 
