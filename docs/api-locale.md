@@ -2064,7 +2064,8 @@ Détails :
    qui inscrit le certificat, et synchronise une fois. Après la création, un échec laisse le
    coffre créé et ouvert ; le rattachement se refait depuis l'écran du serveur.
 4. **`DeviceEnrolFetch`** — appareil sans clé du membre : `Forbidden`. Code mal formé :
-   `InvalidInput`. Rien au rendez-vous (pas encore déposé, ou expiré après 10 minutes) :
+   `InvalidInput`. Aucun casier partagé où le membre a un rôle : `Unsupported`, avant de
+   relever le rendez-vous (le même code resservira). Rien au rendez-vous (pas encore déposé, ou expiré après 10 minutes) :
    `NotFound`. Clés qui ne redonnent pas le code : `FingerprintMismatch`. L'interface affiche
    l'empreinte du membre et demande à l'utilisateur de la comparer avec celle de N.
 5. **`DeviceEnrolApprove`** — appareil autre que celui de `DeviceEnrolFetch` : `NotFound`.

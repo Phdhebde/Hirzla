@@ -255,6 +255,11 @@ impl ServerMode {
             return Err(ServerCode::Forbidden);
         }
         let code = enrol::normalise_code(typed).ok_or(general(ErrorCode::InvalidInput))?;
+        // Nothing to give the new device without a shared locker: refused before the
+        // request is taken from the rendezvous, so the same code still works afterwards.
+        if !self.holds_any_role(&self.device.member_id()) {
+            return Err(general(ErrorCode::Unsupported));
+        }
         let mut client = self.session()?;
         let got = client.mailbox_get(&enrol::rendezvous(&code));
         let _ = client.bye();

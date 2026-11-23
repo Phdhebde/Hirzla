@@ -159,6 +159,9 @@ Mode Serveur :
                           Révoque un autre appareil inscrit à votre nom (alerte « appareil
                           inconnu »), depuis un appareil de certification. Définitif.
                           --oui : sans demande de confirmation.
+  appareil ajouter CODE   Ajoute un nouvel appareil à votre compte (téléphone) : CODE est
+                          le code affiché par l'appareil. Depuis un appareil de
+                          certification rattaché au serveur.
   stop                    Verrouille le coffre et arrête le noyau.
 
 Mises à jour hors ligne (sans réseau ni noyau) :
@@ -281,6 +284,12 @@ pub struct DeviceRevokeCommand {
     pub device: String,
     /// Confirmed on the command line: no question asked.
     pub yes: bool,
+}
+
+/// `appareil ajouter CODE` (ADR 0081).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceEnrolCommand {
+    pub code: String,
 }
 
 /// A command on shared lockers (`docs/api-locale.md` § 15.6).
@@ -486,6 +495,7 @@ pub enum Command {
     Quorum(QuorumCommand),
     Quarantine(QuarantineCommand),
     DeviceRevoke(DeviceRevokeCommand),
+    DeviceEnrol(DeviceEnrolCommand),
     Update(UpdateCommand),
     /// `--version`: prints the version of `hirzla`, without starting the core.
     Version,
@@ -1661,6 +1671,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                         "« appareil revoquer » attend l'identifiant de l'APPAREIL.".to_owned()
                     })?,
                     yes: has("--oui"),
+                }),
+                Some("ajouter") => Command::DeviceEnrol(DeviceEnrolCommand {
+                    code: positional.get(1).cloned().ok_or_else(|| {
+                        "« appareil ajouter » attend le CODE affiché par l'appareil.".to_owned()
+                    })?,
                 }),
                 _ => {
                     return Err(format!(

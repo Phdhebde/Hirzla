@@ -10,11 +10,12 @@
 use std::io::Read;
 use std::path::Path;
 
+use hirzla_core::proto::ErrorCode;
 use hirzla_core::server_mode::proto::{
     normalise_fingerprint, AlertKind, FoundInfo, KeyLogStatus, LockerStatus, MemberInfo,
-    QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role, ServerReply,
-    ServerRequest, SuspectReason, SyncReport, MAX_DISPLAY_NAME, MAX_LOCKER_NAME, MAX_ROOTS,
-    MAX_TEXT, MIN_SEARCH,
+    QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role, ServerCode,
+    ServerReply, ServerRequest, SuspectReason, SyncReport, MAX_DISPLAY_NAME, MAX_LOCKER_NAME,
+    MAX_ROOTS, MAX_TEXT, MIN_SEARCH,
 };
 use hirzla_vault::model::{Id16, MemberKeys, OpId, MAX_SERVER_URL};
 use serde::{Deserialize, Serialize};
@@ -1192,6 +1193,118 @@ impl AppState {
 // -----------------------------------------------------------------------------------------
 // Tauri commands
 // -----------------------------------------------------------------------------------------
+
+/// The new device fetched by its code (ADR 0081): member fingerprint to compare, device.
+#[derive(Debug, Serialize)]
+pub struct EnrolPeerDto {
+    /// Fingerprint of the member key.
+    pub fingerprint: String,
+    /// Identifier of the new device, hexadecimal.
+    pub device: String,
+}
+
+/// Refusals of the enrolment operations, in French (ADR 0081).
+fn enrol_error(e: DesktopError) -> DesktopError {
+    match e {
+        DesktopError::Server(ServerCode::Forbidden) => DesktopError::Invalid(
+            "Ce poste ne détient pas votre clé de membre : ajoutez l'appareil depuis un \
+             appareil de certification.",
+        ),
+        DesktopError::Server(ServerCode::General(ErrorCode::NotFound)) => DesktopError::Invalid(
+            "Rien n'attend sous ce code : vérifiez-le, ou recommencez sur l'appareil (le code \
+             expire après 10 minutes).",
+        ),
+        DesktopError::Server(ServerCode::General(ErrorCode::InvalidInput)) => {
+            DesktopError::Invalid(
+                "Code mal formé : 20 lettres et chiffres, tels qu'affichés par l'appareil.",
+            )
+        }
+        DesktopError::Server(ServerCode::FingerprintMismatch) => DesktopError::Invalid(
+            "Les clés reçues ne correspondent pas au code : code mal recopié, ou \
+             substitution. Recommencez sur l'appareil.",
+        ),
+        DesktopError::Refused(r) if r.code == ErrorCode::Unsupported => DesktopError::Invalid(
+            "Vous n'avez encore aucun casier partagé : créez-en un ci-dessus, puis saisissez \
+             de nouveau le même code.",
+        ),
+        other => other,
+    }
+}
+
+impl AppState {
+    /// Fetches the keys of a new device by the code it shows (ADR 0081).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_fetch(&self, code: &str) -> Result<EnrolPeerDto, DesktopError> {
+        if code.len() > 64 {
+            return Err(DesktopError::Invalid("Code trop long."));
+        }
+        match self
+            .call_server(&ServerRequest::DeviceEnrolFetch {
+                code: code.to_owned(),
+            })
+            .map_err(enrol_error)?
+        {
+            ServerReply::EnrolPeer {
+                fingerprint,
+                device,
+            } => Ok(EnrolPeerDto {
+                fingerprint,
+                device: hex(&device),
+            }),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Certifies the new device and sends its package.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_approve(&self, device: &str) -> Result<(), DesktopError> {
+        let device = id16(device)?;
+        self.call_server(&ServerRequest::DeviceEnrolApprove { device })
+            .map_err(enrol_error)
+            .map(drop)
+    }
+
+    /// Adds the new device to the shared lockers once it authenticated: the number of
+    /// lockers, `None` while waiting.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_complete(&self, device: &str) -> Result<Option<u64>, DesktopError> {
+        let device = id16(device)?;
+        match self
+            .call_server(&ServerRequest::DeviceEnrolComplete { device })
+            .map_err(enrol_error)?
+        {
+            ServerReply::EnrolCompleted(n) => Ok(n),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+}
+
+/// See [`AppState::enrol_fetch`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_fetch(state: State<'_>, code: String) -> Result<EnrolPeerDto, DesktopError> {
+    state.enrol_fetch(&code)
+}
+
+/// See [`AppState::enrol_approve`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_approve(state: State<'_>, device: String) -> Result<(), DesktopError> {
+    state.enrol_approve(&device)
+}
+
+/// See [`AppState::enrol_complete`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_complete(
+    state: State<'_>,
+    device: String,
+) -> Result<Option<u64>, DesktopError> {
+    state.enrol_complete(&device)
+}
 
 /// See [`AppState::server_status`].
 #[tauri::command(async, rename_all = "snake_case")]

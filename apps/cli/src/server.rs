@@ -12,7 +12,8 @@ use hirzla_vault::model::{Id16, OpId};
 use zeroize::Zeroizing;
 
 use crate::args::{
-    DeviceRevokeCommand, LockerCommand, QuarantineCommand, QuorumCommand, QuorumWhat, ServerCommand,
+    DeviceEnrolCommand, DeviceRevokeCommand, LockerCommand, QuarantineCommand, QuorumCommand,
+    QuorumWhat, ServerCommand,
 };
 use crate::{client_message, hex, refusal_message, say, Session};
 
@@ -651,6 +652,77 @@ pub fn run_device_revoke(
          il a pu le copier : changez les mots de passe sensibles sur leurs cibles."
     ));
     Ok(())
+}
+
+/// `appareil ajouter CODE` (ADR 0081): fetches the keys of the new device by its code,
+/// shows the member fingerprint to compare, certifies it on « oui », then waits until it has
+/// authenticated to add it to the shared lockers.
+pub fn run_device_enrol(session: &Session<'_>, command: &DeviceEnrolCommand) -> Result<(), String> {
+    if !crate::term::interactive() {
+        return Err("l'ajout d'un appareil se confirme au terminal.".into());
+    }
+    let mut c = session.connect(false)?;
+    let mut call = |r: &ServerRequest| match c.call_server(r) {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(code)) => Err(device_enrol_message(code)),
+        Err(e) => Err(client_message(&e)),
+    };
+    let ServerReply::EnrolPeer {
+        fingerprint,
+        device,
+    } = call(&ServerRequest::DeviceEnrolFetch {
+        code: command.code.clone(),
+    })?
+    else {
+        return bad_reply();
+    };
+    note(&format!(
+        "Empreinte de votre clé de membre : {}\nComparez-la, caractère par caractère, avec \
+         celle qu'affiche le nouvel appareil. Si elles diffèrent, n'allez pas plus loin.",
+        grouped(&fingerprint)
+    ));
+    if !confirm("Ajouter cet appareil à votre compte ? Tapez « oui » pour confirmer : ")? {
+        say("Ajout abandonné.");
+        return Ok(());
+    }
+    call(&ServerRequest::DeviceEnrolApprove { device })?;
+    say("Appareil certifié. Terminez sur l'appareil (mot de passe maître) ; attente…");
+    for _ in 0..300 {
+        match call(&ServerRequest::DeviceEnrolComplete { device })? {
+            ServerReply::EnrolCompleted(Some(n)) => {
+                say(&format!("Appareil ajouté à {n} casier(s) partagé(s)."));
+                return Ok(());
+            }
+            ServerReply::EnrolCompleted(None) => {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+            }
+            _ => return bad_reply(),
+        }
+    }
+    Err("l'appareil ne s'est pas présenté au serveur en 10 minutes : recommencez.".into())
+}
+
+/// Refusals of the enrolment operations (ADR 0081).
+fn device_enrol_message(code: ServerCode) -> String {
+    match code {
+        ServerCode::Forbidden => "ce poste ne détient pas votre clé de membre : ajoutez \
+             l'appareil depuis un appareil de certification."
+            .into(),
+        ServerCode::General(ErrorCode::NotFound) => "rien n'attend sous ce code : vérifiez-le, \
+             ou recommencez sur l'appareil (le code expire après 10 minutes)."
+            .into(),
+        ServerCode::General(ErrorCode::InvalidInput) => {
+            "code mal formé : 20 lettres et chiffres, tels qu'affichés par l'appareil.".into()
+        }
+        ServerCode::FingerprintMismatch => "les clés reçues ne correspondent pas au code : \
+             code mal recopié, ou substitution. Recommencez sur l'appareil."
+            .into(),
+        ServerCode::General(ErrorCode::Unsupported) => "vous n'avez encore aucun casier \
+             partagé : créez-en un (« casier creer NOM »), puis relancez la commande avec le \
+             même code."
+            .into(),
+        other => server_message(other),
+    }
 }
 
 /// Refusals of `DeviceRevoke` that mean something else than for the locker operations.
