@@ -123,6 +123,11 @@ $("liste-synchroniser").addEventListener("click", () => void synchroniser(true))
 /** @type {number | undefined} */
 let releve;
 let rejoindreActif = false;
+/** Member fingerprint received with the package, then the one the user confirmed.
+ * @type {string | null} */
+let empreinteRecue = null;
+/** @type {string | null} */
+let empreinteConfirmee = null;
 
 /** @param {"form-lien" | "rejoindre-code" | "rejoindre-empreinte" | "form-rejoindre-mdp"} partie */
 function etape(partie) {
@@ -174,6 +179,8 @@ async function relever() {
     if (!rejoindreActif) return;
     if (fp) {
       arreterReleve();
+      empreinteConfirmee = null;
+      empreinteRecue = fp;
       $("rejoindre-empreinte-valeur").textContent = grouper(fp);
       etape("rejoindre-empreinte");
       return;
@@ -198,6 +205,8 @@ async function relever() {
 $("rejoindre-annuler").addEventListener("click", () => void abandonner());
 $("rejoindre-different").addEventListener("click", () => void abandonner());
 $("rejoindre-identique").addEventListener("click", () => {
+  // The fingerprint shown and confirmed goes back to the core, which refuses any other.
+  empreinteConfirmee = empreinteRecue;
   input("rejoindre-mdp").value = "";
   input("rejoindre-confirmation").value = "";
   erreur($("form-rejoindre-mdp"), null);
@@ -211,6 +220,7 @@ $("form-rejoindre-mdp").addEventListener("submit", (ev) => {
     await invoke("enrol_finish", {
       password: input("rejoindre-mdp").value,
       confirmation: input("rejoindre-confirmation").value,
+      fingerprint: empreinteConfirmee ?? "",
     });
     input("rejoindre-mdp").value = "";
     input("rejoindre-confirmation").value = "";

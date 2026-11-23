@@ -1,5 +1,6 @@
 //! Revocation, quarantine, devices, forks and rotations (§ 7.5, § 9, § 15).
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use hirzla_crypto::util::sha384;
@@ -235,6 +236,38 @@ fn mutual_concurrent_removals() {
         assert_eq!(s.role(&w.members[0].id()), Some(Role::Owner));
         assert_eq!(s.role(&w.members[1].id()), None);
     }
+}
+
+// ADR 0081: only the devices enrolled from a device, and the one that enrolled it, are its
+// member's devices it knows. One added by another member is not.
+#[test]
+fn own_enrolled_devices_exclude_those_added_by_another_member() {
+    let mut w = World::new(&[Role::Editor]);
+    let first = w.devices[0].device_id();
+    // Alice's second device, added by her first; her third, added by Bob (`Editor`).
+    let d2 = w.add_device(0, 0);
+    w.sync();
+    let d3 = w.add_device(0, 1);
+    w.sync();
+    let second = w.devices[d2].device_id();
+    let third = w.devices[d3].device_id();
+    let alice = w.members[0].id();
+    for d in [second, third] {
+        assert!(w.replicas[0]
+            .authorization()
+            .unwrap()
+            .device_active(&alice, &d));
+    }
+    assert_eq!(
+        w.replicas[0].own_enrolled_devices(),
+        BTreeSet::from([second])
+    );
+    assert_eq!(
+        w.replicas[d2].own_enrolled_devices(),
+        BTreeSet::from([first])
+    );
+    assert!(w.replicas[d3].own_enrolled_devices().is_empty());
+    assert!(w.replicas[1].own_enrolled_devices().is_empty());
 }
 
 // § 9.7: device removal.

@@ -32,22 +32,26 @@ code que l'utilisateur recopie de N vers E sert aussi d'adresse de dépôt.
 1. **Sur N** (aucun coffre) : « Rejoindre mon compte ». L'utilisateur colle le **lien
    d'invitation** du serveur (§ 11.10, le même que pour un poste). N tire `device_id` et ses
    paires hybrides définitives, et les garde en mémoire seulement. N calcule le code de
-   contrôle C (§ 14, étape 1 : 20 caractères base32, 100 bits) et l'adresse de rendez-vous
-   `R = SHA-384("hirzla/v1/enrol-rendezvous" ‖ 0x00 ‖ C)[0..16]`.
+   contrôle C de sa requête : 20 premiers caractères de
+   `base32(SHA-384(CBOR({1: device_id, 2: sig, 3: kem})))`, 100 bits. C'est le code du
+   § 14, étape 1, étendu à l'identifiant (voir « Code de contrôle de la requête »). Puis
+   l'adresse de rendez-vous `R = SHA-384("hirzla/v1/enrol-rendezvous" ‖ 0x00 ‖ C)[0..16]`.
 2. N ouvre une session (`Hello`, vérification de l'empreinte du serveur par le lien), dépose
    **avant `Auth`** `MailboxPut {1: R, 2: blob}`, où `blob` = `CBOR({1: device_id, 2: sig,
    3: kem})`, puis affiche C.
 3. **Sur E** (poste déverrouillé, appareil de certification, rattaché au serveur) : « Ajouter
    un appareil ». L'utilisateur saisit C. E calcule R, lit `MailboxGet {1: R}`, recalcule le
-   code des clés reçues et le compare à C en temps constant. Une différence fait tout refuser :
-   le serveur ne peut pas substituer ses propres clés sans une seconde préimage sur 100 bits.
+   code de la requête reçue et le compare à C en temps constant. Une différence fait tout
+   refuser : le serveur ne peut substituer ni ses propres clés, ni un autre identifiant,
+   sans une seconde préimage sur 100 bits.
 4. E affiche l'**empreinte du membre** (`format.md` § 3.1) et demande confirmation. Puis E
    signe le `DeviceCert` de N, construit le paquet du § 14, étape 4, sans le champ 6, et le
    dépose dans la boîte de N (`MailboxPut {1: device_id de N}`, déjà permis).
 5. **Sur N** : `MailboxGet` de sa propre boîte avant `Auth` (déjà permis), relevé toutes les
    2 secondes pendant 10 minutes au plus. N ouvre le paquet, vérifie `sig` et les deux
    certificats (étape 6), affiche l'empreinte du membre. L'utilisateur confirme qu'elle est
-   celle du poste.
+   celle du poste. L'interface rend au noyau l'empreinte confirmée (`DeviceEnrolFinish`) : le
+   noyau refuse de créer le coffre si ce n'est pas celle du paquet reçu.
 6. N demande un mot de passe maître (le sien, propre à cet appareil), crée son coffre avec
    l'identité reçue (§ 2), se rattache au serveur avec l'adresse, l'AC et l'empreinte du lien,
    s'authentifie avec son certificat (le serveur l'inscrit au registre) et synchronise.
@@ -56,6 +60,16 @@ code que l'utilisateur recopie de N vers E sert aussi d'adresse de dépôt.
    Il ne peut pas le faire plus tôt : on ne scelle une clé de casier que pour un appareil
    inscrit (`transparence.md` § 6.2). N reçoit les casiers à sa synchronisation suivante. Un
    casier partagé créé plus tard par E reçoit aussi N.
+
+**Code de contrôle de la requête.** Le code du § 14, étape 1, ne couvre que les clés
+(`{1: sig, 2: kem}`). Par le serveur, la requête passe entre ses mains : il pourrait y
+remplacer `device_id` sans changer le code, et E certifierait les clés de N sous un
+identifiant choisi par le serveur. N refuserait le paquet (certificat d'un autre appareil),
+donc rien ne fuit, mais l'enrôlement échouerait sans que E le sache et un certificat signé par
+la clé du membre existerait pour un identifiant que personne n'a tiré. Le code de la requête
+couvre donc aussi `device_id`. Le code de contrôle d'un appareil déjà certifié
+(`ServerIdentity`, agent Hornn, colis de récupération) ne change pas : il porte sur un
+certificat, où l'identifiant est signé par la clé du membre.
 
 ### 2. Coffre créé par enrôlement (`format.md` § 13)
 
@@ -99,7 +113,8 @@ Opérations 190 à 196, détaillées dans `api-locale.md` § 15.11 :
 
 - `DeviceEnrolStart {1: link}` → `{1: code}` (N, sans coffre) ;
 - `DeviceEnrolWait` → `{1?: member_fingerprint}`, absente en attente (N) ;
-- `DeviceEnrolFinish {1: password, 2?: coût}` (N : crée le coffre, rejoint, synchronise) ;
+- `DeviceEnrolFinish {1: password, 2?: coût, 3: member_fingerprint}` (N : l'empreinte que
+  l'utilisateur a confirmée ; crée le coffre, rejoint, synchronise) ;
 - `DeviceEnrolCancel` (N) ;
 - `DeviceEnrolFetch {1: code}` → `{1: member_fingerprint, 2: device_id}` (E) ;
 - `DeviceEnrolApprove {1: device_id}` (E : certificat, paquet) ;
@@ -122,6 +137,12 @@ destruction, et sont perdues si le noyau s'arrête : il faut alors recommencer.
   appareils, le membre les range dans un casier partagé dont il est seul membre. Déplacer un
   secret d'un casier à l'autre fait l'objet d'un ADR suivant (0082).
 - E doit avoir au moins un casier partagé quand N termine (sinon `Unsupported`).
+- **Appareils attendus au registre après un redémarrage.** Un poste ne tient pour connus que
+  les appareils de son membre qu'il a lui-même ajoutés (`DeviceAdd` de sa main) et celui qui
+  l'a ajouté. Un appareil du membre ajouté à un casier par un autre membre (`Owner`,
+  `Manager`, `Editor`, § 7.2) ne l'est pas : son inscription reste une alerte « appareil
+  inconnu », et il ne reçoit pas les casiers créés ensuite. Un certificat fabriqué avec une
+  clé de membre volée ne passe donc pas pour un appareil enrôlé.
 - Un coffre déjà créé sur N n'est pas fusionné : on enrôle un appareil vierge. Le coffre
   d'essai actuel du Pixel sera supprimé.
 - Le serveur gagne une petite surface avant authentification : un dépôt de 8 Kio par session,

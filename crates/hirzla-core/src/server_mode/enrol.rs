@@ -173,6 +173,17 @@ impl Enrolling {
         self.received.is_some()
     }
 
+    /// Whether `typed` is the fingerprint of the member of the package received: the one the
+    /// interface showed and the user compared with the certification device (§ 14, step 6).
+    /// A fingerprint is public: no constant time needed.
+    #[must_use]
+    pub fn confirms(&self, typed: &str) -> bool {
+        match (&self.received, super::proto::normalise_fingerprint(typed)) {
+            (Some(e), Some(t)) => fingerprint(&e.member.sig) == t,
+            _ => false,
+        }
+    }
+
     /// The identity for the new vault, the server to join (address, roots, fingerprint) and
     /// the certificate of E, once the package arrived.
     ///
@@ -271,7 +282,8 @@ impl ServerMode {
             Err(e) => return Err(net(e)),
         };
         let request = EnrolRequest::decode(&bytes).map_err(|_| general(ErrorCode::Malformed))?;
-        // Keys that do not give the typed code were substituted (or the code mistyped).
+        // A request that does not give the typed code was altered (keys or identifier
+        // substituted), or the code mistyped.
         if !request.matches(&code) {
             return Err(ServerCode::FingerprintMismatch);
         }

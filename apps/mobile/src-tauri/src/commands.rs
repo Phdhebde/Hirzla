@@ -536,12 +536,14 @@ pub async fn enrol_wait(
 }
 
 /// Creates the vault of this phone with the identity received, joins and synchronises.
+/// `fingerprint` is the member fingerprint the user confirmed on the previous screen.
 #[tauri::command]
 pub async fn enrol_finish(
     state: State<'_>,
     native: NativeState<'_>,
     password: Zeroizing<String>,
     confirmation: Zeroizing<String>,
+    fingerprint: String,
 ) -> Result<(), MobileError> {
     check_master(&password)?;
     if password.chars().count() < MIN_MASTER_CHARS {
@@ -559,6 +561,7 @@ pub async fn enrol_finish(
             &ServerRequest::DeviceEnrolFinish {
                 password,
                 kdf: None,
+                fingerprint,
             },
         )
         .map(drop)

@@ -2650,6 +2650,7 @@ fn a_second_device_is_enrolled_through_the_server() {
         phone.handle_server(ServerRequest::DeviceEnrolFinish {
             password: z(PASSWORD),
             kdf: None,
+            fingerprint: alice.fingerprint.clone(),
         }),
         Err(ServerCode::General(ErrorCode::NotFound))
     );
@@ -2696,6 +2697,22 @@ fn a_second_device_is_enrolled_through_the_server() {
         phone.handle_server(ServerRequest::DeviceEnrolWait).unwrap(),
         ServerReply::EnrolState(Some(alice.fingerprint.clone()))
     );
+    // A fingerprint the user did not see is refused, and the enrolment is kept: no vault
+    // is created for a member that was not confirmed.
+    let mut other_fp = alice.fingerprint.clone();
+    other_fp.replace_range(0..1, if other_fp.starts_with('A') { "B" } else { "A" });
+    for wrong in [other_fp.as_str(), ""] {
+        assert_eq!(
+            phone.handle_server(ServerRequest::DeviceEnrolFinish {
+                password: z(PASSWORD),
+                kdf: None,
+                fingerprint: wrong.to_owned(),
+            }),
+            Err(ServerCode::FingerprintMismatch)
+        );
+    }
+    assert!(!phone_vault.exists());
+    // The fingerprint as shown, grouped and in lower case, is accepted.
     phone
         .handle_server(ServerRequest::DeviceEnrolFinish {
             password: z(PASSWORD),
@@ -2704,6 +2721,11 @@ fn a_second_device_is_enrolled_through_the_server() {
                 t: MIN_T,
                 p: 1,
             }),
+            fingerprint: format!(
+                "{} {}",
+                alice.fingerprint[..10].to_lowercase(),
+                &alice.fingerprint[10..]
+            ),
         })
         .unwrap();
     // A second enrolment is refused: a vault exists.

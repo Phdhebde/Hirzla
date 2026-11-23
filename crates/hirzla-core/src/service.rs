@@ -377,9 +377,11 @@ impl Core {
                     None => Err(ServerCode::General(ErrorCode::NotFound)),
                 }
             }
-            ServerRequest::DeviceEnrolFinish { password, kdf } => {
-                return self.enrol_finish(&password, kdf)
-            }
+            ServerRequest::DeviceEnrolFinish {
+                password,
+                kdf,
+                fingerprint,
+            } => return self.enrol_finish(&password, kdf, &fingerprint),
             ServerRequest::DeviceEnrolCancel => {
                 self.enrolling = None;
                 return Ok(ServerReply::Done);
@@ -411,16 +413,28 @@ impl Core {
     /// received, opens it, joins the server of the invitation and synchronises once, which
     /// inscribes this device. A failure after the vault is created leaves it created and
     /// open: joining can be done again from the server screen.
+    ///
+    /// `fingerprint` is the member fingerprint the user confirmed (§ 14, step 6). One that is
+    /// not the fingerprint of the package received is refused and the enrolment is kept: no
+    /// vault is created for a member the user did not confirm.
     fn enrol_finish(
         &mut self,
         password: &str,
         kdf: Option<crate::proto::KdfParams>,
+        fingerprint: &str,
     ) -> Result<ServerReply, ServerCode> {
         if self.vault.is_some() || self.config.vault_path.exists() {
             return Err(ServerCode::General(ErrorCode::VaultExists));
         }
         if !self.enrolling.as_ref().is_some_and(|e| e.received()) {
             return Err(ServerCode::General(ErrorCode::NotFound));
+        }
+        if !self
+            .enrolling
+            .as_ref()
+            .is_some_and(|e| e.confirms(fingerprint))
+        {
+            return Err(ServerCode::FingerprintMismatch);
         }
         let enrolled = self
             .enrolling

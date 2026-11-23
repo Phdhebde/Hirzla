@@ -1183,8 +1183,11 @@ la clé privée du membre (ADR 0011).
 
    **Mise en œuvre par le serveur (ADR 0081)** : N dépose avant `Auth` sa requête
    `CBOR({1: device_id, 2: sig, 3: kem})` à l'adresse de rendez-vous
-   `R = SHA-384("hirzla/v1/enrol-rendezvous" ‖ 0x00 ‖ code)[0..16]` ; E, à qui l'utilisateur
-   donne le code, lit R, vérifie à temps constant que les clés redonnent le code, et dépose le
+   `R = SHA-384("hirzla/v1/enrol-rendezvous" ‖ 0x00 ‖ code)[0..16]`. Ici le code couvre la
+   requête entière, identifiant compris : 20 premiers caractères de
+   `base32(SHA-384(CBOR({1: device_id, 2: sig, 3: kem})))`, pour que le serveur ne puisse
+   pas faire certifier les clés de N sous un autre identifiant. E, à qui l'utilisateur
+   donne le code, lit R, vérifie à temps constant que la requête redonne le code, et dépose le
    paquet dans la boîte de N. Le paquet suit l'assemblage du fichier d'échange (§ 13.1) :
    `{1: v = 1, 2: envelope (KeyEnvelopeEntry de N, contexte ci-dessus), 3: box (SealedBox
    bourrée, AAD = contexte), 4: sig, 5: e_cert}`, `sig` sur `CBOR(clés 1, 2, 3, 5)`. Le

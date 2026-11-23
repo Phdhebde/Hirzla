@@ -2040,7 +2040,7 @@ certification E (194 à 196) exigent un coffre ouvert et un serveur rattaché et
 | --- | --- | --- | --- | --- | --- |
 | 190 | `DeviceEnrolStart` | N | oui | `{1: lien d'invitation}` | `{1: code de contrôle tstr(20)}` |
 | 191 | `DeviceEnrolWait` | N | oui | — | `{1?: empreinte du membre}`, absente tant que le paquet n'est pas arrivé |
-| 192 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`)}` | — |
+| 192 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`), 3: empreinte du membre confirmée}` | — |
 | 193 | `DeviceEnrolCancel` | N | non | — | — |
 | 194 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
 | 195 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
@@ -2060,7 +2060,10 @@ Détails :
    certificats sous la clé du membre reçue, clés de N), et l'empreinte du membre est rendue
    pour comparaison. Paquet qui ne s'ouvre pas ou ne se vérifie pas : `ApprovalInvalid`.
    Aucun enrôlement en cours : `NotFound`.
-3. **`DeviceEnrolFinish`** — paquet pas encore arrivé : `NotFound`. Crée le coffre avec
+3. **`DeviceEnrolFinish`** — paquet pas encore arrivé : `NotFound`. Le champ 3 est
+   l'empreinte que l'interface a affichée et que l'utilisateur a confirmée (saisie tolérée
+   comme toute empreinte) ; si ce n'est pas celle du membre du paquet reçu :
+   `FingerprintMismatch`, sans rien créer, l'enrôlement en cours est gardé. Crée le coffre avec
    l'identité reçue (`format.md` § 13, sans clé privée du membre, avec son propre casier
    personnel), l'ouvre, rattache le serveur du lien (empreinte vérifiée), s'authentifie, ce
    qui inscrit le certificat, et synchronise une fois. Après la création, un échec laisse le
@@ -2068,7 +2071,7 @@ Détails :
 4. **`DeviceEnrolFetch`** — appareil sans clé du membre : `Forbidden`. Code mal formé :
    `InvalidInput`. Aucun casier partagé où le membre a un rôle : `Unsupported`, avant de
    relever le rendez-vous (le même code resservira). Rien au rendez-vous (pas encore déposé, ou expiré après 10 minutes) :
-   `NotFound`. Clés qui ne redonnent pas le code : `FingerprintMismatch`. L'interface affiche
+   `NotFound`. Requête (identifiant et clés) qui ne redonne pas le code : `FingerprintMismatch`. L'interface affiche
    l'empreinte du membre et demande à l'utilisateur de la comparer avec celle de N.
 5. **`DeviceEnrolApprove`** — appareil autre que celui de `DeviceEnrolFetch` : `NotFound`.
    Le coffre signe le certificat de N avec la clé du membre ; le noyau scelle le paquet et

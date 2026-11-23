@@ -453,6 +453,8 @@ pub enum ServerRequest {
         password: Zeroizing<String>,
         /// Explicit derivation cost; calibrated on the device when absent (as `Init`).
         kdf: Option<crate::proto::KdfParams>,
+        /// Member fingerprint the user confirmed, as `DeviceEnrolWait` gave it.
+        fingerprint: String,
     },
     /// 193.
     DeviceEnrolCancel,
@@ -1150,8 +1152,15 @@ impl ServerRequest {
             ServerRequest::DeviceEnrolStart { link } => {
                 Some(Value::map(vec![(1, Value::text(link))]))
             }
-            ServerRequest::DeviceEnrolFinish { password, kdf } => {
-                let mut e = vec![(1, Value::text(password.as_str()))];
+            ServerRequest::DeviceEnrolFinish {
+                password,
+                kdf,
+                fingerprint,
+            } => {
+                let mut e = vec![
+                    (1, Value::text(password.as_str())),
+                    (3, Value::text(fingerprint)),
+                ];
                 if let Some(k) = kdf {
                     e.push((
                         2,
@@ -1340,10 +1349,12 @@ impl ServerRequest {
                 })
             }
             ServerOp::DeviceEnrolFinish => {
-                let f = m(Fields::new(args()?, &[1, 2]))?;
+                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
                 let p = m(f
                     .req(1)
                     .and_then(|t| text_max(t, crate::proto::MAX_PASSWORD)))?;
+                let fingerprint =
+                    m(f.req(3).and_then(|t| text_max(t, MAX_TYPED_FINGERPRINT)))?.to_owned();
                 if p.is_empty() {
                     return Err(ServerCode::General(ErrorCode::InvalidInput));
                 }
@@ -1365,6 +1376,7 @@ impl ServerRequest {
                 Ok(ServerRequest::DeviceEnrolFinish {
                     password: Zeroizing::new(p.to_owned()),
                     kdf,
+                    fingerprint,
                 })
             }
             ServerOp::DeviceEnrolFetch => {
@@ -2471,6 +2483,7 @@ mod tests {
                     t: 3,
                     p: 1,
                 }),
+                fingerprint: "ABCDEFGHIJKLMNOPQRST".into(),
             },
             ServerRequest::DeviceEnrolCancel,
             ServerRequest::DeviceEnrolFetch {

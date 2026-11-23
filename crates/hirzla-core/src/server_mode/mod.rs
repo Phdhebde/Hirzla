@@ -673,18 +673,23 @@ impl ServerMode {
             for object in profiles.issued() {
                 m.expect_own(*object);
             }
-            // And the member's other devices present in a locker held here, added by an
-            // operation the locker accepted: those enrolled from here or that enrolled this
-            // device (ADR 0081).
+            // And the member's other devices enrolled from here or that enrolled this device
+            // (ADR 0081), still active in a locker held here. Not every device of the member
+            // a locker lists: another member with a role may add one (`DeviceAdd`, § 7.2),
+            // and a certificate made with a stolen member key must stay an « appareil
+            // inconnu », never be added to the lockers created here.
             let me = self.device.member_id();
             for s in lockers.values() {
+                let enrolled = s.replica.own_enrolled_devices();
                 if let Some(e) = s
                     .replica
                     .authorization()
                     .and_then(|a| a.access().state().member(&me))
                 {
-                    for cert in e.devices.values() {
-                        m.expect_own_device(cert).map_err(corrupt)?;
+                    for (device, cert) in &e.devices {
+                        if enrolled.contains(device) {
+                            m.expect_own_device(cert).map_err(corrupt)?;
+                        }
                     }
                 }
             }

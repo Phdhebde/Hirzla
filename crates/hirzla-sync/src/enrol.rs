@@ -5,8 +5,8 @@
 //!   ([`PendingDevice`]) and drops its public keys ([`EnrolRequest`]) at the rendezvous
 //!   address derived from its control code ([`rendezvous`]).
 //! - The certification device E, given the code by the user, fetches the request, checks
-//!   that the keys give that code ([`EnrolRequest::matches`]), certifies them (inside the
-//!   vault) and seals the package for N ([`seal_package`]).
+//!   that the request gives that code ([`EnrolRequest::matches`]), certifies its keys (inside
+//!   the vault) and seals the package for N ([`seal_package`]).
 //! - N opens the package ([`PendingDevice::open_package`]), checks the signature of E and
 //!   both certificates under the member key it receives, and shows the member fingerprint.
 //!
@@ -42,13 +42,19 @@ pub const MAX_PACKAGE_LEN: usize = 64 * 1024;
 
 const BASE32: &[u8; 32] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 
-/// The control code of a pair of device keys: the first 20 characters of
-/// `base32(SHA-384(CBOR({1: sig, 2: kem})))` (§ 14, step 1).
+/// The control code of an enrolment request: the first 20 characters of
+/// `base32(SHA-384(CBOR({1: device_id, 2: sig, 3: kem})))`, the hash of the request dropped
+/// at the rendezvous (ADR 0081 § 1). It covers the identifier as well as the keys: the
+/// server can change neither without a second preimage on 100 bits.
 ///
 /// # Errors
 /// [`SyncError::Malformed`] if the encoding fails.
-pub fn control_code(sig: &[u8], kem: &[u8]) -> Result<String, SyncError> {
-    let v = Value::map(vec![(1, Value::bytes(sig)), (2, Value::bytes(kem))]);
+pub fn control_code(device: &Id16, sig: &[u8], kem: &[u8]) -> Result<String, SyncError> {
+    let v = Value::map(vec![
+        (1, Value::bytes(device)),
+        (2, Value::bytes(sig)),
+        (3, Value::bytes(kem)),
+    ]);
     let digest = sha384(&encode_public(&v)?);
     let mut out = String::with_capacity(CODE_LEN);
     let mut acc: u32 = 0;
@@ -139,16 +145,17 @@ impl EnrolRequest {
         Ok(r)
     }
 
-    /// The control code of these keys.
+    /// The control code of this request.
     ///
     /// # Errors
     /// [`SyncError::Malformed`].
     pub fn code(&self) -> Result<String, SyncError> {
-        control_code(&self.sig, &self.kem)
+        control_code(&self.device, &self.sig, &self.kem)
     }
 
-    /// Whether these keys give the code the user typed (constant time): a server that
-    /// substitutes its own keys would need a second preimage on 100 bits.
+    /// Whether this request gives the code the user typed (constant time): a server that
+    /// substitutes its own keys, or another identifier, would need a second preimage on
+    /// 100 bits.
     #[must_use]
     pub fn matches(&self, code: &str) -> bool {
         self.code()
@@ -404,6 +411,11 @@ mod tests {
         assert!(n.request().matches(&code));
         let other = PendingDevice::generate().unwrap();
         assert!(!other.request().matches(&code));
+        // The same keys under another identifier give another code: the server cannot have
+        // them certified under an identifier of its choice.
+        let mut renamed = n.request();
+        renamed.device[0] ^= 1;
+        assert!(!renamed.matches(&code));
         assert_ne!(rendezvous(&code), rendezvous(&other.code().unwrap()));
     }
 
