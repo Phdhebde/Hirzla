@@ -1,0 +1,81 @@
+/* Hirzla Android — mobile screens (ADR 0080 § 8). Tokens: tokens.css (brand/README.md). */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--hz-fond);
+  color: var(--hz-texte);
+  font: 16px/1.45 var(--hz-font-texte);
+  -webkit-tap-highlight-color: transparent;
+}
+[hidden] { display: none !important; }
+h1 { font: 600 1.4rem/1.2 var(--hz-font-titre); margin: .5rem 0; display: flex; align-items: center; gap: .5rem; }
+.ecran {
+  min-height: 100%;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+}
+.ecran-centre { display: flex; flex-direction: column; justify-content: center; }
+.pile { display: flex; flex-direction: column; gap: 14px; }
+.marque { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.symbole { width: 40px; height: 40px; }
+.logotype { font: 600 1.25rem var(--hz-font-titre); letter-spacing: .18em; }
+.secondaire { color: var(--hz-texte-secondaire); margin: 0; }
+.centre { text-align: center; padding: 24px 0; }
+.champ { display: flex; flex-direction: column; gap: 6px; font-size: .9rem; color: var(--hz-texte-secondaire); }
+input {
+  font: 1rem var(--hz-font-texte);
+  color: var(--hz-texte);
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 10px;
+  padding: 12px 14px;
+  width: 100%;
+}
+input[type="password"], .mono { font-family: var(--hz-font-mono); }
+input:focus { outline: 2px solid var(--hz-braise); outline-offset: 1px; }
+.bouton {
+  font: 500 1rem var(--hz-font-texte);
+  color: var(--hz-texte);
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 10px;
+  padding: 12px 16px;
+  min-height: 48px;
+}
+.bouton:disabled { opacity: .5; }
+.bouton-principal { background: var(--hz-braise); border-color: var(--hz-braise); color: var(--hz-fonte); }
+.bouton-discret { background: transparent; border-color: transparent; padding: 8px 10px; color: var(--hz-lien); }
+.erreur {
+  margin: 0; padding: 10px 12px; border-radius: 10px;
+  background: var(--hz-alerte-fond); color: var(--hz-alerte);
+}
+.barre { display: flex; align-items: center; gap: 4px; margin-bottom: 12px; }
+.espace { flex: 1; }
+.etat { display: inline-flex; align-items: center; gap: 6px; color: var(--hz-texte-secondaire); font-size: .9rem; }
+.forme { display: inline-block; width: 10px; height: 10px; }
+.forme-carre { background: var(--hz-scelle); }
+.forme-rond { background: var(--hz-braise); border-radius: 50%; }
+.recherche { margin-bottom: 12px; }
+.liste { list-style: none; margin: 0; padding: 0 0 88px; }
+.liste li {
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 12px;
+  margin-bottom: 8px;
+}
+.liste button {
+  all: unset; display: block; width: 100%; padding: 12px 14px; box-sizing: border-box;
+}
+.liste .titre { display: block; font-weight: 600; }
+.liste .sous-titre { display: block; color: var(--hz-texte-secondaire); font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flottant { position: fixed; right: 16px; bottom: max(20px, env(safe-area-inset-bottom)); box-shadow: 0 4px 16px rgb(0 0 0 / .25); }
+.ligne-champ {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--hz-surface); border: 1px solid var(--hz-bordure); border-radius: 12px; padding: 10px 12px;
+}
+.ligne-champ > div { flex: 1; min-width: 0; }
+.libelle { display: block; font-size: .8rem; color: var(--hz-texte-secondaire); }
+.valeur { display: block; overflow-wrap: anywhere; }
+.annonce {
+  position: fixed; left: 16px; right: 16px; bottom: max(84px, env(safe-area-inset-bottom));
+  background: var(--hz-ardoise); color: var(--hz-givre); border-radius: 10px; padding: 12px 14px; z-index: 10;
+}

@@ -336,6 +336,10 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
         );
     }
     let hardening = platform::harden_process();
+    // `getFilesDir()` is under `/data/user/0`, a symbolic link to `/data/data` set by the
+    // system; the vault refuses a path through a link, so resolve it once here.
+    let files_dir = std::fs::canonicalize(files_dir)
+        .map_err(|_| "répertoire de l'application illisible.".to_owned())?;
     let core_dir = files_dir.join("core");
     let endpoint = Endpoint::parse(core_dir.join("core.sock").as_os_str())
         .map_err(|_| "point de connexion invalide.".to_owned())?;

@@ -301,3 +301,21 @@ Ces décisions priment sur le reste du document.
    - Tant que le contrôle de l'empreinte du certificat de l'APK (§ 2) n'est pas écrit, une
      version de livraison du noyau Android **refuse de démarrer** (échec fermé) ; seules les
      versions de développement démarrent.
+7. **Glue JNI de Tauri dans `apps/mobile/src-tauri`** (seconde exception à la règle 6,
+   accordée le 2026-11-23). Sur Android, `#[tauri::mobile_entry_point]` développe dans la
+   bibliothèque de l'interface les fonctions JNI exportées de Tauri, wry et tao (`no_mangle`,
+   blocs `unsafe`) : du code de ces crates, pas du nôtre, qui doit être compilé dans la
+   bibliothèque pour que la JVM le trouve. La racine refuse `unsafe_code` ; un seul module,
+   `entry`, l'autorise, précédé de son `// SAFETY:`, et ne contient que la fonction marquée.
+   `hirzla-keystore/tests/unsafe_policy.rs` le vérifie. Le processus de l'interface ne détient
+   aucune clé (point 1).
+   - La couche Kotlin (`HirzlaPlugin` : répertoire privé, `BiometricPrompt` du système sans
+     bibliothèque AndroidX, presse-papiers sensible) est un greffon mobile appelé depuis Rust
+     seulement : aucune capacité ne l'ouvre à la vue web.
+   - Le service `:core` est démarré (`startService`) et non lié : lié, il s'arrêterait dès que
+     l'interface passe en arrière-plan, et copier un mot de passe vers une autre application
+     reverrouillerait le coffre. Quand le système l'arrête, le processus se termine avec lui :
+     le coffre est reverrouillé (§ 7).
+   - **Limite déclarée** : la valeur copiée traverse une `String` Java et la charge JSON du
+     greffon (côté Rust, non effacée), comme la valeur affichée traverse la vue web (ADR 0024).
+     Elle ne concerne que le champ demandé.

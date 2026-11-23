@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <!-- The content security policy is set by Tauri (tauri.conf.json, app.security.csp):
+       no network, no inline script or style, nothing outside the application. -->
+  <title>Hirzla</title>
+  <link rel="stylesheet" href="css/fonts.css">
+  <link rel="stylesheet" href="css/tokens.css">
+  <link rel="stylesheet" href="css/app.css">
+  <script type="module" src="js/app.js"></script>
+</head>
+<body>
+  <div id="annonce" class="annonce" role="status" aria-live="polite" hidden></div>
+
+  <!-- Loading, and a core that cannot be reached. -->
+  <main id="ecran-attente" class="ecran ecran-centre">
+    <div class="marque"><img src="img/hirzla-symbole-fond-sombre.svg" alt="" class="symbole"><span class="logotype">HIRZLA</span></div>
+    <p id="attente-texte" class="secondaire">Connexion au noyau…</p>
+    <button id="attente-reessayer" class="bouton" type="button" hidden>Réessayer</button>
+  </main>
+
+  <!-- First launch: create the vault. -->
+  <main id="ecran-creation" class="ecran ecran-centre" hidden>
+    <form id="form-creation" class="pile" novalidate>
+      <div class="marque"><img src="img/hirzla-symbole-fond-sombre.svg" alt="" class="symbole"><span class="logotype">HIRZLA</span></div>
+      <h1>Créer votre coffre</h1>
+      <p class="secondaire">Le coffre est chiffré sur ce téléphone par une suite hybride, classique et
+        post-quantique. Choisissez un mot de passe maître : lui seul l'ouvre, il ne peut pas être récupéré.</p>
+      <label class="champ"><span>Mot de passe maître (12 caractères au moins)</span>
+        <input id="creation-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <label class="champ"><span>Confirmation</span>
+        <input id="creation-confirmation" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton bouton-principal" type="submit">Créer le coffre</button>
+    </form>
+  </main>
+
+  <!-- The vault is locked. -->
+  <main id="ecran-ouverture" class="ecran ecran-centre" hidden>
+    <form id="form-ouverture" class="pile" novalidate>
+      <div class="marque"><img src="img/hirzla-symbole-fond-sombre.svg" alt="" class="symbole"><span class="logotype">HIRZLA</span></div>
+      <h1><span class="forme forme-carre" aria-hidden="true"></span> Coffre verrouillé</h1>
+      <button id="ouverture-empreinte" class="bouton bouton-principal" type="button" hidden>Ouvrir avec l'empreinte</button>
+      <label class="champ"><span>Mot de passe maître</span>
+        <input id="ouverture-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton" type="submit">Ouvrir</button>
+    </form>
+  </main>
+
+  <!-- The vault is open: the list. -->
+  <main id="ecran-liste" class="ecran" hidden>
+    <header class="barre">
+      <span class="etat"><span class="forme forme-rond" aria-hidden="true"></span> Ouvert</span>
+      <span class="espace"></span>
+      <button id="liste-reglages" class="bouton bouton-discret" type="button">Réglages</button>
+      <button id="liste-verrouiller" class="bouton bouton-discret" type="button">Verrouiller</button>
+    </header>
+    <input id="liste-recherche" class="recherche" type="search" placeholder="Rechercher" autocomplete="off" spellcheck="false" maxlength="1024">
+    <ul id="liste" class="liste"></ul>
+    <p id="liste-vide" class="secondaire centre" hidden>Aucun secret.</p>
+    <button id="liste-ajouter" class="bouton bouton-principal flottant" type="button">Ajouter</button>
+  </main>
+
+  <!-- One secret. -->
+  <main id="ecran-detail" class="ecran" hidden>
+    <header class="barre">
+      <button id="detail-retour" class="bouton bouton-discret" type="button">‹ Retour</button>
+    </header>
+    <h1 id="detail-titre"></h1>
+    <p id="detail-hotes" class="secondaire"></p>
+    <section class="pile">
+      <div class="ligne-champ">
+        <div><span class="libelle">Identifiant</span><span id="detail-identifiant" class="valeur mono"></span></div>
+        <button id="detail-copier-identifiant" class="bouton" type="button">Copier</button>
+      </div>
+      <div class="ligne-champ">
+        <div><span class="libelle">Mot de passe</span><span id="detail-mdp" class="valeur mono">••••••••••••</span></div>
+        <button id="detail-afficher" class="bouton" type="button">Afficher</button>
+        <button id="detail-copier-mdp" class="bouton" type="button">Copier</button>
+      </div>
+    </section>
+  </main>
+
+  <!-- New login. -->
+  <main id="ecran-ajout" class="ecran" hidden>
+    <header class="barre">
+      <button id="ajout-retour" class="bouton bouton-discret" type="button">‹ Annuler</button>
+    </header>
+    <form id="form-ajout" class="pile" novalidate>
+      <h1>Nouvel identifiant</h1>
+      <label class="champ"><span>Titre</span><input id="ajout-titre" type="text" autocomplete="off" maxlength="1024"></label>
+      <label class="champ"><span>Identifiant</span><input id="ajout-identifiant" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="4096"></label>
+      <label class="champ"><span>Mot de passe</span><input id="ajout-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="4096"></label>
+      <label class="champ"><span>Adresse</span><input id="ajout-url" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="2048"></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton bouton-principal" type="submit">Enregistrer</button>
+    </form>
+  </main>
+
+  <!-- Settings: the fingerprint. -->
+  <main id="ecran-reglages" class="ecran" hidden>
+    <header class="barre">
+      <button id="reglages-retour" class="bouton bouton-discret" type="button">‹ Retour</button>
+    </header>
+    <form id="form-empreinte" class="pile" novalidate>
+      <h1>Empreinte</h1>
+      <p id="empreinte-etat" class="secondaire"></p>
+      <div id="empreinte-ajout" class="pile">
+        <p class="secondaire">L'empreinte ouvre le coffre grâce à une clé gardée dans la puce sécurisée
+          du téléphone (StrongBox). Le mot de passe maître reste nécessaire pour l'ajouter, et ouvre toujours le coffre.</p>
+        <label class="champ"><span>Mot de passe maître</span>
+          <input id="empreinte-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+        <p class="erreur" hidden></p>
+        <button class="bouton bouton-principal" type="submit">Ajouter l'empreinte</button>
+      </div>
+    </form>
+  </main>
+</body>
+</html>
