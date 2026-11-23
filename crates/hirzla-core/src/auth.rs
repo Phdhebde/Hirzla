@@ -143,6 +143,21 @@ pub fn authorize_client_profile(
     }
 }
 
+/// The core's verdict on a client on Android (ADR 0080 § 2): every process runs
+/// `app_process`, so the executable says nothing. The kernel's UID does: on Android it is the
+/// application's, and only code of the APK signed by the publisher runs under it (the package
+/// manager checks the signature at installation; the manifest declares no `sharedUserId`).
+/// Such a client gets the full profile.
+///
+/// # Errors
+/// [`Refusal::OtherUser`] for a process of another application or user.
+pub fn authorize_same_app(peer: &PeerIdentity) -> Result<ClientProfile, Refusal> {
+    if !peer.same_user {
+        return Err(Refusal::OtherUser);
+    }
+    Ok(ClientProfile::Full)
+}
+
 /// The core's verdict on a client.
 ///
 /// # Errors
@@ -211,6 +226,24 @@ mod tests {
             executable: exe,
             executable_hidden: false,
         }
+    }
+
+    /// ADR 0080 § 2: on Android, the UID decides, whatever the executable (`app_process`).
+    #[test]
+    fn same_app_admits_its_uid_only() {
+        let app = PathBuf::from("/system/bin/app_process64");
+        assert_eq!(
+            authorize_same_app(&peer(true, Some(app.clone()))),
+            Ok(ClientProfile::Full)
+        );
+        assert_eq!(
+            authorize_same_app(&peer(true, None)),
+            Ok(ClientProfile::Full)
+        );
+        assert_eq!(
+            authorize_same_app(&peer(false, Some(app))),
+            Err(Refusal::OtherUser)
+        );
     }
 
     #[test]

@@ -2089,6 +2089,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "hirzla-mobile-core"
+version = "1.1.2"
+dependencies = [
+ "hirzla-core",
+ "hirzla-keystore",
+ "jni",
+]
+
+[[package]]
 name = "hirzla-native-host"
 version = "1.1.2"
 dependencies = [

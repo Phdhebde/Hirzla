@@ -284,3 +284,20 @@ Ces décisions priment sur le reste du document.
 4. **Distribution hors Play Store** (§ 9) pour l'instant ; le Play Store sera rediscuté
    dans un ADR ultérieur.
 5. **Limite Java du § 6** : acceptée comme limite déclarée.
+6. **Point d'entrée JNI dans `apps/mobile/core`** (précise le point 2). La JVM trouve une
+   méthode native par le nom d'un symbole exporté, et exporter un symbole (`#[no_mangle]`)
+   est `unsafe` pour Rust. `hirzla-keystore` ne peut pas l'exporter : il ne dépend pas du
+   noyau. Le point d'entrée vit donc dans `apps/mobile/core` (bibliothèque
+   `libhirzla_core_android.so`), **seule exception à la règle 6 hors de `hirzla-keystore`** :
+   la racine refuse `unsafe_code` (`deny`), une seule fonction l'autorise
+   (`Java_app_hirzla_mobile_CoreService_nativeStart`), précédée de son `// SAFETY:`, sans
+   aucun bloc `unsafe`. Le test `hirzla-keystore/tests/unsafe_policy.rs` le vérifie.
+   `hirzla_keystore::platform::android::init` reçoit la machine virtuelle et le contexte par
+   les types sûrs de la crate `jni` : le module n'a plus de code `unsafe`.
+   - Politique de clients du noyau sur Android : même UID seulement (`ClientPolicy::SameApp`),
+     sans contrôle d'exécutable ni de signature de binaire (point 1).
+   - Chemins : socket `filesDir/core/core.sock`, coffre `filesDir/coffre.hirzla`, journal
+     `filesDir/core/core.log`.
+   - Tant que le contrôle de l'empreinte du certificat de l'APK (§ 2) n'est pas écrit, une
+     version de livraison du noyau Android **refuse de démarrer** (échec fermé) ; seules les
+     versions de développement démarrent.

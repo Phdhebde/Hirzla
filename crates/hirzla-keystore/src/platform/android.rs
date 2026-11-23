@@ -1,14 +1,13 @@
 //! Android (ADR 0080 § 3): the Java virtual machine and the application context of the core's
-//! process (`:core`), handed over once by its service, so that the unlock factor can reach the
-//! Android Keystore through JNI.
+//! process (`:core`), handed over once by the entry point of `apps/mobile/core` before the core
+//! starts, so that the unlock factor can reach the Android Keystore through JNI.
 //!
-//! The Kotlin service `app.hirzla.mobile.CoreService` declares
-//! `private external fun nativeInit(context: Context)` and calls it once, before the core
-//! starts. Nothing here handles a key or a secret.
+//! No `unsafe` here: the JNI entry point lives in `apps/mobile/core` (ADR 0080, validation
+//! decision 6). Nothing here handles a key or a secret.
 
 use std::sync::OnceLock;
 
-use jni::objects::{GlobalRef, JClass, JObject};
+use jni::objects::{GlobalRef, JObject};
 use jni::{JNIEnv, JavaVM};
 
 static VM: OnceLock<JavaVM> = OnceLock::new();
@@ -24,7 +23,10 @@ pub(crate) fn app_context() -> Option<&'static GlobalRef> {
     CONTEXT.get()
 }
 
-fn init(env: &mut JNIEnv<'_>, context: &JObject<'_>) {
+/// Keeps the virtual machine and the application context of `context` for the unlock factor.
+/// Called once, from the JNI entry point of the `:core` service; a second call changes
+/// nothing. A null or unusable context leaves the factor unavailable.
+pub fn init(env: &mut JNIEnv<'_>, context: &JObject<'_>) {
     if context.is_null() {
         return;
     }
@@ -50,20 +52,4 @@ fn init(env: &mut JNIEnv<'_>, context: &JObject<'_>) {
     if let Ok(global) = env.new_global_ref(app) {
         let _ = CONTEXT.set(global);
     }
-}
-
-/// `CoreService.nativeInit(context)`. Called once by the service of the `:core` process; a
-/// second call changes nothing.
-// SAFETY: the symbol name is the JNI name of `app.hirzla.mobile.CoreService.nativeInit`, unique
-// in the process (no other library of the application exports it). The signature is the one
-// the JVM calls (`JNIEnv*`, `jclass` of a static method or `jobject` of an instance method,
-// then the `Context` argument), with the `system` ABI that JNI uses.
-#[allow(unsafe_code)]
-#[no_mangle]
-pub extern "system" fn Java_app_hirzla_mobile_CoreService_nativeInit<'local>(
-    mut env: JNIEnv<'local>,
-    _this: JClass<'local>,
-    context: JObject<'local>,
-) {
-    init(&mut env, &context);
 }
