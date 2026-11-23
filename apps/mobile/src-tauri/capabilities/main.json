@@ -13,6 +13,11 @@
     "allow-list-secrets",
     "allow-reveal-field",
     "allow-copy-field",
-    "allow-create-login"
+    "allow-create-login",
+    "allow-enrol-start",
+    "allow-enrol-wait",
+    "allow-enrol-finish",
+    "allow-enrol-cancel",
+    "allow-server-sync"
   ]
 }

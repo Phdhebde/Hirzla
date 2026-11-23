@@ -34,6 +34,49 @@
         <input id="creation-confirmation" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
       <p class="erreur" hidden></p>
       <button class="bouton bouton-principal" type="submit">Créer le coffre</button>
+      <button id="creation-rejoindre" class="bouton" type="button">Rejoindre mon compte (déjà un poste Hirzla)</button>
+    </form>
+  </main>
+
+  <!-- Enrolment of this phone as a device of an existing account (ADR 0081). -->
+  <main id="ecran-rejoindre" class="ecran ecran-centre" hidden>
+    <form id="form-lien" class="pile" novalidate>
+      <h1>Rejoindre mon compte</h1>
+      <p class="secondaire">Ce téléphone devient un appareil de votre compte : il reçoit vos casiers partagés.
+        Collez le lien d'invitation du serveur (il commence par « hirzla-invitation: »).</p>
+      <label class="champ"><span>Lien d'invitation</span>
+        <textarea id="lien-saisie" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton bouton-principal" type="submit">Continuer</button>
+      <button id="lien-retour" class="bouton" type="button">Retour</button>
+    </form>
+    <div id="rejoindre-code" class="pile" hidden>
+      <h1>Code de ce téléphone</h1>
+      <p class="secondaire">Sur votre poste, ouvrez Serveur › Ajouter un appareil (ou « hirzla appareil ajouter ») et
+        saisissez ce code. Il expire dans 10 minutes.</p>
+      <p id="rejoindre-code-valeur" class="code mono"></p>
+      <p id="rejoindre-attente" class="secondaire" role="status">En attente du poste…</p>
+      <p class="erreur" hidden></p>
+      <button id="rejoindre-annuler" class="bouton" type="button">Annuler</button>
+    </div>
+    <div id="rejoindre-empreinte" class="pile" hidden>
+      <h1>Comparez l'empreinte</h1>
+      <p class="secondaire">Le poste affiche l'empreinte de votre clé de membre. Elle doit être identique, caractère
+        par caractère. Sinon, n'allez pas plus loin : quelqu'un s'interpose.</p>
+      <p id="rejoindre-empreinte-valeur" class="code mono"></p>
+      <button id="rejoindre-identique" class="bouton bouton-principal" type="button">Identique</button>
+      <button id="rejoindre-different" class="bouton" type="button">Différente : abandonner</button>
+    </div>
+    <form id="form-rejoindre-mdp" class="pile" novalidate hidden>
+      <h1>Mot de passe de ce téléphone</h1>
+      <p class="secondaire">Il ouvre le coffre de ce téléphone seulement. Il peut différer de celui du poste ; il ne
+        peut pas être récupéré.</p>
+      <label class="champ"><span>Mot de passe maître (12 caractères au moins)</span>
+        <input id="rejoindre-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <label class="champ"><span>Confirmation</span>
+        <input id="rejoindre-confirmation" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton bouton-principal" type="submit">Créer le coffre et synchroniser</button>
     </form>
   </main>
 
@@ -55,6 +98,7 @@
     <header class="barre">
       <span class="etat"><span class="forme forme-rond" aria-hidden="true"></span> Ouvert</span>
       <span class="espace"></span>
+      <button id="liste-synchroniser" class="bouton bouton-discret" type="button" hidden>Synchroniser</button>
       <button id="liste-reglages" class="bouton bouton-discret" type="button">Réglages</button>
       <button id="liste-verrouiller" class="bouton bouton-discret" type="button">Verrouiller</button>
     </header>
@@ -95,6 +139,7 @@
       <label class="champ"><span>Identifiant</span><input id="ajout-identifiant" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="4096"></label>
       <label class="champ"><span>Mot de passe</span><input id="ajout-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="4096"></label>
       <label class="champ"><span>Adresse</span><input id="ajout-url" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="2048"></label>
+      <label class="champ"><span>Casier</span><select id="ajout-casier"></select></label>
       <p class="erreur" hidden></p>
       <button class="bouton bouton-principal" type="submit">Enregistrer</button>
     </form>

@@ -12,7 +12,7 @@ const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 /** @param {string} id */
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 
-const ECRANS = ["attente", "creation", "ouverture", "liste", "detail", "ajout", "reglages"];
+const ECRANS = ["attente", "creation", "rejoindre", "ouverture", "liste", "detail", "ajout", "reglages"];
 
 /** @param {string} nom */
 function montrer(nom) {
@@ -63,8 +63,14 @@ async function occupe(form, f) {
   }
 }
 
-/** @type {{ state: string, fingerprint: boolean, can_enrol: boolean, clipboard_clear_s: number } | null} */
+/** @type {{ state: string, fingerprint: boolean, can_enrol: boolean, clipboard_clear_s: number, joined: boolean } | null} */
 let etat = null;
+
+/** Groups a code or fingerprint by 5 characters. @param {string} s */
+const grouper = (s) => (s.match(/.{1,5}/g) ?? []).join(" ");
+
+/** Whether the shared lockers were synchronised since the vault opened. */
+let synchronise = false;
 
 async function demarrer() {
   montrer("attente");
@@ -86,9 +92,125 @@ async function demarrer() {
     erreur($("form-ouverture"), null);
     montrer("ouverture");
   } else {
+    $("liste-synchroniser").hidden = !etat.joined;
     await afficherListe();
+    if (etat.joined && !synchronise) {
+      synchronise = true;
+      void synchroniser(false);
+    }
   }
 }
+
+/** Synchronises the shared lockers, then reloads the list. @param {boolean} dire */
+async function synchroniser(dire) {
+  const b = /** @type {HTMLButtonElement} */ ($("liste-synchroniser"));
+  b.disabled = true;
+  try {
+    const n = await invoke("server_sync");
+    if (dire) annoncer(`${n} casier(s) partagé(s) synchronisé(s).`);
+    if (!$("ecran-liste").hidden) await chargerListe();
+  } catch (e) {
+    annoncer(message(e));
+  } finally {
+    b.disabled = false;
+  }
+}
+
+$("liste-synchroniser").addEventListener("click", () => void synchroniser(true));
+
+// ---- Joining the member's account (ADR 0081) -------------------------------------------
+
+/** @type {number | undefined} */
+let releve;
+let rejoindreActif = false;
+
+/** @param {"form-lien" | "rejoindre-code" | "rejoindre-empreinte" | "form-rejoindre-mdp"} partie */
+function etape(partie) {
+  for (const id of ["form-lien", "rejoindre-code", "rejoindre-empreinte", "form-rejoindre-mdp"]) $(id).hidden = id !== partie;
+}
+
+function arreterReleve() {
+  rejoindreActif = false;
+  clearTimeout(releve);
+}
+
+async function abandonner() {
+  arreterReleve();
+  try {
+    await invoke("enrol_cancel");
+  } catch {
+    // Nothing to cancel.
+  }
+  await demarrer();
+}
+
+$("creation-rejoindre").addEventListener("click", () => {
+  /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value = "";
+  erreur($("form-lien"), null);
+  etape("form-lien");
+  montrer("rejoindre");
+});
+
+$("lien-retour").addEventListener("click", () => montrer("creation"));
+
+$("form-lien").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const form = /** @type {HTMLFormElement} */ (ev.currentTarget);
+  occupe(form, async () => {
+    const code = await invoke("enrol_start", { link: /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value });
+    $("rejoindre-code-valeur").textContent = grouper(code);
+    $("rejoindre-attente").textContent = "En attente du poste…";
+    erreur($("rejoindre-code"), null);
+    etape("rejoindre-code");
+    rejoindreActif = true;
+    relever();
+  });
+});
+
+async function relever() {
+  if (!rejoindreActif) return;
+  try {
+    const fp = await invoke("enrol_wait");
+    if (!rejoindreActif) return;
+    if (fp) {
+      arreterReleve();
+      $("rejoindre-empreinte-valeur").textContent = grouper(fp);
+      etape("rejoindre-empreinte");
+      return;
+    }
+  } catch (e) {
+    arreterReleve();
+    erreur($("rejoindre-code"), e);
+    $("rejoindre-attente").textContent = "";
+    return;
+  }
+  releve = setTimeout(relever, 2000);
+}
+
+$("rejoindre-annuler").addEventListener("click", () => void abandonner());
+$("rejoindre-different").addEventListener("click", () => void abandonner());
+$("rejoindre-identique").addEventListener("click", () => {
+  input("rejoindre-mdp").value = "";
+  input("rejoindre-confirmation").value = "";
+  erreur($("form-rejoindre-mdp"), null);
+  etape("form-rejoindre-mdp");
+});
+
+$("form-rejoindre-mdp").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const form = /** @type {HTMLFormElement} */ (ev.currentTarget);
+  occupe(form, async () => {
+    await invoke("enrol_finish", {
+      password: input("rejoindre-mdp").value,
+      confirmation: input("rejoindre-confirmation").value,
+    });
+    input("rejoindre-mdp").value = "";
+    input("rejoindre-confirmation").value = "";
+    synchronise = false;
+    annoncer("Coffre créé. Votre poste ajoute ce téléphone à vos casiers partagés.");
+    await demarrer();
+  });
+});
 
 // ---- Creation and unlocking ----------------------------------------------------------
 
@@ -129,6 +251,10 @@ $("attente-reessayer").addEventListener("click", demarrer);
 // ---- List ----------------------------------------------------------------------------
 
 /** @typedef {{ locker: string, id: string, title: string, username: string | null, hosts: string[] }} Entree */
+/** @typedef {{ id: string, name: string, personal: boolean }} Casier */
+
+/** @type {Casier[]} */
+let casiers = [];
 
 /** @type {number | undefined} */
 let rechercheMinuteur;
@@ -142,7 +268,9 @@ async function chargerListe() {
   /** @type {Entree[]} */
   let entrees;
   try {
-    entrees = await invoke("list_secrets", { query: input("liste-recherche").value || null });
+    const liste = await invoke("list_secrets", { query: input("liste-recherche").value || null });
+    entrees = liste.entries;
+    casiers = liste.lockers;
   } catch (e) {
     annoncer(message(e));
     await demarrer();
@@ -159,7 +287,8 @@ async function chargerListe() {
     t.textContent = e.title;
     const s = document.createElement("span");
     s.className = "sous-titre";
-    s.textContent = [e.username, e.hosts[0]].filter(Boolean).join(" · ");
+    const casier = casiers.find((c) => c.id === e.locker);
+    s.textContent = [e.username, e.hosts[0], casier && !casier.personal ? casier.name : null].filter(Boolean).join(" · ");
     b.append(t, s);
     b.addEventListener("click", () => afficherDetail(e));
     li.append(b);
@@ -180,11 +309,20 @@ $("liste-verrouiller").addEventListener("click", async () => {
     annoncer(message(e));
   }
   input("liste-recherche").value = "";
+  synchronise = false;
   await demarrer();
 });
 
 $("liste-ajouter").addEventListener("click", () => {
   for (const id of ["ajout-titre", "ajout-identifiant", "ajout-mdp", "ajout-url"]) input(id).value = "";
+  const select = /** @type {HTMLSelectElement} */ ($("ajout-casier"));
+  select.replaceChildren();
+  for (const c of casiers) {
+    const o = document.createElement("option");
+    o.value = c.id;
+    o.textContent = c.personal ? `${c.name} (ce téléphone seulement)` : `${c.name} (partagé)`;
+    select.append(o);
+  }
   erreur($("form-ajout"), null);
   montrer("ajout");
 });
@@ -284,6 +422,7 @@ $("form-ajout").addEventListener("submit", (ev) => {
         username: input("ajout-identifiant").value || null,
         password: input("ajout-mdp").value || null,
         url: input("ajout-url").value || null,
+        locker: /** @type {HTMLSelectElement} */ ($("ajout-casier")).value || null,
       },
     });
     input("ajout-mdp").value = "";
@@ -309,6 +448,8 @@ $("form-empreinte").addEventListener("submit", (ev) => {
 
 // Back to the front: the core may have locked the vault, or been stopped by the system.
 document.addEventListener("visibilitychange", () => {
+  // Not while joining: the user leaves the application to copy the link.
+  if (!$("ecran-rejoindre").hidden) return;
   if (document.visibilityState === "visible") demarrer();
   else masquer();
 });

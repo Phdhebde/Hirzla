@@ -4,6 +4,7 @@
 use hirzla_core::client::ClientError;
 use hirzla_core::methods::proto::MethodCode;
 use hirzla_core::proto::{ErrorCode, ErrorReply};
+use hirzla_core::server_mode::proto::ServerCode;
 use serde::Serialize;
 
 /// An error of a command, as the web view receives it.
@@ -18,6 +19,9 @@ pub enum MobileError {
     /// A hardware method request was refused.
     #[error("method refused")]
     Method(MethodCode),
+    /// A server mode request was refused.
+    #[error("server mode refused")]
+    Server(ServerCode),
     /// The fingerprint was not given (cancelled, too many tries, none enrolled).
     #[error("fingerprint not given")]
     NoFingerprint,
@@ -59,6 +63,7 @@ impl Serialize for MobileError {
             ),
             MobileError::Refused(r) => (r.code.name(), refusal_message(r), r.retry_after_s),
             MobileError::Method(c) => ("method", method_message(*c), None),
+            MobileError::Server(c) => ("server", server_message(*c), None),
             MobileError::NoFingerprint => (
                 "fingerprint",
                 "Empreinte non reconnue ou annulée.".into(),
@@ -95,6 +100,42 @@ fn refusal_message(r: &ErrorReply) -> String {
         ErrorCode::Corrupt => "Le coffre est corrompu ou a été modifié.".into(),
         ErrorCode::Unauthorized => "Le noyau a refusé cette application.".into(),
         _ => "Le noyau a refusé la demande.".into(),
+    }
+}
+
+/// French message for a refusal of a server mode request (`docs/api-locale.md` § 15.5,
+/// § 15.11).
+fn server_message(code: ServerCode) -> String {
+    match code {
+        ServerCode::General(ErrorCode::VaultExists) => "Un coffre existe déjà sur ce téléphone : \
+            l'enrôlement ne se fait que sur un appareil vierge."
+            .into(),
+        ServerCode::General(ErrorCode::NotFound) => {
+            "Rien à reprendre : recommencez l'enrôlement.".into()
+        }
+        ServerCode::General(c) => refusal_message(&ErrorReply::new(c)),
+        ServerCode::InvitationInvalid => "Lien d'invitation non valide ou altéré : copiez-le de \
+            nouveau, en entier."
+            .into(),
+        ServerCode::FingerprintMismatch => "Le serveur ne présente pas la clé annoncée par le \
+            lien. N'allez pas plus loin et prévenez l'administrateur."
+            .into(),
+        ServerCode::ServerUnreachable => {
+            "Serveur injoignable : vérifiez le réseau du téléphone.".into()
+        }
+        ServerCode::ServerRefused(4) => "Ce serveur ne permet pas encore l'enrôlement d'un \
+            appareil : il doit être mis à jour."
+            .into(),
+        ServerCode::ServerRefused(3) => "Le serveur ne reconnaît pas cet appareil.".into(),
+        ServerCode::ServerRefused(c) => format!("Le serveur a refusé la demande (code {c})."),
+        ServerCode::ApprovalInvalid => "Le paquet reçu ne se vérifie pas : recommencez \
+            l'enrôlement."
+            .into(),
+        ServerCode::NotJoined => "Aucun serveur n'est rattaché à ce coffre.".into(),
+        ServerCode::KeyLogRejected => "Registre des clés suspect : la synchronisation est \
+            arrêtée. Prévenez votre administrateur de sécurité."
+            .into(),
+        _ => "Le mode Serveur a refusé la demande.".into(),
     }
 }
 

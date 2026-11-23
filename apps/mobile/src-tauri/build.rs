@@ -14,6 +14,11 @@ const COMMANDS: &[&str] = &[
     "reveal_field",
     "copy_field",
     "create_login",
+    "enrol_start",
+    "enrol_wait",
+    "enrol_finish",
+    "enrol_cancel",
+    "server_sync",
 ];
 
 fn main() {

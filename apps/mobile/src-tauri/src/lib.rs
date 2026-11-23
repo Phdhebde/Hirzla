@@ -57,6 +57,11 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::reveal_field,
             commands::copy_field,
             commands::create_login,
+            commands::enrol_start,
+            commands::enrol_wait,
+            commands::enrol_finish,
+            commands::enrol_cancel,
+            commands::server_sync,
         ])
         .run(tauri::generate_context!())
 }

@@ -11,6 +11,7 @@ use hirzla_core::methods::proto::{MethodReply, MethodRequest};
 use hirzla_core::proto::{
     ApiValue, ListEntry, Reply, Request, Selector, VaultState, MAX_PASSWORD, MAX_QUERY, MAX_TEXT,
 };
+use hirzla_core::server_mode::proto::{ServerReply, ServerRequest};
 use hirzla_vault::model::Id16;
 use hirzla_vault::secret::{Field, SecretType};
 use serde::{Deserialize, Serialize};
@@ -67,6 +68,14 @@ impl AppState {
         self.with_link(native, |l| l.call(r))
     }
 
+    fn call_server(
+        &self,
+        native: &Native<tauri::Wry>,
+        r: &ServerRequest,
+    ) -> Result<ServerReply, MobileError> {
+        self.with_link(native, |l| l.call_server(r))
+    }
+
     fn call_methods(
         &self,
         native: &Native<tauri::Wry>,
@@ -104,6 +113,8 @@ pub struct StatusDto {
     pub can_enrol: bool,
     /// Clipboard clearing delay, seconds.
     pub clipboard_clear_s: u64,
+    /// A server is joined (shared lockers are synchronised).
+    pub joined: bool,
 }
 
 /// A secret of the list (index data only). No `Debug`: it holds the title and user name.
@@ -126,6 +137,21 @@ impl From<ListEntry> for EntryDto {
             hosts: e.hosts,
         }
     }
+}
+
+/// A locker of the list. No `Debug`: it holds the name.
+#[derive(Serialize)]
+pub struct LockerDto {
+    id: String,
+    name: Zeroizing<String>,
+    personal: bool,
+}
+
+/// The list: secrets and lockers.
+#[derive(Serialize)]
+pub struct ListDto {
+    entries: Vec<EntryDto>,
+    lockers: Vec<LockerDto>,
 }
 
 /// A secret, as the web view names it.
@@ -175,6 +201,8 @@ pub struct NewLogin {
     username: Option<Zeroizing<String>>,
     password: Option<Zeroizing<String>>,
     url: Option<Zeroizing<String>>,
+    /// Locker, hexadecimal; the personal locker when absent.
+    locker: Option<String>,
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -266,6 +294,14 @@ pub async fn app_status(
             (rank.is_some(), can)
         }
     };
+    let joined = info.state == VaultState::Unlocked
+        && matches!(
+            state.call_server(&native, &ServerRequest::ServerStatus)?,
+            ServerReply::Status {
+                server: Some(_),
+                ..
+            }
+        );
     Ok(StatusDto {
         state: match info.state {
             VaultState::Absent => "absent",
@@ -275,6 +311,7 @@ pub async fn app_status(
         fingerprint,
         can_enrol,
         clipboard_clear_s: info.clipboard_clear_s,
+        joined,
     })
 }
 
@@ -379,7 +416,7 @@ pub async fn list_secrets(
     state: State<'_>,
     native: NativeState<'_>,
     query: Option<Zeroizing<String>>,
-) -> Result<Vec<EntryDto>, MobileError> {
+) -> Result<ListDto, MobileError> {
     let query = query.filter(|q| !q.trim().is_empty());
     if query.as_ref().is_some_and(|q| q.len() > MAX_QUERY) {
         return Err(MobileError::Invalid("Recherche trop longue."));
@@ -391,7 +428,17 @@ pub async fn list_secrets(
             include_trash: false,
         },
     )? {
-        Reply::List { entries, .. } => Ok(entries.into_iter().map(Into::into).collect()),
+        Reply::List { entries, lockers } => Ok(ListDto {
+            entries: entries.into_iter().map(Into::into).collect(),
+            lockers: lockers
+                .into_iter()
+                .map(|l| LockerDto {
+                    id: hex(&l.id),
+                    name: l.name,
+                    personal: l.personal,
+                })
+                .collect(),
+        }),
         _ => Err(MobileError::Protocol),
     }
 }
@@ -449,7 +496,7 @@ pub async fn create_login(
         .call(
             &native,
             &Request::Create {
-                locker: None,
+                locker: login.locker.as_deref().map(id16).transpose()?,
                 secret_type: SecretType::Password,
                 fields,
                 urls,
@@ -457,6 +504,81 @@ pub async fn create_login(
             },
         )
         .map(drop)
+}
+
+/// Starts the enrolment of this phone with the invitation link (ADR 0081): the code to type
+/// on the certification device.
+#[tauri::command]
+pub async fn enrol_start(
+    state: State<'_>,
+    native: NativeState<'_>,
+    link: String,
+) -> Result<String, MobileError> {
+    if link.len() > 128 * 1024 {
+        return Err(MobileError::Invalid("Lien trop long."));
+    }
+    match state.call_server(&native, &ServerRequest::DeviceEnrolStart { link })? {
+        ServerReply::EnrolCode(code) => Ok(code),
+        _ => Err(MobileError::Protocol),
+    }
+}
+
+/// Looks once for the package: the member fingerprint once it arrived, `None` while waiting.
+#[tauri::command]
+pub async fn enrol_wait(
+    state: State<'_>,
+    native: NativeState<'_>,
+) -> Result<Option<String>, MobileError> {
+    match state.call_server(&native, &ServerRequest::DeviceEnrolWait)? {
+        ServerReply::EnrolState(fp) => Ok(fp),
+        _ => Err(MobileError::Protocol),
+    }
+}
+
+/// Creates the vault of this phone with the identity received, joins and synchronises.
+#[tauri::command]
+pub async fn enrol_finish(
+    state: State<'_>,
+    native: NativeState<'_>,
+    password: Zeroizing<String>,
+    confirmation: Zeroizing<String>,
+) -> Result<(), MobileError> {
+    check_master(&password)?;
+    if password.chars().count() < MIN_MASTER_CHARS {
+        return Err(MobileError::Invalid(
+            "Le mot de passe maître doit compter au moins 12 caractères.",
+        ));
+    }
+    if !hirzla_crypto::util::constant_time_eq(password.as_bytes(), confirmation.as_bytes()) {
+        return Err(MobileError::Invalid("Les deux saisies diffèrent."));
+    }
+    drop(confirmation);
+    state
+        .call_server(
+            &native,
+            &ServerRequest::DeviceEnrolFinish {
+                password,
+                kdf: None,
+            },
+        )
+        .map(drop)
+}
+
+/// Abandons the enrolment in progress.
+#[tauri::command]
+pub async fn enrol_cancel(state: State<'_>, native: NativeState<'_>) -> Result<(), MobileError> {
+    state
+        .call_server(&native, &ServerRequest::DeviceEnrolCancel)
+        .map(drop)
+}
+
+/// Synchronises the shared lockers: how many.
+#[tauri::command]
+pub async fn server_sync(state: State<'_>, native: NativeState<'_>) -> Result<u64, MobileError> {
+    match state.call_server(&native, &ServerRequest::ServerSync)? {
+        ServerReply::Synced(r) => Ok(r.len() as u64),
+        _ => Err(MobileError::Protocol),
+    }
 }
 
 #[cfg(test)]

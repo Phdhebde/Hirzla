@@ -31,7 +31,19 @@ input {
   width: 100%;
 }
 input[type="password"], .mono { font-family: var(--hz-font-mono); }
-input:focus { outline: 2px solid var(--hz-braise); outline-offset: 1px; }
+textarea { resize: vertical; }
+select, textarea {
+  font: 1rem var(--hz-font-texte);
+  color: var(--hz-texte);
+  background: var(--hz-surface);
+  border: 1px solid var(--hz-bordure);
+  border-radius: 10px;
+  padding: 12px 14px;
+  width: 100%;
+}
+textarea { font-family: var(--hz-font-mono); font-size: .85rem; }
+.code { font-size: 1.5rem; letter-spacing: .08em; text-align: center; margin: 8px 0; overflow-wrap: anywhere; }
+input:focus, select:focus, textarea:focus { outline: 2px solid var(--hz-braise); outline-offset: 1px; }
 .bouton {
   font: 500 1rem var(--hz-font-texte);
   color: var(--hz-texte);

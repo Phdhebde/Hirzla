@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use hirzla_core::client::{Client, ClientError};
 use hirzla_core::methods::proto::{MethodReply, MethodRequest};
 use hirzla_core::proto::{Reply, Request};
+use hirzla_core::server_mode::proto::{ServerReply, ServerRequest};
 use hirzla_core::transport::Endpoint;
 
 use crate::error::MobileError;
@@ -52,6 +53,16 @@ impl CoreLink {
     /// [`MobileError`].
     pub fn call(&mut self, request: &Request) -> Result<Reply, MobileError> {
         Ok(self.client.call(request)?)
+    }
+
+    /// Sends a request of the server mode family.
+    ///
+    /// # Errors
+    /// [`MobileError`].
+    pub fn call_server(&mut self, request: &ServerRequest) -> Result<ServerReply, MobileError> {
+        self.client
+            .call_server(request)?
+            .map_err(MobileError::Server)
     }
 
     /// Sends a request of the hardware methods family.
