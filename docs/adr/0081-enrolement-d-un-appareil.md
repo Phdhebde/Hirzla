@@ -12,8 +12,9 @@ un appareil authentifié, `MailboxGet` (33) **avant `Auth`** par l'appareil en c
 d'enrôlement, pour sa propre boîte (§ 11.9).
 
 Le premier usage est le téléphone Android (ADR 0080 § 5) : l'utilisateur veut que son Pixel
-soit un appareil **du même membre** que son poste, et voie les mêmes casiers, personnel
-compris.
+soit un appareil **du même membre** que son poste, et voie les mêmes casiers partagés. Le
+casier personnel n'est pas synchronisé par le serveur, ni ici ni entre deux postes : chaque
+appareil garde le sien (voir « Conséquences »).
 
 Reste un point non tranché par le § 14, étape 2 : « l'utilisateur saisit le code et E récupère
 les clés par la boîte aux lettres du serveur ». N ne peut pas déposer dans une boîte avant
@@ -42,30 +43,29 @@ code que l'utilisateur recopie de N vers E sert aussi d'adresse de dépôt.
    le serveur ne peut pas substituer ses propres clés sans une seconde préimage sur 100 bits.
 4. E affiche l'**empreinte du membre** (`format.md` § 3.1) et demande confirmation. Puis E
    signe le `DeviceCert` de N, construit le paquet du § 14, étape 4, sans le champ 6, et le
-   dépose dans la boîte de N (`MailboxPut {1: device_id de N}`, déjà permis). E publie ensuite
-   la `DeviceAdd` de N (étape 7) dans le casier personnel et dans chaque casier où le membre a
-   un rôle, puis synchronise.
+   dépose dans la boîte de N (`MailboxPut {1: device_id de N}`, déjà permis).
 5. **Sur N** : `MailboxGet` de sa propre boîte avant `Auth` (déjà permis), relevé toutes les
    2 secondes pendant 10 minutes au plus. N ouvre le paquet, vérifie `sig` et les deux
    certificats (étape 6), affiche l'empreinte du membre. L'utilisateur confirme qu'elle est
    celle du poste.
 6. N demande un mot de passe maître (le sien, propre à cet appareil), crée son coffre avec
    l'identité reçue (§ 2), se rattache au serveur avec l'adresse, l'AC et l'empreinte du lien,
-   s'authentifie avec son certificat et synchronise. Les secrets du casier personnel et des
-   casiers partagés arrivent par la synchronisation.
+   s'authentifie avec son certificat (le serveur l'inscrit au registre) et synchronise.
+7. **Sur E**, qui relève toutes les 2 secondes : dès que le certificat de N est au registre,
+   E publie la `DeviceAdd` de N (étape 7) dans chaque casier partagé où le membre a un rôle.
+   Il ne peut pas le faire plus tôt : on ne scelle une clé de casier que pour un appareil
+   inscrit (`transparence.md` § 6.2). N reçoit les casiers à sa synchronisation suivante. Un
+   casier partagé créé plus tard par E reçoit aussi N.
 
 ### 2. Coffre créé par enrôlement (`format.md` § 13)
 
 Même procédure que « Créer un coffre », sauf l'identité :
 
-- `member_id`, la clé publique du membre, le `DeviceCert` et le casier personnel viennent du
-  paquet ;
+- `member_id`, la clé publique du membre et le `DeviceCert` viennent du paquet ;
 - **pas de `member_private`** : N n'est jamais appareil de certification dans ce lot (ADR 0080
   § 1). Il ne peut donc ni enrôler, ni révoquer un appareil ;
-- **pas de `LockerCreate`** : le casier personnel existe déjà. Le coffre le connaît par son
-  identifiant, sans clé d'époque, jusqu'à la première synchronisation : elle apporte les
-  opérations du casier et l'enveloppe de la `DeviceAdd`. Avant, la liste est vide et l'écriture
-  est refusée (« Synchronisation en attente »).
+- N crée **son propre casier personnel**, comme un premier appareil. Le champ 3 du paquet
+  (casier personnel de E) est lu et ignoré.
 
 Aucun champ nouveau dans le format : l'identité du § 5.5 admet déjà l'absence de
 `member_private`.
@@ -95,12 +95,15 @@ N affiche « Ce serveur ne permet pas encore l'enrôlement ; mettez-le à jour �
 
 ### 4. API locale (`api-locale.md`, famille serveur)
 
+Opérations 130 à 136, détaillées dans `api-locale.md` § 15.11 :
+
 - `DeviceEnrolStart {1: link}` → `{1: code}` (N, sans coffre) ;
-- `DeviceEnrolWait` → `{1: member_fingerprint}` ou « en attente » (N) ;
-- `DeviceEnrolFinish {1: password}` (N : crée le coffre, rejoint, synchronise) ;
+- `DeviceEnrolWait` → `{1?: member_fingerprint}`, absente en attente (N) ;
+- `DeviceEnrolFinish {1: password, 2?: coût}` (N : crée le coffre, rejoint, synchronise) ;
 - `DeviceEnrolCancel` (N) ;
 - `DeviceEnrolFetch {1: code}` → `{1: member_fingerprint, 2: device_id}` (E) ;
-- `DeviceEnrolApprove {1: device_id}` (E : certificat, paquet, `DeviceAdd`).
+- `DeviceEnrolApprove {1: device_id}` (E : certificat, paquet) ;
+- `DeviceEnrolComplete {1: device_id}` → `{1?: casiers}` (E : `DeviceAdd` une fois N inscrit).
 
 Les clés privées de N en attente restent dans le noyau de N, dans un type effacé à la
 destruction, et sont perdues si le noyau s'arrête : il faut alors recommencer.
@@ -108,19 +111,23 @@ destruction, et sont perdues si le noyau s'arrête : il faut alors recommencer.
 ### 5. Interfaces
 
 - **Téléphone** : écran de premier lancement « Créer un coffre » ou « Rejoindre mon compte ».
-- **Poste** (application et `hirzla serveur ajouter-appareil`) : saisie du code, empreinte du
-  membre, confirmation.
+- **Poste** (application et `hirzla appareil ajouter CODE`) : saisie du code, empreinte du
+  membre, confirmation, puis attente du téléphone.
 
 ## Conséquences
 
-- Le téléphone devient un appareil du membre : mêmes casiers, même identité, révocable depuis
-  le poste (ADR 0059).
+- Le téléphone devient un appareil du membre : mêmes casiers partagés, même identité,
+  révocable depuis le poste (ADR 0059).
+- **Le casier personnel reste propre à chaque appareil.** Pour partager des secrets entre ses
+  appareils, le membre les range dans un casier partagé dont il est seul membre. Déplacer un
+  secret d'un casier à l'autre fait l'objet d'un ADR suivant (0082).
+- E doit avoir au moins un casier partagé quand N termine (sinon `Unsupported`).
 - Un coffre déjà créé sur N n'est pas fusionné : on enrôle un appareil vierge. Le coffre
   d'essai actuel du Pixel sera supprimé.
 - Le serveur gagne une petite surface avant authentification : un dépôt de 8 Kio par session,
   borné.
-- Travail : `hirzla-vault` (coffre par enrôlement, casier personnel sans clé), `hirzla-sync`
-  (paquet du § 14, codes), `hirzla-core` (six requêtes, deux rôles), `hirzlad` (deux droits),
+- Travail : `hirzla-vault` (coffre par enrôlement), `hirzla-sync`
+  (paquet du § 14, codes), `hirzla-core` (sept requêtes, deux rôles), `hirzlad` (deux droits),
   poste (écran et CLI), Android (écran). Tests : vecteurs du paquet, refus (code faux, clés
   substituées, paquet d'un autre membre, signature de E fausse, boîte expirée).
 

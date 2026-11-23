@@ -80,6 +80,9 @@ pub struct Core {
     /// When the vault was last opened (master password or hardware method): the user counts
     /// as verified for a passkey shortly after (ADR 0079 § 2). Erased when it locks.
     pub(crate) verified_at: Option<Instant>,
+    /// An enrolment of this device in progress, while it has no vault (ADR 0081). Holds the
+    /// device's private keys in memory only: lost if the core stops.
+    enrolling: Option<crate::server_mode::enrol::Enrolling>,
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -217,6 +220,7 @@ impl Core {
             gesture_busy: Arc::new(AtomicBool::new(false)),
             totp_clock: None,
             verified_at: None,
+            enrolling: None,
         }
     }
 
@@ -365,10 +369,107 @@ impl Core {
     }
 
     fn dispatch_server(&mut self, request: ServerRequest) -> Result<ServerReply, ServerCode> {
+        match request {
+            ServerRequest::DeviceEnrolStart { link } => return self.enrol_start(&link),
+            ServerRequest::DeviceEnrolWait => {
+                return match self.enrolling.as_mut() {
+                    Some(e) => e.wait(),
+                    None => Err(ServerCode::General(ErrorCode::NotFound)),
+                }
+            }
+            ServerRequest::DeviceEnrolFinish { password, kdf } => {
+                return self.enrol_finish(&password, kdf)
+            }
+            ServerRequest::DeviceEnrolCancel => {
+                self.enrolling = None;
+                return Ok(ServerReply::Done);
+            }
+            _ => {}
+        }
         self.vault().map_err(|e| ServerCode::General(e.code))?;
         self.load_server();
         match (self.vault.as_ref(), self.server.as_mut()) {
             (Some(vault), Some(Ok(server))) => server.handle(vault, request),
+            (_, Some(Err(code))) => Err(*code),
+            _ => Err(ServerCode::General(ErrorCode::Internal)),
+        }
+    }
+
+    /// `DeviceEnrolStart` (ADR 0081): only without a vault; a new start replaces the one in
+    /// progress.
+    fn enrol_start(&mut self, link: &str) -> Result<ServerReply, ServerCode> {
+        if self.vault.is_some() || self.config.vault_path.exists() {
+            return Err(ServerCode::General(ErrorCode::VaultExists));
+        }
+        self.enrolling = None;
+        let (e, reply) = crate::server_mode::enrol::Enrolling::start(link)?;
+        self.enrolling = Some(e);
+        Ok(reply)
+    }
+
+    /// `DeviceEnrolFinish` (ADR 0081 § 1, step 6): creates the vault with the identity
+    /// received, opens it, joins the server of the invitation and synchronises once, which
+    /// inscribes this device. A failure after the vault is created leaves it created and
+    /// open: joining can be done again from the server screen.
+    fn enrol_finish(
+        &mut self,
+        password: &str,
+        kdf: Option<crate::proto::KdfParams>,
+    ) -> Result<ServerReply, ServerCode> {
+        if self.vault.is_some() || self.config.vault_path.exists() {
+            return Err(ServerCode::General(ErrorCode::VaultExists));
+        }
+        if !self.enrolling.as_ref().is_some_and(|e| e.received()) {
+            return Err(ServerCode::General(ErrorCode::NotFound));
+        }
+        let enrolled = self
+            .enrolling
+            .take()
+            .ok_or(ServerCode::General(ErrorCode::NotFound))?
+            .finish()?;
+        create_parent(&self.config.vault_path).map_err(|e| ServerCode::General(e.code))?;
+        let options = CreateOptions {
+            device_label: device_label(),
+            personal_locker_name: PERSONAL_LOCKER.to_owned(),
+            kdf: match kdf {
+                Some(k) => KdfCost::Params {
+                    m_kib: k.m_kib,
+                    t: k.t,
+                    p: k.p,
+                },
+                None => KdfCost::Calibrate {
+                    target: CALIBRATION_TARGET,
+                    max_m_kib: CALIBRATION_MAX_M_KIB,
+                    p: std::thread::available_parallelism()
+                        .map_or(1, |n| u32::try_from(n.get()).unwrap_or(1))
+                        .clamp(1, 4),
+                },
+            },
+        };
+        let vault = Vault::create_enrolled(
+            &self.config.vault_path,
+            password,
+            &options,
+            enrolled.identity,
+        )
+        .map_err(|e| ServerCode::General(vault_error(e).code))?;
+        self.log.record(Event::VaultCreated);
+        self.opened(vault);
+        self.server = None;
+        self.load_server();
+        match (self.vault.as_ref(), self.server.as_mut()) {
+            (Some(vault), Some(Ok(server))) => {
+                server.join_enrolled(
+                    vault,
+                    &enrolled.url,
+                    enrolled.roots,
+                    &enrolled.server_fingerprint,
+                    &enrolled.issuer,
+                )?;
+                // Shared lockers arrive once the certification device added this one.
+                let _ = server.handle(vault, ServerRequest::ServerSync);
+                Ok(ServerReply::Done)
+            }
             (_, Some(Err(code))) => Err(*code),
             _ => Err(ServerCode::General(ErrorCode::Internal)),
         }

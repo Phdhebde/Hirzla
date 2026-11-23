@@ -22,6 +22,7 @@
 
 mod courier;
 mod devices;
+pub mod enrol;
 mod governance;
 mod profiles;
 pub mod proto;
@@ -298,6 +299,10 @@ pub struct ServerMode {
     /// Members found by the searches of this session: their key (`SHA-384(CBOR(MemberKeys))`)
     /// and its fingerprint, for `MemberVerify` before a first grant (not kept).
     seen: BTreeMap<Id16, ([u8; 48], String)>,
+    /// Keys of a new device fetched by its control code, waiting for approval (ADR 0081).
+    enrol_fetched: Option<hirzla_sync::enrol::EnrolRequest>,
+    /// Certificate issued to a new device, waiting for its first authentication.
+    enrol_issued: Option<hirzla_vault::model::DeviceCert>,
 }
 
 /// Wall clock, milliseconds since 1970 (0 before).
@@ -410,6 +415,8 @@ impl ServerMode {
             last_sync_ms: None,
             clock: wall_ms,
             seen: BTreeMap::new(),
+            enrol_fetched: None,
+            enrol_issued: None,
         };
         match std::fs::symlink_metadata(&mode.annex) {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(mode),
@@ -666,6 +673,21 @@ impl ServerMode {
             for object in profiles.issued() {
                 m.expect_own(*object);
             }
+            // And the member's other devices present in a locker held here, added by an
+            // operation the locker accepted: those enrolled from here or that enrolled this
+            // device (ADR 0081).
+            let me = self.device.member_id();
+            for s in lockers.values() {
+                if let Some(e) = s
+                    .replica
+                    .authorization()
+                    .and_then(|a| a.access().state().member(&me))
+                {
+                    for cert in e.devices.values() {
+                        m.expect_own_device(cert).map_err(corrupt)?;
+                    }
+                }
+            }
         }
         Ok(Joined {
             info,
@@ -901,6 +923,14 @@ impl ServerMode {
                 request,
                 accept,
             } => self.quorum_respond(vault, locker, request, accept),
+            ServerRequest::DeviceEnrolFetch { code } => self.enrol_fetch(vault, &code),
+            ServerRequest::DeviceEnrolApprove { device } => self.enrol_approve(vault, device),
+            ServerRequest::DeviceEnrolComplete { device } => self.enrol_complete(vault, device),
+            // The new device has no vault: the core answers these itself.
+            ServerRequest::DeviceEnrolStart { .. }
+            | ServerRequest::DeviceEnrolWait
+            | ServerRequest::DeviceEnrolFinish { .. }
+            | ServerRequest::DeviceEnrolCancel => Err(general(ErrorCode::AlreadyUnlocked)),
         }
     }
 
@@ -1266,12 +1296,23 @@ impl ServerMode {
         // The creator's proof is joined only if it covers exactly the creating device: a
         // proof listing other devices would not match the `LockerCreate` (§ 3.4).
         let me = self.device.member_id();
+        // The member's other devices known here (enrolled from here or that enrolled this
+        // one, ADR 0081) are added to the new locker; an unknown one never is.
+        let mut others = Vec::new();
         let proof = match self.member_keys(&mut client, &me) {
             Ok((keys, devices, proof))
                 if keys == *self.device.member_keys()
                     && devices.as_slice() == std::slice::from_ref(self.device.cert()) =>
             {
                 Some(proof)
+            }
+            Ok((keys, devices, _)) if keys == *self.device.member_keys() => {
+                let m = read_log(&self.joined()?.keylog.monitor)?;
+                others = devices
+                    .into_iter()
+                    .filter(|d| d.device != self.device.device_id() && m.expects_own_device(d))
+                    .collect();
+                None
             }
             Ok(_) => None,
             Err(ServerCode::ServerUnreachable) => return Err(ServerCode::ServerUnreachable),
@@ -1290,6 +1331,9 @@ impl ServerMode {
             _ => general(ErrorCode::Internal),
         })?;
         Self::wire(&mut replica, &trust, &self.joined()?.keylog);
+        for d in others {
+            replica.device_add(d).map_err(emit_error)?;
+        }
         let id = replica.locker_id();
         let j = self.joined.as_mut().ok_or(ServerCode::NotJoined)?;
         j.lockers.insert(

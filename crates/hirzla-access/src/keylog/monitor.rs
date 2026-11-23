@@ -264,6 +264,13 @@ impl KeyLogMonitor {
         self.own_expected.insert(object);
     }
 
+    /// Whether `cert` is a certificate of the member that the device knows (declared with
+    /// [`KeyLogMonitor::expect_own_device`]).
+    #[must_use]
+    pub fn expects_own_device(&self, cert: &DeviceCert) -> bool {
+        device_cert_object(cert).is_ok_and(|o| self.own_expected.contains(&o))
+    }
+
     /// Declares one of the member's certificates.
     ///
     /// # Errors

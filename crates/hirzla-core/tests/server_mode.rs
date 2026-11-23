@@ -2589,3 +2589,191 @@ fn folders_of_a_shared_locker_synchronise() {
     assert!(!stored.is_empty());
     assert!(!stored.windows(name.len()).any(|w| w == name.as_bytes()));
 }
+
+/// Enrolment of a second device of the same member through the server (ADR 0081): the new
+/// device starts with the invitation link and shows a code; the certification device fetches
+/// its keys by that code, approves, and once the new device has created its vault and
+/// authenticated, adds it to the shared lockers. The new device reads the secrets, neither
+/// device raises an « unknown device » alert, across a restart; a locker created afterwards
+/// includes the new device; a wrong code, a non-certification device and a second vault are
+/// refused.
+#[test]
+fn a_second_device_is_enrolled_through_the_server() {
+    let tmp = tempdir();
+    let server = Server::start(tmp.path());
+    let mut alice = Member::new(tmp.path(), "alice");
+    server.register(&alice.member_keys);
+    alice.join(&server, None).unwrap();
+    let fingerprint = server_fingerprint(&mut alice);
+    alice
+        .server(ServerRequest::ServerConfirm {
+            fingerprint: fingerprint.clone(),
+        })
+        .unwrap();
+    let ServerReply::LockerCreated(famille) = alice
+        .server(ServerRequest::SharedLockerCreate { name: z("Famille") })
+        .unwrap()
+    else {
+        panic!("locker expected");
+    };
+    let secret = alice.create(famille, "Banque", "s3cret-banque").unwrap();
+    alice.sync();
+    let link = Invitation {
+        address: server.url(),
+        roots: server.ca_pem.clone(),
+        fingerprint,
+    }
+    .encode()
+    .unwrap();
+
+    // The phone: no vault, an enrolment started with the link.
+    let phone_vault = tmp.path().join("phone").join("coffre.hirzla");
+    let mut phone = Core::new(
+        config(&phone_vault),
+        Arc::new(Log::new(Box::new(std::io::sink()))),
+    );
+    let ServerReply::EnrolCode(code) = phone
+        .handle_server(ServerRequest::DeviceEnrolStart { link: link.clone() })
+        .unwrap()
+    else {
+        panic!("code expected");
+    };
+    assert_eq!(
+        phone.handle_server(ServerRequest::DeviceEnrolWait).unwrap(),
+        ServerReply::EnrolState(None)
+    );
+    // Finishing before the package arrived is refused.
+    assert_eq!(
+        phone.handle_server(ServerRequest::DeviceEnrolFinish {
+            password: z(PASSWORD),
+            kdf: None,
+        }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+
+    // A wrong code finds nothing; the right one gives the member fingerprint.
+    let mut wrong = code.clone();
+    wrong.replace_range(0..1, if code.starts_with('A') { "B" } else { "A" });
+    assert!(alice
+        .server(ServerRequest::DeviceEnrolFetch { code: wrong })
+        .is_err());
+    let ServerReply::EnrolPeer {
+        fingerprint: member_fp,
+        device,
+    } = alice
+        .server(ServerRequest::DeviceEnrolFetch {
+            code: code.to_lowercase(),
+        })
+        .unwrap()
+    else {
+        panic!("peer expected");
+    };
+    assert_eq!(member_fp, alice.fingerprint);
+    // Completing before approval is refused.
+    assert_eq!(
+        alice.server(ServerRequest::DeviceEnrolComplete { device }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+    assert_eq!(
+        alice
+            .server(ServerRequest::DeviceEnrolApprove { device })
+            .unwrap(),
+        ServerReply::Done
+    );
+    // Not authenticated yet: nothing to add.
+    assert_eq!(
+        alice
+            .server(ServerRequest::DeviceEnrolComplete { device })
+            .unwrap(),
+        ServerReply::EnrolCompleted(None)
+    );
+
+    // The phone receives the package, shows the same member fingerprint, creates its vault.
+    assert_eq!(
+        phone.handle_server(ServerRequest::DeviceEnrolWait).unwrap(),
+        ServerReply::EnrolState(Some(alice.fingerprint.clone()))
+    );
+    phone
+        .handle_server(ServerRequest::DeviceEnrolFinish {
+            password: z(PASSWORD),
+            kdf: Some(KdfParams {
+                m_kib: MIN_M_KIB,
+                t: MIN_T,
+                p: 1,
+            }),
+        })
+        .unwrap();
+    // A second enrolment is refused: a vault exists.
+    assert_eq!(
+        phone.handle_server(ServerRequest::DeviceEnrolStart { link: link.clone() }),
+        Err(ServerCode::General(ErrorCode::VaultExists))
+    );
+    let mut phone = Member {
+        core: phone,
+        vault: phone_vault,
+        id: alice.id,
+        member_keys: alice.member_keys.clone(),
+        fingerprint: alice.fingerprint.clone(),
+    };
+    // Same member, another device, not a certification device.
+    let ServerReply::Identity {
+        fingerprint: phone_fp,
+        device: phone_device,
+        ..
+    } = phone.server(ServerRequest::ServerIdentity).unwrap()
+    else {
+        panic!("identity expected");
+    };
+    assert_eq!(phone_fp, alice.fingerprint);
+    assert_eq!(phone_device, device);
+    assert_eq!(
+        phone.server(ServerRequest::DeviceEnrolFetch { code: code.clone() }),
+        Err(ServerCode::Forbidden)
+    );
+
+    // The phone authenticated: Alice adds it to « Famille ».
+    assert_eq!(
+        alice
+            .server(ServerRequest::DeviceEnrolComplete { device })
+            .unwrap(),
+        ServerReply::EnrolCompleted(Some(1))
+    );
+    phone.sync();
+    assert_eq!(phone.password(famille, secret).unwrap(), "s3cret-banque");
+    // The phone writes; Alice reads.
+    let from_phone = phone.create(famille, "Wifi", "mot-de-passe-wifi").unwrap();
+    phone.sync();
+    alice.sync();
+    assert_eq!(
+        alice.password(famille, from_phone).unwrap(),
+        "mot-de-passe-wifi"
+    );
+
+    // No alert « unknown device » on either side, after a restart too.
+    let unknown = |m: &mut Member| {
+        alerts(m)
+            .iter()
+            .filter(|a| a.kind == AlertKind::UnknownOwnDevice)
+            .count()
+    };
+    assert_eq!(unknown(&mut alice), 0);
+    assert_eq!(unknown(&mut phone), 0);
+    alice.restart();
+    phone.restart();
+    alice.sync();
+    phone.sync();
+    assert_eq!(unknown(&mut alice), 0);
+    assert_eq!(unknown(&mut phone), 0);
+
+    // A locker created afterwards includes the phone.
+    let ServerReply::LockerCreated(travail) = alice
+        .server(ServerRequest::SharedLockerCreate { name: z("Travail") })
+        .unwrap()
+    else {
+        panic!("locker expected");
+    };
+    let s2 = alice.create(travail, "VPN", "vpn-secret").unwrap();
+    alice.sync();
+    phone.sync();
+    assert_eq!(phone.password(travail, s2).unwrap(), "vpn-secret");
+}

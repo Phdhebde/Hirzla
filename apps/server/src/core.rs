@@ -45,6 +45,10 @@ use crate::ServerError;
 const MAILBOX_TTL_MS: u64 = 10 * 60 * 1000;
 /// Most blobs waiting for one device.
 const MAILBOX_PER_DEVICE: usize = 16;
+/// Largest blob dropped before `Auth` by a device being enrolled (ADR 0081 § 3).
+const PREAUTH_BLOB_MAX: usize = 8 * 1024;
+/// Most blobs dropped before `Auth` held at once, all addresses together (ADR 0081 § 3).
+const PREAUTH_BLOBS_MAX: usize = 256;
 /// Longest a sealed approval mail is held for its recipient device (ADR 0070).
 pub const MAIL_RETENTION_MS: u64 = 30 * DAY_MS;
 /// Most mails held for one recipient device (ADR 0070).
@@ -188,6 +192,8 @@ pub struct Session {
     /// Rank of the next stability announcement this session has not been offered yet
     /// (ADR 0057); set when the device authenticates.
     stable_next: u64,
+    /// The one drop before `Auth` this session may make is spent (ADR 0081 § 3).
+    preauth_put: bool,
     closed: bool,
 }
 
@@ -202,6 +208,7 @@ impl Session {
             state: State::Start,
             subs: BTreeMap::new(),
             stable_next: 0,
+            preauth_put: false,
             closed: false,
         }
     }
@@ -260,6 +267,8 @@ pub struct Core {
     lockers: BTreeMap<Id16, Locker>,
     personal: BTreeMap<Id16, Id16>,
     mailbox: BTreeMap<Id16, VecDeque<(Vec<u8>, u64)>>,
+    /// Expiry of each blob dropped before `Auth` still held (ADR 0081 § 3), in memory only.
+    preauth: VecDeque<u64>,
     /// Sealed approval mails held for each recipient device, oldest first (ADR 0070).
     mail: BTreeMap<Id16, Vec<HeldMail>>,
     chunks: BTreeMap<(Id16, Id16, u64), (u64, Vec<u8>)>,
@@ -342,6 +351,7 @@ impl Core {
             lockers: BTreeMap::new(),
             personal: BTreeMap::new(),
             mailbox: BTreeMap::new(),
+            preauth: VecDeque::new(),
             mail: BTreeMap::new(),
             chunks: BTreeMap::new(),
             seen: BTreeMap::new(),
@@ -871,6 +881,13 @@ impl Core {
             .is_some_and(|r| r.revocation.is_some())
     }
 
+    /// Whether `device` is the identifier of a device inscribed for any member.
+    fn is_inscribed_device(&self, device: &Id16) -> bool {
+        self.accounts
+            .keys()
+            .any(|m| self.keylog.directory().device(m, device).is_some())
+    }
+
     fn registered(&self, member: &Id16) -> Option<&MemberKeys> {
         self.accounts.get(member).map(|(_, k)| k)
     }
@@ -1009,9 +1026,10 @@ impl Core {
                 let own = hello.device;
                 proto::read_id(&m.body)
                     .map_err(ServerError::from)
-                    .and_then(|d| self.on_mailbox_get(own, d, req, now))
+                    .and_then(|d| self.on_mailbox_get(own, d, false, req, now))
                     .or_else(|_| Ok(vec![Message::error(req, code::ACCESS)]))
             }
+            (State::Hello { .. }, kind::MAILBOX_PUT) => self.on_preauth_put(s, &m, now),
             (State::Ready { member, device }, k) => {
                 let (member, device) = (*member, *device);
                 self.on_ready(s, member, device, k, &m, now)
@@ -1406,7 +1424,7 @@ impl Core {
             }
             kind::MAILBOX_GET => {
                 let d = proto::read_id(&m.body)?;
-                self.on_mailbox_get(device, d, req, now)
+                self.on_mailbox_get(device, d, true, req, now)
             }
             kind::MAIL_PUT => {
                 // Sealed approval mails between owners (ADR 0070).
@@ -1603,17 +1621,48 @@ impl Core {
         self.mail.get(to).map_or(0, Vec::len)
     }
 
+    /// `MailboxPut` before `Auth`: a device being enrolled drops its public keys at the
+    /// rendezvous address derived from its control code, once per session, at most
+    /// [`PREAUTH_BLOB_MAX`] bytes, [`PREAUTH_BLOBS_MAX`] held at once (ADR 0081 § 3).
+    fn on_preauth_put(
+        &mut self,
+        s: &mut Session,
+        m: &Message,
+        now: u64,
+    ) -> Result<Vec<Message>, ServerError> {
+        let Ok((to, blob)) = proto::read_mailbox_put(&m.body) else {
+            return Ok(vec![Message::error(m.req, code::MALFORMED)]);
+        };
+        if s.preauth_put || blob.len() > PREAUTH_BLOB_MAX {
+            return Ok(vec![Message::error(m.req, code::ACCESS)]);
+        }
+        self.preauth.retain(|exp| *exp > now);
+        let q = self.mailbox.entry(to).or_default();
+        q.retain(|(_, exp)| *exp > now);
+        if self.preauth.len() >= PREAUTH_BLOBS_MAX || q.len() >= MAILBOX_PER_DEVICE {
+            return Ok(vec![Message::error(m.req, code::QUOTA)]);
+        }
+        s.preauth_put = true;
+        q.push_back((blob, now + MAILBOX_TTL_MS));
+        self.preauth.push_back(now + MAILBOX_TTL_MS);
+        Ok(Vec::new())
+    }
+
+    /// `MailboxGet`: a device reads its own mailbox; an authenticated device may also read
+    /// a rendezvous address, one that is no inscribed device's (ADR 0081 § 3), so that no
+    /// device ever reads another device's mailbox.
     fn on_mailbox_get(
         &mut self,
         own: Id16,
         asked: Id16,
+        authenticated: bool,
         req: u64,
         now: u64,
     ) -> Result<Vec<Message>, ServerError> {
-        if own != asked {
+        if own != asked && (!authenticated || self.is_inscribed_device(&asked)) {
             return Ok(vec![Message::error(req, code::ACCESS)]);
         }
-        let blob = self.mailbox.get_mut(&own).and_then(|q| {
+        let blob = self.mailbox.get_mut(&asked).and_then(|q| {
             q.retain(|(_, exp)| *exp > now);
             q.pop_front()
         });

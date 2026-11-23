@@ -904,7 +904,7 @@ Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. A
 contient de secret, de clé ni de détail cryptographique.
 
 **Compatibilité** (ADR 0070) : les clés 10 à 12 de l'état d'une demande et les opérations
-123 à 125 étendent la version 4 de la même façon.
+123 à 125 étendent la version 4 de la même façon. Les opérations 130 à 136 (ADR 0081) aussi.
 
 **Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
 clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
@@ -949,6 +949,7 @@ aucun autre client de la version 4 n'existe.
 | `quarantaine CASIER` | `QuarantineList` |
 | `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
 | `appareil revoquer APPAREIL [--oui]` | `DeviceRevoke` (sans `--oui`, confirmation « oui » au terminal ; sans terminal, `--oui` exigé) |
+| `appareil ajouter CODE` | `DeviceEnrolFetch`, puis confirmation « oui » au terminal après l'empreinte du membre, `DeviceEnrolApprove`, puis `DeviceEnrolComplete` toutes les 2 secondes pendant 10 minutes au plus |
 
 `CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
 identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; `ROLE`, l'un de
@@ -964,8 +965,9 @@ hexadécimaux du début de l'`op_id` ; `APPAREIL`, l'identifiant de l'appareil e
    point 9).
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
 3. ~~Pas d'accords à plusieurs, de décisions de quarantaine~~ (faits : § 15.8, ADR 0044 et
-   0045 ; noms affichés : § 15.9, ADR 0069). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
-   partagés : à spécifier dans une version suivante.
+   0045 ; noms affichés : § 15.9, ADR 0069 ; enrôlement d'un second appareil : § 15.11,
+   ADR 0081). Pas de fichiers joints dans les casiers partagés : à spécifier dans une
+   version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
 5. Révocation d'appareil (ADR 0059) : seulement ses propres appareils (`DeviceRevoke`, seule
@@ -2026,3 +2028,50 @@ toutes lettres. Réponses : `credential`, `clientData`, `attestation`, `authData
 `displayName`) ; `credential`, `clientData`, `authData`, `signature`, `userHandle`. Refus :
 le nom du code (`verification_required`, `credential_excluded`, `algorithm_unsupported`,
 `invalid_input`…).
+
+### 15.11 Enrôlement d'un appareil par le serveur (opérations 130 à 136)
+
+Décision : ADR 0081 (`sync-protocol.md` § 14). Le nouvel appareil N n'a pas de coffre ; ses
+opérations (130 à 133) sont servies sans coffre ouvert. Celles de l'appareil de
+certification E (134 à 136) exigent un coffre ouvert et un serveur rattaché et vérifié.
+
+| Code | Nom | Appareil | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- | --- |
+| 130 | `DeviceEnrolStart` | N | oui | `{1: lien d'invitation}` | `{1: code de contrôle tstr(20)}` |
+| 131 | `DeviceEnrolWait` | N | oui | — | `{1?: empreinte du membre}`, absente tant que le paquet n'est pas arrivé |
+| 132 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`)}` | — |
+| 133 | `DeviceEnrolCancel` | N | non | — | — |
+| 134 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
+| 135 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
+| 136 | `DeviceEnrolComplete` | E | oui | `{1: appareil}` | `{1?: casiers uint}`, absente tant que N ne s'est pas authentifié |
+
+Détails :
+
+1. **`DeviceEnrolStart`** — un coffre existe : `VaultExists`. Lien invalide :
+   `InvitationInvalid` ; empreinte du serveur différente : `FingerprintMismatch`. Le noyau
+   tire l'identifiant et les paires hybrides de N, les garde en mémoire seulement (perdues
+   si le noyau s'arrête), et dépose la requête au rendez-vous du code avant `Auth`. Un
+   serveur antérieur à l'ADR 0081 refuse le dépôt : `ServerRefused`. Un nouvel appel
+   remplace l'enrôlement en cours.
+2. **`DeviceEnrolWait`** — un relevé de la boîte de N, sans attente : l'interface rappelle
+   toutes les 2 secondes. Paquet arrivé : il est ouvert et vérifié (signature de E,
+   certificats sous la clé du membre reçue, clés de N), et l'empreinte du membre est rendue
+   pour comparaison. Paquet qui ne s'ouvre pas ou ne se vérifie pas : `ApprovalInvalid`.
+   Aucun enrôlement en cours : `NotFound`.
+3. **`DeviceEnrolFinish`** — paquet pas encore arrivé : `NotFound`. Crée le coffre avec
+   l'identité reçue (`format.md` § 13, sans clé privée du membre, avec son propre casier
+   personnel), l'ouvre, rattache le serveur du lien (empreinte vérifiée), s'authentifie, ce
+   qui inscrit le certificat, et synchronise une fois. Après la création, un échec laisse le
+   coffre créé et ouvert ; le rattachement se refait depuis l'écran du serveur.
+4. **`DeviceEnrolFetch`** — appareil sans clé du membre : `Forbidden`. Code mal formé :
+   `InvalidInput`. Rien au rendez-vous (pas encore déposé, ou expiré après 10 minutes) :
+   `NotFound`. Clés qui ne redonnent pas le code : `FingerprintMismatch`. L'interface affiche
+   l'empreinte du membre et demande à l'utilisateur de la comparer avec celle de N.
+5. **`DeviceEnrolApprove`** — appareil autre que celui de `DeviceEnrolFetch` : `NotFound`.
+   Le coffre signe le certificat de N avec la clé du membre ; le noyau scelle le paquet et
+   le dépose dans la boîte de N.
+6. **`DeviceEnrolComplete`** — appareil autre que celui approuvé : `NotFound`. Tant que le
+   certificat de N n'est pas au registre de transparence, résultat sans clé 1. Ensuite, une
+   `DeviceAdd` dans chaque casier partagé où le membre a un rôle et qui n'est pas gelé ;
+   aucun casier partagé : `Unsupported` (créez-en un d'abord). Un casier partagé créé plus tard
+   par E reçoit aussi N.

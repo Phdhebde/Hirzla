@@ -99,10 +99,24 @@ pub enum ServerOp {
     QuorumInbox = 124,
     /// Sign or decline a received request, and send the answer.
     QuorumRespond = 125,
+    /// New device, without vault: start an enrolment with an invitation link (ADR 0081).
+    DeviceEnrolStart = 130,
+    /// New device: look once for the package of the certification device.
+    DeviceEnrolWait = 131,
+    /// New device: create the vault from the package, join and synchronise.
+    DeviceEnrolFinish = 132,
+    /// New device: abandon the enrolment in progress.
+    DeviceEnrolCancel = 133,
+    /// Certification device: fetch the keys of the new device by its control code.
+    DeviceEnrolFetch = 134,
+    /// Certification device: certify the new device and send its package.
+    DeviceEnrolApprove = 135,
+    /// Certification device: add the new device to the shared lockers, once inscribed.
+    DeviceEnrolComplete = 136,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 25] = [
+    const ALL: [ServerOp; 32] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -128,6 +142,13 @@ impl ServerOp {
         ServerOp::QuorumSend,
         ServerOp::QuorumInbox,
         ServerOp::QuorumRespond,
+        ServerOp::DeviceEnrolStart,
+        ServerOp::DeviceEnrolWait,
+        ServerOp::DeviceEnrolFinish,
+        ServerOp::DeviceEnrolCancel,
+        ServerOp::DeviceEnrolFetch,
+        ServerOp::DeviceEnrolApprove,
+        ServerOp::DeviceEnrolComplete,
     ];
 
     /// The operation from its number.
@@ -165,6 +186,13 @@ impl ServerOp {
             ServerOp::QuorumSend => "quorum_send",
             ServerOp::QuorumInbox => "quorum_inbox",
             ServerOp::QuorumRespond => "quorum_respond",
+            ServerOp::DeviceEnrolStart => "device_enrol_start",
+            ServerOp::DeviceEnrolWait => "device_enrol_wait",
+            ServerOp::DeviceEnrolFinish => "device_enrol_finish",
+            ServerOp::DeviceEnrolCancel => "device_enrol_cancel",
+            ServerOp::DeviceEnrolFetch => "device_enrol_fetch",
+            ServerOp::DeviceEnrolApprove => "device_enrol_approve",
+            ServerOp::DeviceEnrolComplete => "device_enrol_complete",
         }
     }
 }
@@ -406,6 +434,37 @@ pub enum ServerRequest {
         /// Sign (or decline).
         accept: bool,
     },
+    /// 130 (ADR 0081).
+    DeviceEnrolStart {
+        /// Invitation link of the server, `hirzla-invitation:…`.
+        link: String,
+    },
+    /// 131.
+    DeviceEnrolWait,
+    /// 132.
+    DeviceEnrolFinish {
+        /// Master password of the new vault.
+        password: Zeroizing<String>,
+        /// Explicit derivation cost; calibrated on the device when absent (as `Init`).
+        kdf: Option<crate::proto::KdfParams>,
+    },
+    /// 133.
+    DeviceEnrolCancel,
+    /// 134.
+    DeviceEnrolFetch {
+        /// Control code shown by the new device, as typed.
+        code: String,
+    },
+    /// 135.
+    DeviceEnrolApprove {
+        /// The device fetched by `DeviceEnrolFetch`.
+        device: Id16,
+    },
+    /// 136.
+    DeviceEnrolComplete {
+        /// The device approved by `DeviceEnrolApprove`.
+        device: Id16,
+    },
 }
 
 /// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
@@ -616,6 +675,10 @@ impl std::fmt::Debug for ServerReply {
             Self::DeviceRevoked { .. } => "DeviceRevoked",
             Self::Found { .. } => "Found",
             Self::Inbox(_) => "Inbox",
+            Self::EnrolCode(_) => "EnrolCode",
+            Self::EnrolState(_) => "EnrolState",
+            Self::EnrolPeer { .. } => "EnrolPeer",
+            Self::EnrolCompleted(_) => "EnrolCompleted",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -956,6 +1019,20 @@ pub enum ServerReply {
     },
     /// 124: received requests, oldest first.
     Inbox(Vec<ReceivedRequest>),
+    /// 130: the control code to show on the new device (ADR 0081).
+    EnrolCode(String),
+    /// 131: the package arrived, with the member fingerprint to compare; `None` while waiting.
+    EnrolState(Option<String>),
+    /// 134: the new device fetched: member fingerprint to compare, its identifier.
+    EnrolPeer {
+        /// Fingerprint of the member key (`format.md` § 3.1).
+        fingerprint: String,
+        /// Identifier of the new device.
+        device: Id16,
+    },
+    /// 136: shared lockers the new device was added to; `None` while it has not
+    /// authenticated yet (its certificate is not inscribed in the key log).
+    EnrolCompleted(Option<u64>),
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
@@ -1036,6 +1113,13 @@ impl ServerRequest {
             ServerRequest::QuorumSend { .. } => ServerOp::QuorumSend,
             ServerRequest::QuorumInbox => ServerOp::QuorumInbox,
             ServerRequest::QuorumRespond { .. } => ServerOp::QuorumRespond,
+            ServerRequest::DeviceEnrolStart { .. } => ServerOp::DeviceEnrolStart,
+            ServerRequest::DeviceEnrolWait => ServerOp::DeviceEnrolWait,
+            ServerRequest::DeviceEnrolFinish { .. } => ServerOp::DeviceEnrolFinish,
+            ServerRequest::DeviceEnrolCancel => ServerOp::DeviceEnrolCancel,
+            ServerRequest::DeviceEnrolFetch { .. } => ServerOp::DeviceEnrolFetch,
+            ServerRequest::DeviceEnrolApprove { .. } => ServerOp::DeviceEnrolApprove,
+            ServerRequest::DeviceEnrolComplete { .. } => ServerOp::DeviceEnrolComplete,
         }
     }
 
@@ -1044,7 +1128,33 @@ impl ServerRequest {
             ServerRequest::ServerStatus
             | ServerRequest::ServerIdentity
             | ServerRequest::ServerSync
-            | ServerRequest::QuorumInbox => None,
+            | ServerRequest::QuorumInbox
+            | ServerRequest::DeviceEnrolWait
+            | ServerRequest::DeviceEnrolCancel => None,
+            ServerRequest::DeviceEnrolStart { link } => {
+                Some(Value::map(vec![(1, Value::text(link))]))
+            }
+            ServerRequest::DeviceEnrolFinish { password, kdf } => {
+                let mut e = vec![(1, Value::text(password.as_str()))];
+                if let Some(k) = kdf {
+                    e.push((
+                        2,
+                        Value::map(vec![
+                            (1, Value::Uint(u64::from(k.m_kib))),
+                            (2, Value::Uint(u64::from(k.t))),
+                            (3, Value::Uint(u64::from(k.p))),
+                        ]),
+                    ));
+                }
+                Some(Value::map(e))
+            }
+            ServerRequest::DeviceEnrolFetch { code } => {
+                Some(Value::map(vec![(1, Value::text(code))]))
+            }
+            ServerRequest::DeviceEnrolApprove { device }
+            | ServerRequest::DeviceEnrolComplete { device } => {
+                Some(Value::map(vec![(1, Value::bytes(device))]))
+            }
             ServerRequest::ServerJoin {
                 url,
                 roots,
@@ -1204,6 +1314,60 @@ impl ServerRequest {
             ServerOp::ServerIdentity => none(ServerRequest::ServerIdentity),
             ServerOp::ServerSync => none(ServerRequest::ServerSync),
             ServerOp::QuorumInbox => none(ServerRequest::QuorumInbox),
+            ServerOp::DeviceEnrolWait => none(ServerRequest::DeviceEnrolWait),
+            ServerOp::DeviceEnrolCancel => none(ServerRequest::DeviceEnrolCancel),
+            ServerOp::DeviceEnrolStart => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolStart {
+                    link: m(f.req(1).and_then(|t| text_max(t, MAX_TEXT)))?.to_owned(),
+                })
+            }
+            ServerOp::DeviceEnrolFinish => {
+                let f = m(Fields::new(args()?, &[1, 2]))?;
+                let p = m(f
+                    .req(1)
+                    .and_then(|t| text_max(t, crate::proto::MAX_PASSWORD)))?;
+                if p.is_empty() {
+                    return Err(ServerCode::General(ErrorCode::InvalidInput));
+                }
+                let kdf = match f.opt(2) {
+                    None => None,
+                    Some(k) => {
+                        let k = m(Fields::new(k, &[1, 2, 3]))?;
+                        let n = |key| -> Result<u32, ServerCode> {
+                            u32::try_from(m(k.req(key).and_then(uint))?)
+                                .map_err(|_| ServerCode::General(ErrorCode::InvalidInput))
+                        };
+                        Some(crate::proto::KdfParams {
+                            m_kib: n(1)?,
+                            t: n(2)?,
+                            p: n(3)?,
+                        })
+                    }
+                };
+                Ok(ServerRequest::DeviceEnrolFinish {
+                    password: Zeroizing::new(p.to_owned()),
+                    kdf,
+                })
+            }
+            ServerOp::DeviceEnrolFetch => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolFetch {
+                    code: m(f.req(1).and_then(|t| text_max(t, 64)))?.to_owned(),
+                })
+            }
+            ServerOp::DeviceEnrolApprove => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolApprove {
+                    device: id16(&f, 1)?,
+                })
+            }
+            ServerOp::DeviceEnrolComplete => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolComplete {
+                    device: id16(&f, 1)?,
+                })
+            }
             ServerOp::ServerJoin => {
                 let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
                 if let Some(link) = f.opt(4) {
@@ -1800,6 +1964,22 @@ impl ServerReply {
             ServerReply::DeviceRevoked { lockers } => {
                 Some(Value::map(vec![(1, Value::Uint(*lockers))]))
             }
+            ServerReply::EnrolCompleted(n) => Some(Value::map(
+                n.map(|n| (1, Value::Uint(n))).into_iter().collect(),
+            )),
+            ServerReply::EnrolCode(code) => Some(Value::map(vec![(1, Value::text(code))])),
+            ServerReply::EnrolState(fp) => {
+                let mut e = Vec::new();
+                opt_text(&mut e, 1, fp.as_deref());
+                Some(Value::map(e))
+            }
+            ServerReply::EnrolPeer {
+                fingerprint,
+                device,
+            } => Some(Value::map(vec![
+                (1, Value::text(fingerprint)),
+                (2, Value::bytes(device)),
+            ])),
             ServerReply::Granted {
                 fingerprint,
                 devices,
@@ -1980,7 +2160,10 @@ impl ServerReply {
             | ServerOp::QuorumCancel
             | ServerOp::QuarantineDecide
             | ServerOp::ProfileSet
-            | ServerOp::MemberVerify => {
+            | ServerOp::MemberVerify
+            | ServerOp::DeviceEnrolFinish
+            | ServerOp::DeviceEnrolCancel
+            | ServerOp::DeviceEnrolApprove => {
                 if f.opt(4).is_some() {
                     return Err(ErrorCode::Malformed);
                 }
@@ -2069,6 +2252,25 @@ impl ServerReply {
                 let b = Fields::new(body()?, &[1]).map_err(bad)?;
                 ServerReply::DeviceRevoked {
                     lockers: b.req(1).and_then(uint).map_err(bad)?,
+                }
+            }
+            ServerOp::DeviceEnrolComplete => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolCompleted(b.opt(1).map(uint).transpose().map_err(bad)?)
+            }
+            ServerOp::DeviceEnrolStart => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolCode(text(b.req(1).map_err(bad)?, 64)?)
+            }
+            ServerOp::DeviceEnrolWait => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolState(b.opt(1).map(|v| text(v, FINGERPRINT_LEN)).transpose()?)
+            }
+            ServerOp::DeviceEnrolFetch => {
+                let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
+                ServerReply::EnrolPeer {
+                    fingerprint: text(b.req(1).map_err(bad)?, FINGERPRINT_LEN)?,
+                    device: b.req(2).and_then(fixed::<16>).map_err(bad)?,
                 }
             }
             ServerOp::RoleGrant => {
