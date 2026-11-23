@@ -13,7 +13,10 @@ use std::sync::Mutex;
 use hirzla_crypto::util::{constant_time_eq, random_array, sha384};
 use zeroize::Zeroizing;
 
-use super::{hello_key_name, FactorError, FactorKind, Gesture, KeyRef, Material, UnlockFactor};
+use super::{
+    android_key_alias, hello_key_name, FactorError, FactorKind, Gesture, KeyRef, Material,
+    UnlockFactor,
+};
 
 /// PIN tries before the fake security key blocks.
 pub const PIN_TRIES: u8 = 3;
@@ -137,6 +140,9 @@ fn split(key: &KeyRef) -> (Vec<u8>, Vec<u8>) {
             credential_id,
             salt,
         } => (credential_id.clone(), salt.to_vec()),
+        KeyRef::AndroidKeystore { alias, challenge } => {
+            (alias.as_bytes().to_vec(), challenge.to_vec())
+        }
     }
 }
 
@@ -184,11 +190,15 @@ impl UnlockFactor for SoftwareFactor {
                 credential_id: random::<48>()?.to_vec(),
                 salt: random()?,
             },
+            FactorKind::AndroidKeystore => KeyRef::AndroidKeystore {
+                alias: android_key_alias(&gesture.vault_id),
+                challenge: random()?,
+            },
         };
         let (identity, input) = split(&key);
         let secret = Zeroizing::new(random::<32>()?);
         let m = material(&secret, &input);
-        // Windows Hello replaces a key of the same name.
+        // Windows Hello and the Android Keystore replace a key of the same name.
         state.keys.insert(identity, secret);
         Ok((key, m))
     }

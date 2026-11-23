@@ -74,6 +74,10 @@ fn key_ref(key: &HardwareKey) -> KeyRef {
             credential_id: credential_id.clone(),
             salt: *salt,
         },
+        HardwareKey::AndroidKeystore { alias, challenge } => KeyRef::AndroidKeystore {
+            alias: alias.clone(),
+            challenge: *challenge,
+        },
     }
 }
 
@@ -97,6 +101,10 @@ fn hardware_key(key: &KeyRef) -> HardwareKey {
         } => HardwareKey::Fido2 {
             credential_id: credential_id.clone(),
             salt: *salt,
+        },
+        KeyRef::AndroidKeystore { alias, challenge } => HardwareKey::AndroidKeystore {
+            alias: alias.clone(),
+            challenge: *challenge,
         },
     }
 }
@@ -342,7 +350,8 @@ impl Core {
         let vault = self.vault().map_err(|e| Err(general(e)))?;
         let vault_id = vault.vault_id();
         let methods = vault.unlock_methods().map_err(|e| Err(verr(e)))?;
-        // Windows Hello and Touch ID replace their method in place; FIDO2 adds one.
+        // Windows Hello, Touch ID and the Android Keystore replace their method in place;
+        // FIDO2 adds one.
         let replaces = kind != FactorKind::Fido2.number() && methods.iter().any(|m| m.kind == kind);
         if !replaces && methods.len() >= MAX_METHODS {
             return Err(Err(code(ErrorCode::InvalidInput)));

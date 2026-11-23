@@ -714,3 +714,33 @@ fn the_vault_file_never_holds_the_material() {
         .windows(material.as_bytes().len())
         .any(|w| w == material.as_bytes()));
 }
+
+/// ADR 0080 § 4: the Android Keystore (kind 7) is a symmetric HMAC, not classical only. It is
+/// enrolled without the acknowledgement, replaced in place, and opens the vault.
+#[test]
+fn android_keystore_needs_no_acknowledgement_and_opens() {
+    let mut f = fixture();
+    let android = Arc::new(SoftwareFactor::new(FactorKind::AndroidKeystore));
+    let factors: Vec<Arc<dyn UnlockFactor>> = vec![f.fido.clone(), android.clone()];
+    f.core.set_unlock_factors(factors);
+    assert_eq!(
+        f.core.handle_methods(enrol_unacknowledged(7)).unwrap(),
+        MethodReply::Enrolled { rank: 1 }
+    );
+    assert_eq!(
+        f.core.handle_methods(enrol_unacknowledged(4)).unwrap(),
+        MethodReply::Enrolled { rank: 2 }
+    );
+    // Re-enrolling keeps its rank.
+    assert_eq!(
+        f.core.handle_methods(enrol_unacknowledged(7)).unwrap(),
+        MethodReply::Enrolled { rank: 1 }
+    );
+    assert_eq!(android.gestures(), 2);
+    lock(&mut f.core);
+    f.core.handle_methods(unlock(1, None)).unwrap();
+    assert!(f
+        .sink
+        .text()
+        .contains("event=unlock_method op=enroll_method kind=android result=ok"));
+}

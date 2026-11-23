@@ -46,6 +46,7 @@ fn kind_label(kind: u8) -> &'static str {
         4 => "clé de sécurité FIDO2",
         5 => "Windows Hello",
         6 => "kit de recouvrement",
+        7 => "empreinte Android",
         _ => "méthode inconnue",
     }
 }

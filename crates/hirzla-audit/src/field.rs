@@ -536,6 +536,8 @@ code_enum!(
         WindowsHello = 5, "windows_hello";
         /// Recovery shares or phrase.
         Recovery = 6, "recovery";
+        /// Android Keystore: StrongBox HMAC after a fingerprint (ADR 0080).
+        AndroidKeystore = 7, "android_keystore";
     }
 );
 

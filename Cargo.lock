@@ -2075,6 +2075,7 @@ dependencies = [
  "core-foundation",
  "ctap-hid-fido2",
  "hirzla-crypto",
+ "jni",
  "libc",
  "security-framework",
  "security-framework-sys",

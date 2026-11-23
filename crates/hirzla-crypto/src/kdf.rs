@@ -34,7 +34,8 @@ pub enum KdfLabel {
     Unlock {
         /// Position of the method in the header.
         method_index: u8,
-        /// Kind of the method (1 password, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2, 5 Windows Hello).
+        /// Kind of the method (1 password, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2, 5 Windows Hello,
+        /// 6 recovery kit, 7 Android Keystore).
         method_kind: u8,
     },
     /// `K_dev_wrap`, the local key-encryption key derived from the device key (§ 4.3).
@@ -42,7 +43,7 @@ pub enum KdfLabel {
     /// Method secret of a hardware unlock method, from the material released by the system
     /// (`docs/format.md` § 4.2.1, ADR 0075).
     HardwareSecret {
-        /// Kind of the method (3 Secure Enclave, 4 FIDO2, 5 Windows Hello).
+        /// Kind of the method (3 Secure Enclave, 4 FIDO2, 5 Windows Hello, 7 Android Keystore).
         method_kind: u8,
     },
     /// `K_export`, the key of an encrypted locker export, derived from the Argon2id output of

@@ -136,6 +136,27 @@ jobs:
       - name: Tests
         run: cargo test -p hirzla-keystore --features fido2-hid,test-software --lib
 
+  # Android (ADR 0080): the core, its crates and the Android Keystore factor cross-compiled for
+  # arm64 with the NDK of the runner. Libraries only: the tests run on the host; the factor is
+  # tested by hand on a Pixel (docs/keystore-prototypes.md, test A1).
+  android:
+    name: Android (arm64)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: rustup toolchain install && rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo-ndk
+        run: cargo install cargo-ndk --locked --version 4.1.2
+      - name: Clippy
+        run: >-
+          ANDROID_NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          cargo ndk -t arm64-v8a -P 34 clippy -p hirzla-keystore -p hirzla-core -p hirzla-crypto
+          -p hirzla-vault -p hirzla-access -p hirzla-sync -- -D warnings
+
   # Interface of the desktop application: type check of the JavaScript (no build step, the
   # checked files are the shipped ones) and fingerprints of the embedded fonts.
   desktop-ui:
