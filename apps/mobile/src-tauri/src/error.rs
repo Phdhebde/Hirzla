@@ -63,7 +63,7 @@ impl Serialize for MobileError {
             ),
             MobileError::Refused(r) => (r.code.name(), refusal_message(r), r.retry_after_s),
             MobileError::Method(c) => ("method", method_message(*c), None),
-            MobileError::Server(c) => ("server", server_message(*c), None),
+            MobileError::Server(c) => (c.name(), server_message(*c), None),
             MobileError::NoFingerprint => (
                 "fingerprint",
                 "Empreinte non reconnue ou annulée.".into(),

@@ -179,11 +179,19 @@ async function relever() {
       return;
     }
   } catch (e) {
+    // A network loss (screen off, application in the background) is not the end: the
+    // package waits 10 minutes in the mailbox. Anything else stops.
+    if (e && typeof e === "object" && "code" in e && e.code === "server_unreachable") {
+      $("rejoindre-attente").textContent = "Réseau indisponible, nouvel essai…";
+      releve = setTimeout(relever, 3000);
+      return;
+    }
     arreterReleve();
     erreur($("rejoindre-code"), e);
     $("rejoindre-attente").textContent = "";
     return;
   }
+  $("rejoindre-attente").textContent = "En attente du poste…";
   releve = setTimeout(relever, 2000);
 }
 
