@@ -1231,7 +1231,51 @@ fn enrol_error(e: DesktopError) -> DesktopError {
     }
 }
 
+/// The invitation link and its QR code: `size` modules a side, `modules` row by row, `1`
+/// for a dark module. It holds no secret.
+#[derive(Debug, Serialize)]
+pub struct InvitationDto {
+    /// `hirzla-invitation:…`, on one line.
+    pub link: String,
+    /// Modules a side.
+    pub size: u32,
+    /// `size * size` characters, `0` or `1`.
+    pub modules: String,
+}
+
+/// The QR code of `text` (error correction L: the link is long, the screen is clean).
+fn qr_modules(text: &str) -> Option<(u32, String)> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Low).ok()?;
+    let size = qr.size();
+    let mut m = String::with_capacity(usize::try_from(size * size).ok()?);
+    for y in 0..size {
+        for x in 0..size {
+            m.push(if qr.get_module(x, y) { '1' } else { '0' });
+        }
+    }
+    Some((u32::try_from(size).ok()?, m))
+}
+
 impl AppState {
+    /// The invitation link of the joined server and its QR code, for a new device.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn invitation(&self) -> Result<InvitationDto, DesktopError> {
+        let ServerReply::Invitation(link) = self.call_server(&ServerRequest::ServerInvitation)?
+        else {
+            return Err(DesktopError::Protocol);
+        };
+        let (size, modules) =
+            qr_modules(&link).ok_or(DesktopError::Invalid("Lien trop long pour un code QR."))?;
+        Ok(InvitationDto {
+            link,
+            size,
+            modules,
+        })
+    }
+
     /// Fetches the keys of a new device by the code it shows (ADR 0081).
     ///
     /// # Errors
@@ -1283,6 +1327,12 @@ impl AppState {
             _ => Err(DesktopError::Protocol),
         }
     }
+}
+
+/// See [`AppState::invitation`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn server_invitation(state: State<'_>) -> Result<InvitationDto, DesktopError> {
+    state.invitation()
 }
 
 /// See [`AppState::enrol_fetch`].
@@ -1536,6 +1586,17 @@ pub fn quorum_respond(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn invitation_qr_is_square_and_binary() {
+        let link = format!("hirzla-invitation:{}", "A".repeat(1060));
+        let (size, m) = qr_modules(&link).unwrap();
+        assert!((21..=177).contains(&size));
+        assert_eq!(m.len(), (size * size) as usize);
+        assert!(m.bytes().all(|b| b == b'0' || b == b'1'));
+        // Too long for any QR code: refused, not truncated.
+        assert!(qr_modules(&"A".repeat(5000)).is_none());
+    }
     use hirzla_core::server_mode::proto::KeyLogAlert;
 
     #[test]

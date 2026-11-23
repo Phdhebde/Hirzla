@@ -949,6 +949,7 @@ aucun autre client de la version 4 n'existe.
 | `quarantaine CASIER` | `QuarantineList` |
 | `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
 | `appareil revoquer APPAREIL [--oui]` | `DeviceRevoke` (sans `--oui`, confirmation « oui » au terminal ; sans terminal, `--oui` exigé) |
+| `serveur invitation` | `ServerInvitation` (le lien, et son code QR quand la sortie est un terminal) |
 | `appareil ajouter CODE` | `DeviceEnrolFetch`, puis confirmation « oui » au terminal après l'empreinte du membre, `DeviceEnrolApprove`, puis `DeviceEnrolComplete` toutes les 2 secondes pendant 10 minutes au plus |
 
 `CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
@@ -2044,6 +2045,7 @@ certification E (194 à 196) exigent un coffre ouvert et un serveur rattaché et
 | 194 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
 | 195 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
 | 196 | `DeviceEnrolComplete` | E | oui | `{1: appareil}` | `{1?: casiers uint}`, absente tant que N ne s'est pas authentifié |
+| 197 | `ServerInvitation` | E (ou tout appareil rattaché) | non | — | `{1: lien d'invitation, sur une ligne}` |
 
 Détails :
 
@@ -2076,3 +2078,8 @@ Détails :
    `DeviceAdd` dans chaque casier partagé où le membre a un rôle et qui n'est pas gelé ;
    aucun casier partagé : `Unsupported` (créez-en un d'abord). Un casier partagé créé plus tard
    par E reçoit aussi N.
+7. **`ServerInvitation`** — serveur non rattaché : `NotJoined` ; empreinte pas encore
+   confirmée : `ServerUnverified`. Le lien est reconstruit à partir de ce que l'appareil a
+   vérifié (adresse, AC du site, empreinte) ; il ne contient aucun secret. L'application de
+   poste et la ligne de commande l'affichent aussi en code QR, à lire avec l'appareil photo du
+   téléphone, qui le colle ensuite dans « Rejoindre mon compte ».

@@ -91,6 +91,7 @@ const COMMANDS: &[&str] = &[
     "quorum_send",
     "quorum_inbox",
     "quorum_respond",
+    "server_invitation",
     "device_enrol_fetch",
     "device_enrol_approve",
     "device_enrol_complete",

@@ -184,6 +184,7 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::quorum_send,
             servermode::quorum_inbox,
             servermode::quorum_respond,
+            servermode::server_invitation,
             servermode::device_enrol_fetch,
             servermode::device_enrol_approve,
             servermode::device_enrol_complete,

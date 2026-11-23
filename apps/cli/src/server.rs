@@ -196,6 +196,25 @@ pub fn resolve_locker(c: &mut Client, typed: &str) -> Result<Id16, String> {
 pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
+        ServerCommand::Invitation => {
+            let ServerReply::Invitation(link) =
+                call_server(&mut c, &ServerRequest::ServerInvitation)?
+            else {
+                return bad_reply();
+            };
+            if crate::term::interactive() {
+                note(
+                    "Scannez ce code avec l'appareil photo du téléphone, copiez le texte, puis \
+                     collez-le dans Hirzla › Rejoindre mon compte. Le lien ne contient aucun \
+                     secret.",
+                );
+                if let Some(qr) = qr_terminal(&link) {
+                    say(&qr);
+                }
+            }
+            say(&link);
+            Ok(())
+        }
         ServerCommand::Identity { output } => {
             let ServerReply::Identity {
                 member_keys,
@@ -1225,6 +1244,32 @@ pub fn run_quarantine(session: &Session<'_>, command: &QuarantineCommand) -> Res
             Ok(())
         }
     }
+}
+
+/// The QR code of `text` for a terminal: black modules on a white background whatever the
+/// terminal's colours, two modules per character (half blocks), with a quiet zone.
+fn qr_terminal(text: &str) -> Option<String> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Low).ok()?;
+    let quiet = 2;
+    let size = qr.size();
+    let dark = |x: i32, y: i32| qr.get_module(x, y);
+    let mut out = String::new();
+    let mut y = -quiet;
+    while y < size + quiet {
+        out.push_str("\x1b[30;47m");
+        for x in -quiet..size + quiet {
+            out.push(match (dark(x, y), dark(x, y + 1)) {
+                (true, true) => '\u{2588}',
+                (true, false) => '\u{2580}',
+                (false, true) => '\u{2584}',
+                (false, false) => ' ',
+            });
+        }
+        out.push_str("\x1b[0m\n");
+        y += 2;
+    }
+    Some(out)
 }
 
 #[cfg(test)]

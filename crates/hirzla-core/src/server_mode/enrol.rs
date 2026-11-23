@@ -385,6 +385,26 @@ impl ServerMode {
         Ok(ServerReply::EnrolCompleted(Some(added.len() as u64)))
     }
 
+    /// `ServerInvitation` (197): the invitation link of the joined server, rebuilt from what
+    /// this device verified (address, site CA, fingerprint), on one line, for a new device.
+    /// It holds no secret.
+    pub(super) fn invitation(&self) -> Result<ServerReply, ServerCode> {
+        let j = self.joined()?;
+        if !j.info.server_key_verified {
+            return Err(ServerCode::ServerUnverified);
+        }
+        let link = Invitation {
+            address: j.info.url.clone(),
+            roots: j.roots.clone(),
+            fingerprint: fingerprint(&j.info.server_key),
+        }
+        .encode()
+        .map_err(internal)?;
+        Ok(ServerReply::Invitation(
+            link.chars().filter(|c| !c.is_whitespace()).collect(),
+        ))
+    }
+
     fn holds_any_role(&self, me: &Id16) -> bool {
         self.joined.as_ref().is_some_and(|j| {
             j.lockers.values().any(|s| {

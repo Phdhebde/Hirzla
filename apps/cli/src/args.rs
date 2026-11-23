@@ -106,6 +106,8 @@ Mode Serveur :
   serveur identite        Affiche l'empreinte de votre clé de membre et le code de contrôle
                           du poste. --sortie FICHIER : écrit la clé publique de membre
                           pour l'administrateur du serveur.
+  serveur invitation      Affiche le lien d'invitation du serveur rattaché et son code QR,
+                          à scanner avec l'appareil photo d'un téléphone à ajouter.
   serveur rejoindre ADRESSE --ac PEM [--empreinte E]
                           Rattache le coffre au serveur (hirzla://hôte[:port]). Sans
                           --empreinte, confirmez ensuite l'empreinte affichée.
@@ -211,6 +213,8 @@ pub enum ServerCommand {
     },
     Status,
     Sync,
+    /// The invitation link of the joined server, with its QR code (ADR 0081).
+    Invitation,
     /// Set (or, empty, withdraw) the display name of the member (ADR 0069).
     Name {
         name: String,
@@ -1445,6 +1449,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     max_positional(1)?;
                     only(&[])?;
                     ServerCommand::Sync
+                }
+                "invitation" => {
+                    max_positional(1)?;
+                    only(&[])?;
+                    ServerCommand::Invitation
                 }
                 "nom" => {
                     max_positional(2)?;

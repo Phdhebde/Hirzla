@@ -2618,13 +2618,16 @@ fn a_second_device_is_enrolled_through_the_server() {
     };
     let secret = alice.create(famille, "Banque", "s3cret-banque").unwrap();
     alice.sync();
-    let link = Invitation {
-        address: server.url(),
-        roots: server.ca_pem.clone(),
-        fingerprint,
-    }
-    .encode()
-    .unwrap();
+    // The link comes from Alice's core (`ServerInvitation`), on one line; it opens the
+    // same server as the administrator's.
+    let ServerReply::Invitation(link) = alice.server(ServerRequest::ServerInvitation).unwrap()
+    else {
+        panic!("invitation expected");
+    };
+    assert!(!link.contains(char::is_whitespace));
+    let parsed = Invitation::decode(&link).unwrap();
+    assert_eq!(parsed.roots, server.ca_pem);
+    assert_eq!(parsed.fingerprint, fingerprint);
 
     // The phone: no vault, an enrolment started with the link.
     let phone_vault = tmp.path().join("phone").join("coffre.hirzla");

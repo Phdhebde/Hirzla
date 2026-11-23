@@ -299,11 +299,46 @@ export class ServerView {
     });
     byId("appareil-ajouter").addEventListener("click", () => void this.enrolApprove());
     byId("appareil-annuler").addEventListener("click", () => this.enrolReset());
+    byId("appareil-qr").addEventListener("click", () => void this.showInvitation());
+  }
+
+  /** Shows the invitation link of the server and its QR code, drawn as SVG (no image file). */
+  async showInvitation() {
+    let inv;
+    try {
+      inv = await api.serverInvitation();
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (!this.hooks.onError(err)) showError(byId("appareil-erreur"), err.message);
+      return;
+    }
+    const NS = "http://www.w3.org/2000/svg";
+    const q = 4;
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${inv.size + 2 * q} ${inv.size + 2 * q}`);
+    svg.setAttribute("shape-rendering", "crispEdges");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Code QR du lien d'invitation");
+    let d = "";
+    for (let y = 0; y < inv.size; y++) {
+      for (let x = 0; x < inv.size; x++) {
+        if (inv.modules[y * inv.size + x] === "1") d += `M${x + q} ${y + q}h1v1h-1z`;
+      }
+    }
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "#000");
+    svg.append(path);
+    byId("appareil-qr-image").replaceChildren(svg);
+    /** @type {HTMLTextAreaElement} */ (byId("appareil-lien-texte")).value = inv.link;
+    byId("appareil-lien").hidden = false;
   }
 
   /** Back to the code field. */
   enrolReset() {
     this.enrolDevice = null;
+    byId("appareil-lien").hidden = true;
+    byId("appareil-qr-image").replaceChildren();
     byId("appareil-trouve").hidden = true;
     byId("appareil-attente").hidden = true;
     byId("form-appareil").hidden = false;

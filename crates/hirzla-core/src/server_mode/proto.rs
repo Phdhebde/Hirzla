@@ -115,10 +115,12 @@ pub enum ServerOp {
     DeviceEnrolApprove = 195,
     /// Certification device: add the new device to the shared lockers, once inscribed.
     DeviceEnrolComplete = 196,
+    /// The invitation link of the joined server, for a new device (ADR 0081).
+    ServerInvitation = 197,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 32] = [
+    const ALL: [ServerOp; 33] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -151,6 +153,7 @@ impl ServerOp {
         ServerOp::DeviceEnrolFetch,
         ServerOp::DeviceEnrolApprove,
         ServerOp::DeviceEnrolComplete,
+        ServerOp::ServerInvitation,
     ];
 
     /// The operation from its number.
@@ -195,6 +198,7 @@ impl ServerOp {
             ServerOp::DeviceEnrolFetch => "device_enrol_fetch",
             ServerOp::DeviceEnrolApprove => "device_enrol_approve",
             ServerOp::DeviceEnrolComplete => "device_enrol_complete",
+            ServerOp::ServerInvitation => "server_invitation",
         }
     }
 }
@@ -467,6 +471,8 @@ pub enum ServerRequest {
         /// The device approved by `DeviceEnrolApprove`.
         device: Id16,
     },
+    /// 197.
+    ServerInvitation,
 }
 
 /// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
@@ -681,6 +687,7 @@ impl std::fmt::Debug for ServerReply {
             Self::EnrolState(_) => "EnrolState",
             Self::EnrolPeer { .. } => "EnrolPeer",
             Self::EnrolCompleted(_) => "EnrolCompleted",
+            Self::Invitation(_) => "Invitation",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -1035,6 +1042,8 @@ pub enum ServerReply {
     /// 196: shared lockers the new device was added to; `None` while it has not
     /// authenticated yet (its certificate is not inscribed in the key log).
     EnrolCompleted(Option<u64>),
+    /// 197: the invitation link, `hirzla-invitation:…`, on one line.
+    Invitation(String),
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
@@ -1125,6 +1134,7 @@ impl ServerRequest {
             ServerRequest::DeviceEnrolFetch { .. } => ServerOp::DeviceEnrolFetch,
             ServerRequest::DeviceEnrolApprove { .. } => ServerOp::DeviceEnrolApprove,
             ServerRequest::DeviceEnrolComplete { .. } => ServerOp::DeviceEnrolComplete,
+            ServerRequest::ServerInvitation => ServerOp::ServerInvitation,
         }
     }
 
@@ -1135,7 +1145,8 @@ impl ServerRequest {
             | ServerRequest::ServerSync
             | ServerRequest::QuorumInbox
             | ServerRequest::DeviceEnrolWait
-            | ServerRequest::DeviceEnrolCancel => None,
+            | ServerRequest::DeviceEnrolCancel
+            | ServerRequest::ServerInvitation => None,
             ServerRequest::DeviceEnrolStart { link } => {
                 Some(Value::map(vec![(1, Value::text(link))]))
             }
@@ -1321,6 +1332,7 @@ impl ServerRequest {
             ServerOp::QuorumInbox => none(ServerRequest::QuorumInbox),
             ServerOp::DeviceEnrolWait => none(ServerRequest::DeviceEnrolWait),
             ServerOp::DeviceEnrolCancel => none(ServerRequest::DeviceEnrolCancel),
+            ServerOp::ServerInvitation => none(ServerRequest::ServerInvitation),
             ServerOp::DeviceEnrolStart => {
                 let f = m(Fields::new(args()?, &[1]))?;
                 Ok(ServerRequest::DeviceEnrolStart {
@@ -1973,6 +1985,7 @@ impl ServerReply {
                 n.map(|n| (1, Value::Uint(n))).into_iter().collect(),
             )),
             ServerReply::EnrolCode(code) => Some(Value::map(vec![(1, Value::text(code))])),
+            ServerReply::Invitation(link) => Some(Value::map(vec![(1, Value::text(link))])),
             ServerReply::EnrolState(fp) => {
                 let mut e = Vec::new();
                 opt_text(&mut e, 1, fp.as_deref());
@@ -2259,6 +2272,10 @@ impl ServerReply {
                     lockers: b.req(1).and_then(uint).map_err(bad)?,
                 }
             }
+            ServerOp::ServerInvitation => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::Invitation(text(b.req(1).map_err(bad)?, MAX_TEXT)?)
+            }
             ServerOp::DeviceEnrolComplete => {
                 let b = Fields::new(body()?, &[1]).map_err(bad)?;
                 ServerReply::EnrolCompleted(b.opt(1).map(uint).transpose().map_err(bad)?)
@@ -2461,6 +2478,7 @@ mod tests {
             },
             ServerRequest::DeviceEnrolApprove { device: [3; 16] },
             ServerRequest::DeviceEnrolComplete { device: [3; 16] },
+            ServerRequest::ServerInvitation,
         ] {
             assert!(round(&r) == r, "{r:?}");
         }

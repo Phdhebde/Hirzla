@@ -926,6 +926,7 @@ impl ServerMode {
             ServerRequest::DeviceEnrolFetch { code } => self.enrol_fetch(vault, &code),
             ServerRequest::DeviceEnrolApprove { device } => self.enrol_approve(vault, device),
             ServerRequest::DeviceEnrolComplete { device } => self.enrol_complete(vault, device),
+            ServerRequest::ServerInvitation => self.invitation(),
             // The new device has no vault: the core answers these itself.
             ServerRequest::DeviceEnrolStart { .. }
             | ServerRequest::DeviceEnrolWait

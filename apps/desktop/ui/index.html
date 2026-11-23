@@ -600,7 +600,17 @@
         <h2 id="serveur-appareil-titre" class="titre-carte">Ajouter un appareil</h2>
         <p class="texte-secondaire">Votre téléphone devient un appareil de votre compte : il reçoit vos casiers
           partagés, pas le casier personnel de ce poste. Sur le téléphone, choisissez « Rejoindre mon compte » et
-          collez le lien d'invitation du serveur ; il affiche un code.</p>
+          donnez-lui le lien d'invitation du serveur ; il affiche un code.</p>
+        <div class="ligne-actions">
+          <button id="appareil-qr" class="bouton bouton-secondaire" type="button">Afficher le lien d'invitation en code QR</button>
+        </div>
+        <div id="appareil-lien" class="encadre" hidden>
+          <p class="texte-secondaire">Scannez ce code avec l'appareil photo du téléphone, copiez le texte, puis collez-le
+            dans Hirzla › Rejoindre mon compte. Le lien ne contient aucun secret.</p>
+          <div id="appareil-qr-image" class="code-qr"></div>
+          <textarea id="appareil-lien-texte" class="saisie saisie-mono saisie-texte" rows="3" readonly
+                    spellcheck="false" aria-label="Lien d'invitation"></textarea>
+        </div>
         <form id="form-appareil" class="encadre" novalidate>
           <label class="champ" for="appareil-code">
             <span class="champ-libelle">Code affiché par l'appareil</span>

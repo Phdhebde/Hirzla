@@ -93,6 +93,7 @@
     "allow-quorum-send",
     "allow-quorum-inbox",
     "allow-quorum-respond",
+    "allow-server-invitation",
     "allow-device-enrol-fetch",
     "allow-device-enrol-approve",
     "allow-device-enrol-complete",

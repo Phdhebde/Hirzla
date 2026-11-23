@@ -333,6 +333,8 @@ export const api = {
   revokeRole: (locker, member) => call("revoke_role", { locker, member }),
   /** @param {string} device @returns {Promise<number>} Lockers where the revocation was published (ADR 0059). */
   revokeDevice: (device) => call("revoke_device", { device }),
+  /** @returns {Promise<{ link: string, size: number, modules: string }>} */
+  serverInvitation: () => call("server_invitation"),
   /** @param {string} code @returns {Promise<{ fingerprint: string, device: string }>} */
   enrolFetch: (code) => call("device_enrol_fetch", { code }),
   /** @param {string} device @returns {Promise<void>} */

@@ -28,6 +28,9 @@ hirzla-crypto = { path = "../../crates/hirzla-crypto" }
 hirzla-keystore = { path = "../../crates/hirzla-keystore" }
 hirzla-vault = { path = "../../crates/hirzla-vault" }
 zeroize = "1.8"
+# QR code of the invitation link (ADR 0081), shown in the terminal: Nayuki's reference
+# encoder, no dependency, `forbid(unsafe_code)`; it only ever encodes the link, never a secret.
+qrcodegen = "1.8.0"
 # ADR 0016: clipboard with history and cloud exclusion. No image support.
 arboard = { version = "3.7.0", default-features = false }
 
