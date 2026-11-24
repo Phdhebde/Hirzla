@@ -18,6 +18,8 @@ use crate::transport::Endpoint;
 
 /// Pause between two attempts to reach a core just started.
 const START_POLL: Duration = Duration::from_millis(50);
+/// How long [`Route::start`] watches a core it started for an early stop.
+const START_WATCH: Duration = Duration::from_millis(300);
 
 /// Errors of the routing. They carry no secret.
 #[derive(Debug, thiserror::Error)]
@@ -216,6 +218,32 @@ impl Route {
     }
 }
 
+impl Route {
+    /// Starts `core` for this route **without connecting to it**, for a client that could
+    /// no longer be recognised by a new core (a hardened process on Linux, § 25.9). Returns
+    /// whether the core is still running shortly after; `false` also when another core
+    /// already listens there, which is no failure.
+    ///
+    /// # Errors
+    /// [`RouteError::Registry`] when the vault file of the entry is missing or is not the
+    /// registered vault, [`RouteError::CoreNotStarted`] when the core cannot be started.
+    pub fn start(&self, core: &Path) -> Result<bool, RouteError> {
+        if let Some(entry) = &self.entry {
+            entry.check_file()?;
+        }
+        let mut child =
+            spawn_core(core, &self.start_args).map_err(|_| RouteError::CoreNotStarted)?;
+        let deadline = Instant::now() + START_WATCH;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return Ok(false),
+                Ok(None) if Instant::now() < deadline => std::thread::sleep(START_POLL),
+                _ => return Ok(true),
+            }
+        }
+    }
+}
+
 /// The routing of one user: the registry file and the default vault location.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VaultRouter {
@@ -258,6 +286,16 @@ impl VaultRouter {
     #[must_use]
     pub fn registry_path(&self) -> &Path {
         &self.registry_path
+    }
+
+    /// A file for a vault still to be created, when the user names none (§ 25.9, step 1):
+    /// `coffre-<random>.hirzla` in the directory of the default vault location. `None` when
+    /// that location is unknown or the system generator fails.
+    #[must_use]
+    pub fn new_vault_path(&self) -> Option<PathBuf> {
+        let dir = self.default_vault.as_deref()?.parent()?;
+        let tag = hirzla_crypto::util::random_array::<8>().ok()?;
+        Some(dir.join(format!("coffre-{}.hirzla", registry::hex(&tag))))
     }
 
     /// Reads the registry. **Adoption** (§ 25.5): when it is absent or empty and a vault
