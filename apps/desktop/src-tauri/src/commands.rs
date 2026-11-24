@@ -9,8 +9,8 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hirzla_core::proto::{
-    classes, ApiValue, ListEntry, LockerEntry, Reply, Request, Selector, StatusInfo, VaultState,
-    GENERATE_LENGTH, MAX_FIELDS, MAX_ITEMS, MAX_PASSWORD, MAX_QUERY, MAX_TEXT,
+    classes, ApiValue, ListEntry, LockerEntry, Reply, Request, Selector, SetChanges, StatusInfo,
+    VaultState, GENERATE_LENGTH, MAX_FIELDS, MAX_ITEMS, MAX_PASSWORD, MAX_QUERY, MAX_TEXT,
 };
 use hirzla_keystore::platform::{HardeningReport, HardeningStatus};
 use hirzla_vault::model::Id16;
@@ -25,6 +25,9 @@ use crate::link::CoreLink;
 
 /// Shortest master password accepted when creating a vault, in characters.
 pub const MIN_MASTER_CHARS: usize = 12;
+/// Longest URL and longest tag the vault keeps (`docs/format.md` § 8.2).
+const MAX_URL: usize = 2048;
+const MAX_TAG: usize = 128;
 
 /// State shared by the commands.
 pub struct AppState {
@@ -415,6 +418,37 @@ pub struct SecretChanges {
     favorite: Option<bool>,
     #[serde(default)]
     clear: Vec<FieldName>,
+    /// URLs and tags to add or remove: the difference the form computed from what
+    /// [`AppState::secret_sets`] gave it (API version 15, ADR 0082).
+    #[serde(default)]
+    add_urls: Vec<Zeroizing<String>>,
+    #[serde(default)]
+    remove_urls: Vec<Zeroizing<String>>,
+    #[serde(default)]
+    add_tags: Vec<Zeroizing<String>>,
+    #[serde(default)]
+    remove_tags: Vec<Zeroizing<String>>,
+}
+
+/// URLs and tags of a secret.
+#[derive(Serialize)]
+pub struct SetsDto {
+    urls: Vec<Zeroizing<String>>,
+    tags: Vec<Zeroizing<String>>,
+}
+
+/// Checks a list of URLs or tags to add or remove, and drops repeated elements.
+fn checked_changes(
+    items: Vec<Zeroizing<String>>,
+    max_len: usize,
+) -> Result<Vec<Zeroizing<String>>, DesktopError> {
+    let mut out: Vec<Zeroizing<String>> = Vec::with_capacity(items.len());
+    for i in checked_items(items, max_len)? {
+        if !out.iter().any(|o| o.as_str() == i.as_str()) {
+            out.push(i);
+        }
+    }
+    Ok(out)
 }
 
 fn checked_text(t: Zeroizing<String>, max: usize) -> Result<ApiValue, DesktopError> {
@@ -475,8 +509,8 @@ impl NewSecret {
             locker,
             secret_type,
             fields,
-            urls: checked_items(self.urls, 2048)?,
-            tags: checked_items(self.tags, 256)?,
+            urls: checked_items(self.urls, MAX_URL)?,
+            tags: checked_items(self.tags, MAX_TAG)?,
         })
     }
 }
@@ -506,16 +540,30 @@ impl SecretChanges {
         if clear.contains(&Field::Title) {
             return Err(DesktopError::Invalid("Le titre est obligatoire."));
         }
-        if set.is_empty() && clear.is_empty() {
+        let sets = SetChanges {
+            add_urls: checked_changes(self.add_urls, MAX_URL)?,
+            remove_urls: checked_changes(self.remove_urls, MAX_URL)?,
+            add_tags: checked_changes(self.add_tags, MAX_TAG)?,
+            remove_tags: checked_changes(self.remove_tags, MAX_TAG)?,
+        };
+        if set.is_empty() && clear.is_empty() && sets.is_empty() {
             return Err(DesktopError::Invalid("Aucune modification."));
         }
-        if set.len() + clear.len() > MAX_FIELDS || set.iter().any(|(f, _)| clear.contains(f)) {
+        let both = |a: &[Zeroizing<String>], r: &[Zeroizing<String>]| {
+            a.iter().any(|x| r.iter().any(|y| x.as_str() == y.as_str()))
+        };
+        if set.len() + clear.len() > MAX_FIELDS
+            || set.iter().any(|(f, _)| clear.contains(f))
+            || both(&sets.add_urls, &sets.remove_urls)
+            || both(&sets.add_tags, &sets.remove_tags)
+        {
             return Err(DesktopError::Invalid("Modification incohérente."));
         }
         Ok(Request::Update {
             selector,
             set,
             clear,
+            sets,
         })
     }
 }
@@ -677,6 +725,19 @@ impl AppState {
     ) -> Result<(), DesktopError> {
         self.call(&changes.into_request(target.selector()?)?)
             .map(drop)
+    }
+
+    /// URLs and tags of a secret, for the form that changes them.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn secret_sets(&self, target: &SecretRef) -> Result<SetsDto, DesktopError> {
+        match self.call(&Request::ReadSets {
+            selector: target.selector()?,
+        })? {
+            Reply::Sets { urls, tags } => Ok(SetsDto { urls, tags }),
+            _ => Err(DesktopError::Protocol),
+        }
     }
 
     /// Moves a secret to the trash, or purges it.
@@ -860,6 +921,12 @@ pub fn update_secret(
     changes: SecretChanges,
 ) -> Result<(), DesktopError> {
     state.update_secret(&target, changes)
+}
+
+/// See [`AppState::secret_sets`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn secret_sets(state: State<'_>, target: SecretRef) -> Result<SetsDto, DesktopError> {
+    state.secret_sets(&target)
 }
 
 /// See [`AppState::delete_secret`].
@@ -1051,6 +1118,38 @@ mod tests {
                 assert_eq!(clear, [Field::Notes]);
             }
             _ => panic!(),
+        }
+        // URLs and tags alone are a change; repeated elements are sent once.
+        let c = SecretChanges {
+            add_urls: vec![z("https://a.example"), z("https://a.example")],
+            remove_tags: vec![z("vieux")],
+            ..SecretChanges::default()
+        };
+        match c.into_request(sel()).unwrap() {
+            Request::Update { set, sets, .. } => {
+                assert!(set.is_empty());
+                assert_eq!(sets.add_urls.len(), 1);
+                assert_eq!(sets.remove_tags.len(), 1);
+            }
+            _ => panic!(),
+        }
+        // Added and removed at once, empty, or longer than the vault keeps: refused.
+        for c in [
+            SecretChanges {
+                add_tags: vec![z("t")],
+                remove_tags: vec![z("t")],
+                ..SecretChanges::default()
+            },
+            SecretChanges {
+                add_urls: vec![z(" ")],
+                ..SecretChanges::default()
+            },
+            SecretChanges {
+                add_tags: vec![z(&"x".repeat(MAX_TAG + 1))],
+                ..SecretChanges::default()
+            },
+        ] {
+            assert!(c.into_request(sel()).is_err());
         }
     }
 
