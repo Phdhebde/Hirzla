@@ -13,7 +13,8 @@ les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (
 § 6.2) par l'ADR 0068 ; l'appel de la fenêtre (version 8) par les ADR 0071 et 0072 ; l'export
 chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
 matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
-l'ADR 0078 ; les clés d'accès (version 14, § 23) par l'ADR 0079.
+l'ADR 0078 ; les clés d'accès (version 14, § 23) par l'ADR 0079 ; la lecture et la
+modification des adresses et des étiquettes (version 15, § 24) par l'ADR 0082.
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
@@ -248,13 +249,14 @@ secret non purgé (corbeille comprise).
 | 5 | `List` | ouvert | `{1?: recherche, 2?: inclure la corbeille}` | `{1: [entrée], 2: [casier]}` |
 | 6 | `Read` | ouvert | `{1: sélecteur, 2: champ}` | `{1: valeur}` |
 | 7 | `Create` | ouvert | `{1?: casier, 2: type, 3: {champ: valeur}, 4?: [url], 5?: [étiquette]}` | `{1: casier, 2: secret}` |
-| 8 | `Update` | ouvert | `{1: sélecteur, 2?: {champ: valeur}, 3?: [champ à effacer]}` | — |
+| 8 | `Update` | ouvert | `{1: sélecteur, 2?: {champ: valeur}, 3?: [champ à effacer]}` ; en v15 aussi `4?: [url à ajouter], 5?: [url à retirer], 6?: [étiquette à ajouter], 7?: [étiquette à retirer]` (§ 24) | — |
 | 9 | `Delete` | ouvert | `{1: sélecteur, 2?: purger}` | — |
 | 10 | `Generate` | non | `{1: longueur 8..128, 2: classes}` | `{1: mot de passe}` |
 | 11 | `Shutdown` | non | — | — (le noyau verrouille, répond, puis s'arrête) |
 | 12 | `Match` (v2) | ouvert | `{1: origine}` | `{1: [entrée]}` |
 | 13 | `Fill` (v2) | ouvert | `{1: casier, 2: secret, 3: origine}` | `{1?: identifiant, 2: mot de passe}` |
 | 14 | `GenerateWith` (v7) | non | réglages du générateur (§ 6.2) | `{1: valeur, 2: entropie en millibits, 3?: taille de l'ensemble}` |
+| 15 | `ReadSets` (v15) | ouvert | `{1: sélecteur}` | `{1: [url], 2: [étiquette]}` (§ 24) |
 
 Détails :
 
@@ -286,8 +288,9 @@ Détails :
    `Unsupported`.
 7. **`Create`** — au plus 32 champs, 64 URL, 64 étiquettes. Casier personnel par défaut. Le
    coffre refuse un champ non permis pour le type ou un titre manquant (`InvalidInput`).
-8. **`Update`** — au moins un champ à poser ou à effacer ; un même champ ne peut pas être posé
-   et effacé (`InvalidInput`).
+8. **`Update`** — au moins un champ à poser ou à effacer, ou (v15) un élément à ajouter ou à
+   retirer ; un même champ ne peut pas être posé et effacé, ni un même élément ajouté et
+   retiré (`InvalidInput`).
 9. **`Delete`** — corbeille par défaut ; `purger` est définitif (`format.md` § 9.2).
 10. **`Generate`** — classes en masque : 1 minuscules, 2 majuscules, 4 chiffres, 8 symboles
     (`!#$%&()*+,-./:;<=>?@[]^_{|}~`, sans espace, guillemets, barre oblique inverse ni accent
@@ -480,7 +483,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **8** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **15** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8, 15]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 15 ajoute `ReadSets` (15) et les clés 4 à 7 d'`Update` (§ 24, ADR 0082). Elle ne change rien aux autres opérations. Un client n'envoie un `Update` en version 15 que s'il porte l'une de ces clés ; sinon, en version 1.
 - La version 14 porte les clés d'accès (§ 23, ADR 0079) : opérations 180 à 182, erreurs 185 à 187, profils complet **et navigateur**. Elle a sa propre plage et n'est pas annoncée par `Status`.
 - La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12, celle des méthodes de déverrouillage matérielles (§ 21).
 - La version 9 ajoute au mode Self la clé 4 (fichier clé) d'`ImportKdbx` (§ 16.3, ADR 0025). Elle ne change rien d'autre : toute opération Self est acceptée en version 5 ou 9, et la réponse porte la version de la requête. Un client n'envoie la version 9 que pour un import avec fichier clé ; un noyau plus ancien répond `UnsupportedVersion` avec `{2: [5]}`.
@@ -509,6 +513,7 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `ls [RECHERCHE] [--corbeille]` | `List` |
 | `get NOM \| --id ID [--champ C] [--stdout]` | `List` (résolution), `Read`, `Status` |
 | `set NOM [--identifiant U] [--url U]… [--tag T]… [--note] [--generer [N]]` | `List`, (`Generate`), `Create` ou `Update` |
+| `set NOM [--url U]… [--tag T]… [--retirer-url U]… [--retirer-tag T]…` (secret existant, v15 ; sans `--identifiant` ni `--generer`, la valeur n'est pas redemandée) | `List`, `ReadSets`, `Update` |
 | `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
 | `gen [TAILLE] [--mode M \| --profil P] [réglages] [--stdout]` | `GenerateWith`, `Status` |
 | `status`, `stop` | `Status` ; `Shutdown` |
@@ -577,6 +582,8 @@ Décisions : ADR 0024. Code : `apps/desktop`.
   passe d'au moins 12 caractères exigé par l'application), `Unlock`, `Lock`, `List`, `Read`
   (révélation d'un champ, ou copie faite par le processus Rust sans passer par la vue web),
   `Create`, `Update`, `Delete`, `Generate`. Un `Create` par ligne pour l'import CSV.
+- Adresses et étiquettes (§ 24) : le formulaire de modification lit `ReadSets` et envoie la
+  différence avec la saisie dans les clés 4 à 7 du même `Update` que les champs.
 - Mode Self (§ 16) : `GetSettings`, `SetSettings`, `ChangePassword`, `RestoreSecret`,
   `History`, `ReadVersion` (révélation ou copie), `RestoreVersion`, `RecoveryStatus` (aussi sur
   l'écran de déverrouillage), `RecoveryCreate`, `RecoveryUnlock`, `RecoveryRemove`,
@@ -2022,3 +2029,38 @@ toutes lettres. Réponses : `credential`, `clientData`, `attestation`, `authData
 `displayName`) ; `credential`, `clientData`, `authData`, `signature`, `userHandle`. Refus :
 le nom du code (`verification_required`, `credential_excluded`, `algorithm_unsupported`,
 `invalid_input`…).
+
+## 24. Adresses et étiquettes d'un secret (version 15)
+
+Décision : ADR 0082. Format : `format.md` § 8.2 (ensembles `urls` et `tags` ; aucun
+changement). Code : `crates/hirzla-core/src/proto.rs`, `service.rs`.
+
+### 24.1 Opérations
+
+| Code | Nom | Coffre requis | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 15 | `ReadSets` | ouvert | `{1: sélecteur}` | `{1: [url], 2: [étiquette]}` |
+| 8 | `Update` (v15) | ouvert | `{1: sélecteur, 2?, 3?` comme en v1`, 4?: [url à ajouter], 5?: [url à retirer], 6?: [étiquette à ajouter], 7?: [étiquette à retirer]}` | — |
+
+1. **`ReadSets`** — les éléments visibles des ensembles `urls` et `tags` du secret, sans
+   doublon, étiquettes triées comme dans `List`. Un type sans adresses (note, clé SSH,
+   connexion…) rend une liste 1 vide. Casier partagé : lu dans la copie du serveur, comme
+   `Read`. Profil complet seulement (profil navigateur : `Unauthorized`). Compte comme une
+   activité pour le verrouillage automatique.
+2. **`Update`** — les clés 4 à 7 deviennent des ajouts et des retraits d'éléments de la
+   **même** modification que les champs (une seule version, une seule opération de
+   synchronisation). Chaque liste présente compte de 1 à 64 textes (adresse ≤ 2 048 octets,
+   étiquette ≤ 128 octets), sans doublon (`Malformed` sinon) ; un élément ajouté et retiré
+   dans la même requête : `InvalidInput`. Retirer un élément absent ne fait rien. Le coffre
+   refuse une adresse sur un type qui n'en porte pas et un ensemble qui dépasserait ses bornes
+   (32 adresses, 64 étiquettes) : `InvalidInput`.
+3. Un `Update` de version 1, 2, 7 ou 8 qui porte les clés 4 à 7 : `Malformed`. `ReadSets` dans
+   une requête de version antérieure : `UnknownOperation`.
+4. Le client envoie la **différence** entre ce que `ReadSets` lui a rendu et ce que
+   l'utilisateur a saisi, jamais la liste entière : un ajout fait entre-temps sur un autre
+   appareil est conservé.
+
+### 24.2 Journal
+
+`event=request op=<read_sets|update> result=<ok|nom>`, comme les autres opérations générales :
+jamais une adresse ni une étiquette.
