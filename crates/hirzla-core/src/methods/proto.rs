@@ -15,10 +15,12 @@ pub const METHOD_OPS: std::ops::RangeInclusive<u64> = 160..=169;
 pub const MAX_PIN: usize = 63;
 /// Highest rank of a method (eight methods at most, `docs/format.md` § 5.4).
 pub const MAX_RANK: u64 = 7;
-/// Kinds a client may enrol: 3 Secure Enclave, 4 FIDO2, 5 Windows Hello.
-pub const ENROLLABLE_KINDS: [u8; 3] = [3, 4, 5];
+/// Kinds a client may enrol: 3 Secure Enclave, 4 FIDO2, 5 Windows Hello, 7 Android Keystore
+/// (ADR 0080).
+pub const ENROLLABLE_KINDS: [u8; 4] = [3, 4, 5, 7];
 /// Kinds whose oracle is classical only (ADR 0075 § 4): 3 Secure Enclave (Touch ID), 5 Windows
 /// Hello. Enrolling one needs the explicit acknowledgement of the residual post-quantum risk.
+/// Not 7, the Android Keystore: its oracle is a symmetric HMAC-SHA-256 (ADR 0080 § 4).
 pub const CLASSICAL_KINDS: [u8; 2] = [3, 5];
 
 /// Whether method kind `kind` is classical only, and so needs the acknowledgement.

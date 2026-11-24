@@ -28,6 +28,7 @@ pub mod causal;
 pub mod codec;
 pub mod compact;
 pub mod device;
+pub mod enrol;
 mod error;
 pub mod exchange;
 pub mod keylog;

@@ -291,6 +291,107 @@ export class ServerView {
     for (const id of ["casiers-nouveau", "bouton-casier-partage"]) {
       byId(id).addEventListener("click", () => this.lockerDialog.open());
     }
+    /** @type {string | null} Device found by its code, waiting for approval (ADR 0081). */
+    this.enrolDevice = null;
+    byId("form-appareil").addEventListener("submit", (e) => {
+      e.preventDefault();
+      void this.enrolFetch();
+    });
+    byId("appareil-ajouter").addEventListener("click", () => void this.enrolApprove());
+    byId("appareil-annuler").addEventListener("click", () => this.enrolReset());
+    byId("appareil-qr").addEventListener("click", () => void this.showInvitation());
+  }
+
+  /** Shows the invitation link of the server and its QR code, drawn as SVG (no image file). */
+  async showInvitation() {
+    let inv;
+    try {
+      inv = await api.serverInvitation();
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (!this.hooks.onError(err)) showError(byId("appareil-erreur"), err.message);
+      return;
+    }
+    const NS = "http://www.w3.org/2000/svg";
+    const q = 4;
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", `0 0 ${inv.size + 2 * q} ${inv.size + 2 * q}`);
+    svg.setAttribute("shape-rendering", "crispEdges");
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Code QR du lien d'invitation");
+    let d = "";
+    for (let y = 0; y < inv.size; y++) {
+      for (let x = 0; x < inv.size; x++) {
+        if (inv.modules[y * inv.size + x] === "1") d += `M${x + q} ${y + q}h1v1h-1z`;
+      }
+    }
+    const path = document.createElementNS(NS, "path");
+    path.setAttribute("d", d);
+    path.setAttribute("fill", "#000");
+    svg.append(path);
+    byId("appareil-qr-image").replaceChildren(svg);
+    /** @type {HTMLTextAreaElement} */ (byId("appareil-lien-texte")).value = inv.link;
+    byId("appareil-lien").hidden = false;
+  }
+
+  /** Back to the code field. */
+  enrolReset() {
+    this.enrolDevice = null;
+    byId("appareil-lien").hidden = true;
+    byId("appareil-qr-image").replaceChildren();
+    byId("appareil-trouve").hidden = true;
+    byId("appareil-attente").hidden = true;
+    byId("form-appareil").hidden = false;
+    byId("appareil-empreinte").textContent = "";
+    /** @type {HTMLInputElement} */ (byId("appareil-code")).value = "";
+    showError(byId("appareil-erreur"), null);
+  }
+
+  /** Fetches the keys of the new device by the code it shows, then the fingerprint to compare. */
+  async enrolFetch() {
+    const input = /** @type {HTMLInputElement} */ (byId("appareil-code"));
+    showError(byId("appareil-erreur"), null);
+    try {
+      const peer = await api.enrolFetch(input.value);
+      this.enrolDevice = peer.device;
+      byId("appareil-empreinte").textContent = grouped(peer.fingerprint);
+      byId("form-appareil").hidden = true;
+      byId("appareil-trouve").hidden = false;
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      if (!this.hooks.onError(err)) showError(byId("appareil-erreur"), err.message);
+    }
+  }
+
+  /** Certifies the device, then waits until it authenticated to add it to the shared lockers. */
+  async enrolApprove() {
+    const device = this.enrolDevice;
+    if (!device) return;
+    const wait = byId("appareil-attente");
+    byId("appareil-trouve").hidden = true;
+    wait.hidden = false;
+    try {
+      await api.enrolApprove(device);
+      wait.textContent = "Appareil certifié. Terminez sur l'appareil (mot de passe maître) ; ce poste attend…";
+      for (let i = 0; i < 300 && this.enrolDevice === device; i++) {
+        const lockers = await api.enrolComplete(device);
+        if (lockers !== null) {
+          this.enrolReset();
+          announce(`Appareil ajouté à ${count(lockers, "casier partagé", "casiers partagés")}.`, 8000);
+          await this.refresh();
+          return;
+        }
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      if (this.enrolDevice === device) {
+        this.enrolReset();
+        showError(byId("appareil-erreur"), "L'appareil ne s'est pas présenté en 10 minutes : recommencez.");
+      }
+    } catch (e) {
+      const err = /** @type {ApiError} */ (e);
+      this.enrolReset();
+      if (!this.hooks.onError(err)) showError(byId("appareil-erreur"), err.message);
+    }
   }
 
   /** @param {string} id @returns {SharedLocker | undefined} */
@@ -320,6 +421,7 @@ export class ServerView {
     this.members.wipe();
     this.approvals.wipe();
     this.quarantine.wipe();
+    this.enrolReset();
     /** @type {HTMLTextAreaElement} */ (byId("lien-saisie")).value = "";
     showError(byId("lien-erreur"), null);
     for (const id of ["identite-membre", "identite-empreinte", "identite-poste", "identite-code", "rejoindre-ac-nom"]) {
@@ -418,6 +520,7 @@ export class ServerView {
     byId("serveur-rejoindre").hidden = !s || joined;
     byId("serveur-confirmer").hidden = !joined || verified;
     for (const id of ["serveur-connexion", "serveur-registre", "serveur-casiers", "serveur-accords"]) byId(id).hidden = !verified;
+    byId("serveur-appareil").hidden = !verified;
     byId("bouton-synchroniser").hidden = !verified;
     byId("bouton-casier-partage").hidden = !verified;
     /** @type {HTMLButtonElement} */ (byId("bouton-synchroniser")).disabled = this.syncing;

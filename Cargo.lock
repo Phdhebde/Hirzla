@@ -1997,6 +1997,7 @@ dependencies = [
  "hirzla-crypto",
  "hirzla-keystore",
  "hirzla-vault",
+ "qrcodegen",
  "tempfile",
  "zeroize",
 ]
@@ -2056,6 +2057,7 @@ dependencies = [
  "hirzla-crypto",
  "hirzla-keystore",
  "hirzla-vault",
+ "qrcodegen",
  "rfd",
  "serde",
  "serde_json",
@@ -2075,6 +2077,7 @@ dependencies = [
  "core-foundation",
  "ctap-hid-fido2",
  "hirzla-crypto",
+ "jni",
  "libc",
  "security-framework",
  "security-framework-sys",
@@ -2085,6 +2088,30 @@ dependencies = [
  "windows-sys 0.61.2",
  "x11rb",
  "zeroize",
+]
+
+[[package]]
+name = "hirzla-mobile"
+version = "1.2.0"
+dependencies = [
+ "hirzla-core",
+ "hirzla-crypto",
+ "hirzla-vault",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "thiserror 2.0.21",
+ "zeroize",
+]
+
+[[package]]
+name = "hirzla-mobile-core"
+version = "1.2.0"
+dependencies = [
+ "hirzla-core",
+ "hirzla-keystore",
+ "jni",
 ]
 
 [[package]]
@@ -3833,6 +3860,12 @@ name = "psl-types"
 version = "2.0.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33cb294fe86a74cbcf50d4445b37da762029549ebeea341421c7c70370f86cac"
+
+[[package]]
+name = "qrcodegen"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4339fc7a1021c9c1621d87f5e3505f2805c8c105420ba2f2a4df86814590c142"
 
 [[package]]
 name = "quick-error"

@@ -237,3 +237,22 @@ la ligne de commande demande le PIN sans écho. Vérifier : un PIN faux donne «
 ou incorrect » ; après le nombre d'essais de la clé, « bloquée » ; **une même clé enrôlée sous
 Windows ouvre le coffre sous Linux** (sémantique PRF identique, à vérifier en copiant le
 fichier).
+
+### A1 — Empreinte Android (StrongBox, ADR 0080)
+
+Sur un Pixel 8 ou plus récent, avec au moins une empreinte, l'application Android installée
+(coffre de test). Le facteur est compilé et vérifié par Clippy en CI (tâche « Android
+(arm64) ») ; sa logique côté noyau est testée avec le facteur simulé.
+
+1. Réglages › Déverrouillage › « Ajouter l'empreinte » : mot de passe maître, puis empreinte.
+2. Verrouiller, puis « Ouvrir avec l'empreinte ».
+
+Vérifier :
+
+- `adb shell dumpsys android.security.keystore2` (ou les journaux du Keystore) montre une clé
+  `hirzla-…` de sécurité **StrongBox** ;
+- attendre plus de 5 secondes entre l'empreinte et la requête au noyau (point d'arrêt dans le
+  client) donne « annulé », sans échec compté ;
+- après l'ajout ou le retrait d'une empreinte (Paramètres › Sécurité), la méthode devient
+  « n'existe plus » et le mot de passe ouvre le coffre ;
+- sur un appareil sans StrongBox, la méthode n'est pas proposée.

@@ -17,7 +17,8 @@ use super::keys::method_kek;
 use super::{nfc, unlock_device_key, Vault};
 use crate::error::VaultError;
 use crate::model::hardware::{
-    is_hardware_kind, HardwareKey, UNLOCK_FIDO2, UNLOCK_SECURE_ENCLAVE, UNLOCK_WINDOWS_HELLO,
+    is_hardware_kind, HardwareKey, UNLOCK_ANDROID_KEYSTORE, UNLOCK_FIDO2, UNLOCK_SECURE_ENCLAVE,
+    UNLOCK_WINDOWS_HELLO,
 };
 use crate::model::{Header, Id16, UnlockMethod, UnlockParams, UNLOCK_PASSWORD};
 
@@ -162,7 +163,8 @@ impl Vault {
     }
 
     /// Adds the hardware method of key `key`, whose key released `material` at enrolment.
-    /// Windows Hello and Secure Enclave replace an existing method of their kind at its rank;
+    /// Windows Hello, Secure Enclave and Android Keystore replace an existing method of their
+    /// kind at its rank;
     /// FIDO2 is appended (one method per security key). Returns the rank of the method.
     ///
     /// # Errors
@@ -177,7 +179,7 @@ impl Vault {
         let blob = key.encode().map_err(|_| VaultError::InvalidInput)?;
         let (_, _, mut header) = Self::read_header(&self.conn)?;
         let replace = match kind {
-            UNLOCK_WINDOWS_HELLO | UNLOCK_SECURE_ENCLAVE => {
+            UNLOCK_WINDOWS_HELLO | UNLOCK_SECURE_ENCLAVE | UNLOCK_ANDROID_KEYSTORE => {
                 header.unlock.iter().position(|m| m.kind == kind)
             }
             UNLOCK_FIDO2 => None,

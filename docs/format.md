@@ -371,7 +371,7 @@ l'enveloppe séparément.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034) |
+| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034), 7 Android Keystore (ADR 0080) |
 | 2 | `params` | map | Selon `kind`, ci-dessous |
 | 3 | `wrapped_device_key` | `bstr(40)` | AES-256-KW-pad(`KEK_unlock`, `DeviceKey`) |
 
@@ -424,9 +424,9 @@ de la méthode est sa position dans le tableau `unlock` de l'en-tête, **à part
 Les plafonds protègent contre un en-tête piégé qui ferait calculer Argon2id indéfiniment.
 Les planchers interdisent un affaiblissement. Un en-tête hors bornes est refusé avant tout calcul.
 
-#### 4.2.1 Méthodes matérielles : Windows Hello, Touch ID, FIDO2 (ADR 0075)
+#### 4.2.1 Méthodes matérielles : Windows Hello, Touch ID, FIDO2, Android Keystore (ADR 0075, 0080)
 
-Le `keystore_blob` des `kind` 3, 4 et 5 est une map CBOR canonique (§ 2.1), décodée
+Le `keystore_blob` des `kind` 3, 4, 5 et 7 est une map CBOR canonique (§ 2.1), décodée
 strictement (clé inconnue, longueur hors bornes ou version autre que 1 : refus). Il ne contient
 **jamais** la clé publique de la clé matérielle.
 
@@ -435,6 +435,7 @@ strictement (clé inconnue, longueur hors bornes ou version autre que 1 : refus)
 | 5 Windows Hello | `version` = 1 | `name` : `tstr(1..128)`, nom de la clé dans le conteneur Windows Hello (`Hirzla-` suivi de `vault_id` en hexadécimal minuscule) | `challenge` : `bstr(32)`, aléa signé à chaque ouverture |
 | 3 Secure Enclave (Touch ID) | `version` = 1 | `wrapped_key` : `bstr(1..4096)`, la clé P-256 de l'enclave sous la forme chiffrée par l'enclave de ce Mac | `ephemeral_public` : `bstr(65)`, clé publique P-256 non compressée (`04 ‖ X ‖ Y`) d'une clé logicielle tirée à l'enrôlement puis oubliée |
 | 4 FIDO2 | `version` = 1 | `credential_id` : `bstr(1..1023)` | `salt` : `bstr(32)`, entrée PRF tirée à l'enrôlement |
+| 7 Android Keystore | `version` = 1 | `alias` : `tstr(1..128)`, alias de la clé HMAC dans le Keystore Android (`hirzla-` suivi de `vault_id` en hexadécimal minuscule) | `challenge` : `bstr(32)`, aléa passé au HMAC à chaque ouverture |
 
 Le **matériau** libéré, de 32 à 1 024 octets, est :
 
@@ -446,14 +447,17 @@ Le **matériau** libéré, de 32 à 1 024 octets, est :
 - FIDO2 : la sortie `hmac-secret` de 32 octets pour l'entrée
   `SHA-256("WebAuthn PRF" ‖ 0x00 ‖ salt)` (sémantique WebAuthn PRF, la même sur les trois
   systèmes), vérification de l'utilisateur exigée, identifiant de partie de confiance
-  `hirzla.local`.
+  `hirzla.local` ;
+- Android Keystore : `HMAC-SHA-256(clé alias, challenge)`, 32 octets, calculé dans StrongBox
+  dans les 5 secondes qui suivent une empreinte de classe 3 ; l'enrôlement calcule deux fois
+  et refuse deux résultats différents.
 
 `secret de méthode = HKDF-SHA-512(ikm = matériau, salt = vault_id,
 info = len ‖ "hirzla/v1/hardware-secret" ‖ len ‖ kind (1 octet), L = 32)`, puis `KEK_unlock`
 comme ci-dessus. Un matériau hors bornes est refusé avant toute dérivation.
 
-Règles d'en-tête : la méthode du mot de passe (rang 0) reste toujours ; Windows Hello et
-Secure Enclave ont au plus une méthode chacun, remplacée sur place à un nouvel enrôlement ;
+Règles d'en-tête : la méthode du mot de passe (rang 0) reste toujours ; Windows Hello,
+Secure Enclave et Android Keystore ont au plus une méthode chacun, remplacée sur place à un nouvel enrôlement ;
 chaque clé FIDO2 ajoute une méthode ; huit méthodes au plus (§ 5.4). Le rang entrant dans
 `KEK_unlock`, seule la dernière méthode peut être retirée. À l'ouverture, la clé décrite par
 le `keystore_blob` doit être celle que le client a présentée au matériel, puis l'en-tête est

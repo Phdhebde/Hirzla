@@ -436,3 +436,71 @@ fn enrolment_of_a_second_device() {
     assert_eq!(mk.devices.len(), 1);
     assert_eq!(mk.revoked.len(), 1);
 }
+
+/// Enrolment by rendezvous (ADR 0081): the new device drops its public keys before `Auth`
+/// at the address derived from its control code, once per session and at most 8 KiB; a
+/// device of the member reads that address once authenticated, but never the mailbox of an
+/// inscribed device; then the package goes back through the new device's own mailbox.
+#[test]
+fn enrolment_by_rendezvous() {
+    use hirzla_sync::enrol::{self, PendingDevice};
+
+    let tmp = tempfile::tempdir().unwrap();
+    let pki = Pki::new(tmp.path());
+    let data = init_data(&tmp.path().join("data"));
+    let server = Server::start(pki, &data);
+    let alice = TestMember::new();
+    server.register(&alice);
+    let e = alice.device();
+    let mut ec = server.connect(&e);
+
+    let n = PendingDevice::generate().unwrap();
+    let code = n.code().unwrap();
+    let r = enrol::rendezvous(&code);
+    let enrolling = Identity::Enrolling {
+        member: [0; 16],
+        device: n.device_id(),
+    };
+    let connect_n = || {
+        Client::connect(
+            server.running.addr,
+            SERVER_NAME,
+            &server.device_tls,
+            None,
+            &enrolling,
+        )
+        .unwrap()
+    };
+    let request = n.request().encode().unwrap();
+    // Too large, or a second drop in the same session: refused.
+    assert!(connect_n().mailbox_put(&r, &vec![0; 8 * 1024 + 1]).is_err());
+    let mut nc = connect_n();
+    nc.mailbox_put(&r, &request).unwrap();
+    assert!(nc.mailbox_put(&r, &request).is_err());
+
+    // Before `Auth`, nobody reads the rendezvous; E reads it once authenticated.
+    assert!(matches!(
+        connect_n().mailbox_get(&r),
+        Err(ServerError::Refused(c)) if c == code::ACCESS
+    ));
+    let got = ec.mailbox_get(&r).unwrap();
+    let req = enrol::EnrolRequest::decode(&got).unwrap();
+    assert!(req.matches(&code));
+    // E never reads the mailbox of an inscribed device, its own excepted.
+    let other = alice.device();
+    server.connect(&other).bye().unwrap();
+    ec.mailbox_put(&other.device_id(), b"for other").unwrap();
+    assert!(matches!(
+        ec.mailbox_get(&other.device_id()),
+        Err(ServerError::Refused(c)) if c == code::ACCESS
+    ));
+
+    // The package goes back through N's own mailbox.
+    let cert = alice.certify(req.device, &req.sig, &req.kem);
+    let pkg = enrol::seal_package(&e, &cert, [1; 16], 1, None).unwrap();
+    ec.mailbox_put(&n.device_id(), &pkg).unwrap();
+    let back = connect_n().mailbox_get(&n.device_id()).unwrap();
+    let opened = n.open_package(&back).unwrap();
+    assert_eq!(opened.cert, cert);
+    ec.bye().unwrap();
+}

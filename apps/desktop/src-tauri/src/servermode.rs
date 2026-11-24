@@ -10,11 +10,12 @@
 use std::io::Read;
 use std::path::Path;
 
+use hirzla_core::proto::ErrorCode;
 use hirzla_core::server_mode::proto::{
     normalise_fingerprint, AlertKind, FoundInfo, KeyLogStatus, LockerStatus, MemberInfo,
-    QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role, ServerReply,
-    ServerRequest, SuspectReason, SyncReport, MAX_DISPLAY_NAME, MAX_LOCKER_NAME, MAX_ROOTS,
-    MAX_TEXT, MIN_SEARCH,
+    QuarantinedOp, QuorumAction, QuorumState, ReceivedRequest, Refusal, Role, ServerCode,
+    ServerReply, ServerRequest, SuspectReason, SyncReport, MAX_DISPLAY_NAME, MAX_LOCKER_NAME,
+    MAX_ROOTS, MAX_TEXT, MIN_SEARCH,
 };
 use hirzla_vault::model::{Id16, MemberKeys, OpId, MAX_SERVER_URL};
 use serde::{Deserialize, Serialize};
@@ -1193,6 +1194,168 @@ impl AppState {
 // Tauri commands
 // -----------------------------------------------------------------------------------------
 
+/// The new device fetched by its code (ADR 0081): member fingerprint to compare, device.
+#[derive(Debug, Serialize)]
+pub struct EnrolPeerDto {
+    /// Fingerprint of the member key.
+    pub fingerprint: String,
+    /// Identifier of the new device, hexadecimal.
+    pub device: String,
+}
+
+/// Refusals of the enrolment operations, in French (ADR 0081).
+fn enrol_error(e: DesktopError) -> DesktopError {
+    match e {
+        DesktopError::Server(ServerCode::Forbidden) => DesktopError::Invalid(
+            "Ce poste ne détient pas votre clé de membre : ajoutez l'appareil depuis un \
+             appareil de certification.",
+        ),
+        DesktopError::Server(ServerCode::General(ErrorCode::NotFound)) => DesktopError::Invalid(
+            "Rien n'attend sous ce code : vérifiez-le, ou recommencez sur l'appareil (le code \
+             expire après 10 minutes).",
+        ),
+        DesktopError::Server(ServerCode::General(ErrorCode::InvalidInput)) => {
+            DesktopError::Invalid(
+                "Code mal formé : 20 lettres et chiffres, tels qu'affichés par l'appareil.",
+            )
+        }
+        DesktopError::Server(ServerCode::FingerprintMismatch) => DesktopError::Invalid(
+            "Les clés reçues ne correspondent pas au code : code mal recopié, ou \
+             substitution. Recommencez sur l'appareil.",
+        ),
+        DesktopError::Refused(r) if r.code == ErrorCode::Unsupported => DesktopError::Invalid(
+            "Vous n'avez encore aucun casier partagé : créez-en un ci-dessus, puis saisissez \
+             de nouveau le même code.",
+        ),
+        other => other,
+    }
+}
+
+/// The invitation link and its QR code: `size` modules a side, `modules` row by row, `1`
+/// for a dark module. It holds no secret.
+#[derive(Debug, Serialize)]
+pub struct InvitationDto {
+    /// `hirzla-invitation:…`, on one line.
+    pub link: String,
+    /// Modules a side.
+    pub size: u32,
+    /// `size * size` characters, `0` or `1`.
+    pub modules: String,
+}
+
+/// The QR code of `text` (error correction L: the link is long, the screen is clean).
+fn qr_modules(text: &str) -> Option<(u32, String)> {
+    use qrcodegen::{QrCode, QrCodeEcc};
+    let qr = QrCode::encode_text(text, QrCodeEcc::Low).ok()?;
+    let size = qr.size();
+    let mut m = String::with_capacity(usize::try_from(size * size).ok()?);
+    for y in 0..size {
+        for x in 0..size {
+            m.push(if qr.get_module(x, y) { '1' } else { '0' });
+        }
+    }
+    Some((u32::try_from(size).ok()?, m))
+}
+
+impl AppState {
+    /// The invitation link of the joined server and its QR code, for a new device.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn invitation(&self) -> Result<InvitationDto, DesktopError> {
+        let ServerReply::Invitation(link) = self.call_server(&ServerRequest::ServerInvitation)?
+        else {
+            return Err(DesktopError::Protocol);
+        };
+        let (size, modules) =
+            qr_modules(&link).ok_or(DesktopError::Invalid("Lien trop long pour un code QR."))?;
+        Ok(InvitationDto {
+            link,
+            size,
+            modules,
+        })
+    }
+
+    /// Fetches the keys of a new device by the code it shows (ADR 0081).
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_fetch(&self, code: &str) -> Result<EnrolPeerDto, DesktopError> {
+        if code.len() > 64 {
+            return Err(DesktopError::Invalid("Code trop long."));
+        }
+        match self
+            .call_server(&ServerRequest::DeviceEnrolFetch {
+                code: code.to_owned(),
+            })
+            .map_err(enrol_error)?
+        {
+            ServerReply::EnrolPeer {
+                fingerprint,
+                device,
+            } => Ok(EnrolPeerDto {
+                fingerprint,
+                device: hex(&device),
+            }),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+
+    /// Certifies the new device and sends its package.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_approve(&self, device: &str) -> Result<(), DesktopError> {
+        let device = id16(device)?;
+        self.call_server(&ServerRequest::DeviceEnrolApprove { device })
+            .map_err(enrol_error)
+            .map(drop)
+    }
+
+    /// Adds the new device to the shared lockers once it authenticated: the number of
+    /// lockers, `None` while waiting.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn enrol_complete(&self, device: &str) -> Result<Option<u64>, DesktopError> {
+        let device = id16(device)?;
+        match self
+            .call_server(&ServerRequest::DeviceEnrolComplete { device })
+            .map_err(enrol_error)?
+        {
+            ServerReply::EnrolCompleted(n) => Ok(n),
+            _ => Err(DesktopError::Protocol),
+        }
+    }
+}
+
+/// See [`AppState::invitation`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn server_invitation(state: State<'_>) -> Result<InvitationDto, DesktopError> {
+    state.invitation()
+}
+
+/// See [`AppState::enrol_fetch`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_fetch(state: State<'_>, code: String) -> Result<EnrolPeerDto, DesktopError> {
+    state.enrol_fetch(&code)
+}
+
+/// See [`AppState::enrol_approve`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_approve(state: State<'_>, device: String) -> Result<(), DesktopError> {
+    state.enrol_approve(&device)
+}
+
+/// See [`AppState::enrol_complete`].
+#[tauri::command(async, rename_all = "snake_case")]
+pub fn device_enrol_complete(
+    state: State<'_>,
+    device: String,
+) -> Result<Option<u64>, DesktopError> {
+    state.enrol_complete(&device)
+}
+
 /// See [`AppState::server_status`].
 #[tauri::command(async, rename_all = "snake_case")]
 pub fn server_status(state: State<'_>) -> Result<ServerStatusDto, DesktopError> {
@@ -1423,6 +1586,17 @@ pub fn quorum_respond(
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn invitation_qr_is_square_and_binary() {
+        let link = format!("hirzla-invitation:{}", "A".repeat(1060));
+        let (size, m) = qr_modules(&link).unwrap();
+        assert!((21..=177).contains(&size));
+        assert_eq!(m.len(), (size * size) as usize);
+        assert!(m.bytes().all(|b| b == b'0' || b == b'1'));
+        // Too long for any QR code: refused, not truncated.
+        assert!(qr_modules(&"A".repeat(5000)).is_none());
+    }
     use hirzla_core::server_mode::proto::KeyLogAlert;
 
     #[test]

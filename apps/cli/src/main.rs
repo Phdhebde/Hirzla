@@ -584,6 +584,7 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Quorum(command) => server::run_quorum(&session, command),
         Command::Quarantine(command) => server::run_quarantine(&session, command),
         Command::DeviceRevoke(command) => server::run_device_revoke(&session, command),
+        Command::DeviceEnrol(command) => server::run_device_enrol(&session, command),
         Command::History {
             name,
             id,

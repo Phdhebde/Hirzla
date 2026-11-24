@@ -1,0 +1,28 @@
+{
+  "identifier": "main",
+  "description": "Ce que la fenêtre principale peut demander : les commandes de l'application, rien d'autre (ni fichiers, ni réseau, ni greffon, ni la couche Kotlin directement).",
+  "local": true,
+  "windows": ["main"],
+  "permissions": [
+    "allow-app-status",
+    "allow-create-vault",
+    "allow-unlock",
+    "allow-unlock-fingerprint",
+    "allow-enroll-fingerprint",
+    "allow-lock",
+    "allow-list-secrets",
+    "allow-reveal-field",
+    "allow-copy-field",
+    "allow-create-login",
+    "allow-enrol-start",
+    "allow-enrol-wait",
+    "allow-enrol-finish",
+    "allow-enrol-cancel",
+    "allow-server-sync",
+    "allow-autofill-request",
+    "allow-autofill-fill",
+    "allow-autofill-cancel",
+    "allow-autofill-state",
+    "allow-autofill-settings"
+  ]
+}

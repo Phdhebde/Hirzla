@@ -240,7 +240,8 @@ pub const RECOVERY_MAX_COUNT: u8 = 16;
 /// One way to obtain the device key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockMethod {
-    /// 1 password, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2, 5 Windows Hello.
+    /// 1 password, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2, 5 Windows Hello, 6 recovery kit,
+    /// 7 Android Keystore (ADR 0080).
     pub kind: u8,
     /// Method parameters.
     pub params: UnlockParams,
@@ -280,7 +281,7 @@ impl UnlockMethod {
 
     fn from_value(v: &Value) -> Result<Self, CborError> {
         let f = Fields::new(v, &[1, 2, 3])?;
-        let kind = u8::try_from(uint_in(f.req(1)?, 1..=6)?).map_err(|_| CborError::Malformed)?;
+        let kind = u8::try_from(uint_in(f.req(1)?, 1..=7)?).map_err(|_| CborError::Malformed)?;
         let params = if kind == UNLOCK_RECOVERY {
             let p = Fields::new(f.req(2)?, &[1, 2, 3, 4])?;
             let small = |v: &Value, lo: u8| -> Result<u8, CborError> {

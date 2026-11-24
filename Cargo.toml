@@ -16,6 +16,10 @@ members = [
     # Tauri 2 shell (ADR 0024): in the workspace so that the four commands of CLAUDE.md,
     # the single Cargo.lock and cargo-deny cover it. Linux needs webkit2gtk-4.1 to build it.
     "apps/desktop/src-tauri",
+    # Android (ADR 0080): the JNI entry point of the core, the one exception to rule 6.
+    "apps/mobile/core",
+    # Android (ADR 0080 § 8): the interface, Tauri 2; its JNI glue is the second exception.
+    "apps/mobile/src-tauri",
 ]
 # Fuzz targets live outside the workspace (nightly, cargo-fuzz).
 exclude = ["fuzz"]

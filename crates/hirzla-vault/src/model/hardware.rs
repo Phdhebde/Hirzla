@@ -1,4 +1,5 @@
-//! The `keystore_blob` of the hardware unlock methods (`docs/format.md` § 4.2.1, ADR 0075):
+//! The `keystore_blob` of the hardware unlock methods (`docs/format.md` § 4.2.1, ADR 0075,
+//! ADR 0080 for the Android Keystore):
 //! what the core keeps in the clear header to ask the system for the method's material again.
 //!
 //! Public by construction: the header is read before any key is available. None of these
@@ -12,11 +13,15 @@ pub const UNLOCK_SECURE_ENCLAVE: u8 = 3;
 pub const UNLOCK_FIDO2: u8 = 4;
 /// Kind of the Windows Hello method.
 pub const UNLOCK_WINDOWS_HELLO: u8 = 5;
+/// Kind of the Android Keystore (StrongBox HMAC after a fingerprint) method (ADR 0080).
+pub const UNLOCK_ANDROID_KEYSTORE: u8 = 7;
 
 /// Version of the `keystore_blob` encoding.
 const BLOB_VERSION: u64 = 1;
 /// Longest Windows Hello key name, bytes.
 pub const MAX_HELLO_NAME: usize = 128;
+/// Longest Android Keystore alias, bytes.
+pub const MAX_ANDROID_ALIAS: usize = 128;
 /// Longest enclave-wrapped key reference, bytes.
 pub const MAX_ENCLAVE_KEY: usize = 4096;
 /// Length of an uncompressed P-256 public key (`04 ‖ X ‖ Y`).
@@ -48,6 +53,14 @@ pub enum HardwareKey {
         /// PRF input.
         salt: [u8; 32],
     },
+    /// Android Keystore (`kind` 7): a StrongBox HMAC-SHA-256 key, asked to authenticate
+    /// `challenge` within seconds of a fingerprint.
+    AndroidKeystore {
+        /// Alias of the key in the Android Keystore.
+        alias: String,
+        /// Random challenge whose HMAC is the material.
+        challenge: [u8; 32],
+    },
 }
 
 impl core::fmt::Debug for HardwareKey {
@@ -65,6 +78,7 @@ impl HardwareKey {
             HardwareKey::WindowsHello { .. } => UNLOCK_WINDOWS_HELLO,
             HardwareKey::SecureEnclave { .. } => UNLOCK_SECURE_ENCLAVE,
             HardwareKey::Fido2 { .. } => UNLOCK_FIDO2,
+            HardwareKey::AndroidKeystore { .. } => UNLOCK_ANDROID_KEYSTORE,
         }
     }
 
@@ -100,6 +114,12 @@ impl HardwareKey {
                     return Err(CborError::Malformed);
                 }
                 vec![(2, Value::bytes(credential_id)), (3, Value::bytes(salt))]
+            }
+            HardwareKey::AndroidKeystore { alias, challenge } => {
+                if alias.is_empty() || alias.len() > MAX_ANDROID_ALIAS {
+                    return Err(CborError::Malformed);
+                }
+                vec![(2, Value::text(alias)), (3, Value::bytes(challenge))]
             }
         };
         let mut entries = vec![(1, Value::Uint(BLOB_VERSION))];
@@ -142,18 +162,28 @@ impl HardwareKey {
                 credential_id: nonempty(bytes_max(f.req(2)?, MAX_CREDENTIAL_ID)?)?,
                 salt: fixed::<32>(f.req(3)?)?,
             }),
+            UNLOCK_ANDROID_KEYSTORE => {
+                let alias = text_max(f.req(2)?, MAX_ANDROID_ALIAS)?;
+                if alias.is_empty() {
+                    return Err(CborError::Malformed);
+                }
+                Ok(HardwareKey::AndroidKeystore {
+                    alias: alias.to_owned(),
+                    challenge: fixed::<32>(f.req(3)?)?,
+                })
+            }
             _ => Err(CborError::Malformed),
         }
     }
 }
 
-/// Whether `kind` is a hardware method this build knows how to describe (ADR 0075). The TPM
+/// Whether `kind` is a hardware method this build knows how to describe (ADR 0075, 0080). The TPM
 /// (`kind` 2) is not: no blob is specified for it yet.
 #[must_use]
 pub fn is_hardware_kind(kind: u8) -> bool {
     matches!(
         kind,
-        UNLOCK_SECURE_ENCLAVE | UNLOCK_FIDO2 | UNLOCK_WINDOWS_HELLO
+        UNLOCK_SECURE_ENCLAVE | UNLOCK_FIDO2 | UNLOCK_WINDOWS_HELLO | UNLOCK_ANDROID_KEYSTORE
     )
 }
 
@@ -175,6 +205,10 @@ mod tests {
             HardwareKey::Fido2 {
                 credential_id: vec![9; 64],
                 salt: [3; 32],
+            },
+            HardwareKey::AndroidKeystore {
+                alias: "hirzla-000102030405060708090a0b0c0d0e0f".to_owned(),
+                challenge: [5; 32],
             },
         ]
     }

@@ -1,0 +1,42 @@
+{
+  "productName": "Hirzla",
+  "version": "1.2.0",
+  "identifier": "app.hirzla.mobile",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hirzla",
+        "devtools": false
+      }
+    ],
+    "security": {
+      "csp": {
+        "default-src": "'none'",
+        "script-src": "'self'",
+        "style-src": "'self'",
+        "font-src": "'self'",
+        "img-src": "'self'",
+        "connect-src": "ipc: http://ipc.localhost",
+        "base-uri": "'none'",
+        "form-action": "'none'",
+        "frame-ancestors": "'none'",
+        "object-src": "'none'"
+      },
+      "freezePrototype": true,
+      "dangerousDisableAssetCspModification": false,
+      "capabilities": ["main"]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "icon": ["icons/icon.png", "icons/icon.ico"],
+    "android": {
+      "minSdkVersion": 34
+    }
+  }
+}

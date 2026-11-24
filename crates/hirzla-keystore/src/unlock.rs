@@ -1,5 +1,6 @@
 //! Hardware unlock factors (ADR 0075): Windows Hello, Touch ID (Secure Enclave), FIDO2
-//! `hmac-secret` with WebAuthn PRF semantics.
+//! `hmac-secret` with WebAuthn PRF semantics; on Android, a StrongBox HMAC key usable for a few
+//! seconds after a fingerprint (ADR 0080).
 //!
 //! A factor asks the system for a user gesture and releases **material**: a deterministic
 //! function of a key that never leaves the hardware and of public data kept in the vault's
@@ -25,6 +26,9 @@ mod windows_hello;
 #[cfg(target_os = "macos")]
 mod secure_enclave;
 
+#[cfg(target_os = "android")]
+mod android_keystore;
+
 #[cfg(all(feature = "fido2-hid", any(target_os = "linux", target_os = "macos")))]
 mod fido2_hid;
 
@@ -42,14 +46,17 @@ pub enum FactorKind {
     Fido2 = 4,
     /// Windows Hello (`kind` 5).
     WindowsHello = 5,
+    /// Android Keystore: StrongBox HMAC after a fingerprint (`kind` 7, ADR 0080).
+    AndroidKeystore = 7,
 }
 
 impl FactorKind {
     /// Every kind, in method-number order.
-    pub const ALL: [FactorKind; 3] = [
+    pub const ALL: [FactorKind; 4] = [
         FactorKind::SecureEnclave,
         FactorKind::Fido2,
         FactorKind::WindowsHello,
+        FactorKind::AndroidKeystore,
     ];
 
     /// The unlock method `kind`.
@@ -71,6 +78,7 @@ impl FactorKind {
             FactorKind::SecureEnclave => "enclave",
             FactorKind::Fido2 => "fido",
             FactorKind::WindowsHello => "hello",
+            FactorKind::AndroidKeystore => "android",
         }
     }
 }
@@ -100,6 +108,13 @@ pub enum KeyRef {
         /// PRF input.
         salt: [u8; 32],
     },
+    /// A StrongBox HMAC key of the Android Keystore.
+    AndroidKeystore {
+        /// Its alias in the Keystore.
+        alias: String,
+        /// The challenge whose HMAC is the material.
+        challenge: [u8; 32],
+    },
 }
 
 impl KeyRef {
@@ -110,6 +125,7 @@ impl KeyRef {
             KeyRef::WindowsHello { .. } => FactorKind::WindowsHello,
             KeyRef::SecureEnclave { .. } => FactorKind::SecureEnclave,
             KeyRef::Fido2 { .. } => FactorKind::Fido2,
+            KeyRef::AndroidKeystore { .. } => FactorKind::AndroidKeystore,
         }
     }
 }
@@ -242,7 +258,8 @@ pub trait UnlockFactor: Send + Sync {
     /// [`FactorError`].
     fn release(&self, key: &KeyRef, gesture: &Gesture<'_>) -> Result<Material, FactorError>;
 
-    /// Deletes `key` from the system when it lives there (Windows Hello). Best effort; the
+    /// Deletes `key` from the system when it lives there (Windows Hello, Android Keystore).
+    /// Best effort; the
     /// default does nothing (a FIDO2 credential or an enclave key kept in the vault has
     /// nothing to delete).
     ///
@@ -269,11 +286,13 @@ pub fn system_factors() -> Vec<Arc<dyn UnlockFactor>> {
     factors.push(Arc::new(secure_enclave::SecureEnclave));
     #[cfg(all(feature = "fido2-hid", any(target_os = "linux", target_os = "macos")))]
     factors.push(Arc::new(fido2_hid::HidFido2));
+    #[cfg(target_os = "android")]
+    factors.push(Arc::new(android_keystore::AndroidKeystore));
     factors
 }
 
 /// Lowercase hexadecimal, for key names.
-#[cfg(any(windows, feature = "test-software"))]
+#[cfg(any(windows, target_os = "android", feature = "test-software"))]
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write;
     bytes.iter().fold(String::new(), |mut s, b| {
@@ -288,6 +307,12 @@ fn hello_key_name(vault_id: &[u8; 16]) -> String {
     format!("Hirzla-{}", hex(vault_id))
 }
 
+/// Alias of the Android Keystore key of a vault (`docs/format.md` § 4.2.1).
+#[cfg(any(target_os = "android", feature = "test-software"))]
+fn android_key_alias(vault_id: &[u8; 16]) -> String {
+    format!("hirzla-{}", hex(vault_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,11 +322,13 @@ mod tests {
         assert_eq!(FactorKind::SecureEnclave.number(), 3);
         assert_eq!(FactorKind::Fido2.number(), 4);
         assert_eq!(FactorKind::WindowsHello.number(), 5);
+        assert_eq!(FactorKind::AndroidKeystore.number(), 7);
         for k in FactorKind::ALL {
             assert_eq!(FactorKind::from_number(k.number()), Some(k));
         }
         assert_eq!(FactorKind::from_number(1), None);
         assert_eq!(FactorKind::from_number(2), None);
+        assert_eq!(FactorKind::from_number(6), None);
     }
 
     #[test]

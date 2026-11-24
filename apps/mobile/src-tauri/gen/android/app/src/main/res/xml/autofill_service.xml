@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Autofill service (ADR 0080 § 6): no settings activity, no compatibility package. -->
+<autofill-service xmlns:android="http://schemas.android.com/apk/res/android" />

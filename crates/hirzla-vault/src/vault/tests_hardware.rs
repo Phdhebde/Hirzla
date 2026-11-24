@@ -43,6 +43,13 @@ fn hello() -> HardwareKey {
     }
 }
 
+fn android() -> HardwareKey {
+    HardwareKey::AndroidKeystore {
+        alias: "hirzla-test".into(),
+        challenge: [6; 32],
+    }
+}
+
 fn enclave() -> HardwareKey {
     HardwareKey::SecureEnclave {
         wrapped_key: vec![8; 200],
@@ -190,6 +197,25 @@ fn hello_and_enclave_replace_in_place_fido2_appends() {
     Vault::open_with_hardware(&path, 2, &fido(1), &[2; 32]).unwrap();
     Vault::open_with_hardware(&path, 3, &enclave(), &[3; 32]).unwrap();
     Vault::open_with_hardware(&path, 4, &fido(2), &[4; 32]).unwrap();
+}
+
+/// ADR 0080 § 4: the Android Keystore method is replaced in place, like Windows Hello, and
+/// opens the vault with the HMAC it released.
+#[test]
+fn android_keystore_replaces_in_place_and_opens() {
+    let (_d, path, mut v) = new_vault();
+    assert_eq!(v.add_hardware_method(&android(), &[1; 32]).unwrap(), 1);
+    assert_eq!(v.add_hardware_method(&fido(1), &[2; 32]).unwrap(), 2);
+    assert_eq!(v.add_hardware_method(&android(), &[7; 32]).unwrap(), 1);
+    assert_eq!(kinds(&path), vec![1, 7, 4]);
+    drop(v);
+    assert_eq!(
+        Vault::open_with_hardware(&path, 1, &android(), &[1; 32]).err(),
+        Some(VaultError::Unlock)
+    );
+    // The key described by the header must be the one presented.
+    assert!(Vault::open_with_hardware(&path, 1, &hello(), &[7; 32]).is_err());
+    Vault::open_with_hardware(&path, 1, &android(), &[7; 32]).unwrap();
 }
 
 #[test]

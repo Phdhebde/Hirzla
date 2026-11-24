@@ -23,7 +23,9 @@ toucher à un module.
 5. **Tout secret en mémoire est typé** (`secrecy`/`zeroize`), jamais dans un `String`, un
    `Vec<u8>` nu, un log, un message d'erreur, un `Debug` ou un test instantané.
 6. **`unsafe` est interdit** hors de `hirzla-keystore` (accès au matériel). Chaque bloc y est
-   justifié par un commentaire `// SAFETY:`.
+   justifié par un commentaire `// SAFETY:`. Seules exceptions, pour Android (ADR 0080,
+   décisions 6 et 7) : le point d'entrée JNI de `apps/mobile/core` et le module `entry` de
+   `apps/mobile/src-tauri` (glue JNI de Tauri), vérifiés par `hirzla-keystore/tests/unsafe_policy.rs`.
 7. **Aucun appel réseau sortant** non configuré : pas de télémétrie, pas de CDN, pas de
    vérification en ligne. Le produit doit fonctionner en réseau isolé.
 8. **Le format et le protocole sont spécifiés avant d'être codés** (`docs/format.md`,
@@ -52,6 +54,7 @@ Dans ces cas : propose un ADR (copie `docs/adr/0000-modele.md`), n'implémente p
 | `apps/cli` | `hirzla`, ligne de commande. |
 | `apps/server` | `hirzlad`, serveur aveugle. |
 | `apps/desktop` | Application Tauri 2. |
+| `apps/mobile` | Application Android (ADR 0080) : `src-tauri` (interface Tauri 2 et couche Kotlin dans `gen/android`), `core` (bibliothèque du noyau pour le service `:core`). |
 | `apps/extension` | Extension navigateur. |
 | `apps/native-host` | `hirzla-native-host`, hôte de messagerie native de l'extension (client du noyau, profil navigateur). |
 | `apps/release-signer` | `hirzla-signer`, outil de l'éditeur : clé d'éditeur, manifeste des clients, paquets de mise à jour (jamais livré aux postes, ADR 0043). |

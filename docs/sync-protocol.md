@@ -929,6 +929,12 @@ Ensuite :
 - **`MailboxGet` avant `Auth`** : après `Hello`, un appareil en cours d'enrôlement (§ 14), qui
   n'a pas encore de certificat, peut lire la boîte aux lettres de son propre `device`, et rien
   d'autre. Une lecture consomme le premier paquet non expiré ; sans paquet : code 4.
+- **`MailboxPut` avant `Auth`** (ADR 0081) : après `Hello`, une fois par session, vers une
+  adresse quelconque, `blob` ≤ 8 Kio (sinon code 4) ; au plus 256 paquets déposés avant
+  `Auth` gardés à la fois, tous destinataires confondus (sinon code 8), en mémoire seulement.
+- **`MailboxGet` d'une autre adresse** (ADR 0081) : un appareil authentifié peut lire une
+  adresse qui n'est le `device` d'aucun appareil inscrit au registre (un rendez-vous) ; la
+  boîte d'un autre appareil inscrit reste refusée (code 4).
 - **Droits vus par le serveur** (étape 5 du § 11.8) : calcul de `hirzla-access` sur les corps de
   contrôle stockés, dans l'ordre de réception ; refus (code 4) seulement pour un défaut de droit
   qu'aucun ordre causal ne lève (ADR 0028, point 7).
@@ -1174,6 +1180,21 @@ la clé privée du membre (ADR 0011).
      par la clé de l'appareil E sur `"hirzla/v1/device-enrol"` ‖ `0x00` ‖ `CBOR(clés 1, 2, 3, 5)`.
 5. Transport du paquet : boîte aux lettres du serveur (`MailboxPut`), réseau local ou fichier.
    Le paquet est illisible sans la clé privée de N.
+
+   **Mise en œuvre par le serveur (ADR 0081)** : N dépose avant `Auth` sa requête
+   `CBOR({1: device_id, 2: sig, 3: kem})` à l'adresse de rendez-vous
+   `R = SHA-384("hirzla/v1/enrol-rendezvous" ‖ 0x00 ‖ code)[0..16]`. Ici le code couvre la
+   requête entière, identifiant compris : 20 premiers caractères de
+   `base32(SHA-384(CBOR({1: device_id, 2: sig, 3: kem})))`, pour que le serveur ne puisse
+   pas faire certifier les clés de N sous un autre identifiant. E, à qui l'utilisateur
+   donne le code, lit R, vérifie à temps constant que la requête redonne le code, et dépose le
+   paquet dans la boîte de N. Le paquet suit l'assemblage du fichier d'échange (§ 13.1) :
+   `{1: v = 1, 2: envelope (KeyEnvelopeEntry de N, contexte ci-dessus), 3: box (SealedBox
+   bourrée, AAD = contexte), 4: sig, 5: e_cert}`, `sig` sur `CBOR(clés 1, 2, 3, 5)`. Le
+   champ 3 du contenu porte le casier personnel de E ; N crée le sien. Le casier personnel
+   n'étant pas synchronisé par le serveur, la `DeviceAdd` de l'étape 7 est publiée dans les
+   casiers partagés, une fois N authentifié (son certificat doit être au registre pour qu'on
+   lui scelle une clé, `transparence.md` § 6.2).
 6. N ouvre le paquet, vérifie `sig` avec le certificat de E, et vérifie les deux certificats
    avec la clé du membre reçue. E et N affichent l'**empreinte du membre** (`format.md` § 3.1).
    L'utilisateur confirme qu'elles sont égales. Cela empêche N de rejoindre le compte d'un autre.

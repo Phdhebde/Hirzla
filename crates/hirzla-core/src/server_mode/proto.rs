@@ -23,6 +23,8 @@ pub const GOVERNANCE_OPS: std::ops::RangeInclusive<u64> = 90..=99;
 /// Operation codes of the member directory, also version 4 (ADR 0069). 120 to 129 are
 /// reserved for the server mode.
 pub const DIRECTORY_OPS: std::ops::RangeInclusive<u64> = 120..=129;
+/// Operation codes of the enrolment of a device, also version 4 (ADR 0081).
+pub const ENROL_OPS: std::ops::RangeInclusive<u64> = 190..=199;
 /// Shortest text searched in the directory, in bytes (`sync-protocol.md` § 11.11).
 pub const MIN_SEARCH: usize = hirzla_sync::net::proto::MIN_FIND_QUERY;
 /// Most members in the result of a search.
@@ -99,10 +101,26 @@ pub enum ServerOp {
     QuorumInbox = 124,
     /// Sign or decline a received request, and send the answer.
     QuorumRespond = 125,
+    /// New device, without vault: start an enrolment with an invitation link (ADR 0081).
+    DeviceEnrolStart = 190,
+    /// New device: look once for the package of the certification device.
+    DeviceEnrolWait = 191,
+    /// New device: create the vault from the package, join and synchronise.
+    DeviceEnrolFinish = 192,
+    /// New device: abandon the enrolment in progress.
+    DeviceEnrolCancel = 193,
+    /// Certification device: fetch the keys of the new device by its control code.
+    DeviceEnrolFetch = 194,
+    /// Certification device: certify the new device and send its package.
+    DeviceEnrolApprove = 195,
+    /// Certification device: add the new device to the shared lockers, once inscribed.
+    DeviceEnrolComplete = 196,
+    /// The invitation link of the joined server, for a new device (ADR 0081).
+    ServerInvitation = 197,
 }
 
 impl ServerOp {
-    const ALL: [ServerOp; 25] = [
+    const ALL: [ServerOp; 33] = [
         ServerOp::ServerStatus,
         ServerOp::ServerIdentity,
         ServerOp::ServerJoin,
@@ -128,6 +146,14 @@ impl ServerOp {
         ServerOp::QuorumSend,
         ServerOp::QuorumInbox,
         ServerOp::QuorumRespond,
+        ServerOp::DeviceEnrolStart,
+        ServerOp::DeviceEnrolWait,
+        ServerOp::DeviceEnrolFinish,
+        ServerOp::DeviceEnrolCancel,
+        ServerOp::DeviceEnrolFetch,
+        ServerOp::DeviceEnrolApprove,
+        ServerOp::DeviceEnrolComplete,
+        ServerOp::ServerInvitation,
     ];
 
     /// The operation from its number.
@@ -165,6 +191,14 @@ impl ServerOp {
             ServerOp::QuorumSend => "quorum_send",
             ServerOp::QuorumInbox => "quorum_inbox",
             ServerOp::QuorumRespond => "quorum_respond",
+            ServerOp::DeviceEnrolStart => "device_enrol_start",
+            ServerOp::DeviceEnrolWait => "device_enrol_wait",
+            ServerOp::DeviceEnrolFinish => "device_enrol_finish",
+            ServerOp::DeviceEnrolCancel => "device_enrol_cancel",
+            ServerOp::DeviceEnrolFetch => "device_enrol_fetch",
+            ServerOp::DeviceEnrolApprove => "device_enrol_approve",
+            ServerOp::DeviceEnrolComplete => "device_enrol_complete",
+            ServerOp::ServerInvitation => "server_invitation",
         }
     }
 }
@@ -406,6 +440,41 @@ pub enum ServerRequest {
         /// Sign (or decline).
         accept: bool,
     },
+    /// 190 (ADR 0081).
+    DeviceEnrolStart {
+        /// Invitation link of the server, `hirzla-invitation:…`.
+        link: String,
+    },
+    /// 191.
+    DeviceEnrolWait,
+    /// 192.
+    DeviceEnrolFinish {
+        /// Master password of the new vault.
+        password: Zeroizing<String>,
+        /// Explicit derivation cost; calibrated on the device when absent (as `Init`).
+        kdf: Option<crate::proto::KdfParams>,
+        /// Member fingerprint the user confirmed, as `DeviceEnrolWait` gave it.
+        fingerprint: String,
+    },
+    /// 193.
+    DeviceEnrolCancel,
+    /// 194.
+    DeviceEnrolFetch {
+        /// Control code shown by the new device, as typed.
+        code: String,
+    },
+    /// 195.
+    DeviceEnrolApprove {
+        /// The device fetched by `DeviceEnrolFetch`.
+        device: Id16,
+    },
+    /// 196.
+    DeviceEnrolComplete {
+        /// The device approved by `DeviceEnrolApprove`.
+        device: Id16,
+    },
+    /// 197.
+    ServerInvitation,
 }
 
 /// An action that takes approvals (`sync-protocol.md` § 7.7, `ApprovalRequest.action`).
@@ -616,6 +685,11 @@ impl std::fmt::Debug for ServerReply {
             Self::DeviceRevoked { .. } => "DeviceRevoked",
             Self::Found { .. } => "Found",
             Self::Inbox(_) => "Inbox",
+            Self::EnrolCode(_) => "EnrolCode",
+            Self::EnrolState(_) => "EnrolState",
+            Self::EnrolPeer { .. } => "EnrolPeer",
+            Self::EnrolCompleted(_) => "EnrolCompleted",
+            Self::Invitation(_) => "Invitation",
         };
         f.debug_struct(name).finish_non_exhaustive()
     }
@@ -956,10 +1030,26 @@ pub enum ServerReply {
     },
     /// 124: received requests, oldest first.
     Inbox(Vec<ReceivedRequest>),
+    /// 190: the control code to show on the new device (ADR 0081).
+    EnrolCode(String),
+    /// 191: the package arrived, with the member fingerprint to compare; `None` while waiting.
+    EnrolState(Option<String>),
+    /// 194: the new device fetched: member fingerprint to compare, its identifier.
+    EnrolPeer {
+        /// Fingerprint of the member key (`format.md` § 3.1).
+        fingerprint: String,
+        /// Identifier of the new device.
+        device: Id16,
+    },
+    /// 196: shared lockers the new device was added to; `None` while it has not
+    /// authenticated yet (its certificate is not inscribed in the key log).
+    EnrolCompleted(Option<u64>),
+    /// 197: the invitation link, `hirzla-invitation:…`, on one line.
+    Invitation(String),
 }
 
 /// Whether `frame` is a request of the server mode: its operation code (key 3) is in
-/// [`SERVER_OPS`], [`GOVERNANCE_OPS`] or [`DIRECTORY_OPS`]. Anything else, readable or not, goes to the other decoders.
+/// [`SERVER_OPS`], [`GOVERNANCE_OPS`], [`DIRECTORY_OPS`] or [`ENROL_OPS`]. Anything else, readable or not, goes to the other decoders.
 #[must_use]
 pub fn is_server_request(frame: &[u8]) -> bool {
     let Ok(v) = cbor::decode(frame) else {
@@ -969,7 +1059,10 @@ pub fn is_server_request(frame: &[u8]) -> bool {
         return false;
     };
     f.req(3).and_then(uint).is_ok_and(|op| {
-        SERVER_OPS.contains(&op) || GOVERNANCE_OPS.contains(&op) || DIRECTORY_OPS.contains(&op)
+        SERVER_OPS.contains(&op)
+            || GOVERNANCE_OPS.contains(&op)
+            || DIRECTORY_OPS.contains(&op)
+            || ENROL_OPS.contains(&op)
     })
 }
 
@@ -1036,6 +1129,14 @@ impl ServerRequest {
             ServerRequest::QuorumSend { .. } => ServerOp::QuorumSend,
             ServerRequest::QuorumInbox => ServerOp::QuorumInbox,
             ServerRequest::QuorumRespond { .. } => ServerOp::QuorumRespond,
+            ServerRequest::DeviceEnrolStart { .. } => ServerOp::DeviceEnrolStart,
+            ServerRequest::DeviceEnrolWait => ServerOp::DeviceEnrolWait,
+            ServerRequest::DeviceEnrolFinish { .. } => ServerOp::DeviceEnrolFinish,
+            ServerRequest::DeviceEnrolCancel => ServerOp::DeviceEnrolCancel,
+            ServerRequest::DeviceEnrolFetch { .. } => ServerOp::DeviceEnrolFetch,
+            ServerRequest::DeviceEnrolApprove { .. } => ServerOp::DeviceEnrolApprove,
+            ServerRequest::DeviceEnrolComplete { .. } => ServerOp::DeviceEnrolComplete,
+            ServerRequest::ServerInvitation => ServerOp::ServerInvitation,
         }
     }
 
@@ -1044,7 +1145,41 @@ impl ServerRequest {
             ServerRequest::ServerStatus
             | ServerRequest::ServerIdentity
             | ServerRequest::ServerSync
-            | ServerRequest::QuorumInbox => None,
+            | ServerRequest::QuorumInbox
+            | ServerRequest::DeviceEnrolWait
+            | ServerRequest::DeviceEnrolCancel
+            | ServerRequest::ServerInvitation => None,
+            ServerRequest::DeviceEnrolStart { link } => {
+                Some(Value::map(vec![(1, Value::text(link))]))
+            }
+            ServerRequest::DeviceEnrolFinish {
+                password,
+                kdf,
+                fingerprint,
+            } => {
+                let mut e = vec![
+                    (1, Value::text(password.as_str())),
+                    (3, Value::text(fingerprint)),
+                ];
+                if let Some(k) = kdf {
+                    e.push((
+                        2,
+                        Value::map(vec![
+                            (1, Value::Uint(u64::from(k.m_kib))),
+                            (2, Value::Uint(u64::from(k.t))),
+                            (3, Value::Uint(u64::from(k.p))),
+                        ]),
+                    ));
+                }
+                Some(Value::map(e))
+            }
+            ServerRequest::DeviceEnrolFetch { code } => {
+                Some(Value::map(vec![(1, Value::text(code))]))
+            }
+            ServerRequest::DeviceEnrolApprove { device }
+            | ServerRequest::DeviceEnrolComplete { device } => {
+                Some(Value::map(vec![(1, Value::bytes(device))]))
+            }
             ServerRequest::ServerJoin {
                 url,
                 roots,
@@ -1204,6 +1339,64 @@ impl ServerRequest {
             ServerOp::ServerIdentity => none(ServerRequest::ServerIdentity),
             ServerOp::ServerSync => none(ServerRequest::ServerSync),
             ServerOp::QuorumInbox => none(ServerRequest::QuorumInbox),
+            ServerOp::DeviceEnrolWait => none(ServerRequest::DeviceEnrolWait),
+            ServerOp::DeviceEnrolCancel => none(ServerRequest::DeviceEnrolCancel),
+            ServerOp::ServerInvitation => none(ServerRequest::ServerInvitation),
+            ServerOp::DeviceEnrolStart => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolStart {
+                    link: m(f.req(1).and_then(|t| text_max(t, MAX_TEXT)))?.to_owned(),
+                })
+            }
+            ServerOp::DeviceEnrolFinish => {
+                let f = m(Fields::new(args()?, &[1, 2, 3]))?;
+                let p = m(f
+                    .req(1)
+                    .and_then(|t| text_max(t, crate::proto::MAX_PASSWORD)))?;
+                let fingerprint =
+                    m(f.req(3).and_then(|t| text_max(t, MAX_TYPED_FINGERPRINT)))?.to_owned();
+                if p.is_empty() {
+                    return Err(ServerCode::General(ErrorCode::InvalidInput));
+                }
+                let kdf = match f.opt(2) {
+                    None => None,
+                    Some(k) => {
+                        let k = m(Fields::new(k, &[1, 2, 3]))?;
+                        let n = |key| -> Result<u32, ServerCode> {
+                            u32::try_from(m(k.req(key).and_then(uint))?)
+                                .map_err(|_| ServerCode::General(ErrorCode::InvalidInput))
+                        };
+                        Some(crate::proto::KdfParams {
+                            m_kib: n(1)?,
+                            t: n(2)?,
+                            p: n(3)?,
+                        })
+                    }
+                };
+                Ok(ServerRequest::DeviceEnrolFinish {
+                    password: Zeroizing::new(p.to_owned()),
+                    kdf,
+                    fingerprint,
+                })
+            }
+            ServerOp::DeviceEnrolFetch => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolFetch {
+                    code: m(f.req(1).and_then(|t| text_max(t, 64)))?.to_owned(),
+                })
+            }
+            ServerOp::DeviceEnrolApprove => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolApprove {
+                    device: id16(&f, 1)?,
+                })
+            }
+            ServerOp::DeviceEnrolComplete => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(ServerRequest::DeviceEnrolComplete {
+                    device: id16(&f, 1)?,
+                })
+            }
             ServerOp::ServerJoin => {
                 let f = m(Fields::new(args()?, &[1, 2, 3, 4]))?;
                 if let Some(link) = f.opt(4) {
@@ -1800,6 +1993,23 @@ impl ServerReply {
             ServerReply::DeviceRevoked { lockers } => {
                 Some(Value::map(vec![(1, Value::Uint(*lockers))]))
             }
+            ServerReply::EnrolCompleted(n) => Some(Value::map(
+                n.map(|n| (1, Value::Uint(n))).into_iter().collect(),
+            )),
+            ServerReply::EnrolCode(code) => Some(Value::map(vec![(1, Value::text(code))])),
+            ServerReply::Invitation(link) => Some(Value::map(vec![(1, Value::text(link))])),
+            ServerReply::EnrolState(fp) => {
+                let mut e = Vec::new();
+                opt_text(&mut e, 1, fp.as_deref());
+                Some(Value::map(e))
+            }
+            ServerReply::EnrolPeer {
+                fingerprint,
+                device,
+            } => Some(Value::map(vec![
+                (1, Value::text(fingerprint)),
+                (2, Value::bytes(device)),
+            ])),
             ServerReply::Granted {
                 fingerprint,
                 devices,
@@ -1980,7 +2190,10 @@ impl ServerReply {
             | ServerOp::QuorumCancel
             | ServerOp::QuarantineDecide
             | ServerOp::ProfileSet
-            | ServerOp::MemberVerify => {
+            | ServerOp::MemberVerify
+            | ServerOp::DeviceEnrolFinish
+            | ServerOp::DeviceEnrolCancel
+            | ServerOp::DeviceEnrolApprove => {
                 if f.opt(4).is_some() {
                     return Err(ErrorCode::Malformed);
                 }
@@ -2069,6 +2282,29 @@ impl ServerReply {
                 let b = Fields::new(body()?, &[1]).map_err(bad)?;
                 ServerReply::DeviceRevoked {
                     lockers: b.req(1).and_then(uint).map_err(bad)?,
+                }
+            }
+            ServerOp::ServerInvitation => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::Invitation(text(b.req(1).map_err(bad)?, MAX_TEXT)?)
+            }
+            ServerOp::DeviceEnrolComplete => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolCompleted(b.opt(1).map(uint).transpose().map_err(bad)?)
+            }
+            ServerOp::DeviceEnrolStart => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolCode(text(b.req(1).map_err(bad)?, 64)?)
+            }
+            ServerOp::DeviceEnrolWait => {
+                let b = Fields::new(body()?, &[1]).map_err(bad)?;
+                ServerReply::EnrolState(b.opt(1).map(|v| text(v, FINGERPRINT_LEN)).transpose()?)
+            }
+            ServerOp::DeviceEnrolFetch => {
+                let b = Fields::new(body()?, &[1, 2]).map_err(bad)?;
+                ServerReply::EnrolPeer {
+                    fingerprint: text(b.req(1).map_err(bad)?, FINGERPRINT_LEN)?,
+                    device: b.req(2).and_then(fixed::<16>).map_err(bad)?,
                 }
             }
             ServerOp::RoleGrant => {
@@ -2199,6 +2435,66 @@ mod tests {
         let (id, back) = ServerRequest::decode(&f).unwrap();
         assert_eq!(id, 7);
         back
+    }
+
+    /// Every operation reaches this family through the router, and no number belongs to
+    /// another family (ADR 0081: 130 to 132 were taken by general operations).
+    #[test]
+    fn every_operation_is_routed_here_and_only_here() {
+        for op in ServerOp::ALL {
+            let n = op as u64;
+            let frame = cbor::encode(&Value::map(vec![
+                (1, Value::Uint(SERVER_VERSION)),
+                (2, Value::Uint(1)),
+                (3, Value::Uint(n)),
+            ]))
+            .unwrap();
+            assert!(is_server_request(&frame), "{n} not routed");
+            assert!(
+                crate::proto::Op::from_u64(n).is_none(),
+                "{n} is a general operation"
+            );
+            for other in [
+                crate::methods::proto::METHOD_OPS,
+                crate::passkey::proto::PASSKEY_OPS,
+                crate::selfmode::proto::SELF_OPS,
+                crate::agent::proto::AGENT_OPS,
+                crate::connections::proto::CONNECTION_OPS,
+                crate::locker_export::proto::EXPORT_OPS,
+                crate::folders::proto::FOLDER_OPS,
+                crate::totp::proto::TOTP_OPS,
+            ] {
+                assert!(!other.contains(&n), "{n} belongs to another family");
+            }
+        }
+    }
+
+    #[test]
+    fn enrolment_requests_round_trip() {
+        for r in [
+            ServerRequest::DeviceEnrolStart {
+                link: "hirzla-invitation:x".into(),
+            },
+            ServerRequest::DeviceEnrolWait,
+            ServerRequest::DeviceEnrolFinish {
+                password: Zeroizing::new("mot de passe".into()),
+                kdf: Some(crate::proto::KdfParams {
+                    m_kib: 65536,
+                    t: 3,
+                    p: 1,
+                }),
+                fingerprint: "ABCDEFGHIJKLMNOPQRST".into(),
+            },
+            ServerRequest::DeviceEnrolCancel,
+            ServerRequest::DeviceEnrolFetch {
+                code: "ABCDE FGHIJ".into(),
+            },
+            ServerRequest::DeviceEnrolApprove { device: [3; 16] },
+            ServerRequest::DeviceEnrolComplete { device: [3; 16] },
+            ServerRequest::ServerInvitation,
+        ] {
+            assert!(round(&r) == r, "{r:?}");
+        }
     }
 
     #[test]

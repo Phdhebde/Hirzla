@@ -1446,3 +1446,75 @@ fn discarded_attachment_leaves_no_chunk() {
         Some(VaultError::NotFound)
     );
 }
+
+/// Enrolment (ADR 0081 § 2): the first device certifies a second one; the vault created
+/// from that identity opens with its own password, holds the member's public keys and the
+/// certificate, but not the member key, and has its own personal locker.
+#[test]
+fn enrolled_vault_has_the_identity_but_not_the_member_key() {
+    let (_d1, _p1, first) = new_vault();
+    let sign = DeviceSigningKey::generate().unwrap();
+    let kem_key = kem::PrivateKey::generate().unwrap();
+    let device: Id16 = random_array().unwrap();
+    let cert = first
+        .certify_device(
+            device,
+            sign.verifying_key().as_bytes(),
+            kem_key.public_key().as_bytes(),
+        )
+        .unwrap();
+    assert_eq!(cert.member, first.member_id());
+    // Its own device and malformed keys are refused.
+    assert!(first
+        .certify_device(first.device_cert().device, &cert.sig, &cert.kem)
+        .is_err());
+    assert!(first
+        .certify_device(device, &cert.sig[1..], &cert.kem)
+        .is_err());
+
+    let dir = tempdir();
+    let path = dir.path().join("second.hirzla");
+    let enrolled = |cert: DeviceCert, sign, kem| EnrolledIdentity {
+        member: first.member_keys().clone(),
+        cert,
+        sign,
+        kem,
+    };
+    // Keys that do not match the certificate are refused, and nothing is left behind.
+    let other = kem::PrivateKey::generate().unwrap();
+    let s2 = DeviceSigningKey::generate().unwrap();
+    assert!(Vault::create_enrolled(
+        &path,
+        "autre mot de passe",
+        &options(),
+        enrolled(cert.clone(), s2, other)
+    )
+    .is_err());
+    assert!(!path.exists());
+
+    let second = diag(
+        Vault::create_enrolled(
+            &path,
+            "autre mot de passe",
+            &options(),
+            enrolled(cert.clone(), sign, kem_key),
+        ),
+        "create_enrolled",
+    );
+    assert_eq!(second.member_keys(), first.member_keys());
+    assert_eq!(second.device_cert(), &cert);
+    assert!(!second.holds_member_key());
+    assert!(first.holds_member_key());
+    assert_ne!(second.personal_locker(), first.personal_locker());
+    assert!(matches!(
+        second.certify_device([9; 16], &cert.sig, &cert.kem),
+        Err(VaultError::Unsupported)
+    ));
+    drop(second);
+    let reopened = diag(Vault::open(&path, "autre mot de passe"), "open");
+    assert_eq!(reopened.device_cert(), &cert);
+    assert!(!reopened.holds_member_key());
+    let (s, k) = reopened.device_private_keys().unwrap();
+    assert_eq!(s.verifying_key().as_bytes(), cert.sig.as_slice());
+    assert_eq!(k.public_key().as_bytes(), cert.kem.as_slice());
+}
