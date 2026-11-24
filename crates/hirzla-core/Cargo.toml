@@ -36,7 +36,7 @@ hirzla-keystore = { path = "../hirzla-keystore" }
 hirzla-sync = { path = "../hirzla-sync", features = ["net"] }
 thiserror = "2.0"
 # Same parser as the vault index hosts (WHATWG URL Standard), already in the graph.
-url = "2.5.8"
+url = "2.5.9"
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 # Public Suffix List compiled in, for the relying party identifier of a passkey (ADR 0079
 # § 3): no network. Pinned: the list changes with the version, a reviewed change.
