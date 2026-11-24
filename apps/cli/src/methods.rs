@@ -146,7 +146,7 @@ fn read_pin() -> Result<Zeroizing<String>, String> {
 }
 
 /// `methods`, `methods add KIND`, `methods remove RANG`.
-pub fn run(session: &Session<'_>, command: &MethodsCommand) -> Result<(), String> {
+pub fn run(session: &Session, command: &MethodsCommand) -> Result<(), String> {
     // Checked before anything else: no password asked, no core started.
     if let MethodsCommand::Add {
         kind,
@@ -235,7 +235,7 @@ pub fn run(session: &Session<'_>, command: &MethodsCommand) -> Result<(), String
 }
 
 /// `unlock --materiel [RANG]`: the given method, or the first usable hardware method.
-pub fn unlock(session: &Session<'_>, rank: Option<u8>) -> Result<(), String> {
+pub fn unlock(session: &Session, rank: Option<u8>) -> Result<(), String> {
     let mut c = session.connect(true)?;
     match status(&mut c)?.state {
         VaultState::Unlocked => {

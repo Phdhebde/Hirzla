@@ -298,7 +298,7 @@ fn z(s: &str) -> Zeroizing<String> {
     Zeroizing::new(s.to_owned())
 }
 
-pub fn run(session: &Session<'_>, command: &FolderCommand) -> Result<(), String> {
+pub fn run(session: &Session, command: &FolderCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let (entries, lockers) = listing(&mut c)?;
     let typed = match command {
@@ -419,7 +419,7 @@ pub fn run(session: &Session<'_>, command: &FolderCommand) -> Result<(), String>
 
 /// `mv NOM|--id ID DESTINATION`: puts a secret in a folder of its own locker.
 pub fn move_secret(
-    session: &Session<'_>,
+    session: &Session,
     name: Option<&str>,
     id: Option<&str>,
     destination: &str,
