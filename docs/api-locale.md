@@ -2146,7 +2146,7 @@ jamais une adresse ni une étiquette.
 
 ## 25. Plusieurs coffres par appareil (version 16)
 
-Décision : ADR 0085 (proposé), première étape : registre des coffres, un noyau par coffre,
+Décision : ADR 0085 (accepté), première étape : registre des coffres, un noyau par coffre,
 ligne de commande. Le format du coffre, son annexe, le protocole de synchronisation et la
 suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
 (registre), `client/router.rs` (aiguillage), `transport.rs`, `daemon.rs`, `service.rs` ;
@@ -2350,9 +2350,9 @@ contient ni alias, ni chemin, ni identifiant de coffre.
 ### 25.8 Points ouverts
 
 1. **Création d'un coffre supplémentaire** (`Init`, invitation, enrôlement) : l'ADR 0085
-   nomme le point de connexion par le `vault_id`, que le noyau ne tire qu'à la création. À
-   trancher : un point de connexion provisoire, ou un identifiant tiré par le client et
-   passé au noyau.
+   nomme le point de connexion par le `vault_id`, que le noyau ne tire qu'à la création.
+   Tranché (ADR 0085, « Mise en œuvre ») : un point de connexion provisoire, le temps de la
+   création. À spécifier ici avec l'étape 2.
 2. **Coffre de l'emplacement par défaut au point de connexion par défaut** : à basculer sur
    son point de connexion propre quand l'application de poste et l'hôte natif sauront
    l'aiguillage.

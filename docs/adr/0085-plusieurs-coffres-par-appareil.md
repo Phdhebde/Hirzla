@@ -1,6 +1,7 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
-- Statut : proposé
+- Statut : accepté (2026-11-24, décision du mainteneur) ; étape 1 réalisée (voir « Mise en
+  œuvre »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -154,6 +155,54 @@ connexion reste accepté pour lui pendant une version.
   appareils au périmètre réduit) ; non demandé, et il touche au protocole. À rouvrir si un
   client l'exige.
 
+## Mise en œuvre
+
+### Étape 1 : registre, un noyau par coffre, ligne de commande (API locale v16)
+
+Spécifiée dans `api-locale.md` § 25. Le code a précisé ou corrigé les points suivants, qui
+priment sur le texte de la décision :
+
+1. **Le noyau ne lit pas le registre** (§ 3 : un noyau ne connaît pas les autres). Le client
+   lui passe l'identifiant attendu (`--vault-id`) ; le noyau le compare à l'en-tête du coffre
+   au démarrage et à chaque ouverture, et refuse de créer un coffre dans ce mode.
+2. **`VaultInfo` ne rend pas l'alias** (§ 4), puisque le noyau ne connaît pas le registre : il
+   rend le `vault_id`, puis le mode et le serveur une fois le coffre ouvert. L'alias est lu
+   dans le registre par le client. Le résumé de la politique attend l'ADR 0086.
+3. **`hirzla coffres defaut ALIAS`** s'ajoute aux sous-commandes du § 4 : il faut pouvoir
+   choisir le coffre par défaut. `--socket` et `--vault` contournent le registre.
+4. **Ancien point de connexion (§ 7)** : l'application de poste et l'hôte natif y parlent
+   encore et y lancent le noyau. Le coffre de l'emplacement par défaut **garde le point de
+   connexion par défaut** tant que tous les clients ne savent pas l'aiguillage ; lui donner
+   plus tôt son propre point ferait tourner deux noyaux sur le même fichier. La bascule est
+   la dernière étape de ce lot.
+5. **Un poste à un seul coffre** est inscrit au registre à la première commande, sous l'alias
+   `principal`.
+6. **Liens symboliques sous Windows** : seul le fichier du registre est contrôlé, comme pour
+   le coffre ; sous Unix, chaque composant du chemin.
+7. **Deux chemins égaux aux octets différents** : sous Windows, `C:\…` et `c:\…` désignent le
+   même fichier ; le registre les refuse comme doublon, à l'ajout et à la lecture.
+
+### Créer un coffre de plus : point de connexion provisoire
+
+Le point de connexion porte le `vault_id`, que le noyau ne tire qu'à la création : un coffre
+à créer n'a encore ni entrée au registre ni point de connexion. **Décision** : le client
+lance le noyau sur un **point de connexion provisoire**, au nom tiré au hasard, pour le temps
+de la création (`Init`, lien d'invitation, enrôlement). Le noyau tire le `vault_id` comme
+aujourd'hui et le rend ; le client inscrit le coffre au registre, arrête ce noyau, et le
+relance au point de connexion du coffre. Le noyau reste le seul à tirer un identifiant.
+Écarté : un identifiant tiré par le client et passé au noyau, qui ferait dépendre le sel du
+coffre (`format.md` § 5.4) d'un processus moins protégé.
+
+### Étapes suivantes
+
+2. Création d'un coffre par le point provisoire (noyau, ligne de commande).
+3. Application de poste : sélecteur, recherche commune, zone de notification.
+4. Hôte natif et extension.
+5. Android.
+6. Bascule du coffre par défaut sur son propre point de connexion.
+
+Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR 0086.
+
 ## Points ouverts
 
 1. **Android** : un processus par coffre exige des processus déclarés au manifeste, en nombre
@@ -163,8 +212,11 @@ connexion reste accepté pour lui pendant une version.
    secret pour la même origine : ordre du registre, ou dernier utilisé.
 3. **Hornn** : l'agent gateway (ADR 0031) reste à un coffre ; `sdk/go` n'apprend pas
    l'aiguillage dans ce lot.
+4. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
+5. **Longueur du chemin de la socket sous macOS** (`sun_path`, 104 octets) et
+   **`RLIMIT_MEMLOCK`** avec plusieurs noyaux sous Linux : à mesurer sur des postes réels.
 
-## Vocabulaire proposé (à inscrire dans `glossaire.md` à l'acceptation)
+## Vocabulaire (inscrit dans `glossaire.md`)
 
 | Français | Code | Sens |
 | --- | --- | --- |
