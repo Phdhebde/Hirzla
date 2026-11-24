@@ -47,6 +47,8 @@ data-encoding = { version = "=2.11.1", default-features = false, features = ["al
 
 [dev-dependencies]
 tempfile = "3.27.0"
+# Property tests of the vault registry encoding (ADR 0085). Same version as hirzla-vault.
+proptest = "1.12.0"
 # Independent ES256 verification of the passkey signatures (ADR 0079 § 1); tests only.
 p256 = { version = "0.14.0", features = ["ecdsa"] }
 # In-memory relay and test identities, for the Hornn control plane simulator (tests only).

@@ -314,7 +314,7 @@ fn card_lines(card: &ConnectionCard) -> Vec<String> {
 }
 
 /// `connexion ssh|rdp|voir|modifier`.
-pub fn run(session: &Session<'_>, command: &ConnectionCommand) -> Result<(), String> {
+pub fn run(session: &Session, command: &ConnectionCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         ConnectionCommand::Create {
@@ -428,7 +428,7 @@ fn default_public(file: &Path) -> PathBuf {
 }
 
 /// `cle-ssh ajouter NOM FICHIER`.
-pub fn add_ssh_key(session: &Session<'_>, a: &SshKeyAdd) -> Result<(), String> {
+pub fn add_ssh_key(session: &Session, a: &SshKeyAdd) -> Result<(), String> {
     let private_key = read_bounded(&a.file, MAX_PRIVATE_KEY, "clé privée")?;
     let public = match &a.public {
         Some(p) => Some(p.clone()),

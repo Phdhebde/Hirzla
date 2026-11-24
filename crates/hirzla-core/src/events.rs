@@ -50,6 +50,30 @@ impl Refusal {
     }
 }
 
+/// Why a core started for one registered vault refuses the file at its path
+/// (`docs/api-locale.md` § 25.3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultRefusal {
+    /// No file at the path.
+    Absent,
+    /// The clear header cannot be read.
+    Unreadable,
+    /// The file is another vault.
+    IdMismatch,
+}
+
+impl VaultRefusal {
+    /// Stable short name.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            VaultRefusal::Absent => "absent",
+            VaultRefusal::Unreadable => "unreadable",
+            VaultRefusal::IdMismatch => "id_mismatch",
+        }
+    }
+}
+
 /// Why the vault was locked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LockReason {
@@ -111,6 +135,12 @@ pub enum Event {
     Locked {
         /// Reason.
         reason: LockReason,
+    },
+    /// The vault file is not the vault this core was started for (§ 25.3). Neither the
+    /// identifier nor the path is written.
+    VaultRefused {
+        /// Reason.
+        reason: VaultRefusal,
     },
     /// The core stops.
     Stopped,
@@ -267,6 +297,9 @@ impl Event {
                     LockReason::SessionLock => "session_lock",
                 }
             ),
+            Event::VaultRefused { reason } => {
+                write!(out, "event=vault_refused reason={}", reason.name())
+            }
             Event::Stopped => write!(out, "event=stopped"),
             Event::AutoTyped { what, terminal } => write!(
                 out,
@@ -441,7 +474,14 @@ mod tests {
         ] {
             events.push(Event::Locked { reason });
         }
-        for n in 1..=13 {
+        for reason in [
+            VaultRefusal::Absent,
+            VaultRefusal::Unreadable,
+            VaultRefusal::IdMismatch,
+        ] {
+            events.push(Event::VaultRefused { reason });
+        }
+        for n in 1..=16 {
             let op = Op::from_u64(n).unwrap_or(Op::Status);
             events.push(Event::Request { op, error: None });
             for c in 1..=17 {

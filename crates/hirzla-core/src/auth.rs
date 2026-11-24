@@ -115,6 +115,8 @@ impl ClientProfile {
                 // Only the desktop application takes the call for its window.
                 | Request::AppPoll
                 | Request::AutoTyped { .. }
+                // The browser profile does not route between vaults yet (§ 25.4).
+                | Request::VaultInfo
                 | Request::Shutdown => false,
             },
         }
@@ -395,6 +397,7 @@ mod tests {
             create(None, SecretType::Password, vec![z("https://a.example")]),
         ];
         let refused = [
+            Request::VaultInfo,
             Request::AppPoll,
             Request::AutoTyped {
                 what: crate::proto::Typed::Password,

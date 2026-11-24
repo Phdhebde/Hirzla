@@ -779,3 +779,166 @@ fn urls_and_tags_are_read_and_changed() {
         assert!(!log.contains(leak), "{leak}: {log}");
     }
 }
+
+fn vault_info(c: &mut Core) -> Result<VaultInfo, ErrorCode> {
+    match c.handle(Request::VaultInfo) {
+        Ok(Reply::VaultInfo(info)) => Ok(info),
+        Ok(_) => panic!("unexpected reply"),
+        Err(e) => Err(e.code),
+    }
+}
+
+/// `VaultInfo` (version 16, ADR 0085): the identifier of the vault, readable while it is
+/// locked; the mode once it is open. It is not an activity.
+#[test]
+fn vault_info_names_the_vault_served() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), Some(Duration::from_secs(60)));
+    assert_eq!(vault_info(&mut c), Err(ErrorCode::NoVault));
+    c.handle(Request::Init {
+        password: z(PASSWORD),
+        kdf: floor(),
+    })
+    .unwrap();
+    let id = c.vault.as_ref().unwrap().vault_id();
+    assert_eq!(hirzla_vault::vault_id_of(&c.config.vault_path).unwrap(), id);
+    // Open, and attached to no server.
+    assert_eq!(
+        vault_info(&mut c),
+        Ok(VaultInfo {
+            vault_id: id,
+            mode: Some(VaultMode::Standalone),
+            server: None,
+        })
+    );
+    // Asking does not postpone the automatic lock.
+    let before = c.last_activity;
+    vault_info(&mut c).unwrap();
+    assert_eq!(c.last_activity, before);
+    c.tick(Instant::now() + Duration::from_secs(61));
+    assert!(!c.is_unlocked());
+    // Locked: the identifier of the clear header, nothing else.
+    assert_eq!(
+        vault_info(&mut c),
+        Ok(VaultInfo {
+            vault_id: id,
+            mode: None,
+            server: None,
+        })
+    );
+    // A file that is not a vault.
+    std::fs::write(&c.config.vault_path, b"pas un coffre").unwrap();
+    assert_eq!(vault_info(&mut c), Err(ErrorCode::Corrupt));
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("event=request op=vault_info result=ok"));
+    assert!(log.contains("event=request op=vault_info result=no_vault"));
+    assert!(log.contains("event=request op=vault_info result=corrupt"));
+}
+
+/// A core started for one registered vault (`--vault-id`, § 25.3) opens that vault only:
+/// another vault put at its path is closed at once and refused, and the log says so
+/// without naming anything.
+#[test]
+fn a_core_refuses_a_vault_that_is_not_the_one_expected() {
+    let dir = tempdir();
+    let other_dir = tempdir();
+    // Two vaults with the same password: only the identifier tells them apart.
+    let (mut a, _) = core(dir.path(), None);
+    let (mut b, _) = core(other_dir.path(), None);
+    for c in [&mut a, &mut b] {
+        c.handle(Request::Init {
+            password: z(PASSWORD),
+            kdf: floor(),
+        })
+        .unwrap();
+    }
+    let id_a = a.vault.as_ref().unwrap().vault_id();
+    let id_b = b.vault.as_ref().unwrap().vault_id();
+    assert_ne!(id_a, id_b);
+    let (path_a, path_b) = (a.config.vault_path.clone(), b.config.vault_path.clone());
+    drop((a, b));
+    assert_eq!(vault_file_refusal(&path_a, &id_a), None);
+    assert_eq!(
+        vault_file_refusal(&path_a, &id_b),
+        Some(VaultRefusal::IdMismatch)
+    );
+    assert_eq!(
+        vault_file_refusal(&dir.path().join("absent.hirzla"), &id_a),
+        Some(VaultRefusal::Absent)
+    );
+    let junk = dir.path().join("faux.hirzla");
+    std::fs::write(&junk, b"pas un coffre").unwrap();
+    assert_eq!(
+        vault_file_refusal(&junk, &id_a),
+        Some(VaultRefusal::Unreadable)
+    );
+
+    // The core of vault A opens vault A.
+    let (mut c, sink) = core(dir.path(), None);
+    c.expect_vault(id_a);
+    c.handle(Request::Unlock {
+        password: z(PASSWORD),
+    })
+    .unwrap();
+    assert!(c.is_unlocked());
+    c.handle(Request::Lock).unwrap();
+    // It never creates a vault, even on request.
+    assert_eq!(
+        code(c.handle(Request::Init {
+            password: z(PASSWORD),
+            kdf: floor(),
+        })),
+        ErrorCode::VaultExists
+    );
+
+    // The file of A is replaced by the vault B, which the same password opens.
+    std::fs::copy(&path_b, &path_a).unwrap();
+    assert_eq!(
+        code(c.handle(Request::Unlock {
+            password: z(PASSWORD),
+        })),
+        ErrorCode::Corrupt
+    );
+    assert!(!c.is_unlocked());
+    assert_eq!(status(&mut c).state, VaultState::Locked);
+    assert_eq!(
+        code(c.handle(Request::List {
+            query: None,
+            include_trash: false,
+        })),
+        ErrorCode::Locked
+    );
+    // The refusal is not a failed unlock: the password was right, nothing is throttled.
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(
+        log.contains("event=vault_refused reason=id_mismatch"),
+        "{log}"
+    );
+    assert!(!log.contains("event=unlock_failed"), "{log}");
+    assert_eq!(log.matches("event=unlocked").count(), 1, "{log}");
+    for id in [id_a, id_b] {
+        assert!(!log.contains(&crate::registry::id_hex(&id)), "{log}");
+    }
+
+    // Its file gone, it still creates nothing.
+    std::fs::remove_file(&path_a).unwrap();
+    assert_eq!(
+        code(c.handle(Request::Init {
+            password: z(PASSWORD),
+            kdf: floor(),
+        })),
+        ErrorCode::Unsupported
+    );
+    assert!(!path_a.exists());
+    assert_eq!(vault_info(&mut c), Err(ErrorCode::NoVault));
+
+    // A core without an expected vault opens whatever is at its path, as before.
+    std::fs::copy(&path_b, &path_a).unwrap();
+    let (mut plain, _) = core(dir.path(), None);
+    plain
+        .handle(Request::Unlock {
+            password: z(PASSWORD),
+        })
+        .unwrap();
+    assert_eq!(vault_info(&mut plain).unwrap().vault_id, id_b);
+}

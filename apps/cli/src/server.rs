@@ -193,7 +193,7 @@ pub fn resolve_locker(c: &mut Client, typed: &str) -> Result<Id16, String> {
     }
 }
 
-pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), String> {
+pub fn run_server(session: &Session, command: &ServerCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         ServerCommand::Invitation => {
@@ -540,7 +540,7 @@ fn member_id(member_keys: &[u8]) -> Result<Id16, String> {
         .map_err(|_| "réponse non valide du noyau.".to_owned())
 }
 
-pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), String> {
+pub fn run_locker(session: &Session, command: &LockerCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         LockerCommand::Create { name } => {
@@ -637,10 +637,7 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
 
 /// `appareil revoquer APPAREIL [--oui]` (ADR 0059): the member key of this device signs
 /// the revocation, published in every locker where the device appears.
-pub fn run_device_revoke(
-    session: &Session<'_>,
-    command: &DeviceRevokeCommand,
-) -> Result<(), String> {
+pub fn run_device_revoke(session: &Session, command: &DeviceRevokeCommand) -> Result<(), String> {
     let device = device_arg(&command.device)?;
     if !command.yes {
         if !crate::term::interactive() {
@@ -676,7 +673,7 @@ pub fn run_device_revoke(
 /// `appareil ajouter CODE` (ADR 0081): fetches the keys of the new device by its code,
 /// shows the member fingerprint to compare, certifies it on « oui », then waits until it has
 /// authenticated to add it to the shared lockers.
-pub fn run_device_enrol(session: &Session<'_>, command: &DeviceEnrolCommand) -> Result<(), String> {
+pub fn run_device_enrol(session: &Session, command: &DeviceEnrolCommand) -> Result<(), String> {
     if !crate::term::interactive() {
         return Err("l'ajout d'un appareil se confirme au terminal.".into());
     }
@@ -933,7 +930,7 @@ fn resolve_request(c: &mut Client, typed: &str) -> Result<Id16, String> {
     }
 }
 
-pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), String> {
+pub fn run_quorum(session: &Session, command: &QuorumCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         QuorumCommand::Prepare { locker, what } => {
@@ -1185,7 +1182,7 @@ fn resolve_ops(listed: &[QuarantinedOp], typed: &[String]) -> Result<Vec<OpId>, 
     Ok(out)
 }
 
-pub fn run_quarantine(session: &Session<'_>, command: &QuarantineCommand) -> Result<(), String> {
+pub fn run_quarantine(session: &Session, command: &QuarantineCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let locker = resolve_locker(&mut c, &command.locker)?;
     let ServerReply::Quarantine { ops, can_decide } =

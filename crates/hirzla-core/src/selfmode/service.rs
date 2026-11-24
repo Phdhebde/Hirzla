@@ -270,9 +270,11 @@ impl Core {
         }
         match Vault::open_with_recovery(&self.config.vault_path, &shares) {
             Ok(mut v) => {
+                // Before the password is changed: never on another vault than the expected one.
+                self.expected(&v).map_err(general)?;
                 let kdf = v.password_cost().map_err(verr)?;
                 v.set_password(new_password, kdf).map_err(verr)?;
-                self.opened(v);
+                self.opened(v).map_err(general)?;
                 Ok(SelfReply::Done)
             }
             Err(VaultError::Unlock) => {

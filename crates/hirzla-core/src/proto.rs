@@ -16,12 +16,16 @@ use zeroize::Zeroizing;
 use crate::generator::{self, Estimate, Generated, Spec};
 
 /// Latest version of the protocol spoken by this build.
-pub const PROTOCOL_VERSION: u64 = 15;
+pub const PROTOCOL_VERSION: u64 = 16;
 /// Versions this build accepts for the general operations. Versions 3 to 6 and 9 to 14
 /// belong to families of operations with their own code ranges.
-pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8, 15];
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8, 15, 16];
 /// First version in which `Update` adds and removes URLs and tags (ADR 0082).
 pub const SETS_VERSION: u64 = 15;
+/// First version that knows `VaultInfo` (ADR 0085).
+pub const VAULT_INFO_VERSION: u64 = 16;
+/// Longest server address in a `VaultInfo` reply, in bytes (`docs/format.md` § 5.5).
+pub const MAX_SERVER_ADDRESS: usize = 2048;
 /// Largest frame accepted, in bytes (length prefix excluded).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Longest master password, in bytes.
@@ -168,6 +172,8 @@ pub enum Op {
     GenerateWith = 14,
     /// URLs and tags of one secret (version 15, ADR 0082).
     ReadSets = 15,
+    /// Identifier, mode and server of the vault this core serves (version 16, ADR 0085).
+    VaultInfo = 16,
     /// Ask the desktop application to bring its window to the front (version 8, ADR 0071).
     ShowApp = 130,
     /// The desktop application asks whether its window was called for (version 8, ADR 0071).
@@ -177,7 +183,7 @@ pub enum Op {
 }
 
 impl Op {
-    const ALL: [Op; 18] = [
+    const ALL: [Op; 19] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -193,6 +199,7 @@ impl Op {
         Op::Fill,
         Op::GenerateWith,
         Op::ReadSets,
+        Op::VaultInfo,
         Op::ShowApp,
         Op::AppPoll,
         Op::AutoTyped,
@@ -223,6 +230,7 @@ impl Op {
             Op::Fill => "fill",
             Op::GenerateWith => "generate_with",
             Op::ReadSets => "read_sets",
+            Op::VaultInfo => "vault_info",
             Op::ShowApp => "show_app",
             Op::AppPoll => "app_poll",
             Op::AutoTyped => "auto_typed",
@@ -238,6 +246,7 @@ impl Op {
             Op::GenerateWith => 7,
             Op::ShowApp | Op::AppPoll | Op::AutoTyped => 8,
             Op::ReadSets => SETS_VERSION,
+            Op::VaultInfo => VAULT_INFO_VERSION,
             _ => 1,
         }
     }
@@ -499,6 +508,9 @@ pub enum Request {
         /// The target is a terminal.
         terminal: bool,
     },
+    /// Which vault this core serves: its identifier and, once open, its mode and server
+    /// (v16, ADR 0085). Carries nothing.
+    VaultInfo,
 }
 
 /// What the desktop application typed into another application (ADR 0072).
@@ -630,6 +642,7 @@ impl Request {
             Request::ShowApp => Op::ShowApp,
             Request::AppPoll => Op::AppPoll,
             Request::AutoTyped { .. } => Op::AutoTyped,
+            Request::VaultInfo => Op::VaultInfo,
         }
     }
 
@@ -650,7 +663,8 @@ impl Request {
             | Request::Lock
             | Request::Shutdown
             | Request::ShowApp
-            | Request::AppPoll => None,
+            | Request::AppPoll
+            | Request::VaultInfo => None,
             Request::AutoTyped { what, terminal } => Some(Value::map(vec![
                 (1, Value::Uint(*what as u64)),
                 (2, Value::Bool(*terminal)),
@@ -838,6 +852,7 @@ impl Request {
             Op::Shutdown => none(Request::Shutdown),
             Op::ShowApp => none(Request::ShowApp),
             Op::AppPoll => none(Request::AppPoll),
+            Op::VaultInfo => none(Request::VaultInfo),
             Op::AutoTyped => {
                 let f = fields(args()?, &[1, 2])?;
                 let req = |k| f.req(k).map_err(|_| ErrorCode::Malformed);
@@ -1050,6 +1065,27 @@ pub struct StatusInfo {
     pub versions: Vec<u64>,
 }
 
+/// Mode of an open vault, as `VaultInfo` reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultMode {
+    /// Self: attached to no server.
+    Standalone = 0,
+    /// Attached to a server.
+    Server = 1,
+}
+
+/// Reply to [`Request::VaultInfo`] (`docs/api-locale.md` § 25.4). Nothing in it is secret:
+/// the identifier is in the clear header of the vault file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultInfo {
+    /// Identifier of the vault this core serves.
+    pub vault_id: Id16,
+    /// Mode, known only while the vault is open.
+    pub mode: Option<VaultMode>,
+    /// Address of the server (`hirzla://host:port`), in server mode only.
+    pub server: Option<String>,
+}
+
 /// A secret in a listing (index data only: never a password or a note).
 #[derive(Clone, PartialEq, Eq)]
 pub struct ListEntry {
@@ -1130,6 +1166,8 @@ pub enum Reply {
         /// Tags.
         tags: Vec<Zeroizing<String>>,
     },
+    /// The vault this core serves (v16).
+    VaultInfo(VaultInfo),
 }
 
 impl std::fmt::Debug for Reply {
@@ -1146,6 +1184,7 @@ impl std::fmt::Debug for Reply {
             Reply::GeneratedWith(_) => "Reply::GeneratedWith",
             Reply::Flag(_) => "Reply::Flag",
             Reply::Sets { .. } => "Reply::Sets",
+            Reply::VaultInfo(_) => "Reply::VaultInfo",
         })
     }
 }
@@ -1321,6 +1360,16 @@ impl Reply {
                 };
                 Some(Value::map(vec![(1, texts(urls)), (2, texts(tags))]))
             }
+            Reply::VaultInfo(info) => {
+                let mut m = vec![(1, Value::bytes(&info.vault_id))];
+                if let Some(mode) = info.mode {
+                    m.push((2, Value::Uint(mode as u64)));
+                }
+                if let Some(server) = &info.server {
+                    m.push((3, Value::text(server)));
+                }
+                Some(Value::map(m))
+            }
         }
     }
 
@@ -1331,6 +1380,7 @@ impl Reply {
             Reply::GeneratedWith(_) => 7,
             Reply::Flag(_) => 8,
             Reply::Sets { .. } => SETS_VERSION,
+            Reply::VaultInfo(_) => VAULT_INFO_VERSION,
             _ => 1,
         }
     }
@@ -1552,6 +1602,31 @@ impl Reply {
                     urls: text_list(req(1)?)?,
                     tags: text_list(req(2)?)?,
                 }
+            }
+            Op::VaultInfo => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2, 3])?;
+                let mode = match b.opt(2).map(uint).transpose() {
+                    Ok(None) => None,
+                    Ok(Some(0)) => Some(VaultMode::Standalone),
+                    Ok(Some(1)) => Some(VaultMode::Server),
+                    _ => return Err(ErrorCode::Malformed),
+                };
+                let server = b
+                    .opt(3)
+                    .map(|s| text_max(s, MAX_SERVER_ADDRESS).map(str::to_owned))
+                    .transpose()
+                    .map_err(|_| ErrorCode::Malformed)?;
+                // The server goes with the server mode, and only with it.
+                if server.as_ref().is_some_and(String::is_empty)
+                    || server.is_some() != (mode == Some(VaultMode::Server))
+                {
+                    return Err(ErrorCode::Malformed);
+                }
+                Reply::VaultInfo(VaultInfo {
+                    vault_id: id16(b.req(1).map_err(|_| ErrorCode::Malformed)?)?,
+                    mode,
+                    server,
+                })
             }
             Op::Fill => {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2])?;
