@@ -589,3 +589,243 @@ fn the_single_vault_of_a_workstation_is_adopted_and_joined_by_a_second_one() {
     ok(&s.run(&["--coffre", "client", "stop"], None));
     ok(&s.run(&["stop"], None));
 }
+
+/// The directory of the default vault location of a station, where `coffres creer` puts a
+/// vault it was given no file for.
+fn data_dir(s: &Station) -> PathBuf {
+    if cfg!(windows) {
+        s.path("appdata").join("Hirzla")
+    } else if cfg!(target_os = "macos") {
+        s.path("Library").join("Application Support").join("Hirzla")
+    } else {
+        s.path("data").join("hirzla")
+    }
+}
+
+/// The vault files `coffres creer` named itself in `dir`: `coffre-<16 hex digits>.hirzla`.
+fn fresh_vaults(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .and_then(|n| n.strip_prefix("coffre-"))
+                .and_then(|n| n.strip_suffix(".hirzla"))
+                .is_some_and(|tag| tag.len() == 16 && tag.chars().all(|c| c.is_ascii_hexdigit()))
+        })
+        .collect()
+}
+
+/// Waits until `hirzla coffres` says `state` for `alias`: the core of a vault just created
+/// is started without being waited for.
+fn wait_for_state(s: &Station, alias: &str, state: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    loop {
+        let listing = ok(&s.run(&["coffres"], None));
+        if line_of(&listing, alias).contains(state) {
+            return listing;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{alias} never became « {state} »:\n{listing}"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// On Unix, no provisional socket is left in the runtime directory of the station: the
+/// provisional core removed its own when it stopped. (A Windows pipe leaves nothing.)
+fn no_provisional_endpoint_is_left(s: &Station) {
+    #[cfg(unix)]
+    {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let left: Vec<String> = std::fs::read_dir(s.runtime.path().join("hirzla"))
+                .map(|d| {
+                    d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                        .filter(|n| n.starts_with("core-new-"))
+                        .collect()
+                })
+                .unwrap_or_default();
+            if left.is_empty() {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "provisional sockets are left: {left:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    #[cfg(windows)]
+    let _ = s;
+}
+
+const KDF: [&str; 4] = ["--kdf-memory", "65536", "--kdf-passes", "3"];
+
+/// `coffres creer` (`docs/api-locale.md` § 25.9): a vault of more is created by a
+/// provisional core, registered under the identifier that core drew, then served, locked,
+/// by its own core at the endpoint of the vault. No `--socket` anywhere.
+#[test]
+fn a_vault_of_more_is_created_through_a_provisional_core() {
+    let s = Station::new();
+    let a = s.path("personnel.hirzla");
+    let a_str = a.to_str().unwrap();
+
+    // The first vault: created at the file named, registered, default, locked.
+    let mut create = vec!["coffres", "creer", "perso", a_str];
+    create.extend(KDF);
+    let said = ok(&s.run(&create, Some(MASTER_A)));
+    s.started("perso");
+    assert!(said.contains("« perso » créé et inscrit"), "{said}");
+    assert!(said.contains("lisible sans déverrouiller"), "{said}");
+    assert!(said.contains("coffre par défaut"), "{said}");
+    assert!(said.contains("verrouillé"), "{said}");
+    assert!(!said.contains(MASTER_A), "{said}");
+    assert!(a.is_file() && s.registry().is_file());
+    no_provisional_endpoint_is_left(&s);
+    // Its own core serves it at the endpoint of the vault: the listing reaches it there.
+    let listing = wait_for_state(&s, "perso", "verrouillé");
+    assert!(
+        line_of(&listing, "perso").starts_with("* perso"),
+        "{listing}"
+    );
+    assert!(line_of(&listing, "perso").ends_with(a_str), "{listing}");
+    // The password given at the creation opens it; another one does not.
+    assert!(fails(&s.run(&["unlock"], Some(MASTER_B))).contains("déverrouillage refusé"));
+    ok(&s.run(&["unlock"], Some(MASTER_A)));
+    ok(&s.run(&["set", "Perso-Banque"], Some(SECRET_A)));
+
+    // A second one, without a file: next to the default vault location, under a name
+    // drawn at random; not the default vault.
+    assert!(fresh_vaults(&data_dir(&s)).is_empty());
+    let mut create = vec!["coffres", "creer", "Client X"];
+    create.extend(KDF);
+    let said = ok(&s.run(&create, Some(MASTER_B)));
+    s.started("Client X");
+    assert!(said.contains("« Client X » créé et inscrit"), "{said}");
+    assert!(!said.contains("coffre par défaut"), "{said}");
+    let fresh = fresh_vaults(&data_dir(&s));
+    assert_eq!(fresh.len(), 1, "{fresh:?}");
+    assert!(said.contains(fresh[0].to_str().unwrap()), "{said}");
+    no_provisional_endpoint_is_left(&s);
+    wait_for_state(&s, "Client X", "verrouillé");
+    ok(&s.run(&["--coffre", "client x", "unlock"], Some(MASTER_B)));
+    ok(&s.run(
+        &["--coffre", "Client X", "set", "Client-VPN"],
+        Some(SECRET_B),
+    ));
+
+    // Two cores, two vaults open at the same time, each with its own secrets.
+    let listing = ok(&s.run(&["coffres"], None));
+    for alias in ["perso", "Client X"] {
+        let line = line_of(&listing, alias);
+        assert!(
+            line.contains("ouvert") && line.contains("Self"),
+            "{listing}"
+        );
+    }
+    let ls_a = ok(&s.run(&["ls"], None));
+    assert!(
+        ls_a.contains("Perso-Banque") && !ls_a.contains("Client-VPN"),
+        "{ls_a}"
+    );
+    assert_eq!(
+        ok(&s.run(&["--coffre", "Client X", "get", "Client-VPN"], None)),
+        format!("{SECRET_B}\n")
+    );
+
+    // Refusals, each said in French, each before any core is started: neither the registry
+    // nor the files change.
+    let before = std::fs::read(s.registry()).unwrap();
+    let free = s.path("libre.hirzla");
+    let free_str = free.to_str().unwrap();
+    let junk = s.path("faux.hirzla");
+    std::fs::write(&junk, b"pas un coffre").unwrap();
+    let long = "x".repeat(65);
+    for (args, message) in [
+        (["coffres", "creer", "PERSO", free_str], "porte déjà ce nom"),
+        (["coffres", "creer", "autre", a_str], "déjà inscrit"),
+        (
+            ["coffres", "creer", "autre", junk.to_str().unwrap()],
+            "un fichier existe déjà",
+        ),
+        (
+            ["coffres", "creer", long.as_str(), free_str],
+            "nom de coffre refusé",
+        ),
+    ] {
+        let err = fails(&s.run(&args, Some(MASTER_A)));
+        assert!(err.contains(message), "{args:?}: {err}");
+    }
+    assert_eq!(std::fs::read(s.registry()).unwrap(), before);
+    assert!(!free.exists());
+    assert_eq!(std::fs::read(&junk).unwrap(), b"pas un coffre");
+    assert_eq!(fresh_vaults(&data_dir(&s)).len(), 1);
+
+    // `init` on a registered vault creates nothing and points to `coffres creer`.
+    let err = fails(&s.run(&["init"], Some(MASTER_A)));
+    assert!(err.contains("coffres creer"), "{err}");
+
+    // A creation given up (no password on the input): nothing is created or registered,
+    // and the provisional core stops with its client.
+    let err = fails(&s.run(&["coffres", "creer", "abandon", free_str], Some("")));
+    assert!(err.contains("valeur vide"), "{err}");
+    assert!(!free.exists());
+    assert_eq!(std::fs::read(s.registry()).unwrap(), before);
+    no_provisional_endpoint_is_left(&s);
+}
+
+/// `coffres rejoindre` with a link the core refuses: the vault was created before the
+/// server was asked, so it is registered all the same, and the failure is reported
+/// (§ 25.9, « Échecs »). `coffres enroler` is confirmed at a terminal: without one, nothing
+/// is started.
+#[test]
+fn a_vault_created_before_a_refused_join_is_registered() {
+    let s = Station::new();
+    let file = s.path("societe.hirzla");
+    let file_str = file.to_str().unwrap();
+
+    let out = s.run(
+        &[
+            "coffres",
+            "enroler",
+            "société",
+            "hirzla-invitation:x",
+            file_str,
+        ],
+        None,
+    );
+    assert!(fails(&out).contains("terminal"));
+    assert!(!file.exists() && !s.registry().exists());
+
+    let out = s.run(
+        &[
+            "coffres",
+            "rejoindre",
+            "société",
+            "hirzla-invitation:ceci-n-est-pas-un-lien",
+            file_str,
+        ],
+        Some(MASTER_A),
+    );
+    s.started("société");
+    let err = fails(&out);
+    assert!(err.contains("lien d'invitation non valide"), "{err}");
+    assert!(err.contains("créé et inscrit, sans serveur"), "{err}");
+    let said = String::from_utf8(out.stdout.clone()).unwrap();
+    assert!(said.contains("« société » créé et inscrit"), "{said}");
+    assert!(file.is_file());
+    no_provisional_endpoint_is_left(&s);
+    wait_for_state(&s, "société", "verrouillé");
+    ok(&s.run(&["unlock"], Some(MASTER_A)));
+    let listing = ok(&s.run(&["coffres"], None));
+    let line = line_of(&listing, "société");
+    assert!(
+        line.contains("ouvert") && line.contains("Self"),
+        "{listing}"
+    );
+}
