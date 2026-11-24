@@ -8,7 +8,22 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
-## [Non publié]
+## [1.2.0] — 2026-11-24
+
+### Adresses web et étiquettes modifiables (ADR 0082)
+
+- Application : le formulaire de modification d'un secret montre ses adresses web et ses
+  étiquettes, et permet d'en ajouter, d'en corriger ou d'en retirer. Jusqu'ici, elles ne se
+  saisissaient qu'à la création. Adresses : mots de passe et codes TOTP ; étiquettes : tous
+  les secrets modifiables, connexions SSH et RDP comprises. Un code TOTP peut aussi recevoir
+  des adresses dès sa création.
+- Ligne de commande : sur un secret existant, `hirzla set NOM --url U --tag T` ajoute ces
+  éléments, `--retirer-url U` et `--retirer-tag T` les retirent ; sans `--identifiant` ni
+  `--generer`, la valeur du secret n'est plus redemandée.
+- Seuls les éléments ajoutés et retirés sont transmis, jamais la liste entière : un ajout
+  fait entre-temps sur un autre appareil est conservé.
+- API locale version 15 (`docs/api-locale.md` § 24). Aucun changement du format du coffre
+  ni du protocole de synchronisation.
 
 ### Clés d'accès (passkeys, ADR 0079)
 
@@ -30,6 +45,11 @@ Le corps de la page de chaque version sur GitHub reprend la section correspondan
   clé privée.
 - API locale version 14 (`docs/api-locale.md` § 23) ; dépendances `coset` (COSE, CBOR) et
   `psl` (liste des suffixes publics). Hors de la configuration évaluée CSPN.
+
+### Sécurité des dépendances
+
+- `url` 2.5.9 (RUSTSEC-2026-0592 : dépassement de pile sur des adresses `blob:` imbriquées)
+  et `cookie` 0.18.3 (RUSTSEC-2026-0594).
 
 ## [1.1.2] — 2026-11-19
 
