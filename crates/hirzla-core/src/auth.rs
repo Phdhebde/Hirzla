@@ -109,6 +109,7 @@ impl ClientProfile {
                 | Request::Unlock { .. }
                 | Request::List { .. }
                 | Request::Read { .. }
+                | Request::ReadSets { .. }
                 | Request::Update { .. }
                 | Request::Delete { .. }
                 // Only the desktop application takes the call for its window.
@@ -379,10 +380,12 @@ mod tests {
                 selector: sel(),
                 field: Field::Password,
             },
+            Request::ReadSets { selector: sel() },
             Request::Update {
                 selector: sel(),
                 set: vec![],
                 clear: vec![Field::Notes],
+                sets: Default::default(),
             },
             Request::Delete {
                 selector: sel(),

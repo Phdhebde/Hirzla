@@ -27,6 +27,9 @@ Commandes :
                           demandée (ou lue sur l'entrée standard).
                           --identifiant U, --url URL, --tag T, --note, --generer [LONGUEUR],
                           --casier CASIER (casier partagé, à la création).
+                          Secret existant : --url et --tag ajoutent, --retirer-url URL et
+                          --retirer-tag T retirent ; sans --identifiant ni --generer, la
+                          valeur n'est pas redemandée.
   rm NOM                  Met un secret à la corbeille. --purger : suppression définitive.
                           --id ID.
   gen [TAILLE]            Génère un mot de passe (24 caractères par défaut) et affiche
@@ -437,6 +440,8 @@ pub enum Command {
         username: Option<String>,
         urls: Vec<String>,
         tags: Vec<String>,
+        remove_urls: Vec<String>,
+        remove_tags: Vec<String>,
         note: bool,
         generate: Option<u32>,
         locker: Option<String>,
@@ -771,6 +776,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "--identifiant",
         "--url",
         "--tag",
+        "--retirer-url",
+        "--retirer-tag",
         "--kdf-memory",
         "--kdf-passes",
         "--kdf-lanes",
@@ -839,6 +846,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--identifiant",
             "--url",
             "--tag",
+            "--retirer-url",
+            "--retirer-tag",
             "--note",
             "--generer",
             "--casier",
@@ -1159,6 +1168,8 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 username: one("--identifiant")?,
                 urls: all("--url"),
                 tags: all("--tag"),
+                remove_urls: all("--retirer-url"),
+                remove_tags: all("--retirer-tag"),
                 note: has("--note"),
                 generate,
                 locker: one("--casier")?,
@@ -1875,8 +1886,35 @@ mod tests {
                 username: None,
                 urls: vec!["a".into(), "b".into()],
                 tags: vec![],
+                remove_urls: vec![],
+                remove_tags: vec![],
                 note: false,
                 generate: Some(24),
+                locker: None,
+            }
+        );
+        assert_eq!(
+            p(&[
+                "set",
+                "x",
+                "--retirer-url",
+                "a",
+                "--tag",
+                "t",
+                "--retirer-tag",
+                "u"
+            ])
+            .unwrap()
+            .command,
+            Command::Set {
+                name: "x".into(),
+                username: None,
+                urls: vec![],
+                tags: vec!["t".into()],
+                remove_urls: vec!["a".into()],
+                remove_tags: vec!["u".into()],
+                note: false,
+                generate: None,
                 locker: None,
             }
         );

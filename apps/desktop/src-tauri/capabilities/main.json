@@ -15,6 +15,7 @@
     "allow-copy-field",
     "allow-create-secret",
     "allow-update-secret",
+    "allow-secret-sets",
     "allow-delete-secret",
     "allow-generate-password",
     "allow-copy-generated",

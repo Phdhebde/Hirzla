@@ -319,6 +319,7 @@ fn trash_history_and_restore() {
         selector: Selector::Id { locker, id },
         set: vec![(Field::Password, ApiValue::Text(z(SECRET_V2)))],
         clear: vec![],
+        sets: Default::default(),
     })
     .unwrap();
     let SelfReply::History(versions) = ok(&mut c, SelfRequest::History { locker, secret: id })

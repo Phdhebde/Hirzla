@@ -13,6 +13,7 @@ const COMMANDS: &[&str] = &[
     "copy_field",
     "create_secret",
     "update_secret",
+    "secret_sets",
     "delete_secret",
     "generate_password",
     "copy_generated",
