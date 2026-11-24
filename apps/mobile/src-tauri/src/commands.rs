@@ -228,8 +228,9 @@ fn id16(s: &str) -> Result<Id16, MobileError> {
         _ => None,
     };
     let mut out = [0u8; 16];
-    for (i, pair) in b.chunks_exact(2).enumerate() {
-        match (digit(pair[0]), digit(pair[1])) {
+    let (pairs, _) = b.as_chunks::<2>();
+    for (i, &[high, low]) in pairs.iter().enumerate() {
+        match (digit(high), digit(low)) {
             (Some(h), Some(l)) => out[i] = (h << 4) | l,
             _ => return Err(bad),
         }

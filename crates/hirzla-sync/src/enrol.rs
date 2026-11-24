@@ -403,7 +403,7 @@ mod tests {
         let typed = format!(
             " {}-{} ",
             code[..10].to_lowercase(),
-            &code[10..].to_lowercase()
+            code[10..].to_lowercase()
         );
         assert_eq!(normalise_code(&typed).as_deref(), Some(code.as_str()));
         assert!(normalise_code("ABC").is_none());
