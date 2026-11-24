@@ -12,12 +12,19 @@ use crate::registry::{VaultRegistry, MAX_VAULTS, REGISTRY_FILE};
 
 const TIMEOUT: Duration = Duration::from_millis(200);
 
-/// A temporary directory reached without symbolic links (`/var` is a link on macOS).
+/// A temporary directory reached without symbolic links (`/var` is a link on macOS), and
+/// private (mode 0700 on Unix): a client refuses a socket in a directory open to others.
 fn tempdir() -> tempfile::TempDir {
     let base = std::env::temp_dir();
     #[cfg(unix)]
     let base = base.canonicalize().unwrap();
-    tempfile::tempdir_in(base).unwrap()
+    let dir = tempfile::tempdir_in(base).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    dir
 }
 
 struct Station {
