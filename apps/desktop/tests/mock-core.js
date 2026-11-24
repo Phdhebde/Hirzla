@@ -238,6 +238,11 @@
     if (sid === id(2) || e.kind === "totp") f.push("totp");
     return f;
   };
+  // Web addresses of each secret (ADR 0082): built from its hosts until `update_secret`
+  // changes them.
+  const urlsById = new Map();
+  const urlsOf = (e) => urlsById.get(e.id) ?? (e.kind === "connection" ? [] : e.hosts.map((x) => `https://${x}/`));
+  const hostOf = (u) => { try { return new URL(u).hostname; } catch { return null; } };
   const refuse = (code, message) => Promise.reject({ code, message, retry_after_s: null });
   const delay = (v) => new Promise((r) => setTimeout(() => r(v), 30));
   const handlers = {
@@ -275,7 +280,21 @@
         for (const k of ["username", "password", "notes"]) if (a.changes[k]) f.add(k);
         for (const k of a.changes.clear || []) f.delete(k);
         changedFields.set(e.id, [...f]);
+        const c = a.changes;
+        if (c.add_urls || c.remove_urls) {
+          const urls = urlsOf(e).filter((u) => !(c.remove_urls || []).includes(u)).concat(c.add_urls || []);
+          urlsById.set(e.id, urls);
+          e.hosts = [...new Set(urls.map(hostOf).filter(Boolean))];
+        }
+        if (c.add_tags || c.remove_tags) {
+          e.tags = [...new Set(e.tags.filter((t) => !(c.remove_tags || []).includes(t)).concat(c.add_tags || []))].sort();
+        }
       }
+    },
+    secret_sets: (a) => {
+      const e = entries.find((x) => x.id === a.target.id);
+      if (!e) return refuse("not_found", "Secret ou champ introuvable.");
+      return { urls: ["password", "totp"].includes(e.kind) ? urlsOf(e) : [], tags: [...e.tags] };
     },
     delete_secret: (a) => {
       const i = entries.findIndex((x) => x.id === a.target.id);

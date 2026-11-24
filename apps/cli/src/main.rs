@@ -26,8 +26,8 @@ use std::time::{Duration, Instant};
 use hirzla_core::auth::ServerRefusal;
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{
-    ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, Reply, Request, Selector, StatusInfo,
-    VaultState, MAX_PASSWORD,
+    ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, Reply, Request, Selector, SetChanges,
+    StatusInfo, VaultState, MAX_PASSWORD,
 };
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningStatus;
@@ -620,12 +620,45 @@ fn run(args: &Args) -> Result<(), String> {
 }
 
 /// `set`: creates the secret, or updates the active one with that exact title.
+/// The URLs and tags to add to and remove from a secret, from what it holds now
+/// (`ReadSets`, version 15): elements already there are not added again, absent ones not
+/// removed.
+fn set_changes(
+    c: &mut Client,
+    selector: &Selector,
+    add_urls: &[String],
+    add_tags: &[String],
+    remove_urls: &[String],
+    remove_tags: &[String],
+) -> Result<SetChanges, String> {
+    let Reply::Sets { urls, tags } = call(
+        c,
+        &Request::ReadSets {
+            selector: selector.clone(),
+        },
+    )?
+    else {
+        return Err("réponse non valide du noyau.".into());
+    };
+    let next = |old: &[Zeroizing<String>], add: &[String], remove: &[String]| {
+        let mut out: Vec<Zeroizing<String>> = old.to_vec();
+        out.extend(add.iter().map(|a| Zeroizing::new(a.clone())));
+        out.retain(|x| !remove.iter().any(|r| r == x.as_str()));
+        out
+    };
+    let new_urls = next(&urls, add_urls, remove_urls);
+    let new_tags = next(&tags, add_tags, remove_tags);
+    Ok(SetChanges::between(&urls, &new_urls, &tags, &new_tags))
+}
+
 fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
     let Command::Set {
         name,
         username,
         urls,
         tags,
+        remove_urls,
+        remove_tags,
         note,
         generate,
         locker,
@@ -633,6 +666,8 @@ fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
     else {
         return Ok(());
     };
+    let touches_sets =
+        !(urls.is_empty() && tags.is_empty() && remove_urls.is_empty() && remove_tags.is_empty());
     let (name, username, note, generate) = (name.as_str(), username.as_deref(), *note, *generate);
     let z = |s: &str| Zeroizing::new(s.to_owned());
     let mut c = session.connect(false)?;
@@ -667,6 +702,37 @@ fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
     if is_note && generate.is_some() {
         return Err("--generer ne s'applique pas à une note.".into());
     }
+    if existing.is_none() && !(remove_urls.is_empty() && remove_tags.is_empty()) {
+        return Err(
+            "--retirer-url et --retirer-tag ne s'appliquent qu'à un secret existant.".into(),
+        );
+    }
+    // Only URLs or tags to change on an existing secret: its value is not asked again.
+    if let Some(e) = existing
+        .as_ref()
+        .filter(|_| touches_sets && username.is_none() && generate.is_none() && !note)
+    {
+        let selector = Selector::Id {
+            locker: e.locker,
+            id: e.id,
+        };
+        let sets = set_changes(&mut c, &selector, urls, tags, remove_urls, remove_tags)?;
+        if sets.is_empty() {
+            say("Rien à modifier.");
+            return Ok(());
+        }
+        call(
+            &mut c,
+            &Request::Update {
+                selector,
+                set: Vec::new(),
+                clear: Vec::new(),
+                sets,
+            },
+        )?;
+        say("Secret modifié.");
+        return Ok(());
+    }
 
     let value = match generate {
         Some(length) => match call(
@@ -692,18 +758,22 @@ fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
     }
     match existing {
         Some(e) => {
-            if !urls.is_empty() || !tags.is_empty() {
-                return Err("--url et --tag ne s'appliquent qu'à la création d'un secret.".into());
-            }
+            let selector = Selector::Id {
+                locker: e.locker,
+                id: e.id,
+            };
+            let sets = if touches_sets {
+                set_changes(&mut c, &selector, urls, tags, remove_urls, remove_tags)?
+            } else {
+                SetChanges::default()
+            };
             call(
                 &mut c,
                 &Request::Update {
-                    selector: Selector::Id {
-                        locker: e.locker,
-                        id: e.id,
-                    },
+                    selector,
                     set: fields,
                     clear: Vec::new(),
+                    sets,
                 },
             )?;
             say("Secret modifié.");

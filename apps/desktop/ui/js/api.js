@@ -166,6 +166,8 @@ export const api = {
   create: (secret) => call("create_secret", { secret }),
   /** @param {SecretRef} target @param {Record<string, unknown>} changes @returns {Promise<void>} */
   update: (target, changes) => call("update_secret", { target, changes }),
+  /** @param {SecretRef} target @returns {Promise<{ urls: string[], tags: string[] }>} */
+  secretSets: (target) => call("secret_sets", { target }),
   /** @param {SecretRef} target @param {boolean} purge @returns {Promise<void>} */
   remove: (target, purge) => call("delete_secret", { target, purge }),
   /** @param {{length: number, lower: boolean, upper: boolean, digits: boolean, symbols: boolean}} options @returns {Promise<string>} */

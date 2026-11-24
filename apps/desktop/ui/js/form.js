@@ -4,6 +4,8 @@
 // A connection (SSH, RDP) is stored and shown; the application opens no session (ADR 0067).
 // A TOTP is set from the otpauth:// address or the base32 key the site gives, sent to the core,
 // which keeps it sealed and computes the codes; the form never loads it back (ADR 0078).
+// Web addresses and tags are loaded when the form opens on a secret; what the user changes in
+// them goes to the core as elements to add and to remove, never as a whole new list (ADR 0082).
 
 import { api } from "./api.js";
 import { announce, byId, h, showError } from "./dom.js";
@@ -26,6 +28,22 @@ export function looksLikeTotp(text) {
 }
 
 const TOTP_HELP = "Collez l'adresse « otpauth://totp/… » ou la clé secrète en base32 (au moins 16 caractères) donnée par le site.";
+
+/** @param {string} text One web address per line. */
+const urlList = (text) => text.split("\n").map((u) => u.trim()).filter(Boolean);
+/** @param {string} text Tags separated by commas. */
+const tagList = (text) => text.split(",").map((t) => t.trim()).filter(Boolean);
+
+/**
+ * What to add and what to remove to turn `before` into `after`, each element once.
+ * @param {string[]} before @param {string[]} after
+ * @returns {{ add: string[], remove: string[] }}
+ */
+export function listChanges(before, after) {
+  const add = [...new Set(after.filter((x) => !before.includes(x)))];
+  const remove = [...new Set(before.filter((x) => !after.includes(x)))];
+  return { add, remove };
+}
 
 /** Kind of the form that changes an entry of the list. @param {Entry | null} entry @returns {FormKind} */
 function kindOf(entry) {
@@ -85,6 +103,12 @@ export class SecretForm {
     this.card = null;
     /** True once a private key file was chosen for this form. */
     this.keyChosen = false;
+    /**
+     * Web addresses and tags of the secret being changed, as loaded and as shown; null when
+     * they could not be read (an older core): the form then hides them.
+     * @type {{ urls: string[], tags: string[], urlsText: string, tagsText: string } | null}
+     */
+    this.sets = null;
     /** @type {{ id: string, name: string, personal: boolean }[]} Lockers a new secret may go to. */
     this.lockers = [];
     this.error = byId("secret-erreur");
@@ -143,10 +167,14 @@ export class SecretForm {
   /** Shows the fields of the chosen type: `data-pour` lists the types a field belongs to. */
   syncType() {
     const kind = this.kind();
-    for (const el of this.form.querySelectorAll("[data-pour], [data-creation]")) {
+    for (const el of this.form.querySelectorAll("[data-pour], [data-creation], [data-ensembles]")) {
       const kinds = el.getAttribute("data-pour");
       const foreign = kinds !== null && !kinds.split(" ").includes(kind);
-      /** @type {HTMLElement} */ (el).hidden = foreign || (!!this.editing && el.hasAttribute("data-creation"));
+      // `data-creation`: only for a new secret; `data-ensembles`: web addresses and tags,
+      // shown on a secret being changed only when the core could read them.
+      const unavailable = !!this.editing
+        && (el.hasAttribute("data-creation") || (el.hasAttribute("data-ensembles") && !this.sets));
+      /** @type {HTMLElement} */ (el).hidden = foreign || unavailable;
     }
     // A choice of locker only when there is one to make.
     byId("secret-casier-champ").hidden = !!this.editing || this.lockers.length < 2;
@@ -217,6 +245,19 @@ export class SecretForm {
         // Unknown: no clearing offered, an empty input keeps the value as before.
       }
     }
+    if (entry) {
+      try {
+        const sets = await api.secretSets({ locker: entry.locker, id: entry.id });
+        const urlsText = sets.urls.join("\n");
+        const tagsText = sets.tags.join(", ");
+        this.sets = { urls: sets.urls, tags: sets.tags, urlsText, tagsText };
+        this.urls.value = urlsText;
+        this.tags.value = tagsText;
+      } catch {
+        // An older core: addresses and tags stay as they are, and are not shown.
+        this.sets = null;
+      }
+    }
     if (!(await this.loadLinks())) return;
     this.locker.replaceChildren(
       ...this.lockers.map((l) =>
@@ -264,6 +305,7 @@ export class SecretForm {
     }
     this.card = null;
     this.keyChosen = false;
+    this.sets = null;
     for (const box of [this.clearPassword, this.clearNotes, this.clearTotp]) box.checked = false;
     this.password.disabled = false;
     this.notes.disabled = false;
@@ -378,6 +420,28 @@ export class SecretForm {
     return { set, clear };
   }
 
+  /**
+   * Web addresses and tags to add and remove on the secret being changed. An input left as it
+   * was loaded changes nothing, even when splitting it again would not give the same list.
+   * @returns {Record<string, string[]>}
+   */
+  setChanges() {
+    /** @type {Record<string, string[]>} */
+    const out = {};
+    const s = this.sets;
+    if (!s) return out;
+    const put = (/** @type {string} */ name, /** @type {{ add: string[], remove: string[] }} */ c) => {
+      if (c.add.length) out[`add_${name}`] = c.add;
+      if (c.remove.length) out[`remove_${name}`] = c.remove;
+    };
+    const kind = this.kind();
+    if ((kind === "password" || kind === "totp") && this.urls.value !== s.urlsText) {
+      put("urls", listChanges(s.urls, urlList(this.urls.value)));
+    }
+    if (this.tags.value !== s.tagsText) put("tags", listChanges(s.tags, tagList(this.tags.value)));
+    return out;
+  }
+
   async save() {
     if (this.saving) return;
     const title = this.title.value.trim();
@@ -403,7 +467,7 @@ export class SecretForm {
     try {
       let ref = null;
       const kind = this.kind();
-      const tags = () => this.tags.value.split(",").map((t) => t.trim()).filter(Boolean);
+      const tags = () => tagList(this.tags.value);
       const target = this.lockers.find((l) => l.id === this.locker.value);
       const locker = target && !target.personal ? target.id : null;
       if (kind === "ssh" || kind === "rdp") {
@@ -411,12 +475,15 @@ export class SecretForm {
         if (!changes) return;
         const e = this.editing;
         if (e) {
-          if (Object.keys(changes.set).length === 0 && changes.clear.length === 0) {
+          const sets = this.setChanges();
+          const fieldsChanged = Object.keys(changes.set).length > 0 || changes.clear.length > 0;
+          if (!fieldsChanged && Object.keys(sets).length === 0) {
             this.dialog.close();
             return;
           }
           ref = { locker: e.locker, id: e.id };
-          await api.updateConnection(ref, changes.set, changes.clear);
+          if (fieldsChanged) await api.updateConnection(ref, changes.set, changes.clear);
+          if (Object.keys(sets).length) await api.update(ref, sets);
           announce("Connexion modifiée.");
         } else {
           ref = await api.createConnection({ kind, locker, fields: changes.set, tags: tags() });
@@ -444,6 +511,8 @@ export class SecretForm {
         const rest = {};
         if (this.notes.value) rest.notes = this.notes.value;
         if (this.favorite.checked) rest.favorite = true;
+        const urls = urlList(this.urls.value);
+        if (urls.length) rest.add_urls = [...new Set(urls)];
         if (Object.keys(rest).length) await api.update(ref, rest);
         announce("Code TOTP rangé dans le coffre.");
       } else if (this.editing) {
@@ -479,6 +548,7 @@ export class SecretForm {
         else if (this.notes.value) changes.notes = this.notes.value;
         if (this.favorite.checked !== e.favorite) changes.favorite = this.favorite.checked;
         if (clear.length) changes.clear = clear;
+        Object.assign(changes, this.setChanges());
         if (Object.keys(changes).length === 0 && !totpChanged) {
           this.dialog.close();
           return;
@@ -499,7 +569,7 @@ export class SecretForm {
         if (kind === "password") {
           secret.username = this.username.value || null;
           secret.password = this.password.value || null;
-          secret.urls = this.urls.value.split("\n").map((u) => u.trim()).filter(Boolean);
+          secret.urls = urlList(this.urls.value);
         }
         ref = await api.create(secret);
         if (typedTotp.trim()) {

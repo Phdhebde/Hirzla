@@ -106,6 +106,7 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::copy_field,
             commands::create_secret,
             commands::update_secret,
+            commands::secret_sets,
             commands::delete_secret,
             commands::generate_password,
             commands::copy_generated,

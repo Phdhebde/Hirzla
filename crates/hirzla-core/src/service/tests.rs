@@ -12,7 +12,7 @@ use zeroize::Zeroizing;
 
 use super::*;
 use crate::generator::{Profile, Spec};
-use crate::proto::classes;
+use crate::proto::{classes, SetChanges};
 
 const PASSWORD: &str = "maître-mot-de-passe-de-test";
 const SECRET: &str = "S3cr3t-Valeur-Unique-7f1c";
@@ -193,6 +193,7 @@ fn life_cycle_and_log_hygiene() {
         selector: by_id.clone(),
         set: vec![(Field::Password, ApiValue::Text(z("nouveau")))],
         clear: vec![Field::Username],
+        sets: Default::default(),
     })
     .unwrap();
     assert_eq!(
@@ -211,6 +212,7 @@ fn life_cycle_and_log_hygiene() {
             selector: by_id.clone(),
             set: vec![(Field::SshPassphrase, ApiValue::Text(z("x")))],
             clear: vec![],
+            sets: Default::default(),
         })),
         ErrorCode::InvalidInput
     );
@@ -603,4 +605,177 @@ fn auto_typed_is_one_log_line_of_fixed_words() {
         log.contains("event=auto_type what=password target=terminal"),
         "{log}"
     );
+}
+
+fn sets_of(c: &mut Core, selector: &Selector) -> (Vec<String>, Vec<String>) {
+    match c
+        .handle(Request::ReadSets {
+            selector: selector.clone(),
+        })
+        .unwrap()
+    {
+        Reply::Sets { urls, tags } => (
+            urls.iter().map(|u| u.to_string()).collect(),
+            tags.iter().map(|t| t.to_string()).collect(),
+        ),
+        _ => panic!(),
+    }
+}
+
+fn sets_update(selector: &Selector, sets: SetChanges) -> Request {
+    Request::Update {
+        selector: selector.clone(),
+        set: vec![],
+        clear: vec![],
+        sets,
+    }
+}
+
+/// `ReadSets` and the URL and tag changes of `Update` (version 15, ADR 0082).
+#[test]
+fn urls_and_tags_are_read_and_changed() {
+    let dir = tempdir();
+    let (mut c, sink) = core(dir.path(), None);
+    let read_locked = Request::ReadSets {
+        selector: Selector::Title(z(TITLE)),
+    };
+    assert_eq!(code(c.handle(read_locked)), ErrorCode::NoVault);
+    c.handle(Request::Init {
+        password: z(PASSWORD),
+        kdf: floor(),
+    })
+    .unwrap();
+    let (locker, id) = create(&mut c, TITLE, SECRET);
+    let sel = Selector::Id { locker, id };
+    assert_eq!(
+        sets_of(&mut c, &sel),
+        (
+            vec!["https://github.com/login".to_owned()],
+            vec!["dev".to_owned()]
+        )
+    );
+
+    // Add a URL and a tag, remove the old URL, in one update with a field.
+    c.handle(Request::Update {
+        selector: sel.clone(),
+        set: vec![(Field::Username, ApiValue::Text(z("maxime")))],
+        clear: vec![],
+        sets: SetChanges {
+            add_urls: vec![z("https://gitlab.example:8443/users/sign_in")],
+            remove_urls: vec![z("https://github.com/login")],
+            add_tags: vec![z("code")],
+            remove_tags: vec![],
+        },
+    })
+    .unwrap();
+    let (urls, tags) = sets_of(&mut c, &sel);
+    assert_eq!(urls, ["https://gitlab.example:8443/users/sign_in"]);
+    assert_eq!(tags, ["code", "dev"]);
+    assert_eq!(
+        text(read(&mut c, TITLE, Field::Username).unwrap()),
+        "maxime"
+    );
+    // The index follows: the host of the new URL, the new tag.
+    match c
+        .handle(Request::List {
+            query: None,
+            include_trash: false,
+        })
+        .unwrap()
+    {
+        Reply::List { entries, .. } => {
+            assert_eq!(entries[0].hosts, ["gitlab.example".to_owned()]);
+            assert_eq!(entries[0].tags.len(), 2);
+        }
+        _ => panic!(),
+    }
+    // Removing an absent element changes nothing and is not an error.
+    c.handle(sets_update(
+        &sel,
+        SetChanges {
+            remove_tags: vec![z("absente")],
+            ..SetChanges::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(sets_of(&mut c, &sel).1, ["code", "dev"]);
+    // Every URL removed.
+    c.handle(sets_update(
+        &sel,
+        SetChanges {
+            remove_urls: vec![z("https://gitlab.example:8443/users/sign_in")],
+            remove_tags: vec![z("code"), z("dev")],
+            ..SetChanges::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(sets_of(&mut c, &sel), (vec![], vec![]));
+
+    // A note carries tags but no URL: the vault refuses one, and reads an empty list.
+    let (nl, nid) = create_for(&mut c, "Une note", SecretType::Note, &[]);
+    let note = Selector::Id {
+        locker: nl,
+        id: nid,
+    };
+    assert_eq!(
+        code(c.handle(sets_update(
+            &note,
+            SetChanges {
+                add_urls: vec![z("https://a.example")],
+                ..SetChanges::default()
+            },
+        ))),
+        ErrorCode::InvalidInput
+    );
+    c.handle(sets_update(
+        &note,
+        SetChanges {
+            add_tags: vec![z("t")],
+            ..SetChanges::default()
+        },
+    ))
+    .unwrap();
+    assert_eq!(sets_of(&mut c, &note), (vec![], vec!["t".to_owned()]));
+    // Beyond the vault's bounds: a tag too long, more than 32 URLs.
+    assert_eq!(
+        code(c.handle(sets_update(
+            &note,
+            SetChanges {
+                add_tags: vec![z(&"x".repeat(129))],
+                ..SetChanges::default()
+            },
+        ))),
+        ErrorCode::InvalidInput
+    );
+    assert_eq!(
+        code(
+            c.handle(sets_update(
+                &sel,
+                SetChanges {
+                    add_urls: (0..33)
+                        .map(|i| z(&format!("https://h{i}.example")))
+                        .collect(),
+                    ..SetChanges::default()
+                },
+            ))
+        ),
+        ErrorCode::InvalidInput
+    );
+    // Unknown secret.
+    assert_eq!(
+        code(c.handle(Request::ReadSets {
+            selector: Selector::Id {
+                locker,
+                id: [9; 16]
+            },
+        })),
+        ErrorCode::NotFound
+    );
+
+    // The log names the operation, never a URL or a tag.
+    let log = String::from_utf8(sink.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("read_sets"), "{log}");
+    for leak in ["gitlab", "github", "code", "absente"] {
+        assert!(!log.contains(leak), "{leak}: {log}");
+    }
 }
