@@ -377,6 +377,7 @@ impl Member {
                 selector: Selector::Id { locker, id },
                 set: vec![(Field::Password, ApiValue::Text(z(password)))],
                 clear: Vec::new(),
+                sets: Default::default(),
             })
             .map(drop)
             .map_err(|e| e.code)

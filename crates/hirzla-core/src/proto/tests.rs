@@ -87,6 +87,7 @@ fn every_request_round_trips() {
             selector: sel.clone(),
             set: vec![(Field::Password, ApiValue::Text(z("new")))],
             clear: vec![Field::Notes],
+            sets: Default::default(),
         },
         Request::Match {
             origin: "https://bank.example".into(),
@@ -849,4 +850,136 @@ fn auto_typed_carries_fixed_values_only() {
         assert_eq!(refused(&request(args)), (3, code));
     }
     reply_round_trip(Op::AutoTyped, Ok(Reply::Done));
+}
+
+fn versioned(version: u64, op: Op, args: Value) -> Zeroizing<Vec<u8>> {
+    encode_map(vec![
+        (1, Value::Uint(version)),
+        (2, Value::Uint(3)),
+        (3, Value::Uint(op as u64)),
+        (4, args),
+    ])
+}
+
+fn texts(items: &[&str]) -> Value {
+    Value::Array(items.iter().map(|t| Value::text(t)).collect())
+}
+
+/// `ReadSets` and the URL and tag keys of `Update` (version 15, ADR 0082).
+#[test]
+fn urls_and_tags_are_version_15() {
+    let sel = Selector::Id {
+        locker: [1; 16],
+        id: [2; 16],
+    };
+    let sets = SetChanges {
+        add_urls: vec![z("https://a.example/login")],
+        remove_urls: vec![z("https://old.example")],
+        add_tags: vec![z("perso"), z("banque")],
+        remove_tags: vec![z("pro")],
+    };
+    let update = Request::Update {
+        selector: sel.clone(),
+        set: vec![(Field::Title, ApiValue::Text(z("t")))],
+        clear: vec![],
+        sets,
+    };
+    let b = update.encode(3).unwrap();
+    assert!(Request::decode_versioned(&b).unwrap() == (3, 15, update));
+    // Only sets: still an update.
+    let only = Request::Update {
+        selector: sel.clone(),
+        set: vec![],
+        clear: vec![],
+        sets: SetChanges {
+            remove_tags: vec![z("x")],
+            ..SetChanges::default()
+        },
+    };
+    round_trip(&only);
+    // Without set changes, an update stays in version 1.
+    let plain = Request::Update {
+        selector: sel.clone(),
+        set: vec![],
+        clear: vec![Field::Notes],
+        sets: SetChanges::default(),
+    };
+    assert_eq!(plain.min_version(), 1);
+    let read = Request::ReadSets {
+        selector: sel.clone(),
+    };
+    let b = read.encode(3).unwrap();
+    assert!(Request::decode_versioned(&b).unwrap() == (3, 15, read));
+    reply_round_trip(
+        Op::ReadSets,
+        Ok(Reply::Sets {
+            urls: vec![z("https://a.example/"), z("https://b.example:8443/x")],
+            tags: vec![],
+        }),
+    );
+    // A reply of version 15 cannot be written for a request of version 8.
+    let sets_reply = Reply::Sets {
+        urls: vec![],
+        tags: vec![],
+    };
+    assert!(Reply::encode_versioned(8, 3, &Ok(sets_reply)).is_err());
+
+    // Earlier versions know neither `ReadSets` nor the new keys of `Update`.
+    for v in [1, 2, 7, 8] {
+        let b = versioned(v, Op::ReadSets, Value::map(vec![(1, sel.to_value())]));
+        assert_eq!(refused(&b), (3, ErrorCode::UnknownOperation));
+        let b = versioned(
+            v,
+            Op::Update,
+            Value::map(vec![
+                (1, sel.to_value()),
+                (4, texts(&["https://a.example"])),
+            ]),
+        );
+        assert_eq!(refused(&b), (3, ErrorCode::Malformed));
+    }
+    let bad = |args: Vec<(u64, Value)>| {
+        let mut m = vec![(1, sel.to_value())];
+        m.extend(args);
+        refused(&versioned(15, Op::Update, Value::map(m))).1
+    };
+    // Empty list, repeated element, element both added and removed, nothing at all, too many.
+    assert_eq!(bad(vec![(4, texts(&[]))]), ErrorCode::Malformed);
+    assert_eq!(bad(vec![(6, texts(&["a", "a"]))]), ErrorCode::Malformed);
+    assert_eq!(
+        bad(vec![(4, texts(&["https://a"])), (5, texts(&["https://a"]))]),
+        ErrorCode::InvalidInput
+    );
+    assert_eq!(
+        bad(vec![(6, texts(&["t"])), (7, texts(&["t"]))]),
+        ErrorCode::InvalidInput
+    );
+    assert_eq!(bad(vec![]), ErrorCode::InvalidInput);
+    let many: Vec<String> = (0..=MAX_ITEMS).map(|i| format!("t{i}")).collect();
+    let many: Vec<&str> = many.iter().map(String::as_str).collect();
+    assert_eq!(bad(vec![(6, texts(&many))]), ErrorCode::Malformed);
+    assert_eq!(bad(vec![(8, texts(&["x"]))]), ErrorCode::Malformed);
+    // `ReadSets` takes a selector and nothing else.
+    let b = versioned(
+        15,
+        Op::ReadSets,
+        Value::map(vec![(1, sel.to_value()), (2, Value::Bool(true))]),
+    );
+    assert_eq!(refused(&b), (3, ErrorCode::Malformed));
+}
+
+#[test]
+fn set_changes_are_the_difference() {
+    let l = |items: &[&str]| items.iter().map(|s| z(s)).collect::<Vec<_>>();
+    let s = |v: &[Zeroizing<String>]| v.iter().map(|x| x.as_str().to_owned()).collect::<Vec<_>>();
+    let c = SetChanges::between(
+        &l(&["https://a", "https://b"]),
+        &l(&["https://b", "https://c", "https://c"]),
+        &l(&["x"]),
+        &l(&["x"]),
+    );
+    assert_eq!(s(&c.add_urls), ["https://c"]);
+    assert_eq!(s(&c.remove_urls), ["https://a"]);
+    assert!(c.add_tags.is_empty() && c.remove_tags.is_empty());
+    assert!(SetChanges::between(&l(&["a"]), &l(&["a"]), &[], &[]).is_empty());
 }

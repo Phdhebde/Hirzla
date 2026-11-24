@@ -16,10 +16,12 @@ use zeroize::Zeroizing;
 use crate::generator::{self, Estimate, Generated, Spec};
 
 /// Latest version of the protocol spoken by this build.
-pub const PROTOCOL_VERSION: u64 = 8;
-/// Versions this build accepts for the general operations. Versions 3 to 6 belong to the
-/// agent, server, Self and connection operations, which have their own code ranges.
-pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8];
+pub const PROTOCOL_VERSION: u64 = 15;
+/// Versions this build accepts for the general operations. Versions 3 to 6 and 9 to 14
+/// belong to families of operations with their own code ranges.
+pub const SUPPORTED_VERSIONS: &[u64] = &[1, 2, 7, 8, 15];
+/// First version in which `Update` adds and removes URLs and tags (ADR 0082).
+pub const SETS_VERSION: u64 = 15;
 /// Largest frame accepted, in bytes (length prefix excluded).
 pub const MAX_FRAME: usize = 8 * 1024 * 1024;
 /// Longest master password, in bytes.
@@ -164,6 +166,8 @@ pub enum Op {
     Fill = 13,
     /// Generate a password, a passphrase, a PIN… from full settings (version 7, ADR 0068).
     GenerateWith = 14,
+    /// URLs and tags of one secret (version 15, ADR 0082).
+    ReadSets = 15,
     /// Ask the desktop application to bring its window to the front (version 8, ADR 0071).
     ShowApp = 130,
     /// The desktop application asks whether its window was called for (version 8, ADR 0071).
@@ -173,7 +177,7 @@ pub enum Op {
 }
 
 impl Op {
-    const ALL: [Op; 17] = [
+    const ALL: [Op; 18] = [
         Op::Status,
         Op::Init,
         Op::Unlock,
@@ -188,6 +192,7 @@ impl Op {
         Op::Match,
         Op::Fill,
         Op::GenerateWith,
+        Op::ReadSets,
         Op::ShowApp,
         Op::AppPoll,
         Op::AutoTyped,
@@ -217,6 +222,7 @@ impl Op {
             Op::Match => "match",
             Op::Fill => "fill",
             Op::GenerateWith => "generate_with",
+            Op::ReadSets => "read_sets",
             Op::ShowApp => "show_app",
             Op::AppPoll => "app_poll",
             Op::AutoTyped => "auto_typed",
@@ -231,6 +237,7 @@ impl Op {
             Op::Match | Op::Fill => 2,
             Op::GenerateWith => 7,
             Op::ShowApp | Op::AppPoll | Op::AutoTyped => 8,
+            Op::ReadSets => SETS_VERSION,
             _ => 1,
         }
     }
@@ -436,6 +443,13 @@ pub enum Request {
         set: Vec<(Field, ApiValue)>,
         /// Fields to clear.
         clear: Vec<Field>,
+        /// URLs and tags to add or remove (version 15).
+        sets: SetChanges,
+    },
+    /// URLs and tags of one secret (version 15).
+    ReadSets {
+        /// The secret.
+        selector: Selector,
     },
     /// Move to the trash, or purge for good.
     Delete {
@@ -521,6 +535,71 @@ impl Typed {
     }
 }
 
+/// URLs and tags added to or removed from a secret by `Update` (version 15, ADR 0082). Each
+/// list holds distinct texts; an element is never both added and removed.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct SetChanges {
+    /// URLs to add.
+    pub add_urls: Vec<Zeroizing<String>>,
+    /// URLs to remove.
+    pub remove_urls: Vec<Zeroizing<String>>,
+    /// Tags to add.
+    pub add_tags: Vec<Zeroizing<String>>,
+    /// Tags to remove.
+    pub remove_tags: Vec<Zeroizing<String>>,
+}
+
+impl SetChanges {
+    /// Whether nothing is added or removed.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.add_urls.is_empty()
+            && self.remove_urls.is_empty()
+            && self.add_tags.is_empty()
+            && self.remove_tags.is_empty()
+    }
+
+    /// The changes that turn the list `old` into `new`, for URLs (`old_urls` to `new_urls`)
+    /// and tags. Elements are compared exactly; duplicates in `new` are dropped.
+    #[must_use]
+    pub fn between(
+        old_urls: &[Zeroizing<String>],
+        new_urls: &[Zeroizing<String>],
+        old_tags: &[Zeroizing<String>],
+        new_tags: &[Zeroizing<String>],
+    ) -> SetChanges {
+        let (add_urls, remove_urls) = diff(old_urls, new_urls);
+        let (add_tags, remove_tags) = diff(old_tags, new_tags);
+        SetChanges {
+            add_urls,
+            remove_urls,
+            add_tags,
+            remove_tags,
+        }
+    }
+}
+
+/// Elements of `new` missing from `old`, and elements of `old` missing from `new`, each once.
+fn diff(
+    old: &[Zeroizing<String>],
+    new: &[Zeroizing<String>],
+) -> (Vec<Zeroizing<String>>, Vec<Zeroizing<String>>) {
+    let has = |list: &[Zeroizing<String>], x: &str| list.iter().any(|y| y.as_str() == x);
+    let mut add: Vec<Zeroizing<String>> = Vec::new();
+    for n in new {
+        if !has(old, n) && !has(&add, n) {
+            add.push(n.clone());
+        }
+    }
+    let mut remove: Vec<Zeroizing<String>> = Vec::new();
+    for o in old {
+        if !has(new, o) && !has(&remove, o) {
+            remove.push(o.clone());
+        }
+    }
+    (add, remove)
+}
+
 impl std::fmt::Debug for Request {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The operation only: arguments may be secret.
@@ -541,6 +620,7 @@ impl Request {
             Request::Read { .. } => Op::Read,
             Request::Create { .. } => Op::Create,
             Request::Update { .. } => Op::Update,
+            Request::ReadSets { .. } => Op::ReadSets,
             Request::Delete { .. } => Op::Delete,
             Request::Generate { .. } => Op::Generate,
             Request::Shutdown => Op::Shutdown,
@@ -632,6 +712,7 @@ impl Request {
                 selector,
                 set,
                 clear,
+                sets,
             } => {
                 let mut m = vec![(1, selector.to_value())];
                 if !set.is_empty() {
@@ -643,8 +724,19 @@ impl Request {
                         Value::Array(clear.iter().map(|f| Value::Uint(*f as u64)).collect()),
                     ));
                 }
+                for (k, list) in [
+                    (4, &sets.add_urls),
+                    (5, &sets.remove_urls),
+                    (6, &sets.add_tags),
+                    (7, &sets.remove_tags),
+                ] {
+                    if !list.is_empty() {
+                        m.push((k, texts(list)));
+                    }
+                }
                 Some(Value::map(m))
             }
+            Request::ReadSets { selector } => Some(Value::map(vec![(1, selector.to_value())])),
             Request::Delete { selector, purge } => {
                 let mut m = vec![(1, selector.to_value())];
                 if *purge {
@@ -666,14 +758,24 @@ impl Request {
         }
     }
 
+    /// The first protocol version that knows this request: [`Op::min_version`], or
+    /// [`SETS_VERSION`] for an `Update` that adds or removes URLs or tags.
+    #[must_use]
+    pub fn min_version(&self) -> u64 {
+        match self {
+            Request::Update { sets, .. } if !sets.is_empty() => SETS_VERSION,
+            _ => self.op().min_version(),
+        }
+    }
+
     /// Encodes the request as a frame body, with request identifier `id`, in the first
-    /// protocol version that knows its operation ([`Op::min_version`]).
+    /// protocol version that knows it ([`Request::min_version`]).
     ///
     /// # Errors
     /// [`ErrorCode::Internal`] if encoding fails.
     pub fn encode(&self, id: u64) -> Result<Zeroizing<Vec<u8>>, ErrorCode> {
         let mut m = vec![
-            (1, Value::Uint(self.op().min_version())),
+            (1, Value::Uint(self.min_version())),
             (2, Value::Uint(id)),
             (3, Value::Uint(self.op() as u64)),
         ];
@@ -720,11 +822,11 @@ impl Request {
         let op = Op::from_u64(op)
             .filter(|o| o.min_version() <= version)
             .ok_or((id, version, ErrorCode::UnknownOperation))?;
-        let req = Self::decode_args(op, f.opt(4)).map_err(|c| (id, version, c))?;
+        let req = Self::decode_args(op, version, f.opt(4)).map_err(|c| (id, version, c))?;
         Ok((id, version, req))
     }
 
-    fn decode_args(op: Op, args: Option<&Value>) -> Result<Request, ErrorCode> {
+    fn decode_args(op: Op, version: u64, args: Option<&Value>) -> Result<Request, ErrorCode> {
         let none = |r: Request| match args {
             None => Ok(r),
             Some(_) => Err(ErrorCode::Malformed),
@@ -810,7 +912,12 @@ impl Request {
                 })
             }
             Op::Update => {
-                let f = fields(args()?, &[1, 2, 3])?;
+                let keys: &[u64] = if version >= SETS_VERSION {
+                    &[1, 2, 3, 4, 5, 6, 7]
+                } else {
+                    &[1, 2, 3]
+                };
+                let f = fields(args()?, keys)?;
                 let selector = Selector::from_value(f.req(1).map_err(|_| ErrorCode::Malformed)?)?;
                 let set = f.opt(2).map(field_values).transpose()?.unwrap_or_default();
                 let clear = match f.opt(3) {
@@ -828,16 +935,43 @@ impl Request {
                         out
                     }
                 };
-                if set.is_empty() && clear.is_empty() {
+                let list = |k| {
+                    f.opt(k)
+                        .map(set_list)
+                        .transpose()
+                        .map(Option::unwrap_or_default)
+                };
+                let sets = SetChanges {
+                    add_urls: list(4)?,
+                    remove_urls: list(5)?,
+                    add_tags: list(6)?,
+                    remove_tags: list(7)?,
+                };
+                if set.is_empty() && clear.is_empty() && sets.is_empty() {
                     return Err(ErrorCode::InvalidInput);
                 }
                 if clear.iter().any(|c| set.iter().any(|(s, _)| s == c)) {
+                    return Err(ErrorCode::InvalidInput);
+                }
+                let both = |a: &[Zeroizing<String>], r: &[Zeroizing<String>]| {
+                    a.iter().any(|x| r.iter().any(|y| x.as_str() == y.as_str()))
+                };
+                if both(&sets.add_urls, &sets.remove_urls)
+                    || both(&sets.add_tags, &sets.remove_tags)
+                {
                     return Err(ErrorCode::InvalidInput);
                 }
                 Ok(Request::Update {
                     selector,
                     set,
                     clear,
+                    sets,
+                })
+            }
+            Op::ReadSets => {
+                let f = fields(args()?, &[1])?;
+                Ok(Request::ReadSets {
+                    selector: Selector::from_value(f.req(1).map_err(|_| ErrorCode::Malformed)?)?,
                 })
             }
             Op::Delete => {
@@ -989,6 +1123,13 @@ pub enum Reply {
     /// Answer of `ShowApp` (an application is listening) and of `AppPoll` (the window was
     /// called for) (v8).
     Flag(bool),
+    /// URLs and tags of a secret (v15).
+    Sets {
+        /// URLs.
+        urls: Vec<Zeroizing<String>>,
+        /// Tags.
+        tags: Vec<Zeroizing<String>>,
+    },
 }
 
 impl std::fmt::Debug for Reply {
@@ -1004,6 +1145,7 @@ impl std::fmt::Debug for Reply {
             Reply::Filled { .. } => "Reply::Filled",
             Reply::GeneratedWith(_) => "Reply::GeneratedWith",
             Reply::Flag(_) => "Reply::Flag",
+            Reply::Sets { .. } => "Reply::Sets",
         })
     }
 }
@@ -1173,6 +1315,12 @@ impl Reply {
                 Some(Value::map(m))
             }
             Reply::Flag(b) => Some(Value::map(vec![(1, Value::Bool(*b))])),
+            Reply::Sets { urls, tags } => {
+                let texts = |items: &[Zeroizing<String>]| {
+                    Value::Array(items.iter().map(|t| Value::text(t)).collect())
+                };
+                Some(Value::map(vec![(1, texts(urls)), (2, texts(tags))]))
+            }
         }
     }
 
@@ -1182,6 +1330,7 @@ impl Reply {
             Reply::Matches(_) | Reply::Filled { .. } => 2,
             Reply::GeneratedWith(_) => 7,
             Reply::Flag(_) => 8,
+            Reply::Sets { .. } => SETS_VERSION,
             _ => 1,
         }
     }
@@ -1395,6 +1544,14 @@ impl Reply {
                         .map(entry_from)
                         .collect::<Result<_, _>>()?,
                 )
+            }
+            Op::ReadSets => {
+                let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2])?;
+                let req = |k| b.req(k).map_err(|_| ErrorCode::Malformed);
+                Reply::Sets {
+                    urls: text_list(req(1)?)?,
+                    tags: text_list(req(2)?)?,
+                }
             }
             Op::Fill => {
                 let b = fields(body.ok_or(ErrorCode::Malformed)?, &[1, 2])?;
@@ -1680,6 +1837,21 @@ fn text_list(v: &Value) -> Result<Vec<Zeroizing<String>>, ErrorCode> {
         .iter()
         .map(|t| text(t, MAX_TEXT))
         .collect()
+}
+
+/// A list of URLs or tags to add or remove (`Update`, version 15): 1 to [`MAX_ITEMS`]
+/// distinct texts.
+fn set_list(v: &Value) -> Result<Vec<Zeroizing<String>>, ErrorCode> {
+    let items = text_list(v)?;
+    if items.is_empty() {
+        return Err(ErrorCode::Malformed);
+    }
+    for (i, x) in items.iter().enumerate() {
+        if items[..i].iter().any(|y| y.as_str() == x.as_str()) {
+            return Err(ErrorCode::Malformed);
+        }
+    }
+    Ok(items)
 }
 
 fn field_values(v: &Value) -> Result<Vec<(Field, ApiValue)>, ErrorCode> {

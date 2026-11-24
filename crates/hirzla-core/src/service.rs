@@ -14,6 +14,7 @@ use hirzla_vault::secret::{
     SetValue,
 };
 use hirzla_vault::{CreateOptions, KdfCost, Vault, VaultError};
+use zeroize::Zeroizing;
 
 use crate::events::{Event, LockReason, Log};
 use crate::generator;
@@ -494,6 +495,7 @@ impl Core {
                 include_trash,
             } => self.list(query.as_deref().map(String::as_str), include_trash),
             Request::Read { selector, field } => self.read(&selector, field),
+            Request::ReadSets { selector } => self.read_sets(&selector),
             Request::Create {
                 locker,
                 secret_type,
@@ -528,9 +530,13 @@ impl Core {
                 selector,
                 set,
                 clear,
+                sets,
             } => {
                 let (locker, id) = self.resolve(&selector)?;
-                let edit = SecretEdit {
+                let text = |k: SetKind, list: Vec<Zeroizing<String>>| {
+                    list.into_iter().map(move |t| (k, SetValue::Text(t)))
+                };
+                let mut edit = SecretEdit {
                     set: set
                         .into_iter()
                         .map(|(f, v)| (f, to_field_value(v)))
@@ -538,6 +544,10 @@ impl Core {
                     clear,
                     ..SecretEdit::default()
                 };
+                edit.add.extend(text(SetKind::Urls, sets.add_urls));
+                edit.add.extend(text(SetKind::Tags, sets.add_tags));
+                edit.remove.extend(text(SetKind::Urls, sets.remove_urls));
+                edit.remove.extend(text(SetKind::Tags, sets.remove_tags));
                 if let Some(t) = self.shared_type(&locker, &id) {
                     self.write_shared(&locker, Some(id), t, edit)?;
                 } else {
@@ -835,6 +845,20 @@ impl Core {
         field_reply(&body, field)
     }
 
+    /// URLs and tags of a secret (`ReadSets`, version 15).
+    fn read_sets(&mut self, selector: &Selector) -> Result<Reply, ErrorReply> {
+        let (locker, id) = self.resolve(selector)?;
+        if self.is_shared(&locker) {
+            let body = self
+                .server()
+                .and_then(|s| s.read(&locker, &id))
+                .ok_or_else(|| ErrorReply::new(ErrorCode::NotFound))?;
+            return Ok(sets_reply(body));
+        }
+        let body = self.vault()?.read_secret(locker, id).map_err(vault_error)?;
+        Ok(sets_reply(&body))
+    }
+
     /// The type of a secret of a shared locker, `None` if `locker` is not shared.
     fn shared_type(&mut self, locker: &Id16, id: &Id16) -> Option<SecretType> {
         let server = self.server()?;
@@ -855,6 +879,29 @@ fn field_reply(body: &SecretBody, field: Field) -> Result<Reply, ErrorReply> {
         FieldValue::Text(t) => Ok(Reply::Value(ApiValue::Text(t.clone()))),
         FieldValue::Bool(b) => Ok(Reply::Value(ApiValue::Bool(*b))),
         _ => Err(ErrorReply::new(ErrorCode::Unsupported)),
+    }
+}
+
+/// The visible URLs and tags of a secret, each once; tags sorted as in `List`.
+fn sets_reply(body: &SecretBody) -> Reply {
+    let texts = |k: SetKind| {
+        let mut out: Vec<Zeroizing<String>> = Vec::new();
+        if let Some(s) = body.sets.get(&k) {
+            for v in s.visible() {
+                if let SetValue::Text(t) = v {
+                    if !out.iter().any(|x| x.as_str() == t.as_str()) {
+                        out.push(t.clone());
+                    }
+                }
+            }
+        }
+        out
+    };
+    let mut tags = texts(SetKind::Tags);
+    tags.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+    Reply::Sets {
+        urls: texts(SetKind::Urls),
+        tags,
     }
 }
 
