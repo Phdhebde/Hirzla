@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-mobile"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "hirzla-core",
  "hirzla-crypto",
@@ -2107,7 +2107,7 @@ dependencies = [
 
 [[package]]
 name = "hirzla-mobile-core"
-version = "1.1.2"
+version = "1.2.0"
 dependencies = [
  "hirzla-core",
  "hirzla-keystore",
