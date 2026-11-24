@@ -14,9 +14,11 @@ les connexions SSH et RDP (version 6) par l'ADR 0067 ; le générateur complet (
 chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déverrouillage
 matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
 l'ADR 0078 ; les clés d'accès (version 14, § 23) par l'ADR 0079 ; la lecture et la
-modification des adresses et des étiquettes (version 15, § 24) par l'ADR 0082.
+modification des adresses et des étiquettes (version 15, § 24) par l'ADR 0082 ; plusieurs
+coffres par appareil (version 16, § 25) par l'ADR 0085 (proposé).
 
-Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`),
+Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`,
+`registry`),
 `crates/hirzla-keystore` (`platform`), `apps/cli`, `apps/native-host`.
 
 ## 1. Principes
@@ -42,6 +44,11 @@ Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, 
 
 Le point de connexion peut être imposé par `--socket` (ou `HIRZLA_SOCKET`) : un chemin absolu
 sous Unix, un nom commençant par `\\.\pipe\` sous Windows.
+
+Depuis la version 16, un appareil peut tenir plusieurs coffres, chacun servi par son propre
+noyau à un point de connexion qui porte l'identifiant du coffre (§ 25.2). Le point de
+connexion par défaut ci-dessus reste celui du coffre rangé à l'emplacement par défaut
+(§ 25.5).
 
 ### 2.1 Unix
 
@@ -257,6 +264,7 @@ secret non purgé (corbeille comprise).
 | 13 | `Fill` (v2) | ouvert | `{1: casier, 2: secret, 3: origine}` | `{1?: identifiant, 2: mot de passe}` |
 | 14 | `GenerateWith` (v7) | non | réglages du générateur (§ 6.2) | `{1: valeur, 2: entropie en millibits, 3?: taille de l'ensemble}` |
 | 15 | `ReadSets` (v15) | ouvert | `{1: sélecteur}` | `{1: [url], 2: [étiquette]}` (§ 24) |
+| 16 | `VaultInfo` (v16) | présent | — | `{1: vault_id, 2?: mode, 3?: serveur}` (§ 25.4) |
 
 Détails :
 
@@ -446,6 +454,7 @@ identifiant de secret, ni chemin).
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 | `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
 | `totp_request` | `op` (`totp_code`, `totp_set`, `totp_clear`, `totp_create`), `result` (`ok` ou nom de l'erreur, § 22) ; jamais un code |
+| `vault_refused` | `reason` (`absent`, `unreadable`, `id_mismatch`) : le fichier du coffre n'est pas celui que le noyau a été lancé pour servir (§ 25.3) ; jamais un identifiant ni un chemin |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
@@ -483,7 +492,8 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 
 ## 10. Versions
 
-- Version actuelle : **15** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8, 15]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- Version actuelle : **16** pour les opérations générales. Le noyau annonce les versions qu'il parle dans `Status` (`[1, 2, 7, 8, 15, 16]`). Les profils agent (version 3, § 14), Serveur (version 4, § 15), Self (versions 5 et 9, § 16), les connexions (version 6, § 17), l'export de casier (version 10, § 19), les dossiers (version 11, § 20) et les méthodes de déverrouillage matérielles (version 12, § 21) ont leurs propres versions et ne sont pas annoncés par `Status`.
+- La version 16 ajoute `VaultInfo` (16) (§ 25.4, ADR 0085). Elle ne change rien aux autres opérations ; dans une requête d'une version antérieure : `UnknownOperation`. Un client n'envoie la version 16 que pour `VaultInfo`.
 - La version 15 ajoute `ReadSets` (15) et les clés 4 à 7 d'`Update` (§ 24, ADR 0082). Elle ne change rien aux autres opérations. Un client n'envoie un `Update` en version 15 que s'il porte l'une de ces clés ; sinon, en version 1.
 - La version 14 porte les clés d'accès (§ 23, ADR 0079) : opérations 180 à 182, erreurs 185 à 187, profils complet **et navigateur**. Elle a sa propre plage et n'est pas annoncée par `Status`.
 - La version 13 porte les codes TOTP (§ 22, ADR 0078) : opérations 170 à 173, profil complet seulement. Comme les connexions, elle a sa propre plage et n'est pas annoncée par `Status`. La version 11 est celle des dossiers (§ 20) ; la version 12, celle des méthodes de déverrouillage matérielles (§ 21).
@@ -517,6 +527,11 @@ Les appels système correspondants sont dans `hirzla_keystore::platform`, seul c
 | `rm NOM \| --id ID [--purger]` | `List`, `Delete` |
 | `gen [TAILLE] [--mode M \| --profil P] [réglages] [--stdout]` | `GenerateWith`, `Status` |
 | `status`, `stop` | `Status` ; `Shutdown` |
+| `coffres [liste \| ajouter \| renommer \| defaut \| retirer]` (v16) | registre des coffres ; `Status`, `VaultInfo`, `Shutdown` (§ 25.6) |
+
+Toute commande s'adresse à **un** coffre : celui de `--coffre ALIAS` (ou `HIRZLA_COFFRE`),
+sinon le coffre par défaut du registre (§ 25.5). `--socket` et `--vault` gardent leur sens
+et ne passent pas par le registre.
 
 Les commandes du mode Serveur sont au § 15.6, celles du mode Self (historique, corbeille,
 import KeePass, mot de passe, réglages, recouvrement) au § 16.5, celles des connexions SSH et
@@ -2128,3 +2143,221 @@ changement). Code : `crates/hirzla-core/src/proto.rs`, `service.rs`.
 
 `event=request op=<read_sets|update> result=<ok|nom>`, comme les autres opérations générales :
 jamais une adresse ni une étiquette.
+
+## 25. Plusieurs coffres par appareil (version 16)
+
+Décision : ADR 0085 (proposé), première étape : registre des coffres, un noyau par coffre,
+ligne de commande. Le format du coffre, son annexe, le protocole de synchronisation et la
+suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
+(registre), `client/router.rs` (aiguillage), `transport.rs`, `daemon.rs`, `service.rs` ;
+`apps/cli`.
+
+L'application de poste, l'extension, l'hôte natif, l'application Android et `sdk/go`
+n'apprennent pas l'aiguillage dans cette étape : ils parlent au point de connexion par défaut
+(§ 2) et lancent le noyau sans argument, comme avant. Le § 25.5 dit comment la ligne de
+commande cohabite avec eux.
+
+### 25.1 Registre des coffres
+
+Le **registre des coffres** (`VaultRegistry`) est la liste locale des coffres de l'appareil.
+Il ne contient ni clé ni secret, et il n'est pas authentifié : qui peut l'écrire peut déjà
+remplacer le fichier d'un coffre. Le noyau ne lui fait donc pas confiance (§ 25.3).
+
+| Système | Fichier |
+| --- | --- |
+| Linux | `$XDG_CONFIG_HOME/hirzla/coffres`, sinon `~/.config/hirzla/coffres` |
+| macOS | `~/Library/Application Support/Hirzla/coffres` |
+| Windows | `%APPDATA%\Hirzla\coffres` |
+
+Contenu : `CBOR(Registry)`, au profil déterministe de `format.md` § 2.1, lu et vérifié par
+`hirzla_vault::cbor` (aucune dépendance nouvelle).
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `v` | `uint` | `1` |
+| 2 | `vaults` | `array<VaultEntry>` | 0 à 16 entrées, rangées par `rank` strictement croissant |
+| 3 | `default` | `bstr(16)` | Facultatif : le `vault_id` d'une entrée, coffre par défaut |
+
+`VaultEntry` :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 | `vault_id` | `bstr(16)` | Celui de l'en-tête du coffre (`format.md` § 5.4) ; unique dans le registre |
+| 2 | `path` | `tstr` | Chemin absolu du fichier du coffre, 1 à 4 096 octets, sans caractère de contrôle ; unique dans le registre |
+| 3 | `alias` | `tstr` | **Alias de coffre** (`VaultAlias`) : 1 à 64 octets, sans caractère de contrôle, sans espace en tête ni en fin ; unique dans le registre, sans tenir compte de la casse |
+| 4 | `rank` | `uint` | 0 à 2³² − 1 : ordre d'affichage |
+
+L'alias est choisi par l'utilisateur et **reste en clair** : il sert à nommer un coffre
+verrouillé. Un alias « Client X » révèle une relation à qui lit le disque ; la ligne de
+commande le rappelle à l'inscription (« ce nom est lisible sans déverrouiller »).
+
+**Lecture.** Un fichier absent vaut un registre vide. Sont refusés, sans réparation ni
+réécriture d'office (la commande échoue et le dit) :
+
+1. un fichier de plus de 131 072 octets, un encodage non canonique, une clé inconnue, un type
+   inattendu, une version autre que 1 ;
+2. plus de 16 entrées, des rangs non strictement croissants, deux entrées de même
+   `vault_id`, de même chemin ou de même alias (sans tenir compte de la casse), un chemin
+   relatif, un alias hors bornes, un `default` qui ne désigne aucune entrée ;
+3. un fichier qui est un lien symbolique ou n'est pas un fichier ordinaire ; sous Unix, en
+   plus, un chemin dont un composant est un lien symbolique (comme pour le coffre,
+   `format.md` § 5.3, étape 1), un fichier dont l'utilisateur effectif n'est pas
+   propriétaire, ou lisible ou inscriptible par le groupe ou les autres.
+
+**Écriture.** Atomique : fichier temporaire `coffres.tmp` à côté (créé en `0600` sous Unix,
+jamais par-dessus un fichier existant), écrit, vidé sur le disque, puis renommé. Le
+répertoire est créé en `0700` sous Unix s'il manque. Deux écritures simultanées ne se
+mélangent pas : la dernière l'emporte.
+
+Les chemins qui ne sont pas de l'UTF-8 valide ne peuvent pas être inscrits.
+
+### 25.2 Point de connexion d'un coffre
+
+| Système | Point de connexion du coffre `<id>` |
+| --- | --- |
+| Linux, macOS | `core-<id>.sock` dans le répertoire du point de connexion par défaut (§ 2) |
+| Windows | `\\.\pipe\hirzla-core-<SID de l'utilisateur>-<id>` |
+
+`<id>` est le `vault_id` en hexadécimal minuscule (32 caractères). Les règles des § 2.1 et
+2.2 s'appliquent telles quelles (répertoire privé, mode de la socket, DACL du tube, première
+instance).
+
+### 25.3 Noyau d'un coffre inscrit
+
+Un noyau est lancé pour un coffre inscrit par
+`hirzla-core --socket POINT --vault FICHIER --vault-id ID`, où `ID` est le `vault_id` du
+registre (32 chiffres hexadécimaux). Sans `--socket` ni `HIRZLA_SOCKET`, `--vault-id` fait
+écouter le noyau au point de connexion du coffre (§ 25.2).
+
+Avec `--vault-id`, le noyau vérifie lui-même que le fichier est le coffre attendu :
+
+1. **Au démarrage**, avant d'ouvrir son point de connexion : l'en-tête en clair du fichier
+   (`format.md` § 5.4) doit porter cet identifiant. Fichier absent, illisible ou d'un autre
+   coffre : le noyau ne démarre pas (code de sortie 1, événement `vault_refused`).
+2. **À chaque ouverture** (`Unlock`, `UnlockWithMethod`, `RecoveryUnlock`) : le `vault_id`
+   du coffre ouvert, celui que `header.auth` authentifie, est comparé à l'identifiant
+   attendu. S'il diffère (fichier remplacé depuis le démarrage), le coffre est refermé
+   aussitôt, la réponse est `Corrupt` et l'événement `vault_refused reason=id_mismatch` est
+   journalisé.
+3. **Il ne crée jamais de coffre** : `Init` et les opérations d'enrôlement qui créent le
+   coffre (§ 15.11, 190 et 192) répondent `VaultExists` tant que le fichier existe, et
+   `Unsupported` s'il a disparu.
+
+Rien d'autre ne change : authentification des deux bouts (§ 3), durcissement (§ 9),
+opérations et erreurs. **Une connexion ne parle qu'à un coffre** : aucun multiplexage, aucun
+identifiant de coffre dans les messages. Un noyau ne lit pas le registre et ne connaît pas
+les autres noyaux. Un noyau lancé sans `--vault-id` se comporte comme avant.
+
+### 25.4 `VaultInfo`
+
+| Code | Nom | Coffre requis | Arguments | Résultat |
+| --- | --- | --- | --- | --- |
+| 16 | `VaultInfo` | présent (verrouillé ou ouvert) | — | `{1: vault_id, 2?: mode, 3?: serveur}` |
+
+1. `vault_id` — `bstr(16)` : celui du coffre ouvert, sinon celui de l'en-tête en clair du
+   fichier, relu à chaque requête.
+2. `mode` — `uint`, présent seulement si le coffre est ouvert : 0 Self, 1 Serveur (coffre
+   rattaché, § 15). `serveur` — `tstr` (1 à 2 048 octets), adresse `hirzla://hôte:port` du
+   serveur, en mode Serveur seulement.
+3. Pas de fichier au chemin du coffre : `NoVault`. En-tête illisible, ou annexe du mode
+   Serveur illisible : `Corrupt`.
+4. Ne lit aucun secret et ne compte pas comme une activité pour le verrouillage automatique.
+   Profil complet seulement (profil navigateur : `Unauthorized`) ; l'hôte natif l'obtiendra
+   à l'étape qui lui apprend l'aiguillage.
+5. Dans une requête de version antérieure : `UnknownOperation`.
+6. **L'alias n'est pas dans la réponse** : le noyau ne lit pas le registre, le client y
+   trouve l'alias lui-même. Le résumé de la politique appliquée (ADR 0086) viendra avec
+   elle, dans une version ultérieure.
+
+Journal : `event=request op=vault_info result=<ok|nom>`.
+
+### 25.5 Aiguillage et compatibilité
+
+L'**aiguillage** (`VaultRouter`, `hirzla_core::client`) trouve le noyau d'un coffre, le lance
+au besoin et le vérifie. La ligne de commande choisit ainsi :
+
+1. `--socket` (ou `HIRZLA_SOCKET`) ou `--vault` (ou `HIRZLA_VAULT`) : **comme avant**. Le
+   registre n'est ni lu ni écrit. `--coffre` avec l'une de ces options est une erreur d'usage.
+2. Sinon `--coffre ALIAS` (ou `HIRZLA_COFFRE`) : l'entrée de cet alias, comparé sans tenir
+   compte de la casse ; alias inconnu : erreur.
+3. Sinon le coffre par défaut du registre (`default`) ; à défaut son unique entrée ; s'il y en
+   a plusieurs sans coffre par défaut : erreur, qui liste les alias.
+4. Registre absent ou vide : **poste à un seul coffre**, point de connexion par défaut (§ 2),
+   noyau lancé sans argument, comme avant.
+
+**Adoption.** Quand le registre est absent ou vide et qu'un coffre existe à l'emplacement
+par défaut (`coffre.hirzla`, emplacement de `hirzla-core` sans `--vault`), le client
+l'inscrit à la première commande : alias `principal`, rang 0, coffre par défaut. Si le
+registre ne peut pas être écrit, la commande continue comme au point 4.
+
+**Route d'une entrée.**
+
+| Coffre | Point de connexion | Noyau lancé avec |
+| --- | --- | --- |
+| Rangé à l'emplacement par défaut | Par défaut (§ 2) | aucun argument |
+| Autre | Celui du coffre (§ 25.2) | `--socket POINT --vault FICHIER --vault-id ID` |
+
+Le coffre rangé à l'emplacement par défaut **garde le point de connexion par défaut pendant
+cette version** (ADR 0085 § 7) : l'application de poste et l'hôte natif y parlent encore et
+y lancent ce noyau ; lui donner un second point de connexion ferait tourner deux noyaux sur
+le même fichier.
+
+**Vérification.** Après le contrôle du noyau (§ 3.2) et un `Status` accepté, le client
+envoie `VaultInfo` et compare `vault_id` à l'entrée du registre. S'il diffère, il n'envoie
+rien d'autre et le dit. Seule exception : au point de connexion par défaut, un noyau qui
+répond `UnsupportedVersion` ou `UnknownOperation` (noyau d'une version antérieure encore en
+marche après une mise à jour) est accepté comme avant.
+
+**Lancement.** Comme au § 11 : `init`, `unlock` et `gen` lancent le noyau s'il ne tourne pas.
+Pour une entrée du registre, le client vérifie d'abord que le fichier existe ; si le noyau
+s'arrête avant d'écouter (§ 25.3, point 1), il le dit sans attendre le délai de démarrage.
+
+Un processus client qui se durcit (§ 9) le fait après avoir joint **tous** les noyaux
+auxquels il doit parler : sous Linux, un processus non vidable masque son exécutable aux
+noyaux suivants.
+
+### 25.6 Ligne de commande
+
+Option globale : `--coffre ALIAS` (ou `HIRZLA_COFFRE`).
+
+| Commande | Effet | Requêtes |
+| --- | --- | --- |
+| `coffres` ou `coffres liste` | Les coffres inscrits, par rang : alias, début du `vault_id`, fichier, état (ouvert, verrouillé, noyau arrêté), mode ; le coffre par défaut est marqué | pour chaque noyau en marche : `Status`, `VaultInfo` |
+| `coffres ajouter ALIAS FICHIER [--defaut]` | Inscrit un coffre **existant** ; son `vault_id` est lu dans l'en-tête en clair, sans clé. Le premier coffre inscrit devient le coffre par défaut | — |
+| `coffres renommer ALIAS NOUVEL_ALIAS` | Change l'alias | — |
+| `coffres defaut ALIAS` | Choisit le coffre par défaut | — |
+| `coffres retirer ALIAS` | Arrête le noyau du coffre s'il tourne, puis retire l'entrée. **N'efface pas le fichier** ; s'il était le coffre par défaut, il n'y en a plus | `Shutdown` |
+
+- `coffres` ne lance aucun noyau et ne demande aucun mot de passe.
+- `ajouter` refuse : un fichier absent ou qui n'est pas un coffre, un 17ᵉ coffre, un alias
+  hors bornes ou déjà pris, un coffre ou un fichier déjà inscrit. Il rappelle que l'alias est
+  lisible sans déverrouiller.
+- `status` nomme le coffre auquel il a parlé quand il vient du registre.
+- Codes de sortie : ceux du § 11.
+
+**Créer un coffre de plus.** Le `vault_id` est tiré par le noyau à la création : un coffre
+qui n'existe pas encore n'a ni entrée au registre ni point de connexion. Dans cette étape,
+on le crée par le chemin des essais, puis on l'inscrit :
+`hirzla --socket POINT --vault FICHIER init`, `hirzla --socket POINT stop`,
+`hirzla coffres ajouter ALIAS FICHIER`. Voir le point ouvert 1.
+
+### 25.7 Erreurs et journal
+
+Aucun code d'erreur nouveau. Événement nouveau : `vault_refused` (§ 8). Le journal ne
+contient ni alias, ni chemin, ni identifiant de coffre.
+
+### 25.8 Points ouverts
+
+1. **Création d'un coffre supplémentaire** (`Init`, invitation, enrôlement) : l'ADR 0085
+   nomme le point de connexion par le `vault_id`, que le noyau ne tire qu'à la création. À
+   trancher : un point de connexion provisoire, ou un identifiant tiré par le client et
+   passé au noyau.
+2. **Coffre de l'emplacement par défaut au point de connexion par défaut** : à basculer sur
+   son point de connexion propre quand l'application de poste et l'hôte natif sauront
+   l'aiguillage.
+3. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
+4. **Alias absent de `VaultInfo`** (§ 25.4, point 6), alors que l'ADR 0085 § 4 le nomme.
+5. **Longueur du chemin de la socket sous macOS** : `$TMPDIR/hirzla/core-<id>.sock` approche
+   la limite de 104 octets de `sun_path` ; à mesurer sur un poste réel.
+6. **`RLIMIT_MEMLOCK`** (ADR 0054) et nombre de noyaux ouverts à la fois sous Linux : non
+   mesuré.
