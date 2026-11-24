@@ -56,6 +56,13 @@ thiserror = { version = "2.0", optional = true }
 [target.'cfg(any(target_os = "macos", windows))'.dependencies]
 thiserror = "2.0"
 
+# ADR 0080 § 3: the Android Keystore (StrongBox HMAC after a fingerprint) through JNI, from
+# the core's `:core` process. `jni` is already in the graph (Tauri on mobile); `subtle` for the
+# determinism check, as on Windows.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { version = "0.21.1", default-features = false }
+subtle = "2.6.1"
+
 # ADR 0014. Secure Enclave, only ever combined with the master password (decision 1).
 # OSX_10_15: the data protection keychain, the only one that holds enclave keys.
 # security-framework-sys: `SecKeyCreateWithData`, which has no safe wrapper.

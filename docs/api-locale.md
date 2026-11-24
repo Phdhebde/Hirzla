@@ -911,7 +911,7 @@ Les codes généraux 1, 2, 3, 4, 5, 7, 11, 13, 14, 16 et 17 gardent leur sens. A
 contient de secret, de clé ni de détail cryptographique.
 
 **Compatibilité** (ADR 0070) : les clés 10 à 12 de l'état d'une demande et les opérations
-123 à 125 étendent la version 4 de la même façon.
+123 à 125 étendent la version 4 de la même façon. Les opérations 190 à 196 (ADR 0081) aussi.
 
 **Compatibilité** (ADR 0069) : la clé 5 de `ServerIdentity`, la clé 3 de `RoleGrant`, les
 clés 9 et 10 d'un membre de `LockerMembers`, les clés 10 et 11 de `QuorumInspect`, l'alerte 8
@@ -956,6 +956,8 @@ aucun autre client de la version 4 n'existe.
 | `quarantaine CASIER` | `QuarantineList` |
 | `quarantaine CASIER accepter OP…`, `… rejeter OP…` | `QuarantineDecide` |
 | `appareil revoquer APPAREIL [--oui]` | `DeviceRevoke` (sans `--oui`, confirmation « oui » au terminal ; sans terminal, `--oui` exigé) |
+| `serveur invitation` | `ServerInvitation` (le lien, et son code QR quand la sortie est un terminal) |
+| `appareil ajouter CODE` | `DeviceEnrolFetch`, puis confirmation « oui » au terminal après l'empreinte du membre, `DeviceEnrolApprove`, puis `DeviceEnrolComplete` toutes les 2 secondes pendant 10 minutes au plus |
 
 `CASIER` est le nom d'un casier partagé ou au moins 4 chiffres hexadécimaux du début de son
 identifiant ; `MEMBRE`, l'identifiant du membre en hexadécimal (32 chiffres) ; `ROLE`, l'un de
@@ -971,8 +973,9 @@ hexadécimaux du début de l'`op_id` ; `APPAREIL`, l'identifiant de l'appareil e
    point 9).
 2. Pas de synchronisation de fond ni de notification : l'interface appelle `ServerSync`.
 3. ~~Pas d'accords à plusieurs, de décisions de quarantaine~~ (faits : § 15.8, ADR 0044 et
-   0045 ; noms affichés : § 15.9, ADR 0069). Pas d'enrôlement d'un second appareil ni de fichiers joints dans les casiers
-   partagés : à spécifier dans une version suivante.
+   0045 ; noms affichés : § 15.9, ADR 0069 ; enrôlement d'un second appareil : § 15.11,
+   ADR 0081). Pas de fichiers joints dans les casiers partagés : à spécifier dans une
+   version suivante.
 4. L'application de poste synchronise à intervalle régulier (ADR 0048) ; le noyau, la ligne de
    commande et l'extension restent sans tâche de fond.
 5. Révocation d'appareil (ADR 0059) : seulement ses propres appareils (`DeviceRevoke`, seule
@@ -1756,7 +1759,7 @@ journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'
 | Nom | Encodage |
 | --- | --- |
 | Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
-| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement (`format.md` § 4.2) |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement, 7 Android Keystore (`format.md` § 4.2) |
 | PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
 
 « Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
@@ -1769,7 +1772,7 @@ macOS) ; sous Windows, le système le demande lui-même.
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
 | 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
-| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4 ou 5), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
+| 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4, 5 ou 7), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
 | 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
 | 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
 
@@ -1781,15 +1784,19 @@ macOS) ; sous Windows, le système le demande lui-même.
   4 est ignorée pour FIDO2, et absente vaut `false`. Puis vérification du mot de passe maître (un mot de passe faux
   compte comme un échec de déverrouillage) ; huit méthodes au plus, vérifié **avant** le
   geste ; PIN exigé avant le geste si le facteur le demande ; geste ; puis le noyau vérifie
-  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello et Touch ID
-  remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+  que le même coffre est toujours ouvert et réécrit l'en-tête. Windows Hello, Touch ID et
+  Android Keystore remplacent leur méthode sur place ; chaque clé FIDO2 en ajoute une.
+- Android Keystore (7, ADR 0080 § 4.1) : le noyau n'a pas de fenêtre ; le **client** affiche
+  `BiometricPrompt` **avant** d'envoyer `EnrollMethod` ou `UnlockWithMethod`, et le noyau
+  calcule le HMAC dans les 5 secondes qui suivent. Passé ce délai, `MethodCancelled`. La clé 4
+  est ignorée : la méthode n'est pas classique seulement.
 - `UnlockWithMethod` : frein ; méthode lue dans l'en-tête en clair ; geste ; ouverture avec
   tous les contrôles de `format.md` § 5.3. Un refus du matériel ou une ouverture qui échoue
   comptent comme un échec de déverrouillage (même frein que le mot de passe) ; une
   annulation, un matériel absent ou une clé disparue ne comptent pas.
 - `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
-  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello est ensuite supprimée du
-  système.
+  kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello ou Android Keystore est
+  ensuite supprimée du système.
 - Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
   le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
   exige un reçoit `Busy`. Le système abandonne après 60 s.
@@ -1808,7 +1815,7 @@ macOS) ; sous Windows, le système le demande lui-même.
 Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
 matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
 `NoVault`, `NotFound` (pas de méthode à ce rang), `InvalidInput`, `Unsupported`, `Busy`. Le
-journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|-> result=<ok|nom>` :
+journal écrit `event=unlock_method op=<nom> kind=<hello|enclave|fido|android|-> result=<ok|nom>` :
 ni nom de clé, ni identifiant de clé, ni rang, ni PIN. Un ajout refusé faute d'acceptation
 s'écrit `result=classical_factor_not_accepted`.
 
@@ -2029,6 +2036,63 @@ toutes lettres. Réponses : `credential`, `clientData`, `attestation`, `authData
 `displayName`) ; `credential`, `clientData`, `authData`, `signature`, `userHandle`. Refus :
 le nom du code (`verification_required`, `credential_excluded`, `algorithm_unsupported`,
 `invalid_input`…).
+
+### 15.11 Enrôlement d'un appareil par le serveur (opérations 190 à 196)
+
+Décision : ADR 0081 (`sync-protocol.md` § 14). Le nouvel appareil N n'a pas de coffre ; ses
+opérations (190 à 193) sont servies sans coffre ouvert. Celles de l'appareil de
+certification E (194 à 196) exigent un coffre ouvert et un serveur rattaché et vérifié.
+
+| Code | Nom | Appareil | Réseau | Arguments | Résultat |
+| --- | --- | --- | --- | --- | --- |
+| 190 | `DeviceEnrolStart` | N | oui | `{1: lien d'invitation}` | `{1: code de contrôle tstr(20)}` |
+| 191 | `DeviceEnrolWait` | N | oui | — | `{1?: empreinte du membre}`, absente tant que le paquet n'est pas arrivé |
+| 192 | `DeviceEnrolFinish` | N | oui | `{1: mot de passe maître, 2?: coût (comme `Init`), 3: empreinte du membre confirmée}` | — |
+| 193 | `DeviceEnrolCancel` | N | non | — | — |
+| 194 | `DeviceEnrolFetch` | E | oui | `{1: code tapé}` | `{1: empreinte du membre, 2: appareil bstr(16)}` |
+| 195 | `DeviceEnrolApprove` | E | oui | `{1: appareil}` | — |
+| 196 | `DeviceEnrolComplete` | E | oui | `{1: appareil}` | `{1?: casiers uint}`, absente tant que N ne s'est pas authentifié |
+| 197 | `ServerInvitation` | E (ou tout appareil rattaché) | non | — | `{1: lien d'invitation, sur une ligne}` |
+
+Détails :
+
+1. **`DeviceEnrolStart`** — un coffre existe : `VaultExists`. Lien invalide :
+   `InvitationInvalid` ; empreinte du serveur différente : `FingerprintMismatch`. Le noyau
+   tire l'identifiant et les paires hybrides de N, les garde en mémoire seulement (perdues
+   si le noyau s'arrête), et dépose la requête au rendez-vous du code avant `Auth`. Un
+   serveur antérieur à l'ADR 0081 refuse le dépôt : `ServerRefused`. Un nouvel appel
+   remplace l'enrôlement en cours.
+2. **`DeviceEnrolWait`** — un relevé de la boîte de N, sans attente : l'interface rappelle
+   toutes les 2 secondes. Paquet arrivé : il est ouvert et vérifié (signature de E,
+   certificats sous la clé du membre reçue, clés de N), et l'empreinte du membre est rendue
+   pour comparaison. Paquet qui ne s'ouvre pas ou ne se vérifie pas : `ApprovalInvalid`.
+   Aucun enrôlement en cours : `NotFound`.
+3. **`DeviceEnrolFinish`** — paquet pas encore arrivé : `NotFound`. Le champ 3 est
+   l'empreinte que l'interface a affichée et que l'utilisateur a confirmée (saisie tolérée
+   comme toute empreinte) ; si ce n'est pas celle du membre du paquet reçu :
+   `FingerprintMismatch`, sans rien créer, l'enrôlement en cours est gardé. Crée le coffre avec
+   l'identité reçue (`format.md` § 13, sans clé privée du membre, avec son propre casier
+   personnel), l'ouvre, rattache le serveur du lien (empreinte vérifiée), s'authentifie, ce
+   qui inscrit le certificat, et synchronise une fois. Après la création, un échec laisse le
+   coffre créé et ouvert ; le rattachement se refait depuis l'écran du serveur.
+4. **`DeviceEnrolFetch`** — appareil sans clé du membre : `Forbidden`. Code mal formé :
+   `InvalidInput`. Aucun casier partagé où le membre a un rôle : `Unsupported`, avant de
+   relever le rendez-vous (le même code resservira). Rien au rendez-vous (pas encore déposé, ou expiré après 10 minutes) :
+   `NotFound`. Requête (identifiant et clés) qui ne redonne pas le code : `FingerprintMismatch`. L'interface affiche
+   l'empreinte du membre et demande à l'utilisateur de la comparer avec celle de N.
+5. **`DeviceEnrolApprove`** — appareil autre que celui de `DeviceEnrolFetch` : `NotFound`.
+   Le coffre signe le certificat de N avec la clé du membre ; le noyau scelle le paquet et
+   le dépose dans la boîte de N.
+6. **`DeviceEnrolComplete`** — appareil autre que celui approuvé : `NotFound`. Tant que le
+   certificat de N n'est pas au registre de transparence, résultat sans clé 1. Ensuite, une
+   `DeviceAdd` dans chaque casier partagé où le membre a un rôle et qui n'est pas gelé ;
+   aucun casier partagé : `Unsupported` (créez-en un d'abord). Un casier partagé créé plus tard
+   par E reçoit aussi N.
+7. **`ServerInvitation`** — serveur non rattaché : `NotJoined` ; empreinte pas encore
+   confirmée : `ServerUnverified`. Le lien est reconstruit à partir de ce que l'appareil a
+   vérifié (adresse, AC du site, empreinte) ; il ne contient aucun secret. L'application de
+   poste et la ligne de commande l'affichent aussi en code QR, à lire avec l'appareil photo du
+   téléphone, qui le colle ensuite dans « Rejoindre mon compte ».
 
 ## 24. Adresses et étiquettes d'un secret (version 15)
 

@@ -1,0 +1,24 @@
+[package]
+name = "hirzla-mobile-core"
+description = "Hirzla on Android: the JNI entry point of the core's `:core` process (ADR 0080)."
+version.workspace = true
+license.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# `libhirzla_core_android.so`, loaded by the `:core` service only (ADR 0080 § 2). On other
+# systems the library is empty: it builds so that the workspace commands cover it.
+[lib]
+name = "hirzla_core_android"
+crate-type = ["cdylib"]
+
+[target.'cfg(target_os = "android")'.dependencies]
+hirzla-core = { path = "../../../crates/hirzla-core" }
+hirzla-keystore = { path = "../../../crates/hirzla-keystore" }
+# The types of the entry point's arguments; already a dependency of hirzla-keystore on
+# Android (ADR 0080 § 3).
+jni = { version = "0.21.1", default-features = false }

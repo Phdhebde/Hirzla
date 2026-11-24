@@ -35,10 +35,14 @@ mod unix;
 #[cfg(unix)]
 pub use unix::*;
 
-#[cfg(target_os = "linux")]
+// Android runs a Linux kernel and its Bionic libc offers the same calls (ADR 0080 § 2).
+#[cfg(any(target_os = "linux", target_os = "android"))]
 mod linux;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "android"))]
 pub use linux::*;
+
+#[cfg(target_os = "android")]
+pub mod android;
 
 #[cfg(target_os = "macos")]
 mod macos;

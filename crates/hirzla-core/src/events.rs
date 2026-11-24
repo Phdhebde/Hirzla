@@ -475,7 +475,7 @@ mod tests {
             }
         }
         for op in MethodOp::ALL {
-            for kind in ["hello", "enclave", "fido", "-"] {
+            for kind in ["hello", "enclave", "fido", "android", "-"] {
                 for result in ["ok", "method_cancelled", "unlock_failed"] {
                     events.push(Event::MethodRequest { op, kind, result });
                 }

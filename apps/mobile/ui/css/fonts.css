@@ -1,0 +1,24 @@
+/* Embedded fonts (SIL Open Font License 1.1, see fonts/OFL-*.txt). Variable files from
+   google/fonts, commit cc39c4c2c304bc368c9b7c311ea2bcc6013299fe, checked by fonts/SHA256SUMS.
+   Nothing is ever loaded from a network. */
+@font-face {
+  font-family: "Space Grotesk";
+  src: url("../fonts/SpaceGrotesk-wght.ttf") format("truetype");
+  font-weight: 300 700;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("../fonts/Inter-opsz-wght.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: block;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("../fonts/JetBrainsMono-wght.ttf") format("truetype");
+  font-weight: 100 800;
+  font-style: normal;
+  font-display: block;
+}

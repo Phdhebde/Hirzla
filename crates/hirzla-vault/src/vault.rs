@@ -23,7 +23,7 @@ use zeroize::Zeroizing;
 use crate::cbor::{self, Fields, Value};
 use crate::error::VaultError;
 use crate::model::{
-    decode_header, DeviceCert, DevicePrivate, Header, HeaderError, Id16, Identity,
+    decode_header, lens, DeviceCert, DevicePrivate, Header, HeaderError, Id16, Identity,
     KeyEnvelopeEntry, LockerCreate, MemberKeys, MemberPrivate, OpId, OpRef, Operation,
     SealedPayload, Settings, Stamp, UnlockMethod, UnlockParams, CLASS_CONTROL, CLASS_DATA,
     KIND_CONTROL, KIND_LOCKER_META_PUT, KIND_SECRET_PUT, UNLOCK_PASSWORD,
@@ -70,6 +70,20 @@ pub struct CreateOptions {
     pub personal_locker_name: String,
     /// Password derivation cost.
     pub kdf: KdfCost,
+}
+
+/// The identity a new device received by enrolment (`sync-protocol.md` § 14, ADR 0081 § 2):
+/// the member's public keys, its certificate and its private keys. Never a member private key:
+/// an enrolled device is not a certification device. Neither `Debug` nor `Clone`.
+pub struct EnrolledIdentity {
+    /// Public keys of the member.
+    pub member: MemberKeys,
+    /// Certificate of this device, signed by the member key (checked by the caller).
+    pub cert: DeviceCert,
+    /// Device signing key, matching `cert.sig`.
+    pub sign: DeviceSigningKey,
+    /// Device KEM private key, matching `cert.kem`.
+    pub kem: kem::PrivateKey,
 }
 
 /// A locker as listed from the index.
@@ -322,7 +336,49 @@ impl Vault {
         .map_err(|_| VaultError::InvalidInput)?;
 
         let conn = store::create(path)?;
-        let result = Self::initialise(conn, &pwd, params, options);
+        let result = Self::initialise(conn, &pwd, params, options, None);
+        if result.is_err() {
+            let _ = std::fs::remove_file(path);
+        }
+        result
+    }
+
+    /// Creates a vault at `path` for a device received by enrolment (§ 13, ADR 0081 § 2):
+    /// same procedure as [`Vault::create`], with the member and device identity of
+    /// `enrolled` and no member private key. The device still creates its own personal
+    /// locker.
+    ///
+    /// # Errors
+    /// As [`Vault::create`]; [`VaultError::InvalidInput`] if the private keys do not match
+    /// the certificate or the certificate is not of the member.
+    pub fn create_enrolled(
+        path: &Path,
+        password: &str,
+        options: &CreateOptions,
+        enrolled: EnrolledIdentity,
+    ) -> Result<Vault, VaultError> {
+        let c = &enrolled.cert;
+        if c.member != enrolled.member.member
+            || c.sig.as_slice() != enrolled.sign.verifying_key().as_bytes()
+            || c.kem.as_slice() != enrolled.kem.public_key().as_bytes()
+        {
+            return Err(VaultError::InvalidInput);
+        }
+        let pwd = nfc(password)?;
+        if options.device_label.len() > 128 || options.personal_locker_name.is_empty() {
+            return Err(VaultError::InvalidInput);
+        }
+        let params = match options.kdf {
+            KdfCost::Params { m_kib, t, p } => PasswordParams::generate(m_kib, t, p),
+            KdfCost::Calibrate {
+                target,
+                max_m_kib,
+                p,
+            } => password::calibrate(target, max_m_kib, p),
+        }
+        .map_err(|_| VaultError::InvalidInput)?;
+        let conn = store::create(path)?;
+        let result = Self::initialise(conn, &pwd, params, options, Some(enrolled));
         if result.is_err() {
             let _ = std::fs::remove_file(path);
         }
@@ -334,6 +390,7 @@ impl Vault {
         pwd: &Password,
         params: PasswordParams,
         options: &CreateOptions,
+        enrolled: Option<EnrolledIdentity>,
     ) -> Result<Vault, VaultError> {
         let vault_id: Id16 = random_array()?;
         let device_key = SymmetricKey::generate()?;
@@ -366,31 +423,43 @@ impl Vault {
             &cbor::encode(&Value::map(vec![(1, Value::bytes(&vault_id))]))?,
         )?;
 
-        // Keys of the member and of this first device (a certification device).
-        let member_key = MemberSigningKey::generate()?;
-        let device_sign = DeviceSigningKey::generate()?;
-        let device_kem = kem::PrivateKey::generate()?;
-        let member_id: Id16 = random_array()?;
-        let device_id: Id16 = random_array()?;
-        let mut cert = DeviceCert {
-            member: member_id,
-            device: device_id,
-            sig: device_sign.verifying_key().as_bytes().to_vec(),
-            kem: device_kem.public_key().as_bytes().to_vec(),
-            issued_ms: now_ms(),
-            issuer_sig: Vec::new(),
+        // Keys of the member and of this device: drawn here for the first device (a
+        // certification device), received by enrolment otherwise (no member private key).
+        let (member, cert, device_sign, device_kem, member_key) = match enrolled {
+            Some(e) => (e.member, e.cert, e.sign, e.kem, None),
+            None => {
+                let member_key = MemberSigningKey::generate()?;
+                let device_sign = DeviceSigningKey::generate()?;
+                let device_kem = kem::PrivateKey::generate()?;
+                let member_id: Id16 = random_array()?;
+                let mut cert = DeviceCert {
+                    member: member_id,
+                    device: random_array()?,
+                    sig: device_sign.verifying_key().as_bytes().to_vec(),
+                    kem: device_kem.public_key().as_bytes().to_vec(),
+                    issued_ms: now_ms(),
+                    issuer_sig: Vec::new(),
+                };
+                cert.issuer_sig = member_key
+                    .certify_device(&cert.body()?)?
+                    .as_bytes()
+                    .to_vec();
+                let member = MemberKeys {
+                    member: member_id,
+                    sig: member_key.verifying_key().as_bytes().to_vec(),
+                };
+                (member, cert, device_sign, device_kem, Some(member_key))
+            }
         };
-        cert.issuer_sig = member_key
-            .certify_device(&cert.body()?)?
-            .as_bytes()
-            .to_vec();
 
         let kem_bytes = device_kem.to_bytes()?;
         let (ecdh, dk) = split_private(&kem_bytes, 48)?;
         let sign_bytes = device_sign.to_bytes()?;
         let (ecdsa, seed) = split_private(&sign_bytes, 48)?;
-        let member_bytes = member_key.to_bytes()?;
-        let (m_ecdsa, m_seed) = split_private(&member_bytes, 48)?;
+        let member_bytes = member_key
+            .as_ref()
+            .map(MemberSigningKey::to_bytes)
+            .transpose()?;
         let fixed = |b: &[u8]| -> Result<Zeroizing<[u8; 48]>, VaultError> {
             let mut out = Zeroizing::new([0u8; 48]);
             if b.len() != 48 {
@@ -408,11 +477,18 @@ impl Vault {
             Ok(out)
         };
         let personal_locker: Id16 = random_array()?;
+        let member_private = match &member_bytes {
+            Some(b) => {
+                let (m_ecdsa, m_seed) = split_private(b, 48)?;
+                Some(MemberPrivate {
+                    ecdsa_sk: fixed(m_ecdsa)?,
+                    mldsa_seed: seed32(m_seed)?,
+                })
+            }
+            None => None,
+        };
         let identity = Identity {
-            member: MemberKeys {
-                member: member_id,
-                sig: member_key.verifying_key().as_bytes().to_vec(),
-            },
+            member,
             device_cert: cert,
             device_private: DevicePrivate {
                 ecdh_sk: fixed(ecdh)?,
@@ -420,10 +496,7 @@ impl Vault {
                 ecdsa_sk: fixed(ecdsa)?,
                 mldsa_seed: seed32(seed)?,
             },
-            member_private: Some(MemberPrivate {
-                ecdsa_sk: fixed(m_ecdsa)?,
-                mldsa_seed: seed32(m_seed)?,
-            }),
+            member_private,
             device_label: Zeroizing::new(options.device_label.clone()),
             personal_locker,
             mode: 0,
@@ -902,6 +975,39 @@ impl Vault {
             (4, Value::Uint(issued_ms)),
         ]))?;
         Ok(key.sign_profile(&body)?.as_bytes().to_vec())
+    }
+
+    /// Certifies, with the member key, inside the vault, another device of this member
+    /// (`sync-protocol.md` § 14, step 3, ADR 0081): its identifier and public keys, as
+    /// checked by the caller against the control code. The member key never leaves the vault.
+    ///
+    /// # Errors
+    /// [`VaultError::Unsupported`] if this device does not hold the member key,
+    /// [`VaultError::InvalidInput`] for this device itself or keys of the wrong length, or a
+    /// cryptographic failure.
+    pub fn certify_device(
+        &self,
+        device: Id16,
+        sig: &[u8],
+        kem_public: &[u8],
+    ) -> Result<DeviceCert, VaultError> {
+        if device == self.identity.device_cert.device
+            || sig.len() != lens::SIG_PUBLIC
+            || kem_public.len() != lens::KEM_PUBLIC
+        {
+            return Err(VaultError::InvalidInput);
+        }
+        let key = self.member_signing_key()?;
+        let mut cert = DeviceCert {
+            member: self.identity.member.member,
+            device,
+            sig: sig.to_vec(),
+            kem: kem_public.to_vec(),
+            issued_ms: now_ms(),
+            issuer_sig: Vec::new(),
+        };
+        cert.issuer_sig = key.certify_device(&cert.body()?)?.as_bytes().to_vec();
+        Ok(cert)
     }
 
     /// Certifies another device of this member (tests only: enrolling a second device is

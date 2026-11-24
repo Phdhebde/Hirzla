@@ -448,6 +448,37 @@ impl<A: Authorizer> Replica<A> {
             .collect()
     }
 
+    /// Devices of this device's member it knows by an enrolment (ADR 0081): those it added
+    /// itself (applied `DeviceAdd` it authored) and the device of the member that added this
+    /// one. The core declares their certificates expected in its local key log again after a
+    /// restart. A device of the member added by anyone else (another member with a role, or
+    /// another device) is not listed: its inscription stays an « appareil inconnu ».
+    #[must_use]
+    pub fn own_enrolled_devices(&self) -> BTreeSet<Id16> {
+        let member = self.device.member_id();
+        let device = self.device.device_id();
+        self.status
+            .iter()
+            .filter(|(_, s)| **s == OpStatus::Applied)
+            .filter_map(|(id, _)| match self.decoded.get(id) {
+                Some(Ok(d)) if d.op.opref.member == member => match &d.control {
+                    Some(ControlBody::DeviceAdd(a)) if a.cert.member == member => {
+                        if d.op.opref.device == device {
+                            Some(a.cert.device)
+                        } else if a.cert.device == device {
+                            Some(d.op.opref.device)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .filter(|d| *d != device)
+            .collect()
+    }
+
     fn applied_controls(&self) -> impl Iterator<Item = &ControlBody> {
         self.causality
             .total_order()

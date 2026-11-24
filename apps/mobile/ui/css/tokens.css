@@ -1,0 +1,41 @@
+/* Hirzla — variables de la charte. Source : charte graphique Hirzla. */
+:root {
+  /* Couleurs de marque */
+  --hz-braise: #EF753C;        /* accent unique, moins de 10 % d'une surface */
+  --hz-braise-foncee: #B8501C; /* liens et texte orange sur fond clair */
+  --hz-fonte: #1B2023;         /* fond sombre, texte sur braise */
+  --hz-ardoise: #30373C;       /* surfaces sombres, texte courant sur clair */
+  --hz-acier: #5C6870;         /* texte secondaire sur clair */
+  --hz-brume: #A9B4BA;         /* texte secondaire sur sombre */
+  --hz-trait: #DDE3E6;         /* bordures, séparateurs */
+  --hz-givre: #F5F7F8;         /* fond clair, texte sur sombre */
+  --hz-glacier: #8FB3C2;       /* repères cryptographiques, schémas */
+
+  /* États : chaque état a aussi sa forme (carré, rond, triangle) */
+  --hz-scelle: #1F6245;  --hz-scelle-fond: #E3F1EA;
+  --hz-ouvert: #8A3A12;  --hz-ouvert-fond: #FDEBDD;
+  --hz-alerte: #9B2520;  --hz-alerte-fond: #FBE4E2;
+
+  /* Typographies : embarquées dans l'application, jamais chargées depuis un CDN */
+  --hz-font-titre: "Space Grotesk", system-ui, sans-serif;   /* 500, 600 */
+  --hz-font-texte: "Inter", system-ui, sans-serif;           /* 400, 500, 600 */
+  --hz-font-mono: "JetBrains Mono", ui-monospace, monospace; /* 400, 500 */
+
+  /* Thème clair (défaut) */
+  --hz-fond: var(--hz-givre);
+  --hz-surface: #FFFFFF;
+  --hz-texte: var(--hz-fonte);
+  --hz-texte-secondaire: var(--hz-acier);
+  --hz-bordure: var(--hz-trait);
+  --hz-lien: var(--hz-braise-foncee);
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hz-fond: var(--hz-fonte);
+    --hz-surface: var(--hz-ardoise);
+    --hz-texte: var(--hz-givre);
+    --hz-texte-secondaire: var(--hz-brume);
+    --hz-bordure: var(--hz-acier);
+    --hz-lien: var(--hz-braise);
+  }
+}

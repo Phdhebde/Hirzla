@@ -109,6 +109,8 @@ Mode Serveur :
   serveur identite        Affiche l'empreinte de votre clé de membre et le code de contrôle
                           du poste. --sortie FICHIER : écrit la clé publique de membre
                           pour l'administrateur du serveur.
+  serveur invitation      Affiche le lien d'invitation du serveur rattaché et son code QR,
+                          à scanner avec l'appareil photo d'un téléphone à ajouter.
   serveur rejoindre ADRESSE --ac PEM [--empreinte E]
                           Rattache le coffre au serveur (hirzla://hôte[:port]). Sans
                           --empreinte, confirmez ensuite l'empreinte affichée.
@@ -162,6 +164,9 @@ Mode Serveur :
                           Révoque un autre appareil inscrit à votre nom (alerte « appareil
                           inconnu »), depuis un appareil de certification. Définitif.
                           --oui : sans demande de confirmation.
+  appareil ajouter CODE   Ajoute un nouvel appareil à votre compte (téléphone) : CODE est
+                          le code affiché par l'appareil. Depuis un appareil de
+                          certification rattaché au serveur.
   stop                    Verrouille le coffre et arrête le noyau.
 
 Mises à jour hors ligne (sans réseau ni noyau) :
@@ -211,6 +216,8 @@ pub enum ServerCommand {
     },
     Status,
     Sync,
+    /// The invitation link of the joined server, with its QR code (ADR 0081).
+    Invitation,
     /// Set (or, empty, withdraw) the display name of the member (ADR 0069).
     Name {
         name: String,
@@ -284,6 +291,12 @@ pub struct DeviceRevokeCommand {
     pub device: String,
     /// Confirmed on the command line: no question asked.
     pub yes: bool,
+}
+
+/// `appareil ajouter CODE` (ADR 0081).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeviceEnrolCommand {
+    pub code: String,
 }
 
 /// A command on shared lockers (`docs/api-locale.md` § 15.6).
@@ -491,6 +504,7 @@ pub enum Command {
     Quorum(QuorumCommand),
     Quarantine(QuarantineCommand),
     DeviceRevoke(DeviceRevokeCommand),
+    DeviceEnrol(DeviceEnrolCommand),
     Update(UpdateCommand),
     /// `--version`: prints the version of `hirzla`, without starting the core.
     Version,
@@ -1447,6 +1461,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                     only(&[])?;
                     ServerCommand::Sync
                 }
+                "invitation" => {
+                    max_positional(1)?;
+                    only(&[])?;
+                    ServerCommand::Invitation
+                }
                 "nom" => {
                     max_positional(2)?;
                     only(&[])?;
@@ -1672,6 +1691,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                         "« appareil revoquer » attend l'identifiant de l'APPAREIL.".to_owned()
                     })?,
                     yes: has("--oui"),
+                }),
+                Some("ajouter") => Command::DeviceEnrol(DeviceEnrolCommand {
+                    code: positional.get(1).cloned().ok_or_else(|| {
+                        "« appareil ajouter » attend le CODE affiché par l'appareil.".to_owned()
+                    })?,
                 }),
                 _ => {
                     return Err(format!(

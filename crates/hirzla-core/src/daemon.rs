@@ -18,6 +18,8 @@ use hirzla_vault::model::Id16;
 
 use crate::agent::proto::{is_agent_request, AgentCode, AgentReply, AgentRequest};
 use crate::agent::service::{AgentConfig, AgentService};
+#[cfg(target_os = "android")]
+use crate::auth::authorize_same_app;
 use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
@@ -52,9 +54,22 @@ const REFUSAL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Period of the automatic lock check.
 const TICK: Duration = Duration::from_millis(250);
 
+/// Which clients the core admits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientPolicy {
+    /// The executables of the allow lists, signed as the build requires (ADR 0015, 0042).
+    Executables,
+    /// Android (ADR 0080 § 2): the processes of this application's UID, whatever their
+    /// executable. Only on Android: anywhere else it would admit every program of the user.
+    #[cfg(target_os = "android")]
+    SameApp,
+}
+
 /// Options of the core process.
 #[derive(Debug, Clone)]
 pub struct Options {
+    /// Which clients are admitted.
+    pub clients: ClientPolicy,
     /// Where to listen.
     pub endpoint: Endpoint,
     /// The vault file.
@@ -207,6 +222,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         _ => return Err("--hornn-issuer et --hornn-key vont ensemble.".to_owned()),
     };
     Ok(Options {
+        clients: ClientPolicy::Executables,
         endpoint,
         vault,
         log,
@@ -304,6 +320,89 @@ pub fn main() -> ExitCode {
     }
 }
 
+/// Entry point of the core on Android (ADR 0080 § 2), called by the service of the `:core`
+/// process with the application's private directory. Listens on `core/core.sock` under it,
+/// keeps the vault in `coffre.hirzla` and the log in `core/core.log`, and admits the processes
+/// of the application. Returns only if the core cannot start.
+///
+/// # Errors
+/// A message in French. A delivery build refuses to start: the check of the APK's own signing
+/// certificate (ADR 0080 § 2) is not written yet, and the core fails closed.
+#[cfg(target_os = "android")]
+pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
+    if release::DELIVERY_BUILD {
+        return Err(
+            "la vérification du certificat de l'application n'est pas encore en place.".to_owned(),
+        );
+    }
+    let hardening = platform::harden_process();
+    // `getFilesDir()` is under `/data/user/0`, a symbolic link to `/data/data` set by the
+    // system; the vault refuses a path through a link, so resolve it once here.
+    let files_dir = std::fs::canonicalize(files_dir)
+        .map_err(|_| "répertoire de l'application illisible.".to_owned())?;
+    let core_dir = files_dir.join("core");
+    let endpoint = Endpoint::parse(core_dir.join("core.sock").as_os_str())
+        .map_err(|_| "point de connexion invalide.".to_owned())?;
+    let options = Options {
+        clients: ClientPolicy::SameApp,
+        endpoint,
+        vault: files_dir.join("coffre.hirzla"),
+        log: Some(core_dir.join("core.log")),
+        allow: None,
+        allow_browser: None,
+        auto_lock: None,
+        hornn: None,
+        client_signatures: SignatureMode::Off,
+        publisher_key: None,
+        client_manifest: None,
+    };
+    // The listener creates the directory 0700; the log needs it first.
+    std::fs::create_dir_all(&core_dir).map_err(|_| "répertoire du noyau illisible.".to_owned())?;
+    let log = open_log(options.log.as_ref())
+        .map(|l| Arc::new(Log::new(l)))
+        .map_err(|_| "impossible d'ouvrir le journal.".to_owned())?;
+    run(&options, hardening, &log)
+}
+
+/// How the listening loop admits a client: the allow lists and the signatures, or the
+/// application's UID on Android.
+enum Gate {
+    Executables {
+        allow: AllowList,
+        browser: AllowList,
+        signatures: ClientSignatures,
+    },
+    #[cfg(target_os = "android")]
+    SameApp,
+}
+
+impl Gate {
+    fn admit(&self, peer: &crate::transport::PeerIdentity) -> Result<ClientProfile, Refusal> {
+        match self {
+            Gate::Executables {
+                allow,
+                browser,
+                signatures,
+            } => {
+                let profile = authorize_client_profile(peer, allow, browser)?;
+                // ADR 0042: the signature, on top of the path.
+                signatures.check(peer)?;
+                Ok(profile)
+            }
+            #[cfg(target_os = "android")]
+            Gate::SameApp => authorize_same_app(peer),
+        }
+    }
+
+    fn signatures_required(&self) -> bool {
+        match self {
+            Gate::Executables { signatures, .. } => signatures.mode() == SignatureMode::Required,
+            #[cfg(target_os = "android")]
+            Gate::SameApp => false,
+        }
+    }
+}
+
 /// Removes the socket of a stopping core (Unix); nothing to do on Windows.
 fn cleanup(endpoint: &Endpoint) {
     #[cfg(unix)]
@@ -325,16 +424,22 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         std::env::current_exe()
             .map_err(|_| "impossible de déterminer l'exécutable du noyau.".to_owned())
     };
-    let allow = match &options.allow {
-        Some(list) => AllowList::new(list.iter().cloned()),
-        None => AllowList::default_for(&me()?),
+    let gate = match options.clients {
+        ClientPolicy::Executables => Gate::Executables {
+            allow: match &options.allow {
+                Some(list) => AllowList::new(list.iter().cloned()),
+                None => AllowList::default_for(&me()?),
+            },
+            browser: match (&options.allow_browser, &options.allow) {
+                (Some(list), _) => AllowList::new(list.iter().cloned()),
+                (None, Some(_)) => AllowList::new([]),
+                (None, None) => AllowList::browser_default_for(&me()?),
+            },
+            signatures: client_signatures(options, &me()?)?,
+        },
+        #[cfg(target_os = "android")]
+        ClientPolicy::SameApp => Gate::SameApp,
     };
-    let browser = match (&options.allow_browser, &options.allow) {
-        (Some(list), _) => AllowList::new(list.iter().cloned()),
-        (None, Some(_)) => AllowList::new([]),
-        (None, None) => AllowList::browser_default_for(&me()?),
-    };
-    let signatures = client_signatures(options, &me()?)?;
     let agent = match &options.hornn {
         None => None,
         Some((issuer, key)) => {
@@ -372,7 +477,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         });
     }
     log.record(Event::ClientSignatures {
-        required: signatures.mode() == SignatureMode::Required,
+        required: gate.signatures_required(),
         kind: codesign::SIGNATURE_KIND,
     });
     let core = Arc::new(Mutex::new(Core::new(
@@ -425,7 +530,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 continue;
             }
         };
-        let profile = match authorize_client_profile(&peer, &allow, &browser) {
+        let profile = match gate.admit(&peer) {
             Ok(p) => p,
             Err(reason) => {
                 log.record(Event::ConnectionRefused {
@@ -436,15 +541,6 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 continue;
             }
         };
-        // ADR 0042: the signature, on top of the path.
-        if let Err(reason) = signatures.check(&peer) {
-            log.record(Event::ConnectionRefused {
-                pid: peer.pid,
-                reason,
-            });
-            spawn_refusal(conn, ErrorCode::Unauthorized, &refusing);
-            continue;
-        }
         if active.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
             active.fetch_sub(1, Ordering::SeqCst);
             log.record(Event::ConnectionRefused {

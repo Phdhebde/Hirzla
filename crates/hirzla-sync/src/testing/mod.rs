@@ -63,6 +63,26 @@ impl TestMember {
         Arc::new(LocalDevice::new(self.keys.clone(), cert, sign, kem).expect("device"))
     }
 
+    /// A certificate of this member for the given device keys (enrolment, § 14).
+    #[must_use]
+    pub fn certify(&self, device: Id16, sig: &[u8], kem: &[u8]) -> DeviceCert {
+        let mut cert = DeviceCert {
+            member: self.keys.member,
+            device,
+            sig: sig.to_vec(),
+            kem: kem.to_vec(),
+            issued_ms: 1,
+            issuer_sig: Vec::new(),
+        };
+        cert.issuer_sig = self
+            .key
+            .certify_device(&cert.body().expect("body"))
+            .expect("certify")
+            .as_bytes()
+            .to_vec();
+        cert
+    }
+
     /// A revocation of one of its devices.
     #[must_use]
     pub fn revoke(&self, device: &Id16) -> DeviceRevocation {
