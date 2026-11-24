@@ -62,6 +62,11 @@ pub fn run() -> Result<(), tauri::Error> {
             commands::enrol_finish,
             commands::enrol_cancel,
             commands::server_sync,
+            commands::autofill_request,
+            commands::autofill_fill,
+            commands::autofill_cancel,
+            commands::autofill_state,
+            commands::autofill_settings,
         ])
         .run(tauri::generate_context!())
 }

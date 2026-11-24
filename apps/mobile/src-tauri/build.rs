@@ -19,6 +19,11 @@ const COMMANDS: &[&str] = &[
     "enrol_finish",
     "enrol_cancel",
     "server_sync",
+    "autofill_request",
+    "autofill_fill",
+    "autofill_cancel",
+    "autofill_state",
+    "autofill_settings",
 ];
 
 fn main() {

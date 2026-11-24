@@ -1,6 +1,7 @@
 //! The Kotlin layer of the application (`app.hirzla.mobile.HirzlaPlugin`, ADR 0080 § 8):
-//! the private directory, `BiometricPrompt` and the sensitive clipboard. Registered as a
-//! mobile plugin and called from Rust only: no capability grants it to the web view.
+//! the private directory, `BiometricPrompt`, the sensitive clipboard and the answer to an
+//! autofill request. Registered as a mobile plugin and called from Rust only: no capability
+//! grants it to the web view.
 
 use serde::{Deserialize, Serialize};
 use tauri::plugin::TauriPlugin;
@@ -50,6 +51,47 @@ struct Prompt<'a> {
 struct Copy<'a> {
     text: &'a str,
     clear_s: u64,
+}
+
+/// The form an autofill request asks to fill (ADR 0080 § 6), as the Kotlin service read it.
+/// It names an application, never a secret.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AutofillTarget {
+    /// A request is waiting; the other fields are meaningless otherwise.
+    pending: bool,
+    /// Package name of the application that shows the form.
+    #[serde(default)]
+    pub package: String,
+    /// Its label.
+    #[serde(default)]
+    pub label: String,
+    /// SHA-256 of its signing certificate, hexadecimal; empty when unknown.
+    #[serde(default)]
+    pub certificate: String,
+    /// Web domain of the form, given only for a browser of the fixed list.
+    #[serde(default)]
+    pub domain: Option<String>,
+    /// The form has a user name field.
+    #[serde(default)]
+    pub username: bool,
+    /// The form has a password field.
+    #[serde(default)]
+    pub password: bool,
+}
+
+/// Whether Hirzla is the autofill service of the system.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+pub struct AutofillState {
+    /// The device supports autofill services.
+    pub supported: bool,
+    /// Hirzla is the one chosen.
+    pub enabled: bool,
+}
+
+#[derive(Serialize)]
+struct Fill<'a> {
+    username: Option<&'a str>,
+    password: Option<&'a str>,
 }
 
 /// What `invoke.resolve()` sends without data: an empty object or nothing at all. Any
@@ -103,6 +145,103 @@ impl<R: Runtime> Native<R> {
         {
             let _ = (prompt.title, prompt.subtitle, Done::Null);
             Err(MobileError::NoFingerprint)
+        }
+    }
+
+    /// The autofill request waiting for an answer, if any.
+    ///
+    /// # Errors
+    /// [`MobileError::Native`].
+    pub fn autofill_pending(&self) -> Result<Option<AutofillTarget>, MobileError> {
+        #[cfg(target_os = "android")]
+        {
+            let t: AutofillTarget = self
+                .run("autofillPending", ())
+                .map_err(|_| MobileError::Native)?;
+            Ok(t.pending.then_some(t))
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = |t: AutofillTarget| t.pending;
+            Ok(None)
+        }
+    }
+
+    /// Answers the autofill request with the fields chosen and gives the front back to the
+    /// target application. The values become Java strings the application cannot wipe
+    /// (ADR 0080 § 6, declared limit).
+    ///
+    /// # Errors
+    /// [`MobileError::Native`], also when no request is waiting any more.
+    pub fn autofill_fill(
+        &self,
+        username: Option<&Zeroizing<String>>,
+        password: Option<&Zeroizing<String>>,
+    ) -> Result<(), MobileError> {
+        let payload = Fill {
+            username: username.map(|u| u.as_str()),
+            password: password.map(|p| p.as_str()),
+        };
+        #[cfg(target_os = "android")]
+        {
+            self.run::<Done>("autofillFill", payload)
+                .map(drop)
+                .map_err(|_| MobileError::Native)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (payload.username, payload.password);
+            Err(MobileError::Native)
+        }
+    }
+
+    /// Abandons the autofill request.
+    ///
+    /// # Errors
+    /// [`MobileError::Native`].
+    pub fn autofill_cancel(&self) -> Result<(), MobileError> {
+        #[cfg(target_os = "android")]
+        {
+            self.run::<Done>("autofillCancel", ())
+                .map(drop)
+                .map_err(|_| MobileError::Native)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(MobileError::Native)
+        }
+    }
+
+    /// Whether Hirzla is the autofill service of the system.
+    ///
+    /// # Errors
+    /// [`MobileError::Native`].
+    pub fn autofill_state(&self) -> Result<AutofillState, MobileError> {
+        #[cfg(target_os = "android")]
+        {
+            self.run("autofillState", ())
+                .map_err(|_| MobileError::Native)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(MobileError::Native)
+        }
+    }
+
+    /// Opens the system screen where the user chooses the autofill service.
+    ///
+    /// # Errors
+    /// [`MobileError::Native`].
+    pub fn autofill_settings(&self) -> Result<(), MobileError> {
+        #[cfg(target_os = "android")]
+        {
+            self.run::<Done>("autofillSettings", ())
+                .map(drop)
+                .map_err(|_| MobileError::Native)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            Err(MobileError::Native)
         }
     }
 

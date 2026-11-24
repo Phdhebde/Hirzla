@@ -198,6 +198,41 @@ C'est le pendant du « secret rempli » de l'extension (ADR 0026) : il ne concer
 secret demandé, après consentement. Le tampon Kotlin intermédiaire est un `CharArray` effacé
 (`fill`) aussitôt la valeur remise.
 
+#### 6.1 Précisions apportées au codage (2026-11-23)
+
+Le premier lot de code s'écarte du texte ci-dessus sur ces points, qui font foi :
+
+- **Le service ne parle pas au noyau.** `HirzlaAutofillService` lit le formulaire (champs
+  identifiant et mot de passe, paquet, certificat, domaine) et ne propose qu'une entrée,
+  « Remplir avec Hirzla », à authentification. La choisir ouvre Hirzla : l'utilisateur ouvre
+  le coffre s'il est verrouillé, choisit le secret, et revient au formulaire rempli. Le
+  service ne détient donc ni clé ni secret, et aucun client du noyau n'est écrit en Kotlin ;
+  les valeurs suivent le chemin de la copie (noyau, Rust, greffon Kotlin, décision 7).
+  En contrepartie, chaque saisie passe par l'écran de Hirzla.
+- **`AutofillActivity`**, sans écran et non exportée, fait le lien : le système la lance dans
+  la tâche de l'application cible, elle amène Hirzla au premier plan et, à son retour, remet
+  au système les valeurs choisies, ou rien.
+- **Applications : l'association n'est pas encore rangée dans le secret.** La ranger (nom de
+  paquet et empreinte du certificat) ajoute un champ au secret, donc change le format du
+  coffre : c'est l'objet d'un ADR à venir. D'ici là, l'utilisateur choisit le secret à
+  chaque saisie, et l'avertissement de l'ADR 0072 § 3 s'affiche **toujours**, avec le nom
+  de l'application et son nom de paquet.
+- **Navigateurs** : le domaine d'un navigateur de la liste figée, en `https`, devient
+  l'origine de `Match` et de `Fill` (`api-locale.md` § 6.1) : un secret enregistré pour
+  exactement cet hôte est rempli sur un seul geste, comme dans l'extension. Tout autre secret
+  demande l'avertissement. Un formulaire web dont le domaine ne peut pas être cru (vue web
+  d'une application hors liste, page en `http`, champs de deux domaines) **n'est pas rempli**.
+- **Liste figée** : Chrome, Chrome Beta, Firefox, Brave, Edge, Samsung Internet, Vivaldi et
+  DuckDuckGo, avec l'empreinte de leur certificat de livraison telle que publiée dans la
+  liste des navigateurs privilégiés du Credential Manager (lue le 2026-11-23).
+- **Visibilité des paquets** : le manifeste déclare `<queries>` sur les applications à icône
+  de lancement, pour lire le nom et le certificat de la cible. Aucune permission de plus.
+  Une cible invisible est désignée par son nom de paquet seul.
+- **Pas d'enregistrement depuis un formulaire** (`onSaveRequest` refuse) : un secret se crée
+  dans Hirzla.
+- **Journal** : la saisie ajoute la ligne `auto_type` de l'ADR 0072 § 8 (`AutoTyped`), mots
+  fixes seulement.
+
 ### 7. Protections du système
 
 - `FLAG_SECURE` sur toutes les fenêtres : ni capture d'écran, ni aperçu dans les applications

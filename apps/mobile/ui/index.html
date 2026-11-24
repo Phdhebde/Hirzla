@@ -108,6 +108,32 @@
     <button id="liste-ajouter" class="bouton bouton-principal flottant" type="button">Ajouter</button>
   </main>
 
+  <!-- Autofill (ADR 0080 § 6): another application asks Hirzla to fill its form. -->
+  <main id="ecran-remplir" class="ecran" hidden>
+    <header class="barre">
+      <button id="remplir-annuler" class="bouton bouton-discret" type="button">‹ Annuler</button>
+    </header>
+    <div id="remplir-choix" class="pile">
+      <h1>Remplir dans <span id="remplir-app"></span></h1>
+      <p id="remplir-cible" class="secondaire"></p>
+      <p id="remplir-aucun" class="secondaire" hidden>Aucun secret n'est enregistré pour cette adresse. Cherchez-en un
+        ci-dessous.</p>
+      <ul id="remplir-correspondances" class="liste liste-courte"></ul>
+      <input id="remplir-recherche" class="recherche" type="search" placeholder="Rechercher un autre secret" autocomplete="off" spellcheck="false" maxlength="1024">
+      <ul id="remplir-resultats" class="liste"></ul>
+    </div>
+    <div id="remplir-confirmation" class="pile" hidden>
+      <h1>Confirmez la saisie</h1>
+      <p id="remplir-avertissement"></p>
+      <p id="remplir-avertissement-cible" class="secondaire mono"></p>
+      <p class="secondaire">Vérifiez que c'est bien l'application ou le site attendu : Hirzla ne peut pas le
+        vérifier pour vous.</p>
+      <p class="erreur" hidden></p>
+      <button id="remplir-confirmer" class="bouton bouton-principal" type="button">Remplir</button>
+      <button id="remplir-retour" class="bouton" type="button">Choisir un autre secret</button>
+    </div>
+  </main>
+
   <!-- One secret. -->
   <main id="ecran-detail" class="ecran" hidden>
     <header class="barre">
@@ -145,7 +171,7 @@
     </form>
   </main>
 
-  <!-- Settings: the fingerprint. -->
+  <!-- Settings: the fingerprint and autofill. -->
   <main id="ecran-reglages" class="ecran" hidden>
     <header class="barre">
       <button id="reglages-retour" class="bouton bouton-discret" type="button">‹ Retour</button>
@@ -162,6 +188,14 @@
         <button class="bouton bouton-principal" type="submit">Ajouter l'empreinte</button>
       </div>
     </form>
+    <section class="pile">
+      <h1>Saisie automatique</h1>
+      <p id="saisie-etat" class="secondaire"></p>
+      <p class="secondaire">Dans un formulaire de connexion, Android propose « Remplir avec Hirzla ». Hirzla s'ouvre,
+        vous choisissez le secret, et vous revenez au formulaire rempli. Dans Chrome, activez aussi « Saisie
+        automatique à l'aide d'un autre service » dans les réglages du navigateur.</p>
+      <button id="saisie-activer" class="bouton" type="button">Choisir Hirzla dans les réglages d'Android</button>
+    </section>
   </main>
 </body>
 </html>

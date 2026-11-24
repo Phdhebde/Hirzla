@@ -18,6 +18,11 @@
     "allow-enrol-wait",
     "allow-enrol-finish",
     "allow-enrol-cancel",
-    "allow-server-sync"
+    "allow-server-sync",
+    "allow-autofill-request",
+    "allow-autofill-fill",
+    "allow-autofill-cancel",
+    "allow-autofill-state",
+    "allow-autofill-settings"
   ]
 }

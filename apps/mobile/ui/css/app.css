@@ -68,6 +68,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--hz-braise);
 .forme-rond { background: var(--hz-braise); border-radius: 50%; }
 .recherche { margin-bottom: 12px; }
 .liste { list-style: none; margin: 0; padding: 0 0 88px; }
+.liste-courte { padding-bottom: 0; }
 .liste li {
   background: var(--hz-surface);
   border: 1px solid var(--hz-bordure);

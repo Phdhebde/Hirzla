@@ -5,6 +5,10 @@ import android.content.ClipData
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
+import android.view.autofill.AutofillManager
 import android.hardware.biometrics.BiometricManager
 import android.hardware.biometrics.BiometricPrompt
 import android.os.CancellationSignal
@@ -31,10 +35,16 @@ class CopyArgs {
   var clear_s: Long = 30
 }
 
+@InvokeArg
+class FillArgs {
+  var username: String? = null
+  var password: String? = null
+}
+
 /**
  * The Kotlin layer of the interface (ADR 0080 § 8), called by the application's Rust code
- * only (no capability grants it to the web view): private directory, BiometricPrompt and
- * sensitive clipboard. No key and no vault access here.
+ * only (no capability grants it to the web view): private directory, BiometricPrompt,
+ * sensitive clipboard and the answer to an autofill request. No key and no vault access here.
  */
 @TauriPlugin
 class HirzlaPlugin(private val activity: Activity) : Plugin(activity) {
@@ -80,6 +90,75 @@ class HirzlaPlugin(private val activity: Activity) : Plugin(activity) {
           })
       } catch (e: Exception) {
         fail("unavailable")
+      }
+    }
+  }
+
+  /** The autofill request waiting for an answer (ADR 0080 § 6), if any. */
+  @Command
+  fun autofillPending(invoke: Invoke) {
+    val ret = JSObject()
+    val r = AutofillBridge.pending()
+    ret.put("pending", r != null)
+    if (r != null) {
+      ret.put("package", r.packageName)
+      ret.put("label", r.label)
+      ret.put("certificate", r.certificate)
+      if (r.domain != null) ret.put("domain", r.domain)
+      ret.put("username", r.username != null)
+      ret.put("password", r.password != null)
+    }
+    invoke.resolve(ret)
+  }
+
+  /**
+   * Answers the autofill request with the values the user chose, then leaves the front so
+   * that the target application comes back: `AutofillActivity` hands them to the system.
+   */
+  @Command
+  fun autofillFill(invoke: Invoke) {
+    val args = invoke.parseArgs(FillArgs::class.java)
+    val answer = AutofillBridge.Answer(args.username?.toCharArray(), args.password?.toCharArray())
+    args.username = null
+    args.password = null
+    if (!AutofillBridge.answer(answer)) {
+      invoke.reject("no request")
+      return
+    }
+    activity.runOnUiThread { activity.moveTaskToBack(true) }
+    invoke.resolve()
+  }
+
+  /** Abandons the autofill request and gives the front back to the target application. */
+  @Command
+  fun autofillCancel(invoke: Invoke) {
+    val had = AutofillBridge.pending() != null
+    AutofillBridge.cancel()
+    if (had) activity.runOnUiThread { activity.moveTaskToBack(true) }
+    invoke.resolve()
+  }
+
+  /** Whether Hirzla is the autofill service chosen in the system settings. */
+  @Command
+  fun autofillState(invoke: Invoke) {
+    val ret = JSObject()
+    val manager = activity.getSystemService(AutofillManager::class.java)
+    ret.put("supported", manager != null && manager.isAutofillSupported)
+    ret.put("enabled", manager != null && manager.hasEnabledAutofillServices())
+    invoke.resolve(ret)
+  }
+
+  /** Opens the system screen where the user chooses the autofill service. */
+  @Command
+  fun autofillSettings(invoke: Invoke) {
+    activity.runOnUiThread {
+      try {
+        activity.startActivity(
+          Intent(Settings.ACTION_REQUEST_SET_AUTOFILL_SERVICE)
+            .setData(Uri.parse("package:${activity.packageName}")))
+        invoke.resolve()
+      } catch (e: Exception) {
+        invoke.reject("settings")
       }
     }
   }

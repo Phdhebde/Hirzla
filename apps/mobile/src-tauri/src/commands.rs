@@ -9,7 +9,8 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use hirzla_core::methods::proto::{MethodReply, MethodRequest};
 use hirzla_core::proto::{
-    ApiValue, ListEntry, Reply, Request, Selector, VaultState, MAX_PASSWORD, MAX_QUERY, MAX_TEXT,
+    ApiValue, ErrorCode, ListEntry, Reply, Request, Selector, Typed, VaultState, MAX_PASSWORD,
+    MAX_QUERY, MAX_TEXT,
 };
 use hirzla_core::server_mode::proto::{ServerReply, ServerRequest};
 use hirzla_vault::model::Id16;
@@ -19,7 +20,7 @@ use zeroize::Zeroizing;
 
 use crate::error::MobileError;
 use crate::link::CoreLink;
-use crate::native::Native;
+use crate::native::{AutofillState, AutofillTarget, Native};
 
 /// Shortest master password accepted when creating a vault, in characters (as on the
 /// desktop).
@@ -567,6 +568,143 @@ pub async fn enrol_finish(
         .map(drop)
 }
 
+/// The form another application asks Hirzla to fill (ADR 0080 § 6). No `Debug`: the
+/// matches hold titles and user names.
+#[derive(Serialize)]
+pub struct AutofillDto {
+    /// Label of the application.
+    app: String,
+    /// Its package name.
+    package: String,
+    /// Web domain of the form, for a browser of the fixed list.
+    domain: Option<String>,
+    /// Secrets registered for exactly that domain (none for an application).
+    matches: Vec<EntryDto>,
+}
+
+/// The web origin of an autofill request, when its domain gives a canonical `https` origin
+/// (`docs/api-locale.md` § 6.1). A domain that does not is shown but matches nothing.
+fn autofill_origin(target: &AutofillTarget) -> Option<String> {
+    let origin = format!("https://{}", target.domain.as_deref()?);
+    hirzla_core::origin::origin_host(&origin).map(|_| origin)
+}
+
+/// The autofill request waiting for an answer, with the secrets of its domain. `None` when
+/// Hirzla was not opened to fill a form.
+#[tauri::command]
+pub async fn autofill_request(
+    state: State<'_>,
+    native: NativeState<'_>,
+) -> Result<Option<AutofillDto>, MobileError> {
+    let Some(target) = native.autofill_pending()? else {
+        return Ok(None);
+    };
+    let matches = match autofill_origin(&target) {
+        Some(origin) => match state.call(&native, &Request::Match { origin })? {
+            Reply::Matches(entries) => entries.into_iter().map(Into::into).collect(),
+            _ => return Err(MobileError::Protocol),
+        },
+        None => Vec::new(),
+    };
+    Ok(Some(AutofillDto {
+        app: target.label,
+        package: target.package,
+        domain: target.domain,
+        matches,
+    }))
+}
+
+/// Fills the form of the autofill request with the user name and the password of `target`,
+/// then gives the front back to the application. A secret registered for exactly the domain
+/// of the form is filled as the extension does (`Fill`); any other, and every form of an
+/// application, needs `confirmed`: the user read the warning that names the secret and the
+/// application (ADR 0072 § 3). The web view never sees the values.
+#[tauri::command]
+pub async fn autofill_fill(
+    state: State<'_>,
+    native: NativeState<'_>,
+    target: SecretRef,
+    confirmed: bool,
+) -> Result<(), MobileError> {
+    let form = native.autofill_pending()?.ok_or(MobileError::Invalid(
+        "Aucune demande de saisie automatique en cours.",
+    ))?;
+    let Selector::Id { locker, id } = target.selector()? else {
+        return Err(MobileError::Protocol);
+    };
+    let registered = match autofill_origin(&form) {
+        Some(origin) => match state.call(&native, &Request::Fill { locker, id, origin }) {
+            Ok(Reply::Filled { username, password }) => Some((username, Some(password))),
+            Ok(_) => return Err(MobileError::Protocol),
+            // Not a secret of this domain: the manual choice below.
+            Err(MobileError::Refused(r))
+                if matches!(r.code, ErrorCode::NotFound | ErrorCode::InvalidInput) =>
+            {
+                None
+            }
+            Err(e) => return Err(e),
+        },
+        None => None,
+    };
+    let (username, password) = match registered {
+        Some(pair) => pair,
+        None if !confirmed => {
+            return Err(MobileError::Invalid(
+                "Ce secret n'est pas enregistré pour cette cible : confirmez la saisie.",
+            ))
+        }
+        None => {
+            let field = |f| match read_text(&state, &native, &target, f) {
+                Ok(v) => Ok(Some(v)),
+                Err(MobileError::Refused(r)) if r.code == ErrorCode::NotFound => Ok(None),
+                Err(e) => Err(e),
+            };
+            (field(FieldName::Username)?, field(FieldName::Password)?)
+        }
+    };
+    // Only the fields the form has.
+    let username = username.filter(|u| form.username && !u.is_empty());
+    let password = password.filter(|p| form.password && !p.is_empty());
+    let what = match (&username, &password) {
+        (Some(_), Some(_)) => Typed::UsernameAndPassword,
+        (Some(_), None) => Typed::Username,
+        (None, Some(_)) => Typed::Password,
+        (None, None) => {
+            return Err(MobileError::Invalid(
+                "Ce secret n'a rien à saisir dans ce formulaire.",
+            ))
+        }
+    };
+    native.autofill_fill(username.as_ref(), password.as_ref())?;
+    // A line of the core's log (fixed words only, ADR 0072 § 8); the fill is already done.
+    let _ = state.call(
+        &native,
+        &Request::AutoTyped {
+            what,
+            terminal: false,
+        },
+    );
+    Ok(())
+}
+
+/// Abandons the autofill request and gives the front back to the application.
+#[tauri::command]
+pub async fn autofill_cancel(native: NativeState<'_>) -> Result<(), MobileError> {
+    native.autofill_cancel()
+}
+
+/// Whether Hirzla is the autofill service of the system.
+#[tauri::command]
+pub async fn autofill_state(native: NativeState<'_>) -> Result<AutofillState, MobileError> {
+    native.autofill_state()
+}
+
+/// Opens the system screen where the user chooses the autofill service.
+#[tauri::command]
+pub async fn autofill_settings(native: NativeState<'_>) -> Result<(), MobileError> {
+    native.autofill_settings()
+}
+
 /// Abandons the enrolment in progress.
 #[tauri::command]
 pub async fn enrol_cancel(state: State<'_>, native: NativeState<'_>) -> Result<(), MobileError> {
@@ -588,6 +726,38 @@ pub async fn server_sync(state: State<'_>, native: NativeState<'_>) -> Result<u6
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::*;
+
+    #[test]
+    fn only_a_canonical_domain_gives_an_origin() {
+        let target = |domain: Option<&str>| -> AutofillTarget {
+            serde_json::from_value(serde_json::json!({
+                "pending": true,
+                "package": "com.android.chrome",
+                "label": "Chrome",
+                "certificate": "",
+                "domain": domain,
+                "username": true,
+                "password": true,
+            }))
+            .unwrap()
+        };
+        assert_eq!(
+            autofill_origin(&target(Some("bank.example"))).as_deref(),
+            Some("https://bank.example")
+        );
+        // An application (no domain), and domains that are not a canonical host.
+        for bad in [
+            None,
+            Some(""),
+            Some("Bank.Example"),
+            Some("bank.example/login"),
+            Some("user@bank.example"),
+            Some("bank.example:443"),
+            Some("bank.example?x"),
+        ] {
+            assert_eq!(autofill_origin(&target(bad)), None, "{bad:?}");
+        }
+    }
 
     #[test]
     fn identifiers_round_trip_and_bad_ones_are_refused() {

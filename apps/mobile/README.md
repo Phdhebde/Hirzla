@@ -1,14 +1,16 @@
 # Hirzla pour Android (ADR 0080)
 
 Premier lot, en développement : créer et ouvrir le coffre, empreinte (StrongBox), liste,
-affichage et copie, ajout d'un identifiant. Hors du Play Store ; APK de développement
+affichage et copie, ajout d'un identifiant, saisie automatique dans les applications et les
+navigateurs (ADR 0080 § 6.1). Hors du Play Store ; APK de développement
 seulement (une version de livraison du noyau refuse de démarrer tant que le contrôle du
 certificat de l'APK n'est pas écrit).
 
 - `core/` : `libhirzla_core_android.so`, le noyau, chargé par `CoreService` dans le processus
   `:core`.
 - `src-tauri/` : l'interface (Tauri 2) ; `gen/android/` : le projet Gradle et la couche
-  Kotlin (`MainActivity`, `CoreService`, `HirzlaPlugin`).
+  Kotlin (`MainActivity`, `CoreService`, `HirzlaPlugin`, `HirzlaAutofillService`,
+  `AutofillActivity`).
 - `ui/` : les écrans, HTML et JavaScript sans framework.
 
 ## Construire et installer (Pixel branché, débogage USB autorisé)

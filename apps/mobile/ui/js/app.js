@@ -12,7 +12,7 @@ const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 /** @param {string} id */
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 
-const ECRANS = ["attente", "creation", "rejoindre", "ouverture", "liste", "detail", "ajout", "reglages"];
+const ECRANS = ["attente", "creation", "rejoindre", "ouverture", "liste", "remplir", "detail", "ajout", "reglages"];
 
 /** @param {string} nom */
 function montrer(nom) {
@@ -93,6 +93,8 @@ async function demarrer() {
     montrer("ouverture");
   } else {
     $("liste-synchroniser").hidden = !etat.joined;
+    // Opened by the autofill service: the form to fill comes first.
+    if (await afficherRemplir()) return;
     await afficherListe();
     if (etat.joined && !synchronise) {
       synchronise = true;
@@ -117,6 +119,135 @@ async function synchroniser(dire) {
 }
 
 $("liste-synchroniser").addEventListener("click", () => void synchroniser(true));
+
+// ---- Autofill (ADR 0080 § 6) -------------------------------------------------------------
+
+/** @typedef {{ app: string, package: string, domain: string | null, matches: Entree[] }} Demande */
+
+/** @type {Demande | null} */
+let demande = null;
+/** The secret awaiting confirmation. @type {Entree | null} */
+let aRemplir = null;
+/** @type {number | undefined} */
+let remplirMinuteur;
+
+/** A row of a list of secrets. @param {Entree} e @param {(e: Entree) => void} choisir */
+function ligneSecret(e, choisir) {
+  const li = document.createElement("li");
+  const b = document.createElement("button");
+  b.type = "button";
+  const t = document.createElement("span");
+  t.className = "titre";
+  t.textContent = e.title;
+  const s = document.createElement("span");
+  s.className = "sous-titre";
+  const casier = casiers.find((c) => c.id === e.locker);
+  s.textContent = [e.username, e.hosts[0], casier && !casier.personal ? casier.name : null].filter(Boolean).join(" · ");
+  b.append(t, s);
+  b.addEventListener("click", () => choisir(e));
+  li.append(b);
+  return li;
+}
+
+/** Shows the form to fill, if Hirzla was opened for one. @returns {Promise<boolean>} */
+async function afficherRemplir() {
+  try {
+    demande = await invoke("autofill_request");
+  } catch (e) {
+    annoncer(message(e));
+    demande = null;
+  }
+  if (!demande) return false;
+  aRemplir = null;
+  $("remplir-app").textContent = demande.app;
+  $("remplir-cible").textContent = demande.domain
+    ? `Site : ${demande.domain}`
+    : `Application : ${demande.package}`;
+  const ul = $("remplir-correspondances");
+  ul.replaceChildren();
+  // A secret registered for exactly this site is filled at once, as the extension does.
+  for (const e of demande.matches) ul.append(ligneSecret(e, (s) => void remplir(s, false)));
+  $("remplir-aucun").hidden = !demande.domain || demande.matches.length > 0;
+  input("remplir-recherche").value = "";
+  $("remplir-resultats").replaceChildren();
+  $("remplir-choix").hidden = false;
+  $("remplir-confirmation").hidden = true;
+  montrer("remplir");
+  // Nothing registered for the target: the whole list, to choose from.
+  if (demande.matches.length === 0) await chercherRemplir();
+  return true;
+}
+
+async function chercherRemplir() {
+  if (!demande) return;
+  const connus = new Set(demande.matches.map((e) => `${e.locker}/${e.id}`));
+  try {
+    const liste = await invoke("list_secrets", { query: input("remplir-recherche").value || null });
+    casiers = liste.lockers;
+    const ul = $("remplir-resultats");
+    ul.replaceChildren();
+    for (const e of /** @type {Entree[]} */ (liste.entries)) {
+      if (!connus.has(`${e.locker}/${e.id}`)) ul.append(ligneSecret(e, confirmerRemplir));
+    }
+  } catch (e) {
+    annoncer(message(e));
+  }
+}
+
+/** The warning before filling a secret that is not registered for the target (ADR 0072 § 3).
+ * @param {Entree} e */
+function confirmerRemplir(e) {
+  if (!demande) return;
+  aRemplir = e;
+  $("remplir-avertissement").textContent =
+    `Hirzla va remplir l'identifiant et le mot de passe de « ${e.title} » dans « ${demande.app} ».`;
+  $("remplir-avertissement-cible").textContent = demande.domain ?? demande.package;
+  erreur($("remplir-confirmation"), null);
+  $("remplir-choix").hidden = true;
+  $("remplir-confirmation").hidden = false;
+  window.scrollTo(0, 0);
+}
+
+/** @param {Entree} e @param {boolean} confirme */
+async function remplir(e, confirme) {
+  try {
+    await invoke("autofill_fill", { target: { locker: e.locker, id: e.id }, confirmed: confirme });
+  } catch (err) {
+    if (confirme) erreur($("remplir-confirmation"), err);
+    else annoncer(message(err));
+    return;
+  }
+  // Hirzla left the front; the next time it shows, it is the list again.
+  demande = null;
+  aRemplir = null;
+  await afficherListe();
+}
+
+$("remplir-recherche").addEventListener("input", () => {
+  clearTimeout(remplirMinuteur);
+  remplirMinuteur = setTimeout(chercherRemplir, 200);
+});
+
+$("remplir-confirmer").addEventListener("click", () => {
+  if (aRemplir) void remplir(aRemplir, true);
+});
+
+$("remplir-retour").addEventListener("click", () => {
+  aRemplir = null;
+  $("remplir-confirmation").hidden = true;
+  $("remplir-choix").hidden = false;
+});
+
+$("remplir-annuler").addEventListener("click", async () => {
+  demande = null;
+  aRemplir = null;
+  try {
+    await invoke("autofill_cancel");
+  } catch (e) {
+    annoncer(message(e));
+  }
+  await afficherListe();
+});
 
 // ---- Joining the member's account (ADR 0081) -------------------------------------------
 
@@ -296,22 +427,7 @@ async function chargerListe() {
   }
   const ul = $("liste");
   ul.replaceChildren();
-  for (const e of entrees) {
-    const li = document.createElement("li");
-    const b = document.createElement("button");
-    b.type = "button";
-    const t = document.createElement("span");
-    t.className = "titre";
-    t.textContent = e.title;
-    const s = document.createElement("span");
-    s.className = "sous-titre";
-    const casier = casiers.find((c) => c.id === e.locker);
-    s.textContent = [e.username, e.hosts[0], casier && !casier.personal ? casier.name : null].filter(Boolean).join(" · ");
-    b.append(t, s);
-    b.addEventListener("click", () => afficherDetail(e));
-    li.append(b);
-    ul.append(li);
-  }
+  for (const e of entrees) ul.append(ligneSecret(e, afficherDetail));
   $("liste-vide").hidden = entrees.length > 0;
 }
 
@@ -361,6 +477,7 @@ $("liste-reglages").addEventListener("click", async () => {
       ? "L'empreinte n'est pas encore ajoutée."
       : "Ce téléphone ne permet pas l'empreinte : il faut la puce StrongBox et une empreinte enregistrée dans les réglages d'Android.";
   $("empreinte-ajout").hidden = etat.fingerprint || !etat.can_enrol;
+  await afficherSaisie();
   montrer("reglages");
 });
 
@@ -449,7 +566,31 @@ $("form-ajout").addEventListener("submit", (ev) => {
   });
 });
 
-// ---- Settings: fingerprint -----------------------------------------------------------
+// ---- Settings: fingerprint, autofill -------------------------------------------------
+
+async function afficherSaisie() {
+  const bouton = /** @type {HTMLButtonElement} */ ($("saisie-activer"));
+  try {
+    const s = await invoke("autofill_state");
+    $("saisie-etat").textContent = !s.supported
+      ? "Ce téléphone ne permet pas la saisie automatique."
+      : s.enabled
+        ? "Hirzla est le service de saisie automatique de ce téléphone."
+        : "Hirzla n'est pas encore le service de saisie automatique de ce téléphone.";
+    bouton.hidden = !s.supported || s.enabled;
+  } catch (e) {
+    $("saisie-etat").textContent = message(e);
+    bouton.hidden = true;
+  }
+}
+
+$("saisie-activer").addEventListener("click", async () => {
+  try {
+    await invoke("autofill_settings");
+  } catch (e) {
+    annoncer(message(e));
+  }
+});
 
 $("reglages-retour").addEventListener("click", afficherListe);
 
