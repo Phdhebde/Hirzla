@@ -2277,7 +2277,8 @@ L'**aiguillage** (`VaultRouter`, `hirzla_core::client`) trouve le noyau d'un cof
 au besoin et le vérifie. La ligne de commande choisit ainsi :
 
 1. `--socket` (ou `HIRZLA_SOCKET`) ou `--vault` (ou `HIRZLA_VAULT`) : **comme avant**. Le
-   registre n'est ni lu ni écrit. `--coffre` avec l'une de ces options est une erreur d'usage.
+   registre n'est ni lu ni écrit. `--coffre` avec l'une de ces options ou variables est une
+   erreur d'usage ; `HIRZLA_COFFRE` seul leur cède, sans erreur.
 2. Sinon `--coffre ALIAS` (ou `HIRZLA_COFFRE`) : l'entrée de cet alias, comparé sans tenir
    compte de la casse ; alias inconnu : erreur.
 3. Sinon le coffre par défaut du registre (`default`) ; à défaut son unique entrée ; s'il y en
