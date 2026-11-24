@@ -270,3 +270,44 @@ signée sans clé par Sigstore :
 ```sh
 gh attestation verify Hirzla_1.0.0_x64_fr-FR.msi --repo Phdhebde/Hirzla
 ```
+
+## 7. Android : clé de signature de l'APK (ADR 0083)
+
+À faire une fois, par l'éditeur, sur son poste. La clé ne change **jamais** : sans elle, plus
+aucune mise à jour de l'application n'est possible sur les téléphones déjà installés.
+
+### 7.1 Créer la clé
+
+`keytool` est fourni avec tout JDK (17 ou plus). Il demande le mot de passe du magasin ;
+choisissez-en un long et rangez-le aussitôt dans Hirzla (`hirzla set android-signature`).
+
+```sh
+keytool -genkeypair -storetype PKCS12 -keystore hirzla-android.p12 -alias hirzla \
+  -keyalg RSA -keysize 4096 -sigalg SHA256withRSA -validity 10950 \
+  -dname "CN=Hirzla, O=Hirzla"
+keytool -list -v -storetype PKCS12 -keystore hirzla-android.p12 -alias hirzla | grep SHA256
+```
+
+La seconde commande affiche l'**empreinte SHA-256** du certificat (publique).
+
+### 7.2 Dans GitHub
+
+1. Variable du dépôt **`HIRZLA_ANDROID_CERT_SHA256`** : l'empreinte ci-dessus, en hexadécimal
+   sans deux-points, en minuscules.
+2. *Settings* › *Environments* › *New environment* › **`android-signature`**, configuré comme
+   `editeur` (§ 1.3 : relecteur obligatoire, étiquettes `v*` seules).
+3. Secrets de cet environnement :
+   - **`HIRZLA_ANDROID_KEYSTORE`** : le base64 du magasin, sur une ligne
+     (`base64 -i hirzla-android.p12` sous macOS, `base64 -w0` sous Linux), collé directement ;
+   - **`HIRZLA_ANDROID_KEYSTORE_PASSWORD`** : le mot de passe du magasin.
+
+### 7.3 Garder une copie hors ligne
+
+Copiez `hirzla-android.p12` sur les deux supports chiffrés de la clé d'éditeur (§ 1.4), puis
+effacez toute autre copie.
+
+### 7.4 Premier passage d'un téléphone d'essai
+
+Un APK de développement est signé par une autre clé : désinstallez-le (le coffre local du
+téléphone est effacé), installez l'APK de livraison, puis enrôlez de nouveau le téléphone
+(ADR 0081). Les mises à jour suivantes s'installent par-dessus.
