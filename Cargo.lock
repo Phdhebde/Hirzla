@@ -2014,6 +2014,7 @@ dependencies = [
  "hirzla-sync",
  "hirzla-vault",
  "p256",
+ "proptest",
  "psl",
  "rcgen",
  "rustls",

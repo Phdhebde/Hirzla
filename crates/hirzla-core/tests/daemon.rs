@@ -9,7 +9,9 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use hirzla_core::client::{Client, ClientError};
-use hirzla_core::proto::{ApiValue, ErrorCode, KdfParams, Reply, Request, Selector, VaultState};
+use hirzla_core::proto::{
+    ApiValue, ErrorCode, KdfParams, Reply, Request, Selector, VaultMode, VaultState,
+};
 use hirzla_core::transport::Endpoint;
 use hirzla_vault::secret::{Field, SecretType};
 use zeroize::Zeroizing;
@@ -856,4 +858,121 @@ fn totp_codes_are_refused_to_the_browser_profile() {
     }
     let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
     assert!(log.contains("event=totp_request op=totp_code result=unauthorized"));
+}
+
+/// Waits for a core that must refuse to start, and returns its exit code.
+fn exit_code(mut core: Core) -> Option<i32> {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        if let Some(status) = core.child.try_wait().unwrap() {
+            return status.code();
+        }
+        assert!(Instant::now() < deadline, "the core kept running");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// The core of one registered vault (`--vault-id`, `docs/api-locale.md` § 25.3, ADR 0085):
+/// it refuses to start on another file, serves its vault only, and names it (`VaultInfo`).
+#[test]
+fn a_core_started_for_one_vault_serves_that_vault_only() {
+    let dir = private_dir();
+    let me = std::env::current_exe().unwrap();
+    let hex = hirzla_core::registry::id_hex;
+
+    // A vault, created by a core started without `--vault-id`.
+    let ep = endpoint(dir.path(), "plain");
+    let core = start(dir.path(), &ep, &me, &[]);
+    let mut c = connect(&ep);
+    assert_eq!(refused(c.call(&Request::VaultInfo)), ErrorCode::NoVault);
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: 65536,
+            t: 3,
+            p: 1,
+        }),
+    })
+    .unwrap();
+    let Reply::VaultInfo(info) = c.call(&Request::VaultInfo).unwrap() else {
+        panic!("unexpected reply");
+    };
+    assert_eq!(info.mode, Some(VaultMode::Standalone));
+    assert_eq!(info.server, None);
+    let id = info.vault_id;
+    c.call(&Request::Shutdown).unwrap();
+    drop(c);
+    assert_eq!(exit_code(core), Some(0));
+
+    // Started for another vault than the one in the file: it stops before listening.
+    let mut other = id;
+    other[0] ^= 0xff;
+    let wrong = endpoint(dir.path(), "wrong");
+    let core = start(dir.path(), &wrong, &me, &["--vault-id", &hex(&other)]);
+    assert_eq!(exit_code(core), Some(1));
+    assert!(matches!(
+        Client::connect(&wrong, Some(&core_exe())),
+        Err(ClientError::NotRunning)
+    ));
+    // Started for a vault whose file is missing, or is not a vault: the same.
+    let absent = dir.path().join("absent.hirzla");
+    let core = start(
+        dir.path(),
+        &wrong,
+        &me,
+        &["--vault-id", &hex(&id), "--vault", absent.to_str().unwrap()],
+    );
+    assert_eq!(exit_code(core), Some(1));
+    assert!(!absent.exists(), "a vault file was created");
+    let junk = dir.path().join("faux.hirzla");
+    std::fs::write(&junk, b"pas un coffre").unwrap();
+    let core = start(
+        dir.path(),
+        &wrong,
+        &me,
+        &["--vault-id", &hex(&id), "--vault", junk.to_str().unwrap()],
+    );
+    assert_eq!(exit_code(core), Some(1));
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    for reason in ["id_mismatch", "absent", "unreadable"] {
+        assert!(
+            log.contains(&format!("event=vault_refused reason={reason}")),
+            "{reason}: {log}"
+        );
+    }
+    assert_eq!(log.matches("event=listening").count(), 1, "{log}");
+
+    // Started for the vault of the file: it serves it, locked, and names it.
+    let right = endpoint(dir.path(), "right");
+    let _core = start(dir.path(), &right, &me, &["--vault-id", &hex(&id)]);
+    let mut c = connect(&right);
+    assert_eq!(state(&mut c), VaultState::Locked);
+    let Reply::VaultInfo(info) = c.call(&Request::VaultInfo).unwrap() else {
+        panic!("unexpected reply");
+    };
+    assert_eq!((info.vault_id, info.mode, info.server), (id, None, None));
+    // It creates no vault.
+    assert_eq!(
+        refused(c.call(&Request::Init {
+            password: z(PASSWORD),
+            kdf: None,
+        })),
+        ErrorCode::VaultExists
+    );
+    c.call(&Request::Unlock {
+        password: z(PASSWORD),
+    })
+    .unwrap();
+    assert_eq!(state(&mut c), VaultState::Unlocked);
+    // Neither the identifier nor the path of the vault is in the log.
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(
+        log.contains("event=request op=vault_info result=ok"),
+        "{log}"
+    );
+    assert!(
+        !log.contains(&hex(&id)) && !log.contains(&hex(&other)),
+        "{log}"
+    );
+    assert!(!log.contains("coffre.hirzla"), "{log}");
 }

@@ -23,7 +23,7 @@ use crate::auth::authorize_same_app;
 use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
-use crate::events::{Event, Log, Refusal};
+use crate::events::{Event, Log, Refusal, VaultRefusal};
 use crate::folders::proto::{is_folder_request, FolderReply, FolderRequest};
 use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
 use crate::locker_export::service as export_service;
@@ -37,7 +37,7 @@ use crate::release::{self, PublisherKeys};
 use crate::selfmode::import;
 use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
-use crate::service::{Config, Core};
+use crate::service::{vault_file_refusal, Config, Core};
 use crate::totp::proto::{is_totp_request, TotpReply, TotpRequest};
 use crate::transport::{Connection, Endpoint, Listener};
 
@@ -74,6 +74,9 @@ pub struct Options {
     pub endpoint: Endpoint,
     /// The vault file.
     pub vault: PathBuf,
+    /// The registered vault this core is started for (`--vault-id`, `docs/api-locale.md`
+    /// § 25.3): the file must carry this identifier, at start and at every opening.
+    pub vault_id: Option<Id16>,
     /// Log file; standard error when absent.
     pub log: Option<PathBuf>,
     /// Allowed client executables; the default list when absent.
@@ -97,8 +100,8 @@ pub struct Options {
     pub client_manifest: Option<PathBuf>,
 }
 
-const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
-[--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
+const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--vault-id HEX] \
+[--log FICHIER] [--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
 [--hornn-issuer HEX --hornn-key FICHIER] [--client-signatures required|off] \
 [--publisher-key FICHIER] [--client-manifest FICHIER]";
 
@@ -125,13 +128,15 @@ pub fn default_vault_path() -> Option<PathBuf> {
 }
 
 /// Parses the arguments of `hirzla-core`. Environment fallbacks: `HIRZLA_SOCKET`,
-/// `HIRZLA_VAULT`.
+/// `HIRZLA_VAULT`. With `--vault-id` and no endpoint given, the core listens on the endpoint
+/// of that vault (`docs/api-locale.md` § 25.2).
 ///
 /// # Errors
 /// A message for the user, in French.
 pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, String> {
     let mut endpoint = std::env::var_os("HIRZLA_SOCKET");
     let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
+    let mut vault_id: Option<Id16> = None;
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
     let mut allow_browser: Option<Vec<PathBuf>> = None;
@@ -150,6 +155,14 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         match arg.to_str() {
             Some("--socket") => endpoint = Some(value("--socket")?),
             Some("--vault") => vault = Some(PathBuf::from(value("--vault")?)),
+            Some("--vault-id") => {
+                let v = value("--vault-id")?;
+                vault_id = Some(
+                    v.to_str()
+                        .and_then(parse_id16)
+                        .ok_or_else(|| "--vault-id attend 32 chiffres hexadécimaux.".to_owned())?,
+                );
+            }
             Some("--log") => log = Some(PathBuf::from(value("--log")?)),
             Some("--allow-exe") => allow
                 .get_or_insert_with(Vec::new)
@@ -208,9 +221,14 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             _ => return Err(format!("argument inconnu. {USAGE}")),
         }
     }
-    let endpoint = match endpoint {
-        Some(e) => Endpoint::parse(&e).map_err(|_| "point de connexion invalide.".to_owned())?,
-        None => Endpoint::default_for_user()
+    let endpoint = match (endpoint, &vault_id) {
+        (Some(e), _) => {
+            Endpoint::parse(&e).map_err(|_| "point de connexion invalide.".to_owned())?
+        }
+        // The core of a registered vault listens on the endpoint of that vault.
+        (None, Some(id)) => Endpoint::for_vault(id)
+            .map_err(|_| "impossible de déterminer le point de connexion.".to_owned())?,
+        (None, None) => Endpoint::default_for_user()
             .map_err(|_| "impossible de déterminer le point de connexion.".to_owned())?,
     };
     let vault = vault.or_else(default_vault_path).ok_or_else(|| {
@@ -225,6 +243,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         clients: ClientPolicy::Executables,
         endpoint,
         vault,
+        vault_id,
         log,
         allow,
         allow_browser,
@@ -347,6 +366,7 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
         clients: ClientPolicy::SameApp,
         endpoint,
         vault: files_dir.join("coffre.hirzla"),
+        vault_id: None,
         log: Some(core_dir.join("core.log")),
         allow: None,
         allow_browser: None,
@@ -456,6 +476,23 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             ))))
         }
     };
+    // The core of a registered vault checks, before it listens, that the file is that vault
+    // (`docs/api-locale.md` § 25.3): the registry that named it is not authenticated.
+    if let Some(expected) = &options.vault_id {
+        if let Some(reason) = vault_file_refusal(&options.vault, expected) {
+            log.record(Event::VaultRefused { reason });
+            return Err(match reason {
+                VaultRefusal::Absent => "aucun coffre à l'emplacement inscrit.",
+                VaultRefusal::Unreadable => {
+                    "le fichier à l'emplacement inscrit n'est pas un coffre lisible."
+                }
+                VaultRefusal::IdMismatch => {
+                    "le coffre à cet emplacement n'est pas celui qui est inscrit."
+                }
+            }
+            .to_owned());
+        }
+    }
     let mut listener = Listener::bind(&options.endpoint).map_err(|e| match e {
         crate::transport::TransportError::InUse => {
             "un noyau est déjà à l'écoute sur ce point de connexion.".to_owned()
@@ -480,14 +517,18 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         required: gate.signatures_required(),
         kind: codesign::SIGNATURE_KIND,
     });
-    let core = Arc::new(Mutex::new(Core::new(
+    let mut core = Core::new(
         Config {
             vault_path: options.vault.clone(),
             auto_lock: options.auto_lock,
             hardening,
         },
         Arc::clone(log),
-    )));
+    );
+    if let Some(expected) = options.vault_id {
+        core.expect_vault(expected);
+    }
+    let core = Arc::new(Mutex::new(core));
 
     {
         // Sleep and session lock, where the system tells (ADR 0033); elsewhere the tick
@@ -1306,6 +1347,41 @@ mod tests {
         assert!(load_hornn([0; 16], &PathBuf::from("/nonexistent/hornn.key")).is_err());
     }
 
+    /// `--vault-id` (`docs/api-locale.md` § 25.3): the core of one registered vault. Without
+    /// an endpoint it listens on the endpoint of that vault; an endpoint given wins.
+    #[test]
+    fn parses_the_vault_identifier() {
+        let hex = "000102030405060708090a0b0c0d0e0f";
+        let mut id = [0u8; 16];
+        for (i, b) in id.iter_mut().enumerate() {
+            *b = u8::try_from(i).unwrap();
+        }
+        let plain = parse_args(args(&["--vault", "v"])).unwrap();
+        assert_eq!(plain.vault_id, None);
+        let o = parse_args(args(&["--vault", "v", "--vault-id", hex])).unwrap();
+        assert_eq!(o.vault_id, Some(id));
+        // The environment may name an endpoint (`HIRZLA_SOCKET`), as for any core.
+        if std::env::var_os("HIRZLA_SOCKET").is_none() {
+            assert_eq!(o.endpoint, Endpoint::for_vault(&id).unwrap());
+            assert_ne!(o.endpoint, plain.endpoint);
+            assert_eq!(plain.endpoint, Endpoint::default_for_user().unwrap());
+        }
+        let given = Endpoint::for_vault(&[0xee; 16]).unwrap();
+        let o = parse_args(args(&[
+            "--vault-id",
+            hex,
+            "--socket",
+            &given.display(),
+            "--vault",
+            "v",
+        ]))
+        .unwrap();
+        assert_eq!((o.endpoint, o.vault_id), (given, Some(id)));
+        for bad in ["", "00", "zz0102030405060708090a0b0c0d0e0f", &hex[..31]] {
+            assert!(parse_args(args(&["--vault", "v", "--vault-id", bad])).is_err());
+        }
+        assert!(parse_args(args(&["--vault", "v", "--vault-id"])).is_err());
+    }
     #[test]
     fn refuses_bad_arguments() {
         assert!(parse_args(args(&["--nope"])).is_err());
