@@ -184,8 +184,10 @@ fn the_android_entries_allow_unsafe_on_one_item_only() {
 /// ends with the function.
 #[test]
 fn the_interface_entry_module_holds_only_the_entry_point() {
-    let lib =
-        fs::read_to_string(workspace_root().join("apps/mobile/src-tauri/src/lib.rs")).unwrap();
+    // A Windows checkout has CRLF line endings.
+    let lib = fs::read_to_string(workspace_root().join("apps/mobile/src-tauri/src/lib.rs"))
+        .unwrap()
+        .replace("\r\n", "\n");
     let start = lib.find("mod entry {").unwrap();
     let body = &lib[start..];
     let end = body.find("\n}\n").unwrap();
