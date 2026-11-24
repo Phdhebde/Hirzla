@@ -15,7 +15,7 @@ chiffré d'un casier (version 10, § 19) par l'ADR 0077 ; les méthodes de déve
 matérielles (version 12, § 21) par l'ADR 0075 ; les codes TOTP (version 13, § 22) par
 l'ADR 0078 ; les clés d'accès (version 14, § 23) par l'ADR 0079 ; la lecture et la
 modification des adresses et des étiquettes (version 15, § 24) par l'ADR 0082 ; plusieurs
-coffres par appareil (version 16, § 25) par l'ADR 0085 (proposé).
+coffres par appareil (version 16, § 25) par l'ADR 0085 (accepté).
 
 Code : `crates/hirzla-core` (`proto`, `transport`, `auth`, `service`, `daemon`, `client`,
 `registry`),
@@ -454,7 +454,7 @@ identifiant de secret, ni chemin).
 | `agent_request` | `op` (nom de l'opération agent), `result` (`ok`, nom de l'erreur ou motif de refus d'une autorisation, § 13) |
 | `server_request` | `op` (nom de l'opération du mode Serveur), `result` (`ok` ou nom de l'erreur, § 15) |
 | `totp_request` | `op` (`totp_code`, `totp_set`, `totp_clear`, `totp_create`), `result` (`ok` ou nom de l'erreur, § 22) ; jamais un code |
-| `vault_refused` | `reason` (`absent`, `unreadable`, `id_mismatch`) : le fichier du coffre n'est pas celui que le noyau a été lancé pour servir (§ 25.3) ; jamais un identifiant ni un chemin |
+| `vault_refused` | `reason` (`absent`, `unreadable`, `id_mismatch`) : le fichier du coffre n'est pas celui que le noyau a été lancé pour servir (§ 25.3) ; `reason=exists` : un noyau provisoire a trouvé un fichier là où il devait créer un coffre (§ 25.9) ; jamais un identifiant ni un chemin |
 
 Tests : un test parcourt tous les événements et vérifie la forme des valeurs ; les tests de bout
 en bout cherchent dans le journal réel le mot de passe maître, les secrets et les titres
@@ -2146,11 +2146,12 @@ jamais une adresse ni une étiquette.
 
 ## 25. Plusieurs coffres par appareil (version 16)
 
-Décision : ADR 0085 (accepté), première étape : registre des coffres, un noyau par coffre,
-ligne de commande. Le format du coffre, son annexe, le protocole de synchronisation et la
+Décision : ADR 0085 (accepté). Première étape : registre des coffres, un noyau par coffre,
+ligne de commande. Deuxième étape : création d'un coffre de plus par un point de connexion
+provisoire (§ 25.9). Le format du coffre, son annexe, le protocole de synchronisation et la
 suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
-(registre), `client/router.rs` (aiguillage), `transport.rs`, `daemon.rs`, `service.rs` ;
-`apps/cli`.
+(registre), `client/router.rs` (aiguillage), `client/creation.rs` (création),
+`transport.rs`, `daemon.rs`, `service.rs` ; `apps/cli`.
 
 L'application de poste, l'extension, l'hôte natif, l'application Android et `sdk/go`
 n'apprennent pas l'aiguillage dans cette étape : ils parlent au point de connexion par défaut
@@ -2325,6 +2326,9 @@ Option globale : `--coffre ALIAS` (ou `HIRZLA_COFFRE`).
 | --- | --- | --- |
 | `coffres` ou `coffres liste` | Les coffres inscrits, par rang : alias, début du `vault_id`, fichier, état (ouvert, verrouillé, noyau arrêté), mode ; le coffre par défaut est marqué | pour chaque noyau en marche : `Status`, `VaultInfo` |
 | `coffres ajouter ALIAS FICHIER [--defaut]` | Inscrit un coffre **existant** ; son `vault_id` est lu dans l'en-tête en clair, sans clé. Le premier coffre inscrit devient le coffre par défaut | — |
+| `coffres creer ALIAS [FICHIER] [--defaut] [--kdf-memory KIO] [--kdf-passes N] [--kdf-lanes N]` | **Crée** un coffre Self et l'inscrit (§ 25.9) | `Status`, `Init`, `VaultInfo`, `Shutdown` |
+| `coffres rejoindre ALIAS LIEN [FICHIER] [--defaut]` | Crée un coffre, le rattache au serveur du lien d'invitation (ADR 0046, nouveau compte) et l'inscrit | `Status`, `Init`, `ServerJoin`, `VaultInfo`, `Shutdown` |
+| `coffres enroler ALIAS LIEN [FICHIER] [--defaut]` | Rejoint **son compte** sur le serveur du lien : enrôle cet appareil (ADR 0081, § 15.11, côté N), crée le coffre et l'inscrit | `Status`, `DeviceEnrolStart`, `DeviceEnrolWait` toutes les 2 secondes pendant 10 minutes au plus, `DeviceEnrolFinish`, `VaultInfo`, `Shutdown` ; `DeviceEnrolCancel` à l'abandon |
 | `coffres renommer ALIAS NOUVEL_ALIAS` | Change l'alias | — |
 | `coffres defaut ALIAS` | Choisit le coffre par défaut | — |
 | `coffres retirer ALIAS` | Arrête le noyau du coffre s'il tourne, puis retire l'entrée. **N'efface pas le fichier** ; s'il était le coffre par défaut, il n'y en a plus | `Shutdown` |
@@ -2336,11 +2340,15 @@ Option globale : `--coffre ALIAS` (ou `HIRZLA_COFFRE`).
 - `status` nomme le coffre auquel il a parlé quand il vient du registre.
 - Codes de sortie : ceux du § 11.
 
-**Créer un coffre de plus.** Le `vault_id` est tiré par le noyau à la création : un coffre
-qui n'existe pas encore n'a ni entrée au registre ni point de connexion. Dans cette étape,
-on le crée par le chemin des essais, puis on l'inscrit :
-`hirzla --socket POINT --vault FICHIER init`, `hirzla --socket POINT stop`,
-`hirzla coffres ajouter ALIAS FICHIER`. Voir le point ouvert 1.
+- `creer`, `rejoindre` et `enroler` suivent le § 25.9. `LIEN` est le texte du lien
+  d'invitation, ou `@FICHIER` (§ 15.6). Sans `FICHIER`, le coffre est créé à côté de
+  l'emplacement par défaut, sous un nom tiré au hasard (§ 25.9). Ces commandes demandent le
+  mot de passe maître au terminal, comme `init` ; `enroler` exige un terminal (le code de
+  contrôle à taper sur l'appareil de certification, puis l'empreinte du membre à confirmer
+  par « oui »).
+- `init` ne change pas : sans coffre inscrit, il crée le coffre de l'emplacement par défaut
+  (§ 25.5, point 4) ; avec un coffre inscrit, il s'adresse au noyau de ce coffre, qui
+  répond `VaultExists`, et la commande renvoie à `coffres creer`.
 
 ### 25.7 Erreurs et journal
 
@@ -2349,10 +2357,8 @@ contient ni alias, ni chemin, ni identifiant de coffre.
 
 ### 25.8 Points ouverts
 
-1. **Création d'un coffre supplémentaire** (`Init`, invitation, enrôlement) : l'ADR 0085
-   nomme le point de connexion par le `vault_id`, que le noyau ne tire qu'à la création.
-   Tranché (ADR 0085, « Mise en œuvre ») : un point de connexion provisoire, le temps de la
-   création. À spécifier ici avec l'étape 2.
+1. **Création d'un coffre supplémentaire** (`Init`, invitation, enrôlement) : réglée par
+   le point de connexion provisoire (§ 25.9).
 2. **Coffre de l'emplacement par défaut au point de connexion par défaut** : à basculer sur
    son point de connexion propre quand l'application de poste et l'hôte natif sauront
    l'aiguillage.
@@ -2362,3 +2368,80 @@ contient ni alias, ni chemin, ni identifiant de coffre.
    la limite de 104 octets de `sun_path` ; à mesurer sur un poste réel.
 6. **`RLIMIT_MEMLOCK`** (ADR 0054) et nombre de noyaux ouverts à la fois sous Linux : non
    mesuré.
+
+### 25.9 Création d'un coffre : point de connexion provisoire
+
+Décision : ADR 0085, « Mise en œuvre », « Créer un coffre de plus ». Le point de connexion
+d'un coffre porte son `vault_id` (§ 25.2), que le noyau ne tire qu'à la création
+(`format.md` § 5.4) : un coffre à créer n'a encore ni entrée au registre ni point de
+connexion. Le client le fait donc créer par un **noyau provisoire**, à un **point de
+connexion provisoire**, puis l'inscrit et relance son noyau au point de connexion du coffre.
+Le noyau reste le seul à tirer un identifiant de coffre ; le client n'en fournit aucun.
+
+**Point de connexion provisoire.**
+
+| Système | Point de connexion provisoire |
+| --- | --- |
+| Linux, macOS | `core-new-<aléa>.sock` dans le répertoire du point de connexion par défaut (§ 2) |
+| Windows | `\\.\pipe\hirzla-core-<SID de l'utilisateur>-new-<aléa>` |
+
+`<aléa>` : 8 octets du générateur du système, tirés par le client, en hexadécimal minuscule
+(16 caractères). Ce n'est pas un secret : il évite seulement que deux créations se gênent.
+Les règles des § 2.1 et 2.2 s'appliquent telles quelles (répertoire privé, mode de la
+socket, DACL du tube, première instance), ainsi que l'authentification des deux bouts (§ 3).
+
+**Noyau provisoire.** Lancé par
+`hirzla-core --socket POINT --vault FICHIER --provisional`. Il sert l'API comme un noyau
+sans `--vault-id` (§ 25.3), avec trois différences :
+
+1. **Il ne sert qu'à créer.** Au démarrage, avant d'ouvrir son point de connexion, s'il
+   existe quoi que ce soit au chemin du coffre (fichier, répertoire, lien), il ne démarre pas
+   (code de sortie 1, événement `vault_refused reason=exists`). Un noyau provisoire ne peut
+   donc pas devenir le second noyau d'un coffre existant.
+2. **Il exige `--socket` et `--vault`** (ou `HIRZLA_SOCKET`, `HIRZLA_VAULT`) et refuse
+   `--vault-id` : erreur d'usage, code de sortie 2.
+3. **Il ne survit pas à son client.** Il s'arrête de lui-même, comme sur `Shutdown` (coffre
+   verrouillé, socket supprimée, `event=stopped`), dès que sa dernière connexion acceptée se
+   ferme, ou si aucun client n'a été accepté 30 secondes après le début de l'écoute. Une
+   création abandonnée (client tué, fenêtre fermée) ne laisse donc aucun noyau à un point de
+   connexion que personne ne connaît. Le client garde **une** connexion ouverte du début à
+   la fin de la création.
+
+**Séquence du client** (`hirzla_core::client::creation`).
+
+1. **Avant de lancer quoi que ce soit** : le registre se lit ; il tient moins de 16 coffres ;
+   l'alias est acceptable et libre ; le chemin est absolu, acceptable (§ 25.1) et n'est pas
+   déjà inscrit ; rien n'existe à ce chemin. Sinon la création est refusée, sans noyau lancé.
+   Sans chemin donné, le client choisit `coffre-<aléa>.hirzla` (16 chiffres hexadécimaux
+   tirés de même) dans le répertoire de l'emplacement par défaut du coffre.
+2. Il tire le point de connexion provisoire, lance le noyau provisoire, s'y connecte et le
+   vérifie comme tout noyau (§ 3.2). `Status` doit répondre « aucun coffre ».
+3. **Création**, sur cette connexion, par l'une des trois voies :
+   - coffre Self : `Init` ;
+   - nouveau compte sur un serveur : `Init`, puis `ServerJoin` avec le lien d'invitation
+     (ADR 0046) ;
+   - appareil de plus du même membre : `DeviceEnrolStart`, `DeviceEnrolWait`…,
+     `DeviceEnrolFinish` (§ 15.11).
+4. `VaultInfo` rend le `vault_id` tiré par le noyau. Le client inscrit le coffre au registre
+   (identifiant, chemin, alias ; le premier coffre inscrit devient le coffre par défaut).
+5. `Shutdown` : le noyau provisoire s'arrête.
+6. Le client relance le noyau du coffre par sa route (§ 25.5). Le coffre y est
+   **verrouillé** : l'utilisateur le déverrouille comme tout autre coffre. Le mot de passe
+   maître n'est pas gardé par le client pour le faire à sa place.
+
+**Échecs.**
+
+- Avant que le coffre existe (étape 3 refusée, client interrompu) : rien n'est inscrit, le
+  noyau provisoire s'arrête, aucun fichier ne reste.
+- **Après la création** (par exemple `Init` réussi puis `ServerJoin` refusé, ou
+  `DeviceEnrolFinish` qui échoue après avoir créé le coffre, § 15.11, point 3) : le coffre
+  existe et il est valide. Le client l'inscrit quand même (étapes 4 à 6), puis rapporte
+  l'échec ; le rattachement se refait depuis le coffre inscrit.
+- Le registre ne peut pas être écrit à l'étape 4 : le fichier du coffre reste, le noyau
+  provisoire est arrêté, et le client donne le chemin, à inscrire avec `coffres ajouter`.
+- Un client qui se durcit (§ 9) le fait après s'être connecté au noyau provisoire et ne
+  peut plus, sous Linux, se faire reconnaître du noyau relancé à l'étape 6 : il le lance
+  sans s'y connecter, et ne signale qu'un noyau arrêté aussitôt lancé.
+
+Journal : rien de nouveau hors `vault_refused reason=exists` ; ni alias, ni chemin, ni
+identifiant.
