@@ -130,11 +130,11 @@ proptest! {
         let mut changed = bytes.clone();
         let at = flip.index(changed.len());
         changed[at] ^= 1 << bit;
-        // A flipped bit gives another registry or a refusal, never the same registry under
-        // another encoding.
+        // A flipped bit gives a refusal, or the registry these very bytes encode. The two
+        // registries are not compared: a path may be equal to another one written with other
+        // bytes (on Windows, `C:\` and `c:\` are the same drive).
         if let Ok(other) = VaultRegistry::decode(&changed) {
             prop_assert_eq!(other.encode().unwrap(), changed);
-            prop_assert_ne!(other, registry);
         }
     }
 
@@ -426,6 +426,31 @@ fn duplicates_and_unknown_aliases_are_refused() {
         registry.find("COFFRE-0").unwrap().alias.as_str(),
         "Coffre-0"
     );
+}
+
+/// Windows: a drive letter names the same drive in either case, so the same file written
+/// `C:\…` and `c:\…` is one file, refused twice in a registry, when added and when read.
+#[cfg(windows)]
+#[test]
+fn the_same_file_under_another_drive_letter_case_is_a_duplicate() {
+    let mut registry = VaultRegistry::new();
+    registry
+        .add([1; 16], Path::new(r"C:\coffres\a.hirzla"), "a")
+        .unwrap();
+    assert_eq!(
+        registry
+            .add([2; 16], Path::new(r"c:\coffres\a.hirzla"), "b")
+            .err(),
+        Some(RegistryError::DuplicateVault)
+    );
+    let bytes = registry_bytes(
+        vec![
+            entry_value(&[1; 16], r"C:\coffres\a.hirzla", "a", 0),
+            entry_value(&[2; 16], r"c:\coffres\a.hirzla", "b", 1),
+        ],
+        None,
+    );
+    assert_eq!(VaultRegistry::decode(&bytes), Err(RegistryError::Malformed));
 }
 
 #[test]
