@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+use hirzla_core::client::router::Route;
 use hirzla_core::client::{Client, ClientError};
 use hirzla_core::proto::{KdfParams, Request};
 use hirzla_core::transport::Endpoint;
@@ -120,13 +121,12 @@ fn start_core(dir: &Path, sock: &str, allow_me: bool) -> Core {
 
 fn config(sock: &str) -> LinkConfig {
     LinkConfig {
-        endpoint: Endpoint::parse(sock.as_ref()).unwrap(),
+        route: Route::unregistered(Endpoint::parse(sock.as_ref()).unwrap(), false, Vec::new()),
         core: core_exe(),
         start_core: false,
         // Hardening would make this test process non-dumpable: on Linux, the core could no
         // longer read its executable for the next connections of the other tests.
         harden: false,
-        socket_arg: None,
     }
 }
 
@@ -646,10 +646,10 @@ fn a_second_start_calls_the_window_of_the_first() {
     // comes within the second.
     assert!(!another_instance_shown(&config(&sock)));
     let state = AppState::new(Ok(CoreLink::new(config(&sock))));
-    assert!(!state.app_poll().unwrap());
+    assert!(!state.app_poll());
     assert!(another_instance_shown(&config(&sock)));
-    assert!(state.app_poll().unwrap());
-    assert!(!state.app_poll().unwrap());
+    assert!(state.app_poll());
+    assert!(!state.app_poll());
     // The call is not activity and works with no vault at all.
     assert_eq!(state.status().unwrap().state(), "absent");
 }

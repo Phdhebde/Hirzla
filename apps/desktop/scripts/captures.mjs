@@ -19,7 +19,7 @@ const ui = join(here, "..", "ui");
 const mock = await readFile(join(here, "..", "tests", "mock-core.js"), "utf8");
 const out = process.argv[2] || join(here, "..", "captures");
 mkdirSync(out, { recursive: true });
-// Optional second argument: "self", "serveur" or "gouvernance" to take only the screens of
+// Optional second argument: "self", "serveur", "gouvernance" or "coffres" to take only the screens of
 // one part (the checks of the others are then skipped too).
 const only = process.argv[3] || "";
 
@@ -56,7 +56,7 @@ const browser = await chromium.launch(process.env.CHROME_PATH ? { executablePath
 const errors = [];
 const shots = [];
 
-async function page(theme, state, server) {
+async function page(theme, state, server, vaults) {
   const context = await browser.newContext({
     viewport: { width: 1180, height: 760 },
     deviceScaleFactor: 2,
@@ -71,7 +71,7 @@ async function page(theme, state, server) {
   p.on("request", (r) => {
     if (!r.url().startsWith("http://127.0.0.1")) errors.push(`requête externe : ${r.url()}`);
   });
-  await p.addInitScript(`window.__HIRZLA_MOCK__ = ${JSON.stringify({ state, server })};`);
+  await p.addInitScript(`window.__HIRZLA_MOCK__ = ${JSON.stringify({ state, server, vaults })};`);
   await p.addInitScript(mock);
   await p.goto(base);
   await p.evaluate(() => document.fonts.ready);
@@ -605,6 +605,55 @@ for (const theme of only && only !== "gouvernance" ? [] : ["clair", "sombre"]) {
     card.closest(".vue").scrollTop = card.offsetTop - 16;
   });
   await shot(p, "41-nom-affiche", theme);
+  await p.close();
+}
+
+// Several vaults on one workstation (ADR 0085): the bar of vaults on every screen, the common
+// search of the palette, and a locked vault shown while another one stays open.
+for (const theme of only && only !== "coffres" ? [] : ["clair", "sombre"]) {
+  const vaults = [
+    { alias: "Personnel", state: "unlocked" },
+    {
+      alias: "Atelier Durand",
+      state: "unlocked",
+      entries: [
+        { locker: "0b3d5f7a9c1e2a4b6c8d0e2f4a6b8c0d", id: "00000000000000000000000000000009", kind: "password",
+          title: "Routeur de l'atelier", username: "admin", hosts: ["10.20.0.1"], tags: [], favorite: false, trash: false },
+      ],
+    },
+    { alias: "Client Mairie", state: "locked" },
+  ];
+  const p = await page(theme, "unlocked", undefined, vaults);
+  await p.waitForSelector("#coffres:not([hidden]) [data-coffre]");
+  await p.waitForSelector("#liste-secrets li");
+  if ((await p.$$("#coffres [data-coffre]")).length !== 3) errors.push(`${theme} : la barre ne montre pas les trois coffres`);
+  if ((await p.getAttribute("#coffres [aria-current='true']", "title")) !== "Coffre « Personnel » : ouvert") {
+    errors.push(`${theme} : le coffre affiché n'est pas marqué dans la barre`);
+  }
+  await shot(p, "42-plusieurs-coffres", theme);
+
+  // Common search: the other open vault answers under its name; the locked one is not asked.
+  await p.keyboard.press("Control+k");
+  await p.waitForSelector("#dialogue-palette[open]");
+  await p.keyboard.type("routeur");
+  await p.waitForFunction(() => document.querySelectorAll("#palette-liste .palette-coffre").length === 2);
+  const names = await p.$$eval("#palette-liste .palette-coffre", (els) => els.map((e) => e.textContent));
+  if (names.join("|") !== "Personnel|Atelier Durand") errors.push(`${theme} : recherche commune : ${names.join("|")}`);
+  await shot(p, "43-recherche-commune", theme);
+  // Choosing the secret of the other vault shows that vault, from the keyboard only.
+  await p.keyboard.press("ArrowDown");
+  await p.keyboard.press("Enter");
+  await p.waitForSelector("#coffres [aria-current='true'][title='Coffre « Atelier Durand » : ouvert']");
+  await p.waitForSelector("#ecran-coffre:not([hidden])");
+
+  // A locked vault: its unlock screen, under the same bar; the others stay open.
+  await p.click("#coffres [data-coffre][title='Coffre « Client Mairie » : verrouillé']");
+  await p.waitForSelector("#ecran-deverrouillage:not([hidden])");
+  await p.waitForSelector("#coffres [aria-current='true'][title='Coffre « Client Mairie » : verrouillé']");
+  if (!(await p.$("#coffres [title='Coffre « Atelier Durand » : ouvert']"))) {
+    errors.push(`${theme} : changer de coffre a verrouillé le précédent`);
+  }
+  await shot(p, "44-coffre-verrouille", theme);
   await p.close();
 }
 

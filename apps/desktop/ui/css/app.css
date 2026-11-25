@@ -231,6 +231,25 @@ button.touche:hover { color: var(--hz-texte); border-color: var(--hz-texte-secon
 .ligne-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .ligne-actions-fin { justify-content: flex-end; }
 
+/* Several vaults (ADR 0085): one tab per registered vault, above every screen. The page
+   becomes a column only then; with one vault nothing changes. */
+.coffres { flex: none; padding: 0 12px; background: var(--hz-surface); border-bottom: 1px solid var(--hz-bordure); }
+.coffres-liste { display: flex; gap: 4px; margin: 0; padding: 6px 0; list-style: none; overflow-x: auto; }
+.coffres-onglet {
+  display: inline-flex; align-items: center; gap: 8px; min-height: 30px; padding: 4px 12px;
+  border: 1px solid transparent; border-radius: 999px; background: transparent;
+  color: var(--hz-texte-secondaire); font: inherit; font-size: 13px; font-weight: 500; white-space: nowrap; cursor: pointer;
+}
+.coffres-onglet:hover { border-color: var(--hz-bordure); color: var(--hz-texte); }
+.coffres-onglet[aria-current="true"] { background: var(--hz-fond); border-color: var(--hz-bordure); color: var(--hz-texte); }
+.coffres-onglet .forme-rond { color: var(--hz-ouvert); }
+.coffres-onglet .forme-carre { color: var(--hz-scelle); }
+.coffres-onglet .forme-triangle { color: var(--hz-alerte); }
+body.plusieurs-coffres { display: flex; flex-direction: column; }
+body.plusieurs-coffres > .ecran { flex: 1 1 0; min-height: 0; height: auto; }
+body.plusieurs-coffres > .ecran-centre { overflow-y: auto; }
+.palette-coffre { flex: none; margin: 0; font-size: 12px; color: var(--hz-texte-secondaire); }
+
 /* Open vault layout. */
 .coffre {
   height: 100%; display: grid;

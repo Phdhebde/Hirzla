@@ -28,6 +28,15 @@ pub enum DesktopError {
     /// The connection to the core failed.
     #[error("connection error")]
     Connection,
+    /// The file of a registered vault is not at its registered path.
+    #[error("vault file missing")]
+    VaultMissing,
+    /// The file, or the core answering, is not the registered vault: nothing more was sent.
+    #[error("not the registered vault")]
+    WrongVault,
+    /// The vault registry was refused, or no vault carries this identifier.
+    #[error("vault registry refused")]
+    Registry,
     /// The core answered outside the protocol.
     #[error("protocol error")]
     Protocol,
@@ -67,6 +76,9 @@ impl DesktopError {
             DesktopError::UntrustedCore => "untrusted_core",
             DesktopError::CoreLost => "core_lost",
             DesktopError::Connection => "connection",
+            DesktopError::VaultMissing => "vault_missing",
+            DesktopError::WrongVault => "wrong_vault",
+            DesktopError::Registry => "registry",
             DesktopError::Protocol => "protocol",
             DesktopError::Invalid(_) => "invalid",
             DesktopError::Mismatch => "mismatch",
@@ -97,6 +109,15 @@ impl DesktopError {
                 l'application pour la rétablir."
                 .into(),
             DesktopError::Connection => "La connexion au noyau a échoué. Réessayez.".into(),
+            DesktopError::VaultMissing => "Le fichier de ce coffre est introuvable à \
+                l'emplacement inscrit."
+                .into(),
+            DesktopError::WrongVault => "Le fichier, ou le noyau à l'écoute, n'est pas le coffre \
+                inscrit. Rien d'autre ne lui a été envoyé."
+                .into(),
+            DesktopError::Registry => "Le registre des coffres n'a pas pu être lu, ou ce coffre \
+                n'y est plus inscrit."
+                .into(),
             DesktopError::Protocol => "Réponse non valide du noyau.".into(),
             DesktopError::Invalid(what) => (*what).to_owned(),
             DesktopError::Mismatch => "Les deux saisies du mot de passe maître diffèrent.".into(),

@@ -4,6 +4,7 @@
 (() => {
   const cfg = window.__HIRZLA_MOCK__ || {};
   let state = cfg.state || "absent";
+  let activeVault = 0;
   const L = "6a1f0c2e9b8d4f17a3c5e0d2b4f6a8c1";
   const W = "0b3d5f7a9c1e2a4b6c8d0e2f4a6b8c0d";
   const id = (n) => n.toString(16).padStart(32, "0");
@@ -467,6 +468,40 @@
     auto_type_forget: (a) => {
       trusted = a.path === null ? [] : trusted.filter((p) => p !== a.path);
       return [...trusted];
+    },
+    // Several vaults (ADR 0085): the captures name them through `vaults` of the mock
+    // configuration; without it, the single vault of before.
+    list_vaults: () => {
+      const names = cfg.vaults || [];
+      if (names.length === 0) return [{ id: "", alias: "", default: false, active: true, state, error: null }];
+      return names.map((v, i) => ({
+        id: id(0xc0 + i),
+        alias: v.alias,
+        default: i === 0,
+        active: i === activeVault,
+        state: i === activeVault ? state : v.state || "locked",
+        error: null,
+      }));
+    },
+    select_vault: (a) => {
+      const i = (cfg.vaults || []).findIndex((_, n) => id(0xc0 + n) === a.vault);
+      if (i < 0) throw { code: "registry", message: "Ce coffre n'est plus inscrit.", retry_after_s: null };
+      if (cfg.vaults[activeVault]) cfg.vaults[activeVault].state = state;
+      activeVault = i;
+      state = cfg.vaults[i].state || "locked";
+    },
+    search_vaults: (a) => {
+      const q = String(a.query || "").trim().toLocaleLowerCase("fr");
+      if (!q) return [];
+      return (cfg.vaults || [])
+        .map((v, i) => ({ v, i }))
+        .filter(({ v, i }) => i !== activeVault && (v.state || "locked") === "unlocked")
+        .map(({ v, i }) => ({
+          vault: id(0xc0 + i),
+          alias: v.alias,
+          entries: (v.entries || []).filter((e) => e.title.toLocaleLowerCase("fr").includes(q)).slice(0, 8),
+        }))
+        .filter((m) => m.entries.length > 0);
     },
     get_preferences: () => ({ ...local }),
     set_preferences: (a) => {

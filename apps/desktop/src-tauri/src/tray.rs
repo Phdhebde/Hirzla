@@ -1,28 +1,33 @@
 //! Notification area icon and window that closes without locking (ADR 0071).
 //!
-//! - The icon carries a menu of three fixed entries. No title, locker name or count ever
-//!   reaches the menu or the tooltip: both are drawn by the system, outside the web view.
+//! - The icon carries a menu of three fixed entries. No title, locker name or count of
+//!   secrets ever reaches the menu or the tooltip: both are drawn by the system, outside the
+//!   web view. With several vaults (`docs/api-locale.md` § 25.10) the menu also lists each
+//!   vault, by its alias (readable without unlocking, § 25.1) and its state, the tooltip
+//!   counts the open vaults, and « Tout verrouiller » locks them all.
 //! - Closing the window hides it and reloads the page, so that nothing revealed, typed or
 //!   opened stays in it. The vault stays open until its inactivity delay, a sleep, a session
 //!   lock (ADR 0033), « Verrouiller » or « Quitter ».
-//! - A thread asks the core every two seconds whether the window was called for (`AppPoll`):
+//! - A thread asks every core each two seconds whether the window was called for (`AppPoll`):
 //!   the extension's « Ouvrir Hirzla » and a second start of the application both go through
 //!   the core's `ShowApp`, which is what makes this the only instance.
 //!
 //! Without a notification area (GNOME without an extension), or with the preference off,
 //! closing the window stops the application and locks the vault, as before (ADR 0024).
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use tauri::image::Image;
-use tauri::menu::{MenuBuilder, MenuItemBuilder};
+use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::commands::{guard, AppState, State};
 use crate::error::DesktopError;
 use crate::prefs::{Preferences, PrefsStore};
+use crate::vaults::VaultDto;
 
 /// Identifier of the icon and of the window.
 const TRAY_ID: &str = "main";
@@ -38,14 +43,18 @@ pub const MENU: [(&str, &str); 3] = [
     ("quit", "Quitter"),
 ];
 
-/// What the icon shows of the vault.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Label of the lock entry when several vaults are registered: it locks them all.
+pub const LOCK_ALL: &str = "Tout verrouiller";
+
+/// What the icon shows of the vaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Shown {
     /// Not known yet, or no vault.
+    #[default]
     Unknown = 0,
-    /// Locked.
+    /// Locked: no vault is open.
     Locked = 1,
-    /// Open.
+    /// Open: at least one vault is.
     Open = 2,
 }
 
@@ -71,13 +80,81 @@ impl Shown {
     }
 }
 
+/// What the icon, its tooltip and its menu show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Summary {
+    /// The icon.
+    pub shown: Shown,
+    /// The tooltip.
+    pub tooltip: String,
+    /// One line per vault, « alias : état », when several vaults are registered.
+    pub rows: Vec<String>,
+}
+
+impl Default for Summary {
+    fn default() -> Self {
+        Summary {
+            shown: Shown::Unknown,
+            tooltip: Shown::Unknown.tooltip().to_owned(),
+            rows: Vec::new(),
+        }
+    }
+}
+
+/// The state of a vault in a line of the menu.
+fn state_label(state: &str) -> &'static str {
+    match state {
+        "unlocked" => "ouvert",
+        "locked" => "verrouillé",
+        "absent" => "à créer",
+        _ => "indisponible",
+    }
+}
+
+/// What to show for `vaults`. One vault, or none: exactly as before the registry existed.
+/// Several: the number of open vaults in the tooltip, and one line per vault.
+#[must_use]
+pub fn summarize(vaults: &[VaultDto]) -> Summary {
+    if vaults.len() < 2 {
+        let shown = vaults
+            .first()
+            .map_or(Shown::Unknown, |v| Shown::from_state(v.state()));
+        return Summary {
+            shown,
+            tooltip: shown.tooltip().to_owned(),
+            rows: Vec::new(),
+        };
+    }
+    let open = vaults.iter().filter(|v| v.state() == "unlocked").count();
+    let shown = if open > 0 {
+        Shown::Open
+    } else if vaults.iter().any(|v| v.state() == "locked") {
+        Shown::Locked
+    } else {
+        Shown::Unknown
+    };
+    let tooltip = match open {
+        0 => "Hirzla : aucun coffre ouvert".to_owned(),
+        1 => format!("Hirzla : 1 coffre ouvert sur {}", vaults.len()),
+        n => format!("Hirzla : {n} coffres ouverts sur {}", vaults.len()),
+    };
+    Summary {
+        shown,
+        tooltip,
+        rows: vaults
+            .iter()
+            .map(|v| format!("{} : {}", v.alias(), state_label(v.state())))
+            .collect(),
+    }
+}
+
 /// State of the icon.
 #[derive(Debug, Default)]
 pub struct TrayState {
     /// The icon is installed: closing the window hides it.
     active: AtomicBool,
-    /// What the icon shows ([`Shown`]).
-    shown: AtomicU8,
+    /// What the icon shows.
+    summary: Mutex<Summary>,
 }
 
 impl TrayState {
@@ -192,14 +269,46 @@ pub fn on_close_requested<R: Runtime>(app: &AppHandle<R>) -> bool {
     true
 }
 
-fn refresh<R: Runtime>(app: &AppHandle<R>, shown: Shown) {
+/// The menu for `summary`: the three fixed entries, and between the first two one inactive
+/// line per vault when several are registered.
+fn menu_for<R: Runtime>(app: &AppHandle<R>, summary: &Summary) -> tauri::Result<Menu<R>> {
+    let [open, lock, quit] = MENU;
+    let mut menu =
+        MenuBuilder::new(app).item(&MenuItemBuilder::with_id(open.0, open.1).build(app)?);
+    let lock_label = if summary.rows.is_empty() {
+        lock.1
+    } else {
+        menu = menu.separator();
+        for (i, row) in summary.rows.iter().enumerate() {
+            let item = MenuItemBuilder::with_id(format!("vault-{i}"), row)
+                .enabled(false)
+                .build(app)?;
+            menu = menu.item(&item);
+        }
+        menu = menu.separator();
+        LOCK_ALL
+    };
+    menu.item(&MenuItemBuilder::with_id(lock.0, lock_label).build(app)?)
+        .item(&MenuItemBuilder::with_id(quit.0, quit.1).build(app)?)
+        .build()
+}
+
+fn refresh<R: Runtime>(app: &AppHandle<R>, summary: Summary) {
     let state = app.state::<TrayState>();
-    if state.shown.swap(shown as u8, Ordering::SeqCst) == shown as u8 {
+    let before = std::mem::replace(&mut *guard(&state.summary), summary.clone());
+    if before == summary {
         return;
     }
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_icon(icon_for(app, shown));
-        let _ = tray.set_tooltip(Some(shown.tooltip()));
+        if before.shown != summary.shown {
+            let _ = tray.set_icon(icon_for(app, summary.shown));
+        }
+        let _ = tray.set_tooltip(Some(summary.tooltip.as_str()));
+        if before.rows != summary.rows {
+            if let Ok(menu) = menu_for(app, &summary) {
+                let _ = tray.set_menu(Some(menu));
+            }
+        }
     }
 }
 
@@ -207,15 +316,16 @@ fn on_menu<R: Runtime>(app: &AppHandle<R>, id: &str) {
     match id {
         "open" => show_window(app),
         "lock" => {
-            // Off the main thread: the core may be busy with a long request.
+            // Off the main thread: a core may be busy with a long request.
             let app = app.clone();
             let _ = std::thread::Builder::new()
                 .name("tray-lock".into())
                 .spawn(move || {
-                    if app.state::<AppState>().lock().is_ok() {
-                        let handle = app.clone();
-                        let _ = app.run_on_main_thread(move || refresh(&handle, Shown::Locked));
-                    }
+                    let state = app.state::<AppState>();
+                    state.lock_all();
+                    let summary = summarize(&state.list_vaults());
+                    let handle = app.clone();
+                    let _ = app.run_on_main_thread(move || refresh(&handle, summary));
                 });
         }
         "quit" => app.exit(0),
@@ -232,14 +342,10 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
     if state.is_active() {
         return Ok(());
     }
-    let mut menu = MenuBuilder::new(app);
-    for (id, label) in MENU {
-        menu = menu.item(&MenuItemBuilder::with_id(id, label).build(app)?);
-    }
-    let shown = Shown::Unknown;
+    let summary = Summary::default();
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip(shown.tooltip())
-        .menu(&menu.build()?)
+        .tooltip(summary.tooltip.as_str())
+        .menu(&menu_for(app, &summary)?)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .on_tray_icon_event(|tray, event| {
@@ -252,11 +358,11 @@ pub fn install<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
                 show_window(tray.app_handle());
             }
         });
-    if let Some(icon) = icon_for(app, shown) {
+    if let Some(icon) = icon_for(app, summary.shown) {
         tray = tray.icon(icon);
     }
     tray.build(app)?;
-    state.shown.store(shown as u8, Ordering::SeqCst);
+    *guard(&state.summary) = summary;
     state.active.store(true, Ordering::SeqCst);
     Ok(())
 }
@@ -295,14 +401,13 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
         .spawn(move || loop {
             std::thread::sleep(POLL);
             let state = app.state::<AppState>();
-            let called = state.app_poll().unwrap_or(false);
-            // Also clears this process's clipboard copy once the vault is locked.
-            let shown = state
-                .status()
-                .map_or(Shown::Unknown, |s| Shown::from_state(s.state()));
+            let called = state.app_poll();
+            // Also clears this process's clipboard copy once the active vault is locked.
+            let _ = state.status();
+            let summary = summarize(&state.list_vaults());
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
-                refresh(&handle, shown);
+                refresh(&handle, summary);
                 if called {
                     show_window(&handle);
                 }

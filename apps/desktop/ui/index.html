@@ -46,6 +46,12 @@
   </svg>
   <template id="gabarit-icone"><svg class="icone" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><use href="#i-secret"/></svg></template>
 
+  <!-- Several vaults (ADR 0085): one tab per registered vault, above every screen. Hidden
+       with a single vault. The aliases come from the vault registry, never from a vault. -->
+  <nav id="coffres" class="coffres" aria-label="Coffres" hidden>
+    <ul id="coffres-liste" class="coffres-liste"></ul>
+  </nav>
+
   <!-- Loading, and a core that cannot be reached. -->
   <main id="ecran-attente" class="ecran ecran-centre" data-ecran="attente">
     <div class="carte carte-etroite">
