@@ -1,7 +1,7 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
-- Statut : accepté (2026-11-24, décision du mainteneur) ; étape 1 réalisée (voir « Mise en
-  œuvre »)
+- Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 3 réalisées (voir
+  « Mise en œuvre »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -193,10 +193,35 @@ relance au point de connexion du coffre. Le noyau reste le seul à tirer un iden
 Écarté : un identifiant tiré par le client et passé au noyau, qui ferait dépendre le sel du
 coffre (`format.md` § 5.4) d'un processus moins protégé.
 
+### Étape 2 : création par le point provisoire (réalisée)
+
+Spécifiée dans `api-locale.md` § 25.9 : noyau provisoire (`--provisional`), qui ne sert qu'à
+créer et ne survit pas à son client ; `hirzla coffres creer`, `rejoindre` et `enroler`.
+
+### Étape 3 : application de poste (réalisée)
+
+Spécifiée dans `api-locale.md` § 25.10. Le code a précisé les points suivants :
+
+1. **Un coffre actif.** L'application tient un lien par coffre inscrit, mais l'interface ne
+   montre qu'un coffre à la fois : toutes ses commandes vont au coffre actif. Changer de
+   coffre efface ce que l'interface tenait du précédent, presse-papiers compris, et ne
+   verrouille rien.
+2. **Durcissement après tous les noyaux** (§ 25.5) : à sa première requête, l'application
+   lance et joint le noyau de chaque coffre inscrit, puis se durcit. Sous Linux, un coffre
+   inscrit ensuite n'est utilisable qu'après un redémarrage de l'application.
+3. **Recherche commune dans l'accès rapide** (Ctrl+K), et non dans la liste : les autres
+   coffres **ouverts** répondent dès qu'un texte est saisi, 8 résultats au plus chacun, sous
+   leur alias. Choisir un résultat rend son coffre actif. C'est une activité pour leur
+   verrouillage automatique.
+4. **Zone de notification** : l'alias et l'état de chaque coffre figurent au menu (l'alias
+   est lisible sans déverrouiller, § 2) ; « Tout verrouiller » et « Quitter » verrouillent
+   tous les coffres. L'ADR 0071 (« trois entrées fixes ») vaut toujours pour un poste à un
+   seul coffre.
+5. **Gestion des coffres** (inscrire, créer, renommer, retirer) : par la ligne de commande
+   seulement ; l'application relit le registre toutes les 3 secondes.
+
 ### Étapes suivantes
 
-2. Création d'un coffre par le point provisoire (noyau, ligne de commande).
-3. Application de poste : sélecteur, recherche commune, zone de notification.
 4. Hôte natif et extension.
 5. Android.
 6. Bascule du coffre par défaut sur son propre point de connexion.
@@ -213,8 +238,12 @@ Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR
 3. **Hornn** : l'agent gateway (ADR 0031) reste à un coffre ; `sdk/go` n'apprend pas
    l'aiguillage dans ce lot.
 4. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
-5. **Longueur du chemin de la socket sous macOS** (`sun_path`, 104 octets) et
-   **`RLIMIT_MEMLOCK`** avec plusieurs noyaux sous Linux : à mesurer sur des postes réels.
+5. **Longueur du chemin de la socket sous macOS** (`sun_path`, 104 octets) : mesurée à
+   98 octets sur un poste réel (`TMPDIR` par défaut), cela fonctionne avec 5 octets de marge ;
+   un nom de socket plus court reste à décider. **`RLIMIT_MEMLOCK`** avec plusieurs noyaux
+   sous Linux : à mesurer sur un poste réel.
+6. **Gestion des coffres dans l'application de poste** : aujourd'hui en ligne de commande
+   seulement.
 
 ## Vocabulaire (inscrit dans `glossaire.md`)
 
