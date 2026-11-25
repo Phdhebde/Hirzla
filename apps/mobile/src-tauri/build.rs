@@ -5,6 +5,9 @@
 
 const COMMANDS: &[&str] = &[
     "app_status",
+    "list_vaults",
+    "select_vault",
+    "lock_all",
     "create_vault",
     "unlock",
     "unlock_fingerprint",

@@ -5,6 +5,9 @@
   "windows": ["main"],
   "permissions": [
     "allow-app-status",
+    "allow-list-vaults",
+    "allow-select-vault",
+    "allow-lock-all",
     "allow-create-vault",
     "allow-unlock",
     "allow-unlock-fingerprint",

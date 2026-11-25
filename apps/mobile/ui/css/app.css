@@ -92,3 +92,7 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--hz-braise);
   position: fixed; left: 16px; right: 16px; bottom: max(84px, env(safe-area-inset-bottom));
   background: var(--hz-ardoise); color: var(--hz-givre); border-radius: 10px; padding: 12px 14px; z-index: 10;
 }
+
+/* The name of the active vault in the bar (ADR 0085): chosen by the user, up to 64 bytes. */
+.coffre-nom { min-width: 0; max-width: 9em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#ecran-coffres .liste { margin: 12px 0; }
