@@ -102,7 +102,7 @@ noyau d'après son exécutable, jamais d'après un message :
 | Profil | Exécutables | Opérations permises |
 | --- | --- | --- |
 | complet | la liste d'autorisation ci-dessus, sauf les exécutables du profil navigateur | toutes |
-| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `ShowApp`, `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
+| navigateur | `hirzla-native-host` à côté du noyau ; `--allow-browser-exe CHEMIN` (répétable) remplace cette liste ; quand `--allow-exe` est donné sans `--allow-browser-exe`, la liste est vide | `Status`, `Lock`, `Generate`, `GenerateWith`, `ShowApp`, `VaultInfo` (réponse réduite à `vault_id`, § 25.4), `Match`, `Fill`, et `Create` d'un secret de type mot de passe portant au moins une URL, dans le casier personnel |
 
 **Signature du client** (ADR 0042, 0063). En plus du chemin, le noyau peut exiger que
 l'exécutable du client soit signé. Ce qui est vérifié est **fixé à la compilation**, jamais
@@ -2148,15 +2148,15 @@ jamais une adresse ni une étiquette.
 
 Décision : ADR 0085 (accepté). Première étape : registre des coffres, un noyau par coffre,
 ligne de commande. Deuxième étape : création d'un coffre de plus par un point de connexion
-provisoire (§ 25.9). Troisième étape : application de poste
-(§ 25.10). Le format du coffre, son annexe, le protocole de synchronisation et la
+provisoire (§ 25.9). Troisième étape : application de poste (§ 25.10). Quatrième étape :
+hôte natif et extension (§ 25.11). Le format du coffre, son annexe, le protocole de synchronisation et la
 suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
 (registre), `client/router.rs` (aiguillage), `client/creation.rs` (création),
 `transport.rs`, `daemon.rs`, `service.rs` ; `apps/cli`.
 
-Troisième étape : l'application de poste apprend l'aiguillage (§ 25.10). L'extension, l'hôte
-natif, l'application Android et `sdk/go` ne le connaissent pas encore : ils parlent au point
-de connexion par défaut (§ 2) et lancent le noyau sans argument, comme avant. Le § 25.5 dit
+Troisième étape : l'application de poste apprend l'aiguillage (§ 25.10). Quatrième étape :
+l'hôte natif et l'extension (§ 25.11). L'application Android et `sdk/go` ne le connaissent
+pas encore : ils parlent au point de connexion par défaut (§ 2), comme avant. Le § 25.5 dit
 comment les clients qui aiguillent cohabitent avec eux.
 
 ### 25.1 Registre des coffres
@@ -2264,8 +2264,8 @@ les autres noyaux. Un noyau lancé sans `--vault-id` se comporte comme avant.
 3. Pas de fichier au chemin du coffre : `NoVault`. En-tête illisible, ou annexe du mode
    Serveur illisible : `Corrupt`.
 4. Ne lit aucun secret et ne compte pas comme une activité pour le verrouillage automatique.
-   Profil complet seulement (profil navigateur : `Unauthorized`) ; l'hôte natif l'obtiendra
-   à l'étape qui lui apprend l'aiguillage.
+   Le profil navigateur ne reçoit que `vault_id` : `mode` et `serveur` sont toujours omis de
+   sa réponse (l'hôte natif n'en a besoin que pour vérifier le coffre servi, § 25.11).
 5. Dans une requête de version antérieure : `UnknownOperation`.
 6. **L'alias n'est pas dans la réponse** : le noyau ne lit pas le registre, le client y
    trouve l'alias lui-même. Le résumé de la politique appliquée (ADR 0086) viendra avec
@@ -2516,3 +2516,49 @@ aucun, et s'arrête dès que l'un répond qu'une application écoute.
 **Hors de cette étape.** Inscrire, créer, renommer ou retirer un coffre se fait par la
 ligne de commande (§ 25.6) ; l'application les voit à la lecture suivante du registre. La
 copie d'un secret d'un coffre à un autre n'existe pas (ADR 0085 § 6).
+
+### 25.11 Hôte natif et extension
+
+Décision : ADR 0085 § 4. Le protocole entre l'extension et l'hôte est décrit dans
+`apps/extension/README.md` (« Protocole de l'hôte ») ; ce paragraphe dit ce que l'hôte fait
+des noyaux. Code : `apps/native-host/src/main.rs`, `host.rs`, `passkey.rs`.
+
+**Seul changement de l'API locale** : le profil navigateur peut envoyer `VaultInfo`, dont la
+réponse est alors réduite à `vault_id` (§ 25.4). Il n'y a pas de nouvelle version : la
+version 16 n'a pas été livrée avant ce changement.
+
+**Choix des coffres.** `HIRZLA_SOCKET` défini, registre absent, vide ou refusé : **comme
+avant**, un seul noyau, au point de connexion de `HIRZLA_SOCKET` ou à défaut au point par
+défaut. Sinon un lien par coffre inscrit, à la route de l'entrée (§ 25.5). L'hôte **lit**
+le registre et ne l'écrit jamais : pas d'adoption (§ 25.5), pas de réparation.
+
+**Ce que l'hôte ne fait toujours pas** : lancer un noyau, déverrouiller un coffre, garder
+quoi que ce soit entre deux lancements, écrire un journal.
+
+**Connexion.** Au premier message, l'hôte tente de joindre le noyau de **chaque** coffre
+inscrit : contrôle du noyau (§ 3.2), un `Status` accepté, puis `VaultInfo`, dont le
+`vault_id` doit être celui de l'entrée (§ 25.5, « Vérification »). Il ne se durcit (§ 9)
+qu'ensuite. Un coffre dont le noyau ne tourne pas, refuse, ou sert un autre coffre est
+**indisponible** pour ce lancement ; les autres servent.
+
+**Coffre visé.** Un message de l'extension peut nommer un coffre (`vault`, l'identifiant en
+hexadécimal). Coffre inconnu du registre : `unknown_vault`. Sans `vault` :
+
+| Message | Coffre(s) |
+| --- | --- |
+| `status` | Tous : l'état de chacun, et un état d'ensemble (ouvert si l'un l'est ; sinon verrouillé si l'un l'est ; sinon absent) |
+| `match`, `passkey_candidates` | Chaque coffre **ouvert**, dans l'ordre des rangs ; chaque élément de la réponse porte l'identifiant et l'alias de son coffre. Aucun coffre ouvert : `locked` si l'un est verrouillé, sinon `no_vault` |
+| `fill`, `save`, `generate`, `passkey_assert`, `passkey_create` | Le **coffre de destination** : le coffre par défaut du registre s'il est ouvert ; sinon le premier coffre ouvert dans l'ordre des rangs ; sinon le coffre par défaut (qui répond `locked`), à défaut le premier |
+| `lock` | Tous les coffres joints |
+| `show` | Chaque noyau joint, jusqu'à ce que l'un réponde qu'une application écoute |
+
+L'extension renvoie toujours le `vault` de l'élément choisi : un identifiant proposé par un
+coffre n'est jamais demandé à un autre. `status` marque le coffre de destination, pour que
+l'extension le nomme avant d'enregistrer.
+
+**Un coffre verrouillé n'est ni interrogé ni déverrouillé** (ADR 0085 § 4) : l'extension le
+nomme, et renvoie à l'application.
+
+**Rien d'autre ne change** : origine exacte, profil navigateur, bornes des messages
+(`apps/extension/README.md`). Avec un seul coffre hors registre, les réponses sont celles
+d'avant, sans `vault` ni `alias`.

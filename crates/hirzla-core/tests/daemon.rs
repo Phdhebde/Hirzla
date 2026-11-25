@@ -314,6 +314,8 @@ fn browser_profile_is_enforced_by_the_core() {
         include_trash: false,
     };
     assert_eq!(refused(c.call(&list)), ErrorCode::Unauthorized);
+    // Which vault the core serves may be asked (§ 25.11); there is none yet.
+    assert_eq!(refused(c.call(&Request::VaultInfo)), ErrorCode::NoVault);
     match c
         .call(&Request::Generate {
             length: 24,

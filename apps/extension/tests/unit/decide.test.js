@@ -2,7 +2,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { alreadySaved, checkInjection, messageFor, sanitizeEntries } from '../../src/lib/decide.js';
+import {
+  alreadySaved,
+  checkInjection,
+  messageFor,
+  sanitizeEntries,
+  sanitizeVaults,
+} from '../../src/lib/decide.js';
 
 const O = 'https://bank.example';
 
@@ -46,6 +52,48 @@ test('entries from the host are filtered', () => {
     ],
   );
   assert.deepEqual(sanitizeEntries(undefined), []);
+});
+
+test('with several vaults, an entry keeps its vault or is dropped', () => {
+  const hex = 'a'.repeat(32);
+  const vault = 'b'.repeat(32);
+  const base = { locker: hex, id: hex, title: 'Banque' };
+  assert.deepEqual(
+    sanitizeEntries([
+      { ...base, vault, alias: 'Client X' },
+      // A vault without alias, an alias without vault, a malformed identifier, an alias too
+      // long or empty: the entry could be asked to the wrong vault, it is dropped.
+      { ...base, vault },
+      { ...base, alias: 'Client X' },
+      { ...base, vault: 'B'.repeat(32), alias: 'Client X' },
+      { ...base, vault, alias: 'x'.repeat(65) },
+      { ...base, vault, alias: '' },
+      { ...base, vault, alias: 7 },
+    ]),
+    [{ ...base, username: null, vault, alias: 'Client X' }],
+  );
+});
+
+test('vaults from the host are filtered', () => {
+  const a = 'a'.repeat(32);
+  const b = 'b'.repeat(32);
+  assert.deepEqual(
+    sanitizeVaults([
+      { vault: a, alias: 'Personnel', state: 'unlocked', default: true, target: true },
+      { vault: b, alias: 'Client X', state: 'locked' },
+      { vault: b, alias: 'Client X', state: 'open' },
+      { vault: 'x', alias: 'Client X', state: 'locked' },
+      { alias: 'Sans identifiant', state: 'locked' },
+      { state: 'locked' },
+      null,
+    ]),
+    [
+      { vault: a, alias: 'Personnel', state: 'unlocked', isDefault: true, target: true },
+      { vault: b, alias: 'Client X', state: 'locked', isDefault: false, target: false },
+    ],
+  );
+  // Without the vault registry the host names no vault.
+  assert.deepEqual(sanitizeVaults(undefined), []);
 });
 
 test('a login is not saved twice for the same user name', () => {

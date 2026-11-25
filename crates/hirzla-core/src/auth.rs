@@ -95,6 +95,9 @@ impl ClientProfile {
                 | Request::Generate { .. }
                 | Request::GenerateWith { .. }
                 | Request::ShowApp
+                // To check which vault a core serves (§ 25.11); the daemon reduces the
+                // answer to the vault identifier for this profile.
+                | Request::VaultInfo
                 | Request::Match { .. }
                 | Request::Fill { .. } => true,
                 // A new login proposed by the extension: a password secret, bound to at
@@ -115,8 +118,6 @@ impl ClientProfile {
                 // Only the desktop application takes the call for its window.
                 | Request::AppPoll
                 | Request::AutoTyped { .. }
-                // The browser profile does not route between vaults yet (§ 25.4).
-                | Request::VaultInfo
                 | Request::Shutdown => false,
             },
         }
@@ -386,6 +387,7 @@ mod tests {
                 spec: crate::generator::Profile::Default.spec(),
             },
             Request::ShowApp,
+            Request::VaultInfo,
             Request::Match {
                 origin: "https://a.example".into(),
             },
@@ -397,7 +399,6 @@ mod tests {
             create(None, SecretType::Password, vec![z("https://a.example")]),
         ];
         let refused = [
-            Request::VaultInfo,
             Request::AppPoll,
             Request::AutoTyped {
                 what: crate::proto::Typed::Password,

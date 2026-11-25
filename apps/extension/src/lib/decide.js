@@ -22,10 +22,28 @@ export function checkInjection(results, expectedOrigin) {
   return { ok: true, value: v };
 }
 
+/** Longest vault alias, in UTF-16 units (64 bytes at most in the registry). */
+const MAX_ALIAS = 64;
+
 /**
- * Keeps only well-formed entries from the host's answer to `match`.
+ * The vault an element of the host comes from (several vaults, ADR 0085): its identifier and
+ * its alias, or null when the element names none. A malformed vault makes the element
+ * unusable: `undefined`.
+ * @param {{vault?: unknown, alias?: unknown}} e
+ * @returns {{vault: string, alias: string} | null | undefined}
+ */
+function vaultOf(e) {
+  if (e.vault === undefined && e.alias === undefined) return null;
+  if (typeof e.vault !== 'string' || !HEX32.test(e.vault)) return undefined;
+  if (typeof e.alias !== 'string' || e.alias === '' || e.alias.length > MAX_ALIAS) return undefined;
+  return { vault: e.vault, alias: e.alias };
+}
+
+/**
+ * Keeps only well-formed entries from the host's answer to `match`. With several vaults each
+ * entry also carries the identifier and the alias of its vault.
  * @param {unknown} entries
- * @returns {{locker: string, id: string, title: string, username: string | null}[]}
+ * @returns {{locker: string, id: string, title: string, username: string | null, vault?: string, alias?: string}[]}
  */
 export function sanitizeEntries(entries) {
   if (!Array.isArray(entries)) return [];
@@ -35,8 +53,31 @@ export function sanitizeEntries(entries) {
     if (typeof e.locker !== 'string' || !HEX32.test(e.locker)) continue;
     if (typeof e.id !== 'string' || !HEX32.test(e.id)) continue;
     if (typeof e.title !== 'string') continue;
+    const where = vaultOf(e);
+    if (where === undefined) continue;
     const username = typeof e.username === 'string' ? e.username : null;
-    out.push({ locker: e.locker, id: e.id, title: e.title, username });
+    out.push({ locker: e.locker, id: e.id, title: e.title, username, ...(where ?? {}) });
+  }
+  return out;
+}
+
+const VAULT_STATES = ['absent', 'locked', 'unlocked', 'unavailable'];
+
+/**
+ * Keeps only well-formed vaults from the host's answer to `status` (several vaults,
+ * ADR 0085). Without the vault registry the host names none: an empty list.
+ * @param {unknown} vaults
+ * @returns {{vault: string, alias: string, state: string, isDefault: boolean, target: boolean}[]}
+ */
+export function sanitizeVaults(vaults) {
+  if (!Array.isArray(vaults)) return [];
+  const out = [];
+  for (const v of vaults) {
+    if (!v || typeof v !== 'object') continue;
+    const where = vaultOf(v);
+    if (!where) continue;
+    if (!VAULT_STATES.includes(v.state)) continue;
+    out.push({ ...where, state: v.state, isDefault: v.default === true, target: v.target === true });
   }
   return out;
 }
@@ -79,6 +120,7 @@ const MESSAGES = {
   no_password: 'Saisissez d’abord un mot de passe dans la page.',
   exists: 'Un identifiant avec ce nom existe déjà pour ce site. Modifiez-le dans l’application.',
   too_large: 'Réponse trop volumineuse.',
+  unknown_vault: 'Ce coffre n’est plus inscrit sur ce poste. Rouvrez Hirzla.',
 };
 
 /**

@@ -126,12 +126,13 @@ button.entry .user {
   color: var(--hz-texte-secondaire); font-size: 12.5px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+button.entry .vault { color: var(--hz-texte-secondaire); font-size: 11.5px; }
 button.entry .fill { font-size: 12.5px; font-weight: 600; color: var(--hz-ouvert); }
 .card { margin: 0; padding: 12px; border: 1px solid var(--hz-bordure); border-radius: 8px; display: flex; flex-direction: column; gap: 10px; }
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 label { display: block; font-size: 13px; }
 label.inline { display: inline-flex; gap: 4px; align-items: center; margin: 0; color: var(--hz-texte-secondaire); font-size: 12.5px; }
-input[type="text"], input[type="number"] {
+input[type="text"], input[type="number"], select {
   font: inherit;
   width: 100%;
   min-height: 34px;

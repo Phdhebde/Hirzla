@@ -1068,6 +1068,24 @@ fn serve_folder(
     write_frame(conn, &body).is_ok()
 }
 
+/// What a profile receives of a reply. The browser profile learns from `VaultInfo` only
+/// which vault the core serves (`docs/api-locale.md` § 25.4): never its mode nor its server.
+fn for_profile(
+    profile: ClientProfile,
+    result: Result<Reply, ErrorReply>,
+) -> Result<Reply, ErrorReply> {
+    match result {
+        Ok(Reply::VaultInfo(info)) if profile != ClientProfile::Full => {
+            Ok(Reply::VaultInfo(crate::proto::VaultInfo {
+                vault_id: info.vault_id,
+                mode: None,
+                server: None,
+            }))
+        }
+        other => other,
+    }
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, version, code) = match SelfRequest::decode_versioned(frame) {
@@ -1219,7 +1237,7 @@ fn serve(
                     .unwrap_or_else(PoisonError::into_inner)
                     .handle(request);
                 let ok = result.is_ok();
-                (id, version, result, shutdown && ok)
+                (id, version, for_profile(profile, result), shutdown && ok)
             }
             Err((id, version, code)) => {
                 log.record(Event::BadMessage);
@@ -1473,6 +1491,30 @@ mod tests {
         if std::env::var_os("HIRZLA_VAULT").is_none() {
             assert!(parse_args(args(&["--socket", &ep, "--provisional"])).is_err());
         }
+    }
+
+    /// `VaultInfo` for the browser profile (§ 25.4): the vault identifier only.
+    #[test]
+    fn the_browser_profile_learns_the_vault_identifier_only() {
+        let info = crate::proto::VaultInfo {
+            vault_id: [7; 16],
+            mode: Some(crate::proto::VaultMode::Server),
+            server: Some("hirzla://serveur.example:8443".to_owned()),
+        };
+        let full = for_profile(ClientProfile::Full, Ok(Reply::VaultInfo(info.clone())));
+        assert!(matches!(full, Ok(Reply::VaultInfo(i)) if i == info));
+        let reduced = crate::proto::VaultInfo {
+            vault_id: [7; 16],
+            mode: None,
+            server: None,
+        };
+        let seen = for_profile(ClientProfile::Browser, Ok(Reply::VaultInfo(info)));
+        assert!(matches!(seen, Ok(Reply::VaultInfo(i)) if i == reduced));
+        // Other replies and refusals pass unchanged.
+        assert!(matches!(
+            for_profile(ClientProfile::Browser, Ok(Reply::Done)),
+            Ok(Reply::Done)
+        ));
     }
 
     #[test]

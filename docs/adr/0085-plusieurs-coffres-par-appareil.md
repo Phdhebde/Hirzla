@@ -1,6 +1,6 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
-- Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 3 réalisées (voir
+- Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 4 réalisées (voir
   « Mise en œuvre »)
 - Date : 2026-11-24
 
@@ -220,9 +220,25 @@ Spécifiée dans `api-locale.md` § 25.10. Le code a précisé les points suivan
 5. **Gestion des coffres** (inscrire, créer, renommer, retirer) : par la ligne de commande
    seulement ; l'application relit le registre toutes les 3 secondes.
 
+### Étape 4 : hôte natif et extension (réalisée)
+
+Spécifiée dans `api-locale.md` § 25.11 et `apps/extension/README.md`. Le code a précisé les
+points suivants :
+
+1. **`VaultInfo` pour le profil navigateur**, réduit à l'identifiant du coffre : l'hôte
+   vérifie ainsi quel coffre sert chaque noyau, sans apprendre ni le mode ni le serveur.
+2. **L'hôte lit le registre et ne l'écrit pas** : ni adoption, ni réparation. Sans registre
+   utilisable, il parle au point de connexion par défaut, comme avant.
+3. **Coffre de destination** (point ouvert 2) : un enregistrement ou une clé d'accès créés
+   sans coffre nommé vont au coffre par défaut du registre s'il est ouvert, sinon au premier
+   coffre ouvert dans l'ordre des rangs. L'extension montre ce coffre et laisse en choisir
+   un autre parmi les coffres ouverts.
+4. **Un identifiant proposé par un coffre n'est demandé qu'à ce coffre** : chaque
+   proposition porte l'identifiant et l'alias de son coffre, que l'extension renvoie.
+5. **« Verrouiller » dans l'extension** verrouille tous les coffres.
+
 ### Étapes suivantes
 
-4. Hôte natif et extension.
 5. Android.
 6. Bascule du coffre par défaut sur son propre point de connexion.
 
@@ -234,7 +250,9 @@ Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR
    fixe. À défaut, les noyaux partagent le processus de l'application et l'isolation est
    moindre que sur un poste ; à dire dans la cible de sécurité.
 2. **Coffre par défaut de la saisie automatique** quand plusieurs coffres ouverts ont un
-   secret pour la même origine : ordre du registre, ou dernier utilisé.
+   secret pour la même origine : réglé pour l'extension par l'ordre du registre (étape 4,
+   point 3) ; « dernier utilisé » n'est pas retenu, l'hôte ne gardant rien entre deux
+   lancements.
 3. **Hornn** : l'agent gateway (ADR 0031) reste à un coffre ; `sdk/go` n'apprend pas
    l'aiguillage dans ce lot.
 4. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
