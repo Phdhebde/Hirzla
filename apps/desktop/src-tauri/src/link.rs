@@ -127,16 +127,20 @@ pub fn core_for_this_process() -> Result<PathBuf, DesktopError> {
 /// trace. One more try after a second if the core had just received the same call.
 #[must_use]
 pub fn another_instance_shown(config: &LinkConfig) -> bool {
-    let Ok(mut client) = Client::connect(&config.route.endpoint, Some(&config.core)) else {
-        return false;
-    };
-    for attempt in 0..2 {
-        match client.call(&Request::ShowApp) {
-            Ok(Reply::Flag(listening)) => return listening,
-            Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
-                std::thread::sleep(Duration::from_millis(1100));
+    // The core of the vault, or the one still serving it at its former endpoint (§ 25.12).
+    let endpoints = std::iter::once(&config.route.endpoint).chain(config.route.legacy.as_ref());
+    for endpoint in endpoints {
+        let Ok(mut client) = Client::connect(endpoint, Some(&config.core)) else {
+            continue;
+        };
+        for attempt in 0..2 {
+            match client.call(&Request::ShowApp) {
+                Ok(Reply::Flag(true)) => return true,
+                Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
+                    std::thread::sleep(Duration::from_millis(1100));
+                }
+                _ => break,
             }
-            _ => return false,
         }
     }
     false
@@ -205,10 +209,11 @@ impl CoreLink {
         &self.config
     }
 
-    /// The registered vault this link serves: its entry is replaced when the registry gives
-    /// it another alias or rank. The route itself does not change.
-    pub fn set_entry(&mut self, entry: hirzla_core::registry::VaultEntry) {
-        self.config.route.entry = Some(entry);
+    /// Gives this link the route its vault has now: another alias or rank in the registry,
+    /// or the route of the entry a vault just created was adopted under. The connection
+    /// already open, if any, is kept: it is to that same vault.
+    pub fn set_route(&mut self, route: Route) {
+        self.config.route = route;
     }
 
     /// What hardening this process obtained, once it is hardened.

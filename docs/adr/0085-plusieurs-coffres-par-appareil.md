@@ -1,7 +1,7 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
-- Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 4 réalisées (voir
-  « Mise en œuvre »)
+- Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 4 et bascule (étape 6)
+  réalisées, étape 5 (Android) en attente d'une décision (voir « Mise en œuvre »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -237,10 +237,43 @@ points suivants :
    proposition porte l'identifiant et l'alias de son coffre, que l'extension renvoie.
 5. **« Verrouiller » dans l'extension** verrouille tous les coffres.
 
-### Étapes suivantes
+### Étape 6 : bascule du coffre de l'emplacement par défaut (réalisée)
 
-5. Android.
-6. Bascule du coffre par défaut sur son propre point de connexion.
+Spécifiée dans `api-locale.md` § 25.12. Réalisée avant l'étape 5 : l'application Android
+tient son coffre dans son répertoire privé, à un point de connexion qui lui est propre, et
+n'utilise ni le registre ni le point de connexion par défaut des postes.
+
+1. **Le noyau de tout coffre inscrit est lancé à son point de connexion propre**, coffre de
+   l'emplacement par défaut compris.
+2. **L'ancien point de connexion reste reconnu** pour ce coffre (§ 7) : un noyau qui l'y sert
+   déjà (celui qui vient de le créer, ou celui d'une version antérieure encore en marche
+   après une mise à jour) est utilisé tel quel. Un client ne lance jamais un second noyau sur
+   un fichier servi à l'ancien point. La bascule se fait au premier arrêt de ce noyau, sans
+   migration.
+3. **Le premier coffre d'un poste** se crée toujours au point de connexion par défaut
+   (`hirzla init`, écran de création) : le point provisoire (étape 2) sert aux coffres
+   suivants. Le § 7 parlait d'« une version » ; l'ancien point reste donc reconnu tant que
+   cette création y a lieu.
+4. **Aucun verrou de fichier** n'empêche deux noyaux lancés à la main sur un même coffre :
+   point ouvert 7.
+
+### Étape 5 : Android (en attente)
+
+Non réalisée : elle dépend du point ouvert 1, qui est un choix de sécurité et non un détail
+de mise en œuvre. Le noyau est écrit pour un coffre par processus (arrêt du processus sur
+`Shutdown`, durcissement du processus entier) et le § 3 de la décision veut que les clés de
+deux coffres ne partagent jamais une mémoire. Deux voies :
+
+- **un processus par coffre**, comme sur un poste : seize services `:core0` à `:core15`
+  déclarés au manifeste (le maximum du registre), chacun lançant un noyau ; l'isolation du
+  § 3 est tenue, au prix de seize déclarations et d'un processus de plus par coffre ouvert ;
+- **tous les noyaux dans le processus `:core`** : il faut alors rendre le noyau arrêtable
+  sans arrêter le processus, et écrire dans la cible de sécurité que l'isolation entre
+  coffres est moindre sur Android.
+
+S'y ajoutent l'interface mobile (choix du coffre, enrôlement d'un coffre de plus) et la
+saisie automatique d'Android (quel coffre propose, quel coffre enregistre). À trancher par
+le mainteneur avant de coder ; la première voie est celle qui n'affaiblit rien.
 
 Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR 0086.
 
@@ -248,7 +281,8 @@ Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR
 
 1. **Android** : un processus par coffre exige des processus déclarés au manifeste, en nombre
    fixe. À défaut, les noyaux partagent le processus de l'application et l'isolation est
-   moindre que sur un poste ; à dire dans la cible de sécurité.
+   moindre que sur un poste ; à dire dans la cible de sécurité. **Bloque l'étape 5** (voir
+   « Mise en œuvre »).
 2. **Coffre par défaut de la saisie automatique** quand plusieurs coffres ouverts ont un
    secret pour la même origine : réglé pour l'extension par l'ordre du registre (étape 4,
    point 3) ; « dernier utilisé » n'est pas retenu, l'hôte ne gardant rien entre deux
@@ -262,6 +296,9 @@ Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR
    sous Linux : à mesurer sur un poste réel.
 6. **Gestion des coffres dans l'application de poste** : aujourd'hui en ligne de commande
    seulement.
+7. **Verrou de fichier du coffre** : rien n'empêche deux noyaux de servir le même fichier
+   s'ils sont lancés hors des règles de l'aiguillage (`--socket` à la main). Un verrou tenu
+   par le noyau à côté du coffre fermerait ce cas ; à spécifier à part.
 
 ## Vocabulaire (inscrit dans `glossaire.md`)
 

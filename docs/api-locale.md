@@ -2149,14 +2149,16 @@ jamais une adresse ni une étiquette.
 Décision : ADR 0085 (accepté). Première étape : registre des coffres, un noyau par coffre,
 ligne de commande. Deuxième étape : création d'un coffre de plus par un point de connexion
 provisoire (§ 25.9). Troisième étape : application de poste (§ 25.10). Quatrième étape :
-hôte natif et extension (§ 25.11). Le format du coffre, son annexe, le protocole de synchronisation et la
-suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
+hôte natif et extension (§ 25.11). Bascule du coffre de l'emplacement par défaut sur son
+propre point de connexion : § 25.12. Le format du coffre, son annexe, le protocole de
+synchronisation et la suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
 (registre), `client/router.rs` (aiguillage), `client/creation.rs` (création),
 `transport.rs`, `daemon.rs`, `service.rs` ; `apps/cli`.
 
 Troisième étape : l'application de poste apprend l'aiguillage (§ 25.10). Quatrième étape :
-l'hôte natif et l'extension (§ 25.11). L'application Android et `sdk/go` ne le connaissent
-pas encore : ils parlent au point de connexion par défaut (§ 2), comme avant. Le § 25.5 dit
+l'hôte natif et l'extension (§ 25.11). L'application Android (un seul coffre, dans son
+répertoire privé) et `sdk/go` (point de connexion donné par l'appelant) ne le connaissent
+pas. Le § 25.5 dit
 comment les clients qui aiguillent cohabitent avec eux.
 
 ### 25.1 Registre des coffres
@@ -2293,23 +2295,17 @@ par défaut (`coffre.hirzla`, emplacement de `hirzla-core` sans `--vault`), le c
 l'inscrit à la première commande : alias `principal`, rang 0, coffre par défaut. Si le
 registre ne peut pas être écrit, la commande continue comme au point 4.
 
-**Route d'une entrée.**
-
-| Coffre | Point de connexion | Noyau lancé avec |
-| --- | --- | --- |
-| Rangé à l'emplacement par défaut | Par défaut (§ 2) | aucun argument |
-| Autre | Celui du coffre (§ 25.2) | `--socket POINT --vault FICHIER --vault-id ID` |
-
-Le coffre rangé à l'emplacement par défaut **garde le point de connexion par défaut pendant
-cette version** (ADR 0085 § 7) : l'application de poste et l'hôte natif y parlent encore et
-y lancent ce noyau ; lui donner un second point de connexion ferait tourner deux noyaux sur
-le même fichier.
+**Route d'une entrée.** Tout coffre inscrit a son point de connexion propre (§ 25.2), où
+son noyau est lancé par `--socket POINT --vault FICHIER --vault-id ID`. Le coffre rangé à
+l'emplacement par défaut a en plus un **ancien point de connexion**, le point par défaut
+(§ 2) : voir la bascule, § 25.12.
 
 **Vérification.** Après le contrôle du noyau (§ 3.2) et un `Status` accepté, le client
 envoie `VaultInfo` et compare `vault_id` à l'entrée du registre. S'il diffère, il n'envoie
-rien d'autre et le dit. Seule exception : au point de connexion par défaut, un noyau qui
-répond `UnsupportedVersion` ou `UnknownOperation` (noyau d'une version antérieure encore en
-marche après une mise à jour) est accepté comme avant.
+rien d'autre et le dit. Seule exception : au point de connexion par défaut (poste sans
+coffre inscrit, ou ancien point de connexion du § 25.12), un noyau qui répond
+`UnsupportedVersion` ou `UnknownOperation` (noyau d'une version antérieure encore en marche
+après une mise à jour) est accepté comme avant.
 
 **Lancement.** Comme au § 11 : `init`, `unlock` et `gen` lancent le noyau s'il ne tourne pas.
 Pour une entrée du registre, le client vérifie d'abord que le fichier existe ; si le noyau
@@ -2360,9 +2356,8 @@ contient ni alias, ni chemin, ni identifiant de coffre.
 
 1. **Création d'un coffre supplémentaire** (`Init`, invitation, enrôlement) : réglée par
    le point de connexion provisoire (§ 25.9).
-2. **Coffre de l'emplacement par défaut au point de connexion par défaut** : à basculer sur
-   son point de connexion propre quand l'application de poste et l'hôte natif sauront
-   l'aiguillage.
+2. **Coffre de l'emplacement par défaut au point de connexion par défaut** : basculé sur son
+   point de connexion propre (§ 25.12).
 3. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
 4. **Alias absent de `VaultInfo`** (§ 25.4, point 6), alors que l'ADR 0085 § 4 le nomme.
 5. **Longueur du chemin de la socket sous macOS** : `$TMPDIR/hirzla/core-<id>.sock` approche
@@ -2562,3 +2557,43 @@ nomme, et renvoie à l'application.
 **Rien d'autre ne change** : origine exacte, profil navigateur, bornes des messages
 (`apps/extension/README.md`). Avec un seul coffre hors registre, les réponses sont celles
 d'avant, sans `vault` ni `alias`.
+
+### 25.12 Bascule du coffre de l'emplacement par défaut
+
+Décision : ADR 0085 § 7 et « Mise en œuvre », point 4. Les clients des postes (ligne de
+commande, application, hôte natif) savent tous l'aiguillage : le coffre rangé à
+l'emplacement par défaut cesse d'être un cas à part. Code : `client/router.rs`.
+
+**Règle.** Le noyau d'un coffre inscrit est **lancé** à son point de connexion propre
+(§ 25.2), où qu'il soit rangé. Le point de connexion par défaut (§ 2) ne sert plus qu'à :
+
+1. un poste **sans coffre inscrit** : c'est là que le premier coffre est créé (`hirzla
+   init`, écran de création de l'application), par un noyau lancé sans argument, comme
+   avant ;
+2. un client hors registre (`--socket`, `HIRZLA_SOCKET`, `--vault`, `HIRZLA_VAULT`,
+   `sdk/go`) : inchangé ;
+3. l'**ancien point de connexion** du coffre rangé à l'emplacement par défaut, ci-dessous.
+
+**Ancien point de connexion.** Un noyau peut encore servir ce coffre au point par défaut :
+celui qui vient de le créer (point 1), ou celui d'une version antérieure resté en marche
+après une mise à jour. Pour ce coffre seulement, un client procède ainsi :
+
+1. il tente le point de connexion du coffre ;
+2. si aucun noyau n'y écoute, il tente le point par défaut : un noyau qui y répond, passe le
+   contrôle du § 3.2 et la vérification du § 25.5 (même `vault_id`, ou noyau antérieur qui
+   ne connaît pas `VaultInfo`) **est utilisé tel quel** ;
+3. sinon seulement, et si la commande lance le noyau, il le lance au point de connexion du
+   coffre.
+
+Un client ne lance donc jamais un second noyau sur un fichier qu'un noyau sert déjà à
+l'ancien point. Un noyau au point par défaut qui sert un autre coffre, ou aucun, est ignoré.
+Quand le noyau de l'ancien point s'arrête (`hirzla stop`, fermeture de session,
+redémarrage), le suivant est lancé au point de connexion du coffre : la bascule se fait
+d'elle-même, sans migration ni réglage.
+
+**Ce qui ne change pas.** L'adoption (§ 25.5), le registre, les arguments du noyau, l'API.
+`hirzla stop` et `coffres retirer` arrêtent le noyau là où il répond.
+
+**Limite connue.** Deux noyaux sur un même fichier restent possibles hors de ces règles (un
+noyau lancé à la main par `--socket` sur le fichier d'un coffre déjà servi) : aucun verrou
+de fichier n'existe. Un tel verrou est une évolution à part.
