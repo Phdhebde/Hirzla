@@ -9,12 +9,17 @@
 
 use data_encoding::BASE64URL_NOPAD;
 use hirzla_core::passkey::proto::{
-    CreateArgs, PasskeyReply, PasskeyRequest, UserVerification, CHALLENGE_LEN, MAX_CREDENTIAL_ID,
-    MAX_RP_ID, MAX_USER_ID,
+    Candidate, CreateArgs, PasskeyReply, PasskeyRequest, UserVerification, CHALLENGE_LEN,
+    MAX_CREDENTIAL_ID, MAX_RP_ID, MAX_USER_ID,
 };
+use hirzla_vault::model::Id16;
 use zeroize::Zeroizing;
 
-use crate::host::{client_error, error_json, hex, id16, origin, text, CoreLink, HostError};
+use crate::host::{
+    client_error, error_json, hex, id16, listed, tag_json, tag_len, target, CoreLink, HostError,
+    VaultCore, VaultTag,
+};
+use crate::host::{origin, text};
 use crate::json::{encoded_len, Object, Writer};
 
 /// Longest user name, display name or relying party name accepted from the extension.
@@ -102,10 +107,20 @@ fn algorithms(o: &Object) -> Result<Vec<i64>, HostError> {
 /// [`HostError`].
 pub fn parse(kind: &str, o: &Object) -> Result<PasskeyRequest, HostError> {
     let keys: &[&str] = match kind {
-        "passkey_candidates" => &["type", "origin", "rpId", "allow"],
-        "passkey_assert" => &["type", "origin", "rpId", "challenge", "locker", "id", "uv"],
+        "passkey_candidates" => &["type", "vault", "origin", "rpId", "allow"],
+        "passkey_assert" => &[
+            "type",
+            "vault",
+            "origin",
+            "rpId",
+            "challenge",
+            "locker",
+            "id",
+            "uv",
+        ],
         "passkey_create" => &[
             "type",
+            "vault",
             "origin",
             "rpId",
             "rpName",
@@ -157,8 +172,95 @@ fn b64_len(n: usize) -> usize {
     n.div_ceil(3) * 4
 }
 
-/// Answers a checked passkey message.
-pub fn respond(core: &mut impl CoreLink, request: &PasskeyRequest) -> Zeroizing<String> {
+/// Answers a checked passkey message over the vaults of this workstation
+/// (`docs/api-locale.md` § 25.11): the candidates of every open vault, each marked with its
+/// vault; an assertion or a creation in the vault named, else in the destination vault.
+pub fn respond_vaults<L: CoreLink>(
+    vaults: &mut [VaultCore<L>],
+    named: Option<Id16>,
+    request: &PasskeyRequest,
+) -> Zeroizing<String> {
+    if !matches!(request, PasskeyRequest::Candidates { .. }) {
+        return match target(vaults, named) {
+            Ok(i) => respond_one(&mut vaults[i].link, request),
+            Err(e) => e,
+        };
+    }
+    let asked = match listed(vaults, named) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
+    let single = asked.len() == 1;
+    let mut found: Vec<(usize, Candidate)> = Vec::new();
+    let mut refusal = None;
+    for i in asked {
+        match vaults[i].link.call_passkey(request) {
+            Ok(Ok(PasskeyReply::Candidates(list))) => {
+                found.extend(list.into_iter().map(|c| (i, c)));
+            }
+            Ok(Ok(_)) if single => return error_json("core_error"),
+            Ok(Err(code)) if single => return error_json(code.name()),
+            Err(e) if single => return client_error(&e),
+            // One vault among several that refuses or fails does not hide the others.
+            Ok(Ok(_)) => {}
+            Ok(Err(code)) => refusal = refusal.or(Some(error_json(code.name()))),
+            Err(e) => refusal = refusal.or(Some(client_error(&e))),
+        }
+    }
+    if found.is_empty() {
+        if let Some(r) = refusal {
+            return r;
+        }
+    }
+    let tagged: Vec<(Option<&VaultTag>, Candidate)> = found
+        .into_iter()
+        .map(|(i, c)| (vaults[i].tag.as_ref(), c))
+        .collect();
+    candidates_json(&tagged)
+}
+
+fn candidates_json(list: &[(Option<&VaultTag>, Candidate)]) -> Zeroizing<String> {
+    let e = |b: &[u8]| BASE64URL_NOPAD.encode(b);
+    let capacity = 64
+        + list
+            .iter()
+            .map(|(tag, c)| {
+                160 + tag_len(*tag)
+                    + b64_len(c.credential_id.len())
+                    + encoded_len(c.title.len())
+                    + c.user_name.as_ref().map_or(0, |u| encoded_len(u.len()))
+                    + c.display_name.as_ref().map_or(0, |d| encoded_len(d.len()))
+            })
+            .sum::<usize>();
+    let mut w = Writer::with_capacity(capacity);
+    w.raw("{\"ok\":true,\"candidates\":[");
+    for (i, (tag, c)) in list.iter().enumerate() {
+        if i > 0 {
+            w.raw(",");
+        }
+        w.raw("{\"locker\":")
+            .string(&hex(&c.locker))
+            .raw(",\"id\":")
+            .string(&hex(&c.id))
+            .raw(",\"credential\":")
+            .string(&e(&c.credential_id))
+            .raw(",\"title\":")
+            .string(&c.title);
+        if let Some(u) = &c.user_name {
+            w.raw(",\"userName\":").string(u);
+        }
+        if let Some(d) = &c.display_name {
+            w.raw(",\"displayName\":").string(d);
+        }
+        tag_json(&mut w, *tag);
+        w.raw("}");
+    }
+    w.raw("]}");
+    w.finish()
+}
+
+/// Answers a checked passkey message with one core.
+fn respond_one(core: &mut impl CoreLink, request: &PasskeyRequest) -> Zeroizing<String> {
     let reply = match core.call_passkey(request) {
         Ok(Ok(r)) => r,
         Ok(Err(code)) => return error_json(code.name()),
@@ -192,40 +294,9 @@ pub fn respond(core: &mut impl CoreLink, request: &PasskeyRequest) -> Zeroizing<
             w.finish()
         }
         (PasskeyRequest::Candidates { .. }, PasskeyReply::Candidates(list)) => {
-            let capacity = 64
-                + list
-                    .iter()
-                    .map(|c| {
-                        160 + b64_len(c.credential_id.len())
-                            + encoded_len(c.title.len())
-                            + c.user_name.as_ref().map_or(0, |u| encoded_len(u.len()))
-                            + c.display_name.as_ref().map_or(0, |d| encoded_len(d.len()))
-                    })
-                    .sum::<usize>();
-            let mut w = Writer::with_capacity(capacity);
-            w.raw("{\"ok\":true,\"candidates\":[");
-            for (i, c) in list.iter().enumerate() {
-                if i > 0 {
-                    w.raw(",");
-                }
-                w.raw("{\"locker\":")
-                    .string(&hex(&c.locker))
-                    .raw(",\"id\":")
-                    .string(&hex(&c.id))
-                    .raw(",\"credential\":")
-                    .string(&e(&c.credential_id))
-                    .raw(",\"title\":")
-                    .string(&c.title);
-                if let Some(u) = &c.user_name {
-                    w.raw(",\"userName\":").string(u);
-                }
-                if let Some(d) = &c.display_name {
-                    w.raw(",\"displayName\":").string(d);
-                }
-                w.raw("}");
-            }
-            w.raw("]}");
-            w.finish()
+            let untagged: Vec<(Option<&VaultTag>, Candidate)> =
+                list.into_iter().map(|c| (None, c)).collect();
+            candidates_json(&untagged)
         }
         (PasskeyRequest::Assert { .. }, PasskeyReply::Assertion(a)) => {
             let mut w = Writer::with_capacity(

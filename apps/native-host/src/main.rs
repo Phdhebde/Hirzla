@@ -5,6 +5,9 @@
 //! many bytes of UTF-8 JSON. The host is a client of the core with the browser profile
 //! (`docs/api-locale.md` § 3.1 and § 12): it holds no key, keeps nothing between two runs,
 //! writes no log, and never starts the core nor unlocks the vault.
+//!
+//! With several vaults (ADR 0085, `docs/api-locale.md` § 25.11) it reads the vault registry,
+//! never writes it, and holds one connection per registered vault whose core runs.
 
 #![forbid(unsafe_code)]
 
@@ -17,46 +20,35 @@ use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use hirzla_core::client::router::{Route, RouteError, VaultRouter};
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::passkey::proto::{PasskeyCode, PasskeyReply, PasskeyRequest};
-use hirzla_core::proto::{Reply, Request};
+use hirzla_core::proto::{ErrorCode, ErrorReply, Reply, Request};
+use hirzla_core::registry::{self, VaultRegistry};
 use hirzla_core::transport::Endpoint;
 use zeroize::Zeroizing;
 
-use host::{respond, CoreLink, MAX_REPLY};
+use host::{respond_vaults, CoreLink, VaultCore, VaultTag, MAX_REPLY};
 
 /// Largest message accepted from the extension, in bytes.
 const MAX_MESSAGE: usize = 64 * 1024;
 
-/// The connection to the core, opened at the first request.
+/// The connection to the core of one vault.
 ///
-/// Connecting checks the core (same user, expected executable); the first request is a
-/// `Status` round trip, after which the core has read and accepted this executable, and only
-/// then is this process hardened: on Linux a non-dumpable process hides its executable from
-/// the core, which would then refuse a later connection. One connection serves the whole run.
+/// Connecting checks the core (same user, expected executable); then one `Status` round
+/// trip, after which the core has read and accepted this executable; then, for a vault of
+/// the registry, that the core serves that vault. A failure is kept for the run.
 struct Link {
+    /// None when no endpoint could be determined: `failed` then says why.
+    route: Option<Route>,
     client: Option<Client>,
     failed: Option<ClientError>,
-}
-
-fn endpoint() -> Result<Endpoint, ClientError> {
-    match std::env::var_os("HIRZLA_SOCKET") {
-        Some(s) => Endpoint::parse(&s).map_err(|_| ClientError::UnsafeEndpoint),
-        None => Endpoint::default_for_user().map_err(|_| ClientError::NotRunning),
-    }
 }
 
 fn expected_core() -> Result<PathBuf, ClientError> {
     std::env::current_exe()
         .map(|me| sibling_core(&me))
         .map_err(|_| ClientError::NotRunning)
-}
-
-fn open() -> Result<Client, ClientError> {
-    let mut client = Client::connect(&endpoint()?, Some(&expected_core()?))?;
-    client.call(&Request::Status)?;
-    let _ = hirzla_keystore::platform::harden_process();
-    Ok(client)
 }
 
 fn copy(e: &ClientError) -> ClientError {
@@ -70,23 +62,108 @@ fn copy(e: &ClientError) -> ClientError {
     }
 }
 
+/// What the extension is told when a route cannot be used: a core that serves another vault
+/// than the registered one, or has no readable vault file, is not asked anything more.
+fn route_error(e: RouteError) -> ClientError {
+    match e {
+        RouteError::Client(e) => e,
+        RouteError::Registry(registry::RegistryError::NoVault) => {
+            ClientError::Refused(ErrorReply::new(ErrorCode::NoVault))
+        }
+        RouteError::WrongVault | RouteError::Registry(_) => ClientError::Protocol,
+        RouteError::CoreNotStarted
+        | RouteError::NoEndpoint
+        | RouteError::UnknownAlias
+        | RouteError::NoDefault => ClientError::NotRunning,
+    }
+}
+
 impl Link {
-    /// The connection, opened at the first request; a failure to open is kept for the run.
+    fn new(route: Route) -> Link {
+        Link {
+            route: Some(route),
+            client: None,
+            failed: None,
+        }
+    }
+
+    /// Opens the connection if it is not open, and was not refused before. The core is
+    /// never started.
+    fn join(&mut self) {
+        if self.client.is_some() || self.failed.is_some() {
+            return;
+        }
+        let Some(route) = &self.route else {
+            self.failed = Some(ClientError::NotRunning);
+            return;
+        };
+        match expected_core().and_then(|core| route.connect(Some(&core)).map_err(route_error)) {
+            Ok(c) => self.client = Some(c),
+            Err(e) => self.failed = Some(e),
+        }
+    }
+
     fn client(&mut self) -> Result<&mut Client, ClientError> {
+        self.join();
         if let Some(e) = &self.failed {
             return Err(copy(e));
         }
-        if self.client.is_none() {
-            match open() {
-                Ok(c) => self.client = Some(c),
-                Err(e) => {
-                    let out = copy(&e);
-                    self.failed = Some(e);
-                    return Err(out);
-                }
-            }
-        }
         self.client.as_mut().ok_or(ClientError::NotRunning)
+    }
+}
+
+/// The vaults of this workstation (`docs/api-locale.md` § 25.11): one link per vault of the
+/// registry, in its order. With `HIRZLA_SOCKET`, or without a usable registry: the single
+/// core of before, outside the registry.
+fn vaults() -> Vec<VaultCore<Link>> {
+    let single = |endpoint: Endpoint, default_endpoint: bool| {
+        vec![VaultCore {
+            tag: None,
+            link: Link::new(Route::unregistered(endpoint, default_endpoint, Vec::new())),
+        }]
+    };
+    let fallback = |e: ClientError| {
+        vec![VaultCore {
+            tag: None,
+            // The failure is answered to every message.
+            link: Link {
+                route: None,
+                client: None,
+                failed: Some(e),
+            },
+        }]
+    };
+    if let Some(s) = std::env::var_os("HIRZLA_SOCKET") {
+        return match Endpoint::parse(&s) {
+            Ok(endpoint) => single(endpoint, false),
+            Err(_) => fallback(ClientError::UnsafeEndpoint),
+        };
+    }
+    // Read only: the host adopts and repairs nothing.
+    let registered = VaultRouter::for_user().and_then(|router| {
+        let registry = VaultRegistry::load(router.registry_path()).ok()?;
+        let default = registry.default_id();
+        let vaults: Vec<VaultCore<Link>> = registry
+            .vaults()
+            .iter()
+            .filter_map(|entry| {
+                let route = router.route_of(entry).ok()?;
+                Some(VaultCore {
+                    tag: Some(VaultTag {
+                        id: entry.vault_id,
+                        alias: entry.alias.as_str().to_owned(),
+                        default: default == Some(entry.vault_id),
+                    }),
+                    link: Link::new(route),
+                })
+            })
+            .collect();
+        (!vaults.is_empty()).then_some(vaults)
+    });
+    match (registered, Endpoint::default_for_user()) {
+        (Some(vaults), _) => vaults,
+        (None, Ok(endpoint)) => single(endpoint, true),
+        (None, Err(_)) => fallback(ClientError::NotRunning),
     }
 }
 
@@ -171,14 +248,24 @@ fn main() -> ExitCode {
     let Ok((mut input, mut output)) = raw_stdio() else {
         return ExitCode::FAILURE;
     };
-    let mut link = Link {
-        client: None,
-        failed: None,
-    };
+    let mut vaults = vaults();
+    let mut joined = false;
     loop {
         match read_message(&mut input) {
             Ok(message) => {
-                let reply = respond(&mut link, &message);
+                if !joined {
+                    // Every core is joined before this process hardens itself: on Linux a
+                    // non-dumpable process hides its executable from the cores it would
+                    // connect to afterwards, which would then refuse it.
+                    for vault in &mut vaults {
+                        vault.link.join();
+                    }
+                    if vaults.iter().any(|v| v.link.client.is_some()) {
+                        let _ = hirzla_keystore::platform::harden_process();
+                    }
+                    joined = true;
+                }
+                let reply = respond_vaults(&mut vaults, &message);
                 drop(message);
                 if write_message(&mut output, &reply).is_err() {
                     return ExitCode::FAILURE;
