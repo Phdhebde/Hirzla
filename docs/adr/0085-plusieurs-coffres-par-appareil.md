@@ -1,7 +1,7 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
 - Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 4 et bascule (étape 6)
-  réalisées, étape 5 (Android) décidée le 2026-11-25 et en cours (voir « Mise en œuvre »)
+  réalisées, étape 5 (Android) réalisée le 2026-11-26 (voir « Mise en œuvre »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -257,14 +257,18 @@ n'utilise ni le registre ni le point de connexion par défaut des postes.
 4. **Aucun verrou de fichier** n'empêche deux noyaux lancés à la main sur un même coffre :
    point ouvert 7.
 
-### Étape 5 : Android (décidée le 2026-11-25, en cours)
+### Étape 5 : Android (réalisée)
 
 Le point ouvert 1 est tranché par le mainteneur : **un processus par coffre**, comme sur un
 poste. L'autre voie (tous les noyaux dans le processus `:core`) est écartée : elle aurait mis
 les clés de plusieurs coffres dans une même mémoire, contre le § 3, et demandé de l'écrire
 dans la cible de sécurité.
 
-Spécifiée dans `api-locale.md` § 25.13. Points fixés à la conception :
+Spécifiée dans `api-locale.md` § 25.13. Vérifiée sur un émulateur (Android 17, x86-64) :
+premier coffre, coffre de plus dans son processus `:core1`, « Tout verrouiller », relance à
+froid. **Reste à vérifier sur un téléphone** : l'empreinte (StrongBox) par coffre, la saisie
+automatique à plusieurs coffres et l'enrôlement d'un coffre de plus. Points fixés à la
+conception :
 
 1. **Seize emplacements de noyau** : seize services `CoreService0` à `CoreService15` déclarés
    au manifeste, chacun dans son processus (`:core0` à `:core15`), aucun exporté. Android ne

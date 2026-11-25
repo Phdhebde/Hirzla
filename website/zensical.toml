@@ -42,6 +42,7 @@ nav = [
     { "Windows Hello, Touch ID, clé de sécurité" = "utiliser/deverrouillage.md" },
     { "Sauvegarde et recouvrement" = "utiliser/recouvrement.md" },
     { "Rejoindre un serveur" = "utiliser/rejoindre-un-serveur.md" },
+    { "Plusieurs coffres sur un appareil" = "utiliser/plusieurs-coffres.md" },
     { "Partager un casier" = "utiliser/partager.md" },
     { "Remettre un casier à un collègue" = "utiliser/exporter-un-casier.md" },
     { "Ligne de commande" = "utiliser/ligne-de-commande.md" },
