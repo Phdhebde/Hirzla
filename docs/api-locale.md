@@ -2150,16 +2150,16 @@ Décision : ADR 0085 (accepté). Première étape : registre des coffres, un noy
 ligne de commande. Deuxième étape : création d'un coffre de plus par un point de connexion
 provisoire (§ 25.9). Troisième étape : application de poste (§ 25.10). Quatrième étape :
 hôte natif et extension (§ 25.11). Bascule du coffre de l'emplacement par défaut sur son
-propre point de connexion : § 25.12. Le format du coffre, son annexe, le protocole de
+propre point de connexion : § 25.12. Cinquième étape : application Android (§ 25.13). Le
+format du coffre, son annexe, le protocole de
 synchronisation et la suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
 (registre), `client/router.rs` (aiguillage), `client/creation.rs` (création),
 `transport.rs`, `daemon.rs`, `service.rs` ; `apps/cli`.
 
 Troisième étape : l'application de poste apprend l'aiguillage (§ 25.10). Quatrième étape :
-l'hôte natif et l'extension (§ 25.11). L'application Android (un seul coffre, dans son
-répertoire privé) et `sdk/go` (point de connexion donné par l'appelant) ne le connaissent
-pas. Le § 25.5 dit
-comment les clients qui aiguillent cohabitent avec eux.
+l'hôte natif et l'extension (§ 25.11). Cinquième étape : l'application Android (§ 25.13),
+dans son répertoire privé. `sdk/go` (point de connexion donné par l'appelant) ne connaît pas
+l'aiguillage. Le § 25.5 dit comment les clients qui aiguillent cohabitent avec lui.
 
 ### 25.1 Registre des coffres
 
@@ -2597,3 +2597,111 @@ d'elle-même, sans migration ni réglage.
 **Limite connue.** Deux noyaux sur un même fichier restent possibles hors de ces règles (un
 noyau lancé à la main par `--socket` sur le fichier d'un coffre déjà servi) : aucun verrou
 de fichier n'existe. Un tel verrou est une évolution à part.
+
+### 25.13 Application Android
+
+Décision : ADR 0085, « Étape 5 : Android », et ADR 0080 § 2. Le point ouvert 1 de l'ADR 0085
+est tranché : **un processus par coffre**, comme sur un poste. Code :
+`crates/hirzla-core/src/slots.rs` (disposition du répertoire privé), `daemon.rs`
+(`run_android`), `apps/mobile/core` (entrée JNI), `apps/mobile/src-tauri/src/vaults.rs`,
+`gen/android` (`CoreService`, `HirzlaPlugin`).
+
+**Emplacements.** Android ne crée un processus que pour un composant déclaré au manifeste.
+L'application déclare donc seize services non exportés, `CoreService0` à `CoreService15`,
+chacun dans son processus (`:core0` à `:core15`) : seize **emplacements de noyau**, le
+maximum du registre (§ 25.1). Un emplacement sert au plus un coffre, et un coffre garde son
+emplacement tant qu'il est inscrit. Un service déclaré mais jamais lancé ne coûte rien :
+Android ne crée son processus qu'à son premier lancement.
+
+**Disposition du répertoire privé** (`filesDir`, résolu : `/data/data/<paquet>/files`) :
+
+| Chemin | Rôle |
+| --- | --- |
+| `coffres` | le registre (§ 25.1) |
+| `coffre.hirzla` | le coffre de l'emplacement 0 (l'emplacement par défaut, inchangé) |
+| `coffre-<n>.hirzla` | le coffre de l'emplacement `n`, de 1 à 15 |
+| `core/core-<id>.sock` | le point de connexion du coffre `<id>` (§ 25.2) |
+| `core/core.sock` | le point de connexion par défaut (premier coffre, voir « Premier coffre ») |
+| `core/core-new-<n>.sock` | le point de connexion provisoire de l'emplacement `n` (§ 25.9) |
+| `core/core-<n>.log` | le journal du noyau de l'emplacement `n` |
+
+**L'emplacement d'un coffre se lit dans le chemin de son fichier** : le registre ne change
+pas de format et aucun autre fichier ne tient cette correspondance. Une entrée du registre
+dont le chemin n'est aucun de ces seize chemins est refusée par l'application
+(`registry`). Le point de connexion provisoire porte le numéro de l'emplacement et non un
+aléa : un emplacement ne crée qu'un coffre à la fois, et le répertoire est privé.
+
+**Lancement d'un noyau.** L'interface (processus principal) demande à Android de lancer le
+service de l'emplacement, avec un mode :
+
+| Mode | Emplacement | Ce que fait le noyau |
+| --- | --- | --- |
+| `first` | 0 seulement | comme avant ce lot : écoute au point par défaut, sert ou crée `coffre.hirzla`, sans identifiant attendu |
+| `vault` + `vault_id` | tous | noyau d'un coffre inscrit (§ 25.3) : écoute au point de connexion du coffre, vérifie l'identifiant, ne crée jamais |
+| `new` | tous | noyau provisoire (§ 25.9) : écoute au point provisoire de l'emplacement, ne démarre pas si un fichier existe, ne survit pas à son client |
+
+Le noyau **déduit le fichier du coffre de son emplacement** ; l'interface ne lui passe aucun
+chemin. Le service n'est pas exporté : seul le code de l'application peut le lancer, ce qui
+est la frontière de l'ADR 0080 § 2 (même UID). Un mode inconnu, un identifiant mal formé, ou
+le mode `first` hors de l'emplacement 0 : le noyau ne démarre pas. Un processus déjà lancé
+ignore toute demande suivante : pour changer de mode, le noyau doit d'abord s'arrêter
+(`Shutdown`, ou fin de sa dernière connexion pour un noyau provisoire), ce qui termine son
+processus. Il n'y a donc jamais deux noyaux sur le fichier d'un emplacement.
+
+**Lancement à la demande.** L'application ne lance que le noyau du **coffre actif**, celui
+que l'utilisateur regarde ; le noyau d'un autre coffre est lancé quand ce coffre est choisi.
+Un coffre dont le noyau ne tourne pas est **verrouillé** par construction (ses clés ne
+vivent que dans ce processus) : l'application l'affiche ainsi sans rien lancer. Comme
+avant, Android arrête les services d'une application passée à l'arrière-plan ; chaque
+processus se termine alors et son coffre est verrouillé.
+
+**Premier coffre.** Un téléphone sans coffre inscrit se comporte comme avant : l'emplacement
+0 est lancé en mode `first`, l'écran de création ou d'enrôlement (ADR 0081) crée
+`coffre.hirzla`, qui reste ouvert. L'application l'**adopte** ensuite (§ 25.5) sous l'alias
+`principal`. Le point par défaut est alors l'**ancien point de connexion** de ce coffre
+(§ 25.12) : le noyau qui vient de le créer est utilisé tel quel, et le suivant est lancé en
+mode `vault`. Un coffre créé par une version antérieure est adopté de même au premier
+lancement, sans migration.
+
+**Coffre de plus.** Suit le § 25.9, le lancement du service remplaçant celui de l'exécutable :
+
+1. l'application vérifie le registre (moins de 16 coffres, alias acceptable et libre) et
+   prend le plus petit emplacement **libre** : aucune entrée du registre ne le désigne et
+   rien n'existe à son chemin ;
+2. elle lance cet emplacement en mode `new` et s'y connecte ; `Status` doit répondre
+   « aucun coffre » ;
+3. création sur cette connexion, gardée ouverte : `Init` (coffre Self) ou l'enrôlement de
+   l'appareil (`DeviceEnrolStart`, `DeviceEnrolWait`…, `DeviceEnrolFinish`, § 15.11) ;
+4. `VaultInfo` rend l'identifiant ; l'application inscrit le coffre (identifiant, chemin de
+   l'emplacement, alias) ;
+5. `Shutdown` : le processus de l'emplacement se termine ;
+6. le nouveau coffre devient le coffre actif : son noyau est lancé en mode `vault` et le
+   coffre y est **verrouillé**. Le mot de passe maître n'est pas gardé pour l'ouvrir à la
+   place de l'utilisateur.
+
+Les échecs suivent le § 25.9 : un coffre créé dont le rattachement échoue est inscrit quand
+même ; une création abandonnée ne laisse ni fichier ni entrée, et l'emplacement redevient
+libre. Si le registre ne peut pas être écrit à l'étape 4, le fichier reste à son
+emplacement, qui n'est plus libre, et l'application le signale ; rien sur le téléphone ne
+permet encore de l'inscrire après coup.
+
+**Coffre actif.** Au lancement, c'est le coffre par défaut du registre. L'écran « Coffres »
+liste les coffres inscrits (alias, « ouvert » ou « verrouillé », coffre actif), en choisit
+un, en ajoute un et propose « Tout verrouiller » (`Lock` à chaque noyau qui tourne). Le
+choix n'est pas gardé d'un lancement à l'autre. Toutes les commandes existantes de
+l'application visent le coffre actif.
+
+**Saisie automatique** (ADR 0080 § 6.1). Pour le domaine d'un navigateur de la liste figée,
+`Match` est envoyé à **chaque coffre ouvert** ; chaque proposition porte l'alias de son
+coffre, et `Fill` est envoyé au noyau du coffre de la proposition choisie. Un coffre
+verrouillé n'est ni lancé ni ouvert d'office. La recherche manuelle d'un autre secret
+porte sur le coffre actif. Rien d'autre ne change : avertissement, liste des navigateurs,
+pas d'enregistrement depuis un formulaire.
+
+**Hors de ce lot.** Renommer un coffre, le retirer et choisir le coffre par défaut : pas
+encore dans l'application (retirer devra aussi effacer le fichier, son annexe et la clé
+StrongBox du coffre, puisque rien d'autre n'y donne accès sur un téléphone). La copie entre
+coffres (ADR 0085 § 6). Le contrôle du certificat de l'APK par le noyau (ADR 0080 § 2), qui
+reste à écrire pour une version de livraison.
+
+Journal : rien de nouveau ; ni alias, ni chemin, ni identifiant.

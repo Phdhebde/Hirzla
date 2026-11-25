@@ -71,3 +71,5 @@ l'anglais dans le code.
 | Registre des coffres | `VaultRegistry` | Liste locale des coffres d'un appareil, sans clé ni secret (ADR 0085) |
 | Alias de coffre | `VaultAlias` | Nom local d'un coffre, choisi par l'utilisateur, lisible sans déverrouiller (ADR 0085) |
 | Aiguillage | `VaultRouter` | Partie du client qui trouve, lance et vérifie le noyau d'un coffre (ADR 0085) |
+| Emplacement de noyau | `CoreSlot` | Sur Android, l'un des seize processus déclarés d'avance, qui sert au plus un coffre (ADR 0085, étape 5) |
+| Coffre actif | `ActiveVault` | Dans une application, le coffre que visent les commandes de l'écran en cours (ADR 0085) |

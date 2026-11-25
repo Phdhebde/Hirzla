@@ -1,7 +1,7 @@
 # ADR 0085 — Plusieurs coffres par appareil, un noyau par coffre
 
 - Statut : accepté (2026-11-24, décision du mainteneur) ; étapes 1 à 4 et bascule (étape 6)
-  réalisées, étape 5 (Android) en attente d'une décision (voir « Mise en œuvre »)
+  réalisées, étape 5 (Android) décidée le 2026-11-25 et en cours (voir « Mise en œuvre »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -92,8 +92,8 @@ Un fichier `coffres` dans le répertoire de configuration de l'utilisateur (mode
 - **Extension et hôte natif** : pour une origine, l'hôte interroge chaque coffre ouvert et
   rend les propositions avec le nom du coffre. Un coffre verrouillé n'est pas déverrouillé
   d'office : l'utilisateur choisit lequel ouvrir.
-- **Android** : une instance du noyau par coffre dans l'application. L'isolation par processus
-  y est un point ouvert (voir plus bas).
+- **Android** : un processus du noyau par coffre dans l'application, parmi seize déclarés
+  d'avance (étape 5).
 - **API locale** : une opération `VaultInfo` (alias, mode, serveur, résumé de la politique
   appliquée) ; nouvelle version de l'API. Aucune autre opération ne change.
 
@@ -257,32 +257,43 @@ n'utilise ni le registre ni le point de connexion par défaut des postes.
 4. **Aucun verrou de fichier** n'empêche deux noyaux lancés à la main sur un même coffre :
    point ouvert 7.
 
-### Étape 5 : Android (en attente)
+### Étape 5 : Android (décidée le 2026-11-25, en cours)
 
-Non réalisée : elle dépend du point ouvert 1, qui est un choix de sécurité et non un détail
-de mise en œuvre. Le noyau est écrit pour un coffre par processus (arrêt du processus sur
-`Shutdown`, durcissement du processus entier) et le § 3 de la décision veut que les clés de
-deux coffres ne partagent jamais une mémoire. Deux voies :
+Le point ouvert 1 est tranché par le mainteneur : **un processus par coffre**, comme sur un
+poste. L'autre voie (tous les noyaux dans le processus `:core`) est écartée : elle aurait mis
+les clés de plusieurs coffres dans une même mémoire, contre le § 3, et demandé de l'écrire
+dans la cible de sécurité.
 
-- **un processus par coffre**, comme sur un poste : seize services `:core0` à `:core15`
-  déclarés au manifeste (le maximum du registre), chacun lançant un noyau ; l'isolation du
-  § 3 est tenue, au prix de seize déclarations et d'un processus de plus par coffre ouvert ;
-- **tous les noyaux dans le processus `:core`** : il faut alors rendre le noyau arrêtable
-  sans arrêter le processus, et écrire dans la cible de sécurité que l'isolation entre
-  coffres est moindre sur Android.
+Spécifiée dans `api-locale.md` § 25.13. Points fixés à la conception :
 
-S'y ajoutent l'interface mobile (choix du coffre, enrôlement d'un coffre de plus) et la
-saisie automatique d'Android (quel coffre propose, quel coffre enregistre). À trancher par
-le mainteneur avant de coder ; la première voie est celle qui n'affaiblit rien.
+1. **Seize emplacements de noyau** : seize services `CoreService0` à `CoreService15` déclarés
+   au manifeste, chacun dans son processus (`:core0` à `:core15`), aucun exporté. Android ne
+   crée le processus d'un service qu'à son lancement : un emplacement déclaré et inutilisé ne
+   coûte ni processus ni mémoire. L'ancien processus `:core` disparaît.
+2. **L'emplacement d'un coffre se lit dans le chemin de son fichier** (`coffre.hirzla` pour
+   l'emplacement 0, `coffre-<n>.hirzla` ensuite). Le registre garde son format ; aucun autre
+   fichier ne tient la correspondance.
+3. **Le noyau déduit son fichier de son emplacement.** L'interface lui passe un mode et, pour
+   un coffre inscrit, l'identifiant attendu ; jamais un chemin.
+4. **Lancement à la demande** : seul le noyau du coffre actif est lancé. Un coffre dont le
+   noyau ne tourne pas est verrouillé par construction. C'est un écart voulu avec le poste,
+   où chaque noyau est lancé au démarrage de l'application (étape 3, point 2) : sur un
+   téléphone, la mémoire compte et le système arrête de toute façon les services en
+   arrière-plan.
+5. **Le premier coffre ne change pas** : créé au point de connexion par défaut, ouvert dès
+   sa création, adopté ensuite, selon les règles de la bascule (étape 6). Un coffre de plus
+   passe par le noyau provisoire de l'étape 2 et se retrouve verrouillé.
+6. **Saisie automatique** : les propositions viennent de chaque coffre ouvert et portent
+   l'alias de leur coffre, comme dans l'extension (étape 4).
+7. **Hors de ce lot** : renommer, retirer, choisir le coffre par défaut depuis le
+   téléphone. Retirer devra effacer le fichier, son annexe et la clé StrongBox du coffre.
 
 Hors de ce lot : la copie entre coffres (§ 6), qui attend la politique de l'ADR 0086.
 
 ## Points ouverts
 
-1. **Android** : un processus par coffre exige des processus déclarés au manifeste, en nombre
-   fixe. À défaut, les noyaux partagent le processus de l'application et l'isolation est
-   moindre que sur un poste ; à dire dans la cible de sécurité. **Bloque l'étape 5** (voir
-   « Mise en œuvre »).
+1. **Android** : tranché, un processus par coffre (étape 5). Reste ouvert : la gestion des
+   coffres depuis le téléphone (renommer, retirer, coffre par défaut).
 2. **Coffre par défaut de la saisie automatique** quand plusieurs coffres ouverts ont un
    secret pour la même origine : réglé pour l'extension par l'ordre du registre (étape 4,
    point 3) ; « dernier utilisé » n'est pas retenu, l'hôte ne gardant rien entre deux
