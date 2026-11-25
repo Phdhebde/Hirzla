@@ -21,6 +21,8 @@ const $ = (id) => document.getElementById(id);
 
 let tab = null;
 let origin = null;
+/** The vaults of this workstation, when several are registered (ADR 0085); else empty. */
+let vaults = [];
 /** Login waiting for the user's confirmation; dropped on save or cancel. */
 let pending = null;
 
@@ -66,6 +68,13 @@ function renderEntries(entries) {
       u.textContent = e.username;
       names.append(u);
     }
+    // With several vaults, every login says which vault it comes from.
+    if (e.alias && vaults.length > 1) {
+      const v = document.createElement('span');
+      v.className = 'vault';
+      v.textContent = `Coffre : ${e.alias}`;
+      names.append(v);
+    }
     const fill = document.createElement('span');
     fill.className = 'fill';
     fill.textContent = 'Remplir';
@@ -92,11 +101,27 @@ function showState(open) {
   $('state-text').textContent = open ? 'Ouvert' : 'Verrouillé';
 }
 
+/** The open vaults a login may be saved into; the destination vault of the host first. */
+function openVaults() {
+  return vaults.filter((v) => v.state === 'unlocked').sort((a, b) => Number(b.target) - Number(a.target));
+}
+
 function openSaveForm(login) {
   pending = { origin: login.origin, password: login.password };
   $('save-title').value = login.title ?? '';
   $('save-username').value = login.username ?? '';
   $('save-origin').textContent = login.origin;
+  // With several vaults the user sees, and may change, where the login goes.
+  const choices = vaults.length > 1 ? openVaults() : [];
+  $('save-vault').replaceChildren(
+    ...choices.map((v) => {
+      const o = document.createElement('option');
+      o.value = v.vault;
+      o.textContent = v.alias;
+      return o;
+    }),
+  );
+  show('save-vault-field', choices.length > 0);
   show('save');
   show('actions', false);
 }
@@ -111,6 +136,15 @@ function closeSaveForm() {
 async function refresh() {
   const r = await listForTab(tab);
   origin = r.origin ?? null;
+  vaults = r.vaults ?? [];
+  // A locked vault is never asked: it is named, and opened in the application.
+  const locked = vaults.length > 1 ? vaults.filter((v) => v.state === 'locked').map((v) => v.alias) : [];
+  $('locked-vaults').textContent =
+    locked.length === 0
+      ? ''
+      : `${locked.length === 1 ? 'Coffre verrouillé' : 'Coffres verrouillés'} : ${locked.join(', ')}. ` +
+        'Les identifiants d’un coffre verrouillé ne sont pas proposés : ouvrez-le dans l’application.';
+  show('locked-vaults', r.ok && locked.length > 0);
   show('site', origin !== null);
   $('origin').textContent = origin ?? '';
   $('site').classList.toggle('verified', r.ok);
@@ -126,7 +160,7 @@ async function refresh() {
     return;
   }
   say(null);
-  show('open-app', false);
+  show('open-app', locked.length > 0);
   show('lock');
   show('actions');
   renderEntries(r.entries);
@@ -187,11 +221,16 @@ async function main() {
   $('save').addEventListener('submit', async (ev) => {
     ev.preventDefault();
     if (!pending) return;
-    const r = await saveLogin(pending.origin, {
-      title: $('save-title').value.trim(),
-      username: $('save-username').value.trim() || null,
-      password: pending.password,
-    });
+    const chosen = $('save-vault-field').hidden ? '' : $('save-vault').value;
+    const r = await saveLogin(
+      pending.origin,
+      {
+        title: $('save-title').value.trim(),
+        username: $('save-username').value.trim() || null,
+        password: pending.password,
+      },
+      chosen ? { vault: chosen } : null,
+    );
     closeSaveForm();
     if (!r.ok) return say(r.error);
     await refresh();

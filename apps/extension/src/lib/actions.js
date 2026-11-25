@@ -5,7 +5,7 @@
 // Secrets only transit: a password received from the host is handed to the page and the
 // reference dropped; nothing is written to extension storage (no storage permission).
 
-import { checkInjection, sanitizeEntries, alreadySaved } from './decide.js';
+import { checkInjection, sanitizeEntries, sanitizeVaults, alreadySaved } from './decide.js';
 import { originOfUrl, hostOf } from './origin.js';
 import { pageAgent } from './page.js';
 
@@ -67,17 +67,29 @@ async function runInMainFrame(tabId, origin, action, data) {
   return checkInjection(results, origin);
 }
 
-/** The vault state, then the logins registered for the exact origin of `tab`. */
+/**
+ * The vault state, then the logins registered for the exact origin of `tab`. With several
+ * vaults (ADR 0085): `vaults` names each one with its state, and each login carries its
+ * vault; a locked vault is never asked.
+ */
 export async function listForTab(tab) {
   const origin = tabOrigin(tab);
   if (!origin) return { ok: false, error: 'unsupported_page' };
   const status = await ask({ type: 'status' });
   if (!status.ok) return status;
-  if (status.state === 'absent') return { ok: false, error: 'no_vault', origin };
-  if (status.state !== 'unlocked') return { ok: false, error: 'locked', origin };
+  // Without the vault registry the host names no vault, and the answers are those of before.
+  const vaults = sanitizeVaults(status.vaults);
+  const named = vaults.length > 0 ? { vaults } : {};
+  if (status.state === 'absent') return { ok: false, error: 'no_vault', origin, ...named };
+  if (status.state !== 'unlocked') return { ok: false, error: 'locked', origin, ...named };
   const found = await ask({ type: 'match', origin });
-  if (!found.ok) return { ...found, origin };
-  return { ok: true, origin, entries: sanitizeEntries(found.entries), truncated: found.truncated === true };
+  if (!found.ok) return { ...found, origin, ...named };
+  return { ok: true, origin, ...named, entries: sanitizeEntries(found.entries), truncated: found.truncated === true };
+}
+
+/** `message` for the vault of `where`, when it names one. */
+function inVault(message, where) {
+  return where && typeof where.vault === 'string' ? { ...message, vault: where.vault } : message;
 }
 
 /**
@@ -90,7 +102,8 @@ export async function fillForTab(tab, entry) {
   if (!origin) return { ok: false, error: 'unsupported_page' };
   const probe = await runInMainFrame(tab.id, origin, 'inspect');
   if (!probe.ok) return { ok: false, error: probe.reason };
-  const login = await ask({ type: 'fill', origin, locker: entry.locker, id: entry.id });
+  // The login is asked to the vault that proposed it, never to another one.
+  const login = await ask(inVault({ type: 'fill', origin, locker: entry.locker, id: entry.id }, entry));
   if (!login.ok) return { ok: false, error: login.error };
   if (typeof login.password !== 'string') return { ok: false, error: 'host_error' };
   const done = await runInMainFrame(tab.id, origin, 'fill', {
@@ -131,16 +144,19 @@ export async function useGeneratedForTab(tab, password) {
 
 /**
  * Saves a new login for `origin`, unless one with the same user name already exists there.
+ * With several vaults, `where` names the vault to save into: the check and the save are for
+ * that vault only.
  * @param {string} origin
  * @param {{title?: string, username: string | null, password: string}} login
+ * @param {{vault: string} | null} [where]
  */
-export async function saveLogin(origin, login) {
+export async function saveLogin(origin, login, where = null) {
   if (!originOfUrl(origin)) return { ok: false, error: 'unsupported_page' };
   if (typeof login.password !== 'string' || login.password === '') return { ok: false, error: 'no_password' };
-  const found = await ask({ type: 'match', origin });
+  const found = await ask(inVault({ type: 'match', origin }, where));
   if (!found.ok) return found;
   if (alreadySaved(sanitizeEntries(found.entries), login.username)) return { ok: false, error: 'exists' };
-  const message = { type: 'save', origin, password: login.password };
+  const message = inVault({ type: 'save', origin, password: login.password }, where);
   if (login.title) message.title = login.title;
   if (login.username) message.username = login.username;
   return ask(message);
