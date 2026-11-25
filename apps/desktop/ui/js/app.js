@@ -12,6 +12,7 @@ import { applyTheme, loadPrefs } from "./prefs.js";
 import { ROLE_NAMES, ServerView, WRITING_ROLES } from "./server.js";
 import { GeneratorView, SettingsView } from "./tools.js";
 import { VaultView } from "./vault.js";
+import { VaultBar } from "./vaults.js";
 
 /** @typedef {import("./api.js").ApiError} ApiError */
 /** @typedef {import("./api.js").Status} Status */
@@ -53,11 +54,41 @@ function onGlobalError(e) {
     void poll();
     return true;
   }
-  if (["core_lost", "core_not_running", "untrusted_core", "unauthorized", "connection"].includes(e.code)) {
+  if (
+    ["core_lost", "core_not_running", "untrusted_core", "unauthorized", "connection", "vault_missing", "wrong_vault", "registry"].includes(
+      e.code,
+    )
+  ) {
     showWaiting(e);
     return true;
   }
   return false;
+}
+
+// --- Several vaults (ADR 0085) -----------------------------------------------------------
+
+const vaultBar = new VaultBar({ onPick: (id) => void switchVault(id) });
+
+/**
+ * Shows another vault: everything shown of the previous one is wiped, then the screen of
+ * the new one comes from its state. Nothing is locked or unlocked by that.
+ * @param {string} id
+ * @returns {Promise<boolean>} Whether that vault is now the one shown.
+ */
+async function switchVault(id) {
+  try {
+    await vaultBar.select(id);
+  } catch (e) {
+    const err = /** @type {ApiError} */ (e);
+    announce(err.message, 6000);
+    void vaultBar.refresh();
+    return false;
+  }
+  userLocked = false;
+  resetWaiting();
+  showWaiting(null);
+  await poll();
+  return true;
 }
 
 /** @type {{ locker: string, folder: string } | null} Folder where the secret being created goes (ADR 0076). */
@@ -156,6 +187,15 @@ const palette = new Palette({
     markNav("secrets", "tous");
     void vault.reveal(entry);
   },
+  vaultName: () => vaultBar.activeAlias(),
+  onOpenIn: (id, entry) => {
+    void switchVault(id).then((shown) => {
+      if (!shown || currentScreen() !== "coffre") return;
+      showView("secrets");
+      markNav("secrets", "tous");
+      void vault.reveal(entry);
+    });
+  },
   actions: () => [
     { label: "Nouveau secret", icon: "plus", keys: "Ctrl N", run: () => newSecret() },
     { label: "Générateur de mots de passe", icon: "generateur", keys: "Ctrl G", run: () => goTo("generateur") },
@@ -197,6 +237,7 @@ function showWaiting(e) {
 
 async function poll() {
   clearTimeout(pollTimer);
+  void vaultBar.refresh();
   try {
     const s = await api.status();
     const before = status?.state;
@@ -580,11 +621,16 @@ async function lockNow() {
 }
 byId("bouton-verrouiller").addEventListener("click", () => void lockNow());
 
-byId("attente-reessayer").addEventListener("click", () => {
+/** Puts the waiting screen back to « Connexion au noyau… ». */
+function resetWaiting() {
   byId("attente-titre").textContent = "Connexion au noyau…";
   byId("attente-texte").hidden = false;
   showError(byId("attente-erreur"), null);
   byId("attente-reessayer").hidden = true;
+}
+
+byId("attente-reessayer").addEventListener("click", () => {
+  resetWaiting();
   void poll();
 });
 

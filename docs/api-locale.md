@@ -2148,15 +2148,16 @@ jamais une adresse ni une étiquette.
 
 Décision : ADR 0085 (accepté). Première étape : registre des coffres, un noyau par coffre,
 ligne de commande. Deuxième étape : création d'un coffre de plus par un point de connexion
-provisoire (§ 25.9). Le format du coffre, son annexe, le protocole de synchronisation et la
+provisoire (§ 25.9). Troisième étape : application de poste
+(§ 25.10). Le format du coffre, son annexe, le protocole de synchronisation et la
 suite cryptographique ne changent pas. Code : `crates/hirzla-core/src/registry.rs`
 (registre), `client/router.rs` (aiguillage), `client/creation.rs` (création),
 `transport.rs`, `daemon.rs`, `service.rs` ; `apps/cli`.
 
-L'application de poste, l'extension, l'hôte natif, l'application Android et `sdk/go`
-n'apprennent pas l'aiguillage dans cette étape : ils parlent au point de connexion par défaut
-(§ 2) et lancent le noyau sans argument, comme avant. Le § 25.5 dit comment la ligne de
-commande cohabite avec eux.
+Troisième étape : l'application de poste apprend l'aiguillage (§ 25.10). L'extension, l'hôte
+natif, l'application Android et `sdk/go` ne le connaissent pas encore : ils parlent au point
+de connexion par défaut (§ 2) et lancent le noyau sans argument, comme avant. Le § 25.5 dit
+comment les clients qui aiguillent cohabitent avec eux.
 
 ### 25.1 Registre des coffres
 
@@ -2365,7 +2366,10 @@ contient ni alias, ni chemin, ni identifiant de coffre.
 3. **Écritures concurrentes du registre** : la dernière l'emporte, sans verrou.
 4. **Alias absent de `VaultInfo`** (§ 25.4, point 6), alors que l'ADR 0085 § 4 le nomme.
 5. **Longueur du chemin de la socket sous macOS** : `$TMPDIR/hirzla/core-<id>.sock` approche
-   la limite de 104 octets de `sun_path` ; à mesurer sur un poste réel.
+   la limite de 104 octets de `sun_path`. Mesuré sur un poste réel (macOS 27, `TMPDIR` par
+   défaut de 49 octets) : 98 octets, le noyau d'un coffre écoute et répond. La marge est de
+   5 octets : un `TMPDIR` plus long ferait échouer le lancement ; un nom plus court reste à
+   décider.
 6. **`RLIMIT_MEMLOCK`** (ADR 0054) et nombre de noyaux ouverts à la fois sous Linux : non
    mesuré.
 
@@ -2445,3 +2449,70 @@ sans `--vault-id` (§ 25.3), avec trois différences :
 
 Journal : rien de nouveau hors `vault_refused reason=exists` ; ni alias, ni chemin, ni
 identifiant.
+
+### 25.10 Application de poste
+
+Décision : ADR 0085 § 4. L'API locale ne change pas : l'application est un client de plus de
+l'aiguillage (§ 25.5). Code : `apps/desktop/src-tauri/src/link.rs`, `vaults.rs`, `tray.rs` ;
+`apps/desktop/ui/js/vaults.js`.
+
+**Choix des coffres.**
+
+1. `HIRZLA_SOCKET` ou `HIRZLA_VAULT` défini : **comme avant** (§ 25.5, point 1), un seul
+   lien, au point de connexion de `HIRZLA_SOCKET` ou à défaut au point par défaut ; le
+   registre n'est ni lu ni écrit, aucun sélecteur n'est montré.
+2. Sinon l'application lit le registre (avec l'adoption du § 25.5) et tient **un lien par
+   coffre inscrit**, dans l'ordre des rangs : une connexion par noyau, à la route de l'entrée
+   (§ 25.5), vérifiée par `VaultInfo`.
+3. Registre vide et aucun coffre à l'emplacement par défaut : un seul lien, au point de
+   connexion par défaut ; l'écran de création y envoie `Init` comme avant, et le coffre créé
+   est adopté à la lecture suivante du registre.
+
+**Démarrage et durcissement.** À sa première requête, l'application joint **tous** les
+noyaux des coffres inscrits : elle lance ceux qui ne tournent pas (un coffre verrouillé
+garde son noyau, ADR 0085 § 3) et attend de chacun un `Status` accepté, puis seulement se
+durcit (§ 9, § 25.5). Un coffre dont le fichier manque, ou dont le noyau refuse, n'empêche
+pas les autres : il est montré « indisponible ».
+
+**Registre relu.** L'application relit le registre à chaque rafraîchissement de la liste des
+coffres (toutes les 3 secondes, fenêtre visible). Entrée nouvelle : un lien de plus. Entrée
+retirée : son lien est fermé (le noyau n'est pas arrêté par l'application). Alias ou coffre
+par défaut changés : repris tels quels. Un registre refusé (§ 25.1) laisse les liens en
+place. Sous Linux, un lien ouvert **après** le durcissement ne peut pas être reconnu de son
+noyau : le coffre est montré indisponible, avec la demande de redémarrer l'application
+(`core_lost`).
+
+**Coffre actif.** Un seul coffre est **actif** : toutes les commandes de l'interface
+(déverrouillage, liste, fiche, réglages, mode Serveur…) vont à son noyau. Au démarrage, c'est
+le coffre par défaut du registre, sinon le premier. Changer de coffre actif efface ce que
+l'interface et le processus tenaient du précédent (fiche affichée, presse-papiers, mot de
+passe généré, fichiers choisis en attente) ; il ne verrouille ni ne déverrouille rien :
+chaque coffre se verrouille seul (ADR 0085 § 5).
+
+**Sélecteur.** Avec au moins deux coffres inscrits, une barre montre chaque coffre sur tous
+les écrans : alias, état (ouvert, verrouillé, à créer, indisponible), coffre actif. L'alias
+vient du registre : il est lisible sans déverrouiller (§ 25.1).
+
+**Recherche commune.** L'accès rapide (Ctrl+K) interroge, en plus du coffre actif, chaque
+**autre coffre ouvert** dès qu'un texte est saisi : `List` avec la recherche, corbeille
+exclue, au plus 8 résultats par coffre. Chaque résultat porte l'alias de son coffre ; le
+choisir rend ce coffre actif puis montre la fiche. Un coffre verrouillé n'est ni interrogé ni
+déverrouillé ; un noyau qui ne répond pas est passé sous silence. Cette recherche est une
+activité pour le verrouillage automatique des coffres interrogés.
+
+**Zone de notification** (ADR 0071). Avec plusieurs coffres : l'infobulle donne le nombre de
+coffres ouverts ; le menu liste chaque coffre (alias et état, lignes inactives) entre
+« Ouvrir Hirzla » et « Tout verrouiller », qui verrouille **tous** les coffres. Avec un seul
+coffre, le menu et l'infobulle ne changent pas. Aucun titre de secret ni nom de casier n'y
+figure.
+
+**Fenêtre unique** (§ 18, `ShowApp`, `AppPoll`). L'application envoie `AppPoll` au noyau de
+chaque coffre toutes les 2 secondes, ce qui garde aussi chaque connexion ouverte. Un second
+lancement envoie `ShowApp` aux noyaux **en marche** des coffres inscrits, sans en lancer
+aucun, et s'arrête dès que l'un répond qu'une application écoute.
+
+**À la fermeture** (« Quitter ») : `Lock` à chaque noyau, comme avant pour le coffre unique.
+
+**Hors de cette étape.** Inscrire, créer, renommer ou retirer un coffre se fait par la
+ligne de commande (§ 25.6) ; l'application les voit à la lecture suivante du registre. La
+copie d'un secret d'un coffre à un autre n'existe pas (ADR 0085 § 6).
