@@ -139,6 +139,26 @@ pub fn id_hex(id: &Id16) -> String {
     hex(id)
 }
 
+/// Reads a vault identifier written by [`id_hex`]: exactly 32 lower-case hexadecimal
+/// digits. `None` for anything else.
+#[must_use]
+pub fn parse_id_hex(s: &str) -> Option<Id16> {
+    let digit = |c: u8| match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        _ => None,
+    };
+    let (pairs, rest) = s.as_bytes().as_chunks::<2>();
+    if pairs.len() != 16 || !rest.is_empty() {
+        return None;
+    }
+    let mut id = [0u8; 16];
+    for (out, &[high, low]) in id.iter_mut().zip(pairs) {
+        *out = (digit(high)? << 4) | digit(low)?;
+    }
+    Some(id)
+}
+
 /// Bytes in lower-case hexadecimal: identifiers and random name parts, never a secret.
 #[must_use]
 pub fn hex(bytes: &[u8]) -> String {
