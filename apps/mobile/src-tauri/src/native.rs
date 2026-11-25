@@ -1,6 +1,6 @@
 //! The Kotlin layer of the application (`app.hirzla.mobile.HirzlaPlugin`, ADR 0080 § 8):
-//! the private directory, `BiometricPrompt`, the sensitive clipboard and the answer to an
-//! autofill request. Registered as a mobile plugin and called from Rust only: no capability
+//! the private directory, the start of a core slot, `BiometricPrompt`, the sensitive
+//! clipboard and the answer to an autofill request. Registered as a mobile plugin and called from Rust only: no capability
 //! grants it to the web view.
 
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,10 @@ use tauri::plugin::TauriPlugin;
 use tauri::{Manager, Runtime};
 use zeroize::Zeroizing;
 
+use hirzla_core::slots::SlotStart;
+
 use crate::error::MobileError;
+use crate::vaults::Platform;
 
 /// Handle on the Kotlin plugin, kept in the application's state.
 pub struct Native<R: Runtime> {
@@ -39,6 +42,13 @@ pub fn plugin<R: Runtime>() -> TauriPlugin<R> {
 #[derive(Deserialize)]
 struct FilesDir {
     path: String,
+}
+
+#[derive(Serialize)]
+struct StartCore<'a> {
+    slot: u8,
+    mode: &'a str,
+    vault_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +134,31 @@ impl<R: Runtime> Native<R> {
                 path: String::new(),
             }
             .path;
+            Err(MobileError::Native)
+        }
+    }
+
+    /// Asks the system to start the core of `slot`, in its own process
+    /// (`docs/api-locale.md` § 25.13). A slot already started ignores the request.
+    ///
+    /// # Errors
+    /// [`MobileError::Native`]: the slot does not exist, or the system refuses (application
+    /// in the background).
+    pub fn start_core(&self, slot: u8, start: &SlotStart) -> Result<(), MobileError> {
+        let payload = StartCore {
+            slot,
+            mode: start.mode(),
+            vault_id: start.vault_id(),
+        };
+        #[cfg(target_os = "android")]
+        {
+            self.run::<Done>("startCore", payload)
+                .map(drop)
+                .map_err(|_| MobileError::Native)
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            let _ = (payload.slot, payload.mode, payload.vault_id);
             Err(MobileError::Native)
         }
     }
@@ -267,5 +302,15 @@ impl<R: Runtime> Native<R> {
             let _ = (payload.text, payload.clear_s);
             Err(MobileError::Native)
         }
+    }
+}
+
+impl<R: Runtime> Platform for Native<R> {
+    fn files_dir(&self) -> Result<std::path::PathBuf, MobileError> {
+        Native::files_dir(self)
+    }
+
+    fn start_core(&self, slot: u8, start: &SlotStart) -> Result<(), MobileError> {
+        Native::start_core(self, slot, start)
     }
 }

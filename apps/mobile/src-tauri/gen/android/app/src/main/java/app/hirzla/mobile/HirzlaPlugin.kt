@@ -41,10 +41,18 @@ class FillArgs {
   var password: String? = null
 }
 
+@InvokeArg
+class StartCoreArgs {
+  var slot: Int = -1
+  var mode: String = ""
+  var vault_id: String? = null
+}
+
 /**
  * The Kotlin layer of the interface (ADR 0080 § 8), called by the application's Rust code
- * only (no capability grants it to the web view): private directory, BiometricPrompt,
- * sensitive clipboard and the answer to an autofill request. No key and no vault access here.
+ * only (no capability grants it to the web view): private directory, start of a core slot,
+ * BiometricPrompt, sensitive clipboard and the answer to an autofill request. No key and no
+ * vault access here.
  */
 @TauriPlugin
 class HirzlaPlugin(private val activity: Activity) : Plugin(activity) {
@@ -55,6 +63,30 @@ class HirzlaPlugin(private val activity: Activity) : Plugin(activity) {
     val ret = JSObject()
     ret.put("path", activity.filesDir.absolutePath)
     invoke.resolve(ret)
+  }
+
+  /**
+   * Starts the core of a slot, in its own process (docs/api-locale.md § 25.13). A slot
+   * already started ignores the request: the caller connects, and checks the vault served.
+   * The mode and the identifier are checked by the core itself.
+   */
+  @Command
+  fun startCore(invoke: Invoke) {
+    val args = invoke.parseArgs(StartCoreArgs::class.java)
+    val service = CoreService.SLOTS.getOrNull(args.slot)
+    if (service == null) {
+      invoke.reject("slot")
+      return
+    }
+    try {
+      val intent = Intent(activity, service).putExtra(CoreService.EXTRA_MODE, args.mode)
+      args.vault_id?.let { intent.putExtra(CoreService.EXTRA_VAULT_ID, it) }
+      activity.startService(intent)
+      invoke.resolve()
+    } catch (e: Exception) {
+      // The system refuses to start a service for an application in the background.
+      invoke.reject("start")
+    }
   }
 
   /**

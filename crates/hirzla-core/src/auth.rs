@@ -95,6 +95,9 @@ impl ClientProfile {
                 | Request::Generate { .. }
                 | Request::GenerateWith { .. }
                 | Request::ShowApp
+                // To check which vault a core serves (§ 25.11); the daemon reduces the
+                // answer to the vault identifier for this profile.
+                | Request::VaultInfo
                 | Request::Match { .. }
                 | Request::Fill { .. } => true,
                 // A new login proposed by the extension: a password secret, bound to at
@@ -384,6 +387,7 @@ mod tests {
                 spec: crate::generator::Profile::Default.spec(),
             },
             Request::ShowApp,
+            Request::VaultInfo,
             Request::Match {
                 origin: "https://a.example".into(),
             },

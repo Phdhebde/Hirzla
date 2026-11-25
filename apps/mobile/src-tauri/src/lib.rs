@@ -1,12 +1,14 @@
 //! `hirzla-mobile` — the Android application (ADR 0080 § 8), interface process.
 //!
 //! A client of the core, like the desktop application (ADR 0007, `docs/api-locale.md`): it
-//! holds no key. The core runs apart, in the `:core` process (`apps/mobile/core`); this
-//! process reaches it over the Unix socket of the application's private directory. The web
+//! holds no key. The cores run apart, one process per vault (`apps/mobile/core`, ADR 0085
+//! step 5); this process reaches each over a Unix socket of the application's private
+//! directory. The web
 //! view talks only to this process, through the commands of [`commands`], under a strict
 //! content security policy, with no network access (ADR 0024).
 //!
-//! - [`link`]: the connection to the core;
+//! - [`link`]: a connection to one core;
+//! - [`vaults`]: the vaults of the phone, the core of each in its own slot (ADR 0085);
 //! - [`native`]: the Kotlin layer (`HirzlaPlugin`): private directory, `BiometricPrompt`,
 //!   sensitive clipboard; never reachable from the web view;
 //! - [`commands`]: what the web view may ask, checked strictly;
@@ -18,6 +20,7 @@ pub mod commands;
 pub mod error;
 pub mod link;
 pub mod native;
+pub mod vaults;
 
 /// Whether the web view may show `url`: only the application's own pages, served by Tauri
 /// (`http(s)://tauri.localhost` on Android, `tauri://localhost` elsewhere).
@@ -48,6 +51,9 @@ pub fn run() -> Result<(), tauri::Error> {
         .manage(commands::AppState::default())
         .invoke_handler(tauri::generate_handler![
             commands::app_status,
+            commands::list_vaults,
+            commands::select_vault,
+            commands::lock_all,
             commands::create_vault,
             commands::unlock,
             commands::unlock_fingerprint,

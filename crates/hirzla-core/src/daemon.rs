@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use crate::auth::authorize_same_app;
 use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
-use crate::events::{Event, Log, Refusal};
+use crate::events::{Event, LockReason, Log, Refusal, VaultRefusal};
 use crate::folders::proto::{is_folder_request, FolderReply, FolderRequest};
 use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
 use crate::locker_export::service as export_service;
@@ -37,7 +37,7 @@ use crate::release::{self, PublisherKeys};
 use crate::selfmode::import;
 use crate::selfmode::proto::{is_self_request, SelfCode, SelfReply, SelfRequest, SystemEventKind};
 use crate::server_mode::proto::{is_server_request, ServerCode, ServerReply, ServerRequest};
-use crate::service::{Config, Core};
+use crate::service::{vault_file_refusal, Config, Core};
 use crate::totp::proto::{is_totp_request, TotpReply, TotpRequest};
 use crate::transport::{Connection, Endpoint, Listener};
 
@@ -53,6 +53,9 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const REFUSAL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Period of the automatic lock check.
 const TICK: Duration = Duration::from_millis(250);
+/// Time left to the client of a provisional core to connect before that core stops
+/// (`docs/api-locale.md` § 25.9).
+const PROVISIONAL_GRACE: Duration = Duration::from_secs(30);
 
 /// Which clients the core admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +77,12 @@ pub struct Options {
     pub endpoint: Endpoint,
     /// The vault file.
     pub vault: PathBuf,
+    /// The registered vault this core is started for (`--vault-id`, `docs/api-locale.md`
+    /// § 25.3): the file must carry this identifier, at start and at every opening.
+    pub vault_id: Option<Id16>,
+    /// Provisional core (`--provisional`, `docs/api-locale.md` § 25.9): started to create a
+    /// vault at a path where nothing exists, and stopped with its last client.
+    pub provisional: bool,
     /// Log file; standard error when absent.
     pub log: Option<PathBuf>,
     /// Allowed client executables; the default list when absent.
@@ -97,8 +106,8 @@ pub struct Options {
     pub client_manifest: Option<PathBuf>,
 }
 
-const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--log FICHIER] \
-[--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
+const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--vault-id HEX] \
+[--provisional] [--log FICHIER] [--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
 [--hornn-issuer HEX --hornn-key FICHIER] [--client-signatures required|off] \
 [--publisher-key FICHIER] [--client-manifest FICHIER]";
 
@@ -125,13 +134,16 @@ pub fn default_vault_path() -> Option<PathBuf> {
 }
 
 /// Parses the arguments of `hirzla-core`. Environment fallbacks: `HIRZLA_SOCKET`,
-/// `HIRZLA_VAULT`.
+/// `HIRZLA_VAULT`. With `--vault-id` and no endpoint given, the core listens on the endpoint
+/// of that vault (`docs/api-locale.md` § 25.2).
 ///
 /// # Errors
 /// A message for the user, in French.
 pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, String> {
     let mut endpoint = std::env::var_os("HIRZLA_SOCKET");
     let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
+    let mut vault_id: Option<Id16> = None;
+    let mut provisional = false;
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
     let mut allow_browser: Option<Vec<PathBuf>> = None;
@@ -150,6 +162,15 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         match arg.to_str() {
             Some("--socket") => endpoint = Some(value("--socket")?),
             Some("--vault") => vault = Some(PathBuf::from(value("--vault")?)),
+            Some("--vault-id") => {
+                let v = value("--vault-id")?;
+                vault_id = Some(
+                    v.to_str()
+                        .and_then(parse_id16)
+                        .ok_or_else(|| "--vault-id attend 32 chiffres hexadécimaux.".to_owned())?,
+                );
+            }
+            Some("--provisional") => provisional = true,
             Some("--log") => log = Some(PathBuf::from(value("--log")?)),
             Some("--allow-exe") => allow
                 .get_or_insert_with(Vec::new)
@@ -208,9 +229,22 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             _ => return Err(format!("argument inconnu. {USAGE}")),
         }
     }
-    let endpoint = match endpoint {
-        Some(e) => Endpoint::parse(&e).map_err(|_| "point de connexion invalide.".to_owned())?,
-        None => Endpoint::default_for_user()
+    // A provisional core is told where to listen and where to create: it has no vault
+    // identifier yet, and never the default vault location by omission (§ 25.9).
+    if provisional && (vault_id.is_some() || endpoint.is_none() || vault.is_none()) {
+        return Err(format!(
+            "--provisional exige --socket et --vault, et ne se combine pas avec --vault-id. \
+             {USAGE}"
+        ));
+    }
+    let endpoint = match (endpoint, &vault_id) {
+        (Some(e), _) => {
+            Endpoint::parse(&e).map_err(|_| "point de connexion invalide.".to_owned())?
+        }
+        // The core of a registered vault listens on the endpoint of that vault.
+        (None, Some(id)) => Endpoint::for_vault(id)
+            .map_err(|_| "impossible de déterminer le point de connexion.".to_owned())?,
+        (None, None) => Endpoint::default_for_user()
             .map_err(|_| "impossible de déterminer le point de connexion.".to_owned())?,
     };
     let vault = vault.or_else(default_vault_path).ok_or_else(|| {
@@ -225,6 +259,8 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         clients: ClientPolicy::Executables,
         endpoint,
         vault,
+        vault_id,
+        provisional,
         log,
         allow,
         allow_browser,
@@ -320,16 +356,23 @@ pub fn main() -> ExitCode {
     }
 }
 
-/// Entry point of the core on Android (ADR 0080 § 2), called by the service of the `:core`
-/// process with the application's private directory. Listens on `core/core.sock` under it,
-/// keeps the vault in `coffre.hirzla` and the log in `core/core.log`, and admits the processes
-/// of the application. Returns only if the core cannot start.
+/// Entry point of the core on Android (ADR 0080 § 2, `docs/api-locale.md` § 25.13), called
+/// by the service of the process of `slot` with the application's private directory and how
+/// to start. The core derives everything from its slot ([`crate::slots`]): the vault file,
+/// the endpoint, the log `core/core-<slot>.log`. It admits the processes of the application.
+/// Returns only if the core cannot start.
 ///
 /// # Errors
 /// A message in French. A delivery build refuses to start: the check of the APK's own signing
 /// certificate (ADR 0080 § 2) is not written yet, and the core fails closed.
 #[cfg(target_os = "android")]
-pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
+pub fn run_android(
+    files_dir: &std::path::Path,
+    slot: u8,
+    start: &crate::slots::SlotStart,
+) -> Result<(), String> {
+    use crate::slots::{SlotLayout, SlotStart};
+
     if release::DELIVERY_BUILD {
         return Err(
             "la vérification du certificat de l'application n'est pas encore en place.".to_owned(),
@@ -338,16 +381,26 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
     let hardening = platform::harden_process();
     // `getFilesDir()` is under `/data/user/0`, a symbolic link to `/data/data` set by the
     // system; the vault refuses a path through a link, so resolve it once here.
-    let files_dir = std::fs::canonicalize(files_dir)
+    let layout = SlotLayout::resolve(files_dir)
         .map_err(|_| "répertoire de l'application illisible.".to_owned())?;
-    let core_dir = files_dir.join("core");
-    let endpoint = Endpoint::parse(core_dir.join("core.sock").as_os_str())
-        .map_err(|_| "point de connexion invalide.".to_owned())?;
+    let no_slot = || "emplacement de noyau invalide.".to_owned();
+    // The first vault lives in slot 0 only: anywhere else it would be a second default
+    // endpoint on another file.
+    if matches!(start, SlotStart::First) && slot != 0 {
+        return Err(no_slot());
+    }
     let options = Options {
         clients: ClientPolicy::SameApp,
-        endpoint,
-        vault: files_dir.join("coffre.hirzla"),
-        log: Some(core_dir.join("core.log")),
+        endpoint: layout
+            .endpoint(slot, start)
+            .map_err(|_| "point de connexion invalide.".to_owned())?,
+        vault: layout.vault(slot).ok_or_else(no_slot)?,
+        vault_id: match start {
+            SlotStart::Vault(id) => Some(*id),
+            SlotStart::First | SlotStart::New => None,
+        },
+        provisional: matches!(start, SlotStart::New),
+        log: Some(layout.log(slot).ok_or_else(no_slot)?),
         allow: None,
         allow_browser: None,
         auto_lock: None,
@@ -357,7 +410,8 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
         client_manifest: None,
     };
     // The listener creates the directory 0700; the log needs it first.
-    std::fs::create_dir_all(&core_dir).map_err(|_| "répertoire du noyau illisible.".to_owned())?;
+    std::fs::create_dir_all(layout.core_dir())
+        .map_err(|_| "répertoire du noyau illisible.".to_owned())?;
     let log = open_log(options.log.as_ref())
         .map(|l| Arc::new(Log::new(l)))
         .map_err(|_| "impossible d'ouvrir le journal.".to_owned())?;
@@ -415,6 +469,17 @@ fn cleanup(endpoint: &Endpoint) {
     }
 }
 
+/// Stops the core without a `Shutdown` request, with the same effects: the vault locked, the
+/// socket removed.
+fn stop(core: &Mutex<Core>, log: &Log, endpoint: &Endpoint) -> ! {
+    core.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .lock(LockReason::Shutdown);
+    log.record(Event::Stopped);
+    cleanup(endpoint);
+    std::process::exit(0);
+}
+
 /// Runs the core until a `Shutdown` request.
 ///
 /// # Errors
@@ -456,6 +521,36 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             ))))
         }
     };
+    // The core of a registered vault checks, before it listens, that the file is that vault
+    // (`docs/api-locale.md` § 25.3): the registry that named it is not authenticated.
+    if let Some(expected) = &options.vault_id {
+        if let Some(reason) = vault_file_refusal(&options.vault, expected) {
+            log.record(Event::VaultRefused { reason });
+            return Err(match reason {
+                VaultRefusal::Absent => "aucun coffre à l'emplacement inscrit.",
+                VaultRefusal::Unreadable => {
+                    "le fichier à l'emplacement inscrit n'est pas un coffre lisible."
+                }
+                VaultRefusal::IdMismatch | VaultRefusal::Exists => {
+                    "le coffre à cet emplacement n'est pas celui qui est inscrit."
+                }
+            }
+            .to_owned());
+        }
+    }
+    // A provisional core only creates (§ 25.9): with anything at the vault path it would
+    // become a second core on an existing vault.
+    if options.provisional
+        && !matches!(
+            std::fs::symlink_metadata(&options.vault),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound
+        )
+    {
+        log.record(Event::VaultRefused {
+            reason: VaultRefusal::Exists,
+        });
+        return Err("un fichier existe déjà là où le coffre doit être créé.".to_owned());
+    }
     let mut listener = Listener::bind(&options.endpoint).map_err(|e| match e {
         crate::transport::TransportError::InUse => {
             "un noyau est déjà à l'écoute sur ce point de connexion.".to_owned()
@@ -480,14 +575,18 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         required: gate.signatures_required(),
         kind: codesign::SIGNATURE_KIND,
     });
-    let core = Arc::new(Mutex::new(Core::new(
+    let mut core = Core::new(
         Config {
             vault_path: options.vault.clone(),
             auto_lock: options.auto_lock,
             hardening,
         },
         Arc::clone(log),
-    )));
+    );
+    if let Some(expected) = options.vault_id {
+        core.expect_vault(expected);
+    }
+    let core = Arc::new(Mutex::new(core));
 
     {
         // Sleep and session lock, where the system tells (ADR 0033); elsewhere the tick
@@ -522,6 +621,24 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     let active = Arc::new(AtomicUsize::new(0));
     let refusing = Arc::new(AtomicUsize::new(0));
     let endpoint = Arc::new(options.endpoint.clone());
+    let provisional = options.provisional;
+    // A provisional core does not outlive its client (§ 25.9): it stops when its last
+    // connection closes, or when no client was admitted soon after it started listening.
+    let served = Arc::new(AtomicBool::new(false));
+    if provisional {
+        let (core, log, endpoint, served) = (
+            Arc::clone(&core),
+            Arc::clone(log),
+            Arc::clone(&endpoint),
+            Arc::clone(&served),
+        );
+        std::thread::spawn(move || {
+            std::thread::sleep(PROVISIONAL_GRACE);
+            if !served.load(Ordering::SeqCst) {
+                stop(&core, &log, &endpoint);
+            }
+        });
+    }
     loop {
         let (conn, peer) = match listener.accept() {
             Ok(x) => x,
@@ -551,6 +668,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             continue;
         }
         log.record(Event::ConnectionAccepted { pid: peer.pid });
+        served.store(true, Ordering::SeqCst);
         let core = Arc::clone(&core);
         let log = Arc::clone(log);
         let active = Arc::clone(&active);
@@ -558,7 +676,9 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         let agent = agent.clone();
         std::thread::spawn(move || {
             serve(conn, &core, agent.as_deref(), &log, &endpoint, profile);
-            active.fetch_sub(1, Ordering::SeqCst);
+            if active.fetch_sub(1, Ordering::SeqCst) == 1 && provisional {
+                stop(&core, &log, &endpoint);
+            }
         });
     }
 }
@@ -964,6 +1084,24 @@ fn serve_folder(
     write_frame(conn, &body).is_ok()
 }
 
+/// What a profile receives of a reply. The browser profile learns from `VaultInfo` only
+/// which vault the core serves (`docs/api-locale.md` § 25.4): never its mode nor its server.
+fn for_profile(
+    profile: ClientProfile,
+    result: Result<Reply, ErrorReply>,
+) -> Result<Reply, ErrorReply> {
+    match result {
+        Ok(Reply::VaultInfo(info)) if profile != ClientProfile::Full => {
+            Ok(Reply::VaultInfo(crate::proto::VaultInfo {
+                vault_id: info.vault_id,
+                mode: None,
+                server: None,
+            }))
+        }
+        other => other,
+    }
+}
+
 /// Refuses a Self-mode request from a client whose profile does not permit it.
 fn refuse_self(conn: &mut Connection, log: &Log, frame: &[u8]) -> bool {
     let (id, version, code) = match SelfRequest::decode_versioned(frame) {
@@ -1115,7 +1253,7 @@ fn serve(
                     .unwrap_or_else(PoisonError::into_inner)
                     .handle(request);
                 let ok = result.is_ok();
-                (id, version, result, shutdown && ok)
+                (id, version, for_profile(profile, result), shutdown && ok)
             }
             Err((id, version, code)) => {
                 log.record(Event::BadMessage);
@@ -1304,6 +1442,95 @@ mod tests {
         ]))
         .is_err());
         assert!(load_hornn([0; 16], &PathBuf::from("/nonexistent/hornn.key")).is_err());
+    }
+
+    /// `--vault-id` (`docs/api-locale.md` § 25.3): the core of one registered vault. Without
+    /// an endpoint it listens on the endpoint of that vault; an endpoint given wins.
+    #[test]
+    fn parses_the_vault_identifier() {
+        let hex = "000102030405060708090a0b0c0d0e0f";
+        let mut id = [0u8; 16];
+        for (i, b) in id.iter_mut().enumerate() {
+            *b = u8::try_from(i).unwrap();
+        }
+        let plain = parse_args(args(&["--vault", "v"])).unwrap();
+        assert_eq!(plain.vault_id, None);
+        let o = parse_args(args(&["--vault", "v", "--vault-id", hex])).unwrap();
+        assert_eq!(o.vault_id, Some(id));
+        // The environment may name an endpoint (`HIRZLA_SOCKET`), as for any core.
+        if std::env::var_os("HIRZLA_SOCKET").is_none() {
+            assert_eq!(o.endpoint, Endpoint::for_vault(&id).unwrap());
+            assert_ne!(o.endpoint, plain.endpoint);
+            assert_eq!(plain.endpoint, Endpoint::default_for_user().unwrap());
+        }
+        let given = Endpoint::for_vault(&[0xee; 16]).unwrap();
+        let o = parse_args(args(&[
+            "--vault-id",
+            hex,
+            "--socket",
+            &given.display(),
+            "--vault",
+            "v",
+        ]))
+        .unwrap();
+        assert_eq!((o.endpoint, o.vault_id), (given, Some(id)));
+        for bad in ["", "00", "zz0102030405060708090a0b0c0d0e0f", &hex[..31]] {
+            assert!(parse_args(args(&["--vault", "v", "--vault-id", bad])).is_err());
+        }
+        assert!(parse_args(args(&["--vault", "v", "--vault-id"])).is_err());
+    }
+    /// `--provisional` (`docs/api-locale.md` § 25.9): told where to listen and where to
+    /// create, never for a vault that already has an identifier.
+    #[test]
+    fn parses_the_provisional_option() {
+        let ep = Endpoint::provisional().unwrap().display();
+        assert!(!parse_args(args(&["--vault", "v"])).unwrap().provisional);
+        let o = parse_args(args(&["--socket", &ep, "--vault", "v", "--provisional"])).unwrap();
+        assert!(o.provisional);
+        assert_eq!(o.vault_id, None);
+        assert_eq!(o.endpoint.display(), ep);
+        let hex = "000102030405060708090a0b0c0d0e0f";
+        assert!(parse_args(args(&[
+            "--socket",
+            &ep,
+            "--vault",
+            "v",
+            "--provisional",
+            "--vault-id",
+            hex
+        ]))
+        .is_err());
+        // The environment may name an endpoint or a vault, as for any core.
+        if std::env::var_os("HIRZLA_SOCKET").is_none() {
+            assert!(parse_args(args(&["--vault", "v", "--provisional"])).is_err());
+        }
+        if std::env::var_os("HIRZLA_VAULT").is_none() {
+            assert!(parse_args(args(&["--socket", &ep, "--provisional"])).is_err());
+        }
+    }
+
+    /// `VaultInfo` for the browser profile (§ 25.4): the vault identifier only.
+    #[test]
+    fn the_browser_profile_learns_the_vault_identifier_only() {
+        let info = crate::proto::VaultInfo {
+            vault_id: [7; 16],
+            mode: Some(crate::proto::VaultMode::Server),
+            server: Some("hirzla://serveur.example:8443".to_owned()),
+        };
+        let full = for_profile(ClientProfile::Full, Ok(Reply::VaultInfo(info.clone())));
+        assert!(matches!(full, Ok(Reply::VaultInfo(i)) if i == info));
+        let reduced = crate::proto::VaultInfo {
+            vault_id: [7; 16],
+            mode: None,
+            server: None,
+        };
+        let seen = for_profile(ClientProfile::Browser, Ok(Reply::VaultInfo(info)));
+        assert!(matches!(seen, Ok(Reply::VaultInfo(i)) if i == reduced));
+        // Other replies and refusals pass unchanged.
+        assert!(matches!(
+            for_profile(ClientProfile::Browser, Ok(Reply::Done)),
+            Ok(Reply::Done)
+        ));
     }
 
     #[test]

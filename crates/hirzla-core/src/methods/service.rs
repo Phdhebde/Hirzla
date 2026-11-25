@@ -521,7 +521,7 @@ impl Core {
         }
         match Vault::open_with_hardware(&self.config.vault_path, rank, key, material.as_bytes()) {
             Ok(v) => {
-                self.opened(v);
+                self.opened(v).map_err(general)?;
                 Ok(MethodReply::Done)
             }
             Err(VaultError::Unlock) => {

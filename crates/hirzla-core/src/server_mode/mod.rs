@@ -794,6 +794,12 @@ impl ServerMode {
         std::fs::rename(&tmp, &self.annex).map_err(internal)
     }
 
+    /// The address of the server this vault is attached to, if any (`VaultInfo`,
+    /// `docs/api-locale.md` § 25.4).
+    pub(crate) fn server_url(&self) -> Option<&str> {
+        self.joined.as_ref().map(|j| j.info.url.as_str())
+    }
+
     fn joined(&self) -> Result<&Joined, ServerCode> {
         self.joined.as_ref().ok_or(ServerCode::NotJoined)
     }

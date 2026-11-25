@@ -1,50 +1,25 @@
-//! The connection to the core (`docs/api-locale.md`), over the Unix socket of the
-//! application's private directory (ADR 0080 § 2). The core checks that this process runs
-//! under the application's UID; this process checks the same of the core.
+//! A connection to one core (`docs/api-locale.md`), over a Unix socket of the application's
+//! private directory (ADR 0080 § 2). The core checks that this process runs under the
+//! application's UID; this process checks the same of the core. Which core, and how its slot
+//! is started, is the business of [`crate::vaults`].
 
-use std::path::Path;
-use std::time::{Duration, Instant};
-
-use hirzla_core::client::{Client, ClientError};
+use hirzla_core::client::Client;
 use hirzla_core::methods::proto::{MethodReply, MethodRequest};
 use hirzla_core::proto::{Reply, Request};
 use hirzla_core::server_mode::proto::{ServerReply, ServerRequest};
-use hirzla_core::transport::Endpoint;
 
 use crate::error::MobileError;
 
-/// How long to wait for the `:core` service to listen after the application starts.
-const START_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// The socket of the core in the private directory `files_dir`.
-#[must_use]
-pub fn socket_path(files_dir: &Path) -> std::path::PathBuf {
-    files_dir.join("core").join("core.sock")
-}
-
-/// A connection to the core.
+/// A connection to one core: one vault (ADR 0085 § 3).
 pub struct CoreLink {
     client: Client,
 }
 
 impl CoreLink {
-    /// Connects to the core of `files_dir`, waiting for it to start.
-    ///
-    /// # Errors
-    /// [`MobileError::CoreNotRunning`].
-    pub fn connect(files_dir: &Path) -> Result<CoreLink, MobileError> {
-        let endpoint = Endpoint::parse(socket_path(files_dir).as_os_str())
-            .map_err(|_| MobileError::CoreNotRunning)?;
-        let deadline = Instant::now() + START_TIMEOUT;
-        loop {
-            match Client::connect(&endpoint, None) {
-                Ok(client) => return Ok(CoreLink { client }),
-                Err(ClientError::NotRunning | ClientError::Io(_)) if Instant::now() < deadline => {
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-                Err(e) => return Err(e.into()),
-            }
-        }
+    /// A link over a connection already checked.
+    #[must_use]
+    pub fn new(client: Client) -> CoreLink {
+        CoreLink { client }
     }
 
     /// Sends a request of the general family.

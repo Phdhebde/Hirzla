@@ -123,10 +123,26 @@ d'un autre type : `bad_request` (ADR 0027).
 | `{"type":"lock"}` | `{"ok":true}` | `Lock` |
 | `{"type":"show"}` | `{"ok":true}`, ou `no_app` si aucune application n'écoute | `ShowApp` (ADR 0071) : l'hôte ne lance aucun exécutable |
 
+**Plusieurs coffres** (ADR 0085, `docs/api-locale.md` § 25.11). Quand le registre des
+coffres du poste est utilisé :
+
+- tout message accepte en plus `"vault":V`, l'identifiant d'un coffre (32 chiffres
+  hexadécimaux minuscules) ; coffre inconnu : `unknown_vault` ;
+- `status` répond en plus `"vaults":[{"vault":V,"alias":A,"state":"absent"|"locked"|"unlocked"|"unavailable","default"?:true,"target"?:true}]` ;
+  `state` est alors l'état d'ensemble, et `target` marque le coffre où `save` et
+  `passkey_create` écrivent quand le message ne nomme pas de coffre ;
+- chaque élément de `entries` (`match`) et de `candidates` (`passkey_candidates`) porte
+  `"vault":V,"alias":A` ; l'extension renvoie ce `vault` dans `fill` et `passkey_assert` ;
+- sans `vault`, `match` et `passkey_candidates` interrogent chaque coffre ouvert, `lock`
+  verrouille tous les coffres, et les autres messages vont au coffre de destination.
+
+Un coffre verrouillé n'est jamais interrogé ni déverrouillé par l'hôte. L'alias vient du
+registre du poste : il est lisible sans déverrouiller.
+
 `O` est une origine `https` canonique (`https://hôte[:port]`) ; `L` et `I` sont 32 chiffres
 hexadécimaux minuscules. Refus : `{"ok":false,"error":CODE}`, où `CODE` est un code de
 l'hôte (`bad_request`, `invalid_origin`, `invalid_input`, `core_not_running`,
-`untrusted_core`, `core_error`, `too_large`, `no_app`) ou le nom d'une erreur du noyau
+`untrusted_core`, `core_error`, `too_large`, `no_app`, `unknown_vault`) ou le nom d'une erreur du noyau
 (`docs/api-locale.md` § 7 : `locked`, `no_vault`, `not_found`, `unauthorized`…). Un refus ne
 contient jamais de détail.
 

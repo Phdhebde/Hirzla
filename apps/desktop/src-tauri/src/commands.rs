@@ -22,6 +22,7 @@ use crate::clipboard::SecretClipboard;
 use crate::error::DesktopError;
 use crate::import::{self, ImportReport};
 use crate::link::CoreLink;
+use crate::vaults::Vaults;
 
 /// Shortest master password accepted when creating a vault, in characters.
 pub const MIN_MASTER_CHARS: usize = 12;
@@ -31,7 +32,8 @@ const MAX_TAG: usize = 128;
 
 /// State shared by the commands.
 pub struct AppState {
-    link: Mutex<Result<CoreLink, DesktopError>>,
+    /// The vaults of this workstation and the links to their cores ([`crate::vaults`]).
+    pub(crate) vaults: Vaults,
     pub(crate) clipboard: SecretClipboard,
     generated: Mutex<Option<Zeroizing<String>>>,
     /// Values of the last batch of the generator screen ([`crate::generator`]).
@@ -63,11 +65,17 @@ pub(crate) fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl AppState {
-    /// State around `link`.
+    /// State around one fixed `link`, outside the vault registry.
     #[must_use]
     pub fn new(link: Result<CoreLink, DesktopError>) -> AppState {
+        AppState::with_vaults(Vaults::single(link))
+    }
+
+    /// State around `vaults`.
+    #[must_use]
+    pub fn with_vaults(vaults: Vaults) -> AppState {
         AppState {
-            link: Mutex::new(link),
+            vaults,
             clipboard: SecretClipboard::default(),
             generated: Mutex::new(None),
             generated_batch: Mutex::new(Vec::new()),
@@ -83,15 +91,12 @@ impl AppState {
         }
     }
 
-    /// Runs `f` with the link to the core.
+    /// Runs `f` with the link to the core of the active vault.
     pub(crate) fn with_link<T>(
         &self,
         f: impl FnOnce(&mut CoreLink) -> Result<T, DesktopError>,
     ) -> Result<T, DesktopError> {
-        match &mut *guard(&self.link) {
-            Ok(link) => f(link),
-            Err(e) => Err(e.clone()),
-        }
+        self.vaults.with_active(f)
     }
 
     fn call(&self, request: &Request) -> Result<Reply, DesktopError> {
@@ -108,23 +113,59 @@ impl AppState {
         guard(&self.generated_batch).clear();
     }
 
-    /// Asks the core whether the window was called for (`AppPoll`, ADR 0071), and takes the
-    /// call.
-    ///
-    /// # Errors
-    /// [`DesktopError`].
-    pub fn app_poll(&self) -> Result<bool, DesktopError> {
-        match self.call(&Request::AppPoll)? {
-            Reply::Flag(called) => Ok(called),
-            _ => Err(DesktopError::Protocol),
-        }
+    /// Asks every core whether the window was called for (`AppPoll`, ADR 0071), and takes
+    /// the calls.
+    #[must_use]
+    pub fn app_poll(&self) -> bool {
+        self.vaults.app_poll()
     }
 
-    /// On exit: lock the vault and clear the clipboard. Errors are ignored: the core locks
-    /// by itself after its delay.
-    pub fn shutdown(&self) {
+    /// The vaults of this workstation, each with its state ([`Vaults::list`]).
+    #[must_use]
+    pub fn list_vaults(&self) -> Vec<crate::vaults::VaultDto> {
+        self.vaults.list()
+    }
+
+    /// Makes another vault the active one (`docs/api-locale.md` § 25.10). What this process
+    /// held for the interface about the previous one is forgotten: the clipboard copy, the
+    /// generated passwords, the files chosen and waiting. Nothing is locked or unlocked.
+    ///
+    /// # Errors
+    /// [`DesktopError::Registry`] when no vault carries this identifier any more.
+    pub fn select_vault(&self, vault: &str) -> Result<(), DesktopError> {
+        self.vaults.select(vault)?;
         self.forget();
-        let _ = self.call(&Request::Lock);
+        *guard(&self.pending_kdbx) = None;
+        *guard(&self.pending_kdbx_key) = None;
+        *guard(&self.pending_export) = None;
+        *guard(&self.pending_ssh_key) = None;
+        guard(&self.pending_shares).clear();
+        *guard(&self.pending_ca) = None;
+        Ok(())
+    }
+
+    /// Searches the other open vaults ([`Vaults::search`]).
+    ///
+    /// # Errors
+    /// [`DesktopError::Invalid`] for a query too long.
+    pub fn search_vaults(
+        &self,
+        query: Zeroizing<String>,
+    ) -> Result<Vec<crate::vaults::VaultMatchesDto>, DesktopError> {
+        self.vaults.search(query)
+    }
+
+    /// Locks every vault and clears the clipboard: « Tout verrouiller » of the notification
+    /// area.
+    pub fn lock_all(&self) {
+        self.forget();
+        self.vaults.lock_all();
+    }
+
+    /// On exit: lock every vault and clear the clipboard. Errors are ignored: each core
+    /// locks by itself after its delay.
+    pub fn shutdown(&self) {
+        self.lock_all();
     }
 }
 

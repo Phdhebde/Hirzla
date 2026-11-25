@@ -54,10 +54,72 @@
             android:excludeFromRecents="true"
             android:exported="false" />
 
-        <!-- The core (ADR 0080 § 2): its own process, never exported. -->
+        <!-- The cores (ADR 0080 § 2, ADR 0085 step 5): sixteen slots, one vault and one
+             process each, never exported. Android creates the process of a slot only when
+             its service is started: a slot without vault costs nothing. -->
         <service
-            android:name=".CoreService"
-            android:process=":core"
+            android:name=".CoreService0"
+            android:process=":core0"
+            android:exported="false" />
+        <service
+            android:name=".CoreService1"
+            android:process=":core1"
+            android:exported="false" />
+        <service
+            android:name=".CoreService2"
+            android:process=":core2"
+            android:exported="false" />
+        <service
+            android:name=".CoreService3"
+            android:process=":core3"
+            android:exported="false" />
+        <service
+            android:name=".CoreService4"
+            android:process=":core4"
+            android:exported="false" />
+        <service
+            android:name=".CoreService5"
+            android:process=":core5"
+            android:exported="false" />
+        <service
+            android:name=".CoreService6"
+            android:process=":core6"
+            android:exported="false" />
+        <service
+            android:name=".CoreService7"
+            android:process=":core7"
+            android:exported="false" />
+        <service
+            android:name=".CoreService8"
+            android:process=":core8"
+            android:exported="false" />
+        <service
+            android:name=".CoreService9"
+            android:process=":core9"
+            android:exported="false" />
+        <service
+            android:name=".CoreService10"
+            android:process=":core10"
+            android:exported="false" />
+        <service
+            android:name=".CoreService11"
+            android:process=":core11"
+            android:exported="false" />
+        <service
+            android:name=".CoreService12"
+            android:process=":core12"
+            android:exported="false" />
+        <service
+            android:name=".CoreService13"
+            android:process=":core13"
+            android:exported="false" />
+        <service
+            android:name=".CoreService14"
+            android:process=":core14"
+            android:exported="false" />
+        <service
+            android:name=".CoreService15"
+            android:process=":core15"
             android:exported="false" />
 
         <provider

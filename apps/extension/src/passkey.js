@@ -65,6 +65,13 @@ function renderAccounts(candidates) {
       u.textContent = sub;
       names.append(u);
     }
+    // With several vaults (ADR 0085), every account says which vault it comes from.
+    if (c.alias) {
+      const v = document.createElement('span');
+      v.className = 'user';
+      v.textContent = `Coffre : ${c.alias}`;
+      names.append(v);
+    }
     const go = document.createElement('span');
     go.className = 'fill';
     go.textContent = 'Utiliser';

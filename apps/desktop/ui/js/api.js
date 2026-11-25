@@ -20,6 +20,9 @@
  * @typedef {{ auto_lock_s: number, clipboard_clear_s: number, lock_on_sleep: boolean,
  *   lock_on_session_lock: boolean }} VaultSettings
  * @typedef {{ keep_in_tray: boolean, tray_available: boolean }} LocalPreferences
+ * @typedef {{ id: string, alias: string, default: boolean, active: boolean,
+ *   state: "absent" | "locked" | "unlocked" | "unavailable", error: string | null }} VaultInfo
+ * @typedef {{ vault: string, alias: string, entries: Entry[] }} VaultMatches
  * @typedef {"username" | "password" | "username_password" | "notes" | "ssh_passphrase"} TypedWhat
  * @typedef {{ name: string, path: string, title: string, terminal: boolean, can_remember: boolean }} AutoTypeTarget
  * @typedef {{ version: string, wall_ms: number, state: "active" | "trash" | "purged", title: string,
@@ -228,6 +231,14 @@ export const api = {
    * @returns {Promise<SecretRef>}
    */
   totpCreate: (totp) => call("totp_create", { totp }),
+
+  // Several vaults (ADR 0085): the vaults of the registry, the active one, the common search.
+  /** @returns {Promise<VaultInfo[]>} */
+  listVaults: () => call("list_vaults"),
+  /** @param {string} vault @returns {Promise<void>} */
+  selectVault: (vault) => call("select_vault", { vault }),
+  /** @param {string} query @returns {Promise<VaultMatches[]>} */
+  searchVaults: (query) => call("search_vaults", { query }),
 
   // This workstation (ADR 0071).
   /** @returns {Promise<LocalPreferences>} */

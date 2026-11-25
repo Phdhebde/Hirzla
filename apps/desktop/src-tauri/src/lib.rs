@@ -25,6 +25,8 @@
 //! - [`locker_export`]: encrypted export of a locker and its import into a new locker
 //!   (local API version 10, ADR 0077);
 //! - [`prefs`]: what belongs to this workstation, in a local file (ADR 0071);
+//! - [`vaults`]: several vaults, one link per registered vault and one active vault (local
+//!   API version 16, ADR 0085);
 //! - [`tray`]: notification area icon, window that closes without locking, and the call
 //!   for the window through the core (local API version 8, ADR 0071);
 //! - `events` (Linux): sleep and session lock reported to the core (ADR 0033).
@@ -50,9 +52,10 @@ pub mod selfmode;
 pub mod servermode;
 pub mod totp;
 pub mod tray;
+pub mod vaults;
 
 use commands::AppState;
-use link::{CoreLink, LinkConfig};
+use vaults::Vaults;
 
 /// Whether the web view may show `url`: only the application's own pages, served by Tauri
 /// (`tauri://localhost` on Linux and macOS, `http(s)://tauri.localhost` on Windows).
@@ -78,15 +81,14 @@ fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 /// # Errors
 /// A failure of the window system or of the web view.
 pub fn run() -> Result<(), tauri::Error> {
-    let config = LinkConfig::for_this_process();
+    let vaults = Vaults::for_this_process();
     // A second start only brings the first one's window to the front (ADR 0071).
-    if config.as_ref().is_ok_and(link::another_instance_shown) {
+    if vaults.another_instance_shown() {
         return Ok(());
     }
-    let link = config.map(CoreLink::new);
     let app = tauri::Builder::default()
         .plugin(navigation_guard())
-        .manage(AppState::new(link))
+        .manage(AppState::with_vaults(vaults))
         .manage(tray::TrayState::default())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
@@ -189,6 +191,9 @@ pub fn run() -> Result<(), tauri::Error> {
             servermode::device_enrol_fetch,
             servermode::device_enrol_approve,
             servermode::device_enrol_complete,
+            vaults::list_vaults,
+            vaults::select_vault,
+            vaults::search_vaults,
             tray::get_preferences,
             tray::set_preferences,
             autotype::auto_type_available,

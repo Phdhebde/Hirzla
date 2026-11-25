@@ -21,6 +21,7 @@ use zeroize::Zeroizing;
 use crate::error::MobileError;
 use crate::link::CoreLink;
 use crate::native::{AutofillState, AutofillTarget, Native};
+use crate::vaults::{self, VaultDto, Vaults};
 
 /// Shortest master password accepted when creating a vault, in characters (as on the
 /// desktop).
@@ -29,10 +30,12 @@ pub const MIN_MASTER_CHARS: usize = 12;
 /// `kind` of the Android Keystore unlock method (`docs/format.md` § 4.2).
 const KIND_ANDROID: u8 = 7;
 
-/// State shared by the commands: one connection to the core, opened on demand.
+/// State shared by the commands: the vaults of the phone (`docs/api-locale.md` § 25.13) and
+/// the connections to their cores, opened on demand. Every command talks to the active
+/// vault, except the ones that name a vault.
 #[derive(Default)]
 pub struct AppState {
-    link: Mutex<Option<CoreLink>>,
+    vaults: Mutex<Vaults>,
 }
 
 type NativeState<'a> = tauri::State<'a, Native<tauri::Wry>>;
@@ -43,26 +46,22 @@ fn guard<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl AppState {
+    /// Runs `f` on the core of `vault`, or of the active vault.
+    fn with_vault<T>(
+        &self,
+        native: &Native<tauri::Wry>,
+        vault: Option<Id16>,
+        f: impl Fn(&mut CoreLink) -> Result<T, MobileError>,
+    ) -> Result<T, MobileError> {
+        guard(&self.vaults).with(native, vault, f)
+    }
+
     fn with_link<T>(
         &self,
         native: &Native<tauri::Wry>,
         f: impl Fn(&mut CoreLink) -> Result<T, MobileError>,
     ) -> Result<T, MobileError> {
-        let mut link = guard(&self.link);
-        if link.is_none() {
-            *link = Some(CoreLink::connect(&native.files_dir()?)?);
-        }
-        let l = link.as_mut().ok_or(MobileError::CoreNotRunning)?;
-        match f(l) {
-            // The `:core` process was stopped by the system (the vault is locked again):
-            // reconnect once to the new one.
-            Err(MobileError::CoreNotRunning) => {
-                *link = Some(CoreLink::connect(&native.files_dir()?)?);
-                let l = link.as_mut().ok_or(MobileError::CoreNotRunning)?;
-                f(l)
-            }
-            r => r,
-        }
+        self.with_vault(native, None, f)
     }
 
     fn call(&self, native: &Native<tauri::Wry>, r: &Request) -> Result<Reply, MobileError> {
@@ -116,6 +115,10 @@ pub struct StatusDto {
     pub clipboard_clear_s: u64,
     /// A server is joined (shared lockers are synchronised).
     pub joined: bool,
+    /// Local name of the active vault; `None` on a phone without registered vault.
+    pub alias: Option<String>,
+    /// How many vaults are registered.
+    pub vaults: usize,
 }
 
 /// A secret of the list (index data only). No `Debug`: it holds the title and user name.
@@ -264,22 +267,47 @@ fn status_info(
     }
 }
 
+fn read_text_in(
+    state: &AppState,
+    native: &Native<tauri::Wry>,
+    vault: Option<Id16>,
+    target: &SecretRef,
+    field: FieldName,
+) -> Result<Zeroizing<String>, MobileError> {
+    let request = Request::Read {
+        selector: target.selector()?,
+        field: field.field(),
+    };
+    match state.with_vault(native, vault, |l| l.call(&request))? {
+        Reply::Value(ApiValue::Text(t)) => Ok(t),
+        _ => Err(MobileError::Protocol),
+    }
+}
+
 fn read_text(
     state: &AppState,
     native: &Native<tauri::Wry>,
     target: &SecretRef,
     field: FieldName,
 ) -> Result<Zeroizing<String>, MobileError> {
-    match state.call(
-        native,
-        &Request::Read {
-            selector: target.selector()?,
-            field: field.field(),
-        },
-    )? {
-        Reply::Value(ApiValue::Text(t)) => Ok(t),
-        _ => Err(MobileError::Protocol),
+    read_text_in(state, native, None, target, field)
+}
+
+/// The master password of a vault to create, typed twice.
+fn check_new_master(
+    password: &Zeroizing<String>,
+    confirmation: Zeroizing<String>,
+) -> Result<(), MobileError> {
+    check_master(password)?;
+    if password.chars().count() < MIN_MASTER_CHARS {
+        return Err(MobileError::Invalid(
+            "Le mot de passe maître doit compter au moins 12 caractères.",
+        ));
     }
+    if !hirzla_crypto::util::constant_time_eq(password.as_bytes(), confirmation.as_bytes()) {
+        return Err(MobileError::Invalid("Les deux saisies diffèrent."));
+    }
+    Ok(())
 }
 
 /// State of the vault and of the fingerprint method.
@@ -289,6 +317,13 @@ pub async fn app_status(
     native: NativeState<'_>,
 ) -> Result<StatusDto, MobileError> {
     let info = status_info(&state, &native)?;
+    let (alias, vaults) = {
+        let mut vaults = guard(&state.vaults);
+        (
+            vaults.active(&*native)?.map(|(_, alias)| alias),
+            vaults.count(&*native)?,
+        )
+    };
     let (fingerprint, can_enrol) = match info.state {
         VaultState::Absent => (false, false),
         _ => {
@@ -314,36 +349,49 @@ pub async fn app_status(
         can_enrol,
         clipboard_clear_s: info.clipboard_clear_s,
         joined,
+        alias,
+        vaults,
     })
 }
 
-/// Creates the vault (it is then unlocked).
+/// The registered vaults and their state (`docs/api-locale.md` § 25.13). Nothing is started
+/// to tell: a vault whose core does not run is locked.
+#[tauri::command]
+pub async fn list_vaults(
+    state: State<'_>,
+    native: NativeState<'_>,
+) -> Result<Vec<VaultDto>, MobileError> {
+    guard(&state.vaults).list(&*native)
+}
+
+/// Makes `vault` the active vault: every other command then talks to its core.
+#[tauri::command]
+pub async fn select_vault(
+    state: State<'_>,
+    native: NativeState<'_>,
+    vault: String,
+) -> Result<(), MobileError> {
+    guard(&state.vaults).select(&*native, vaults::vault_id(&vault)?)
+}
+
+/// Locks every vault whose core runs.
+#[tauri::command]
+pub async fn lock_all(state: State<'_>, native: NativeState<'_>) -> Result<(), MobileError> {
+    guard(&state.vaults).lock_all(&*native)
+}
+
+/// Creates a Self vault. The first vault of the phone is then unlocked; one more vault,
+/// named `alias`, is registered and locked in its own core (`docs/api-locale.md` § 25.13).
 #[tauri::command]
 pub async fn create_vault(
     state: State<'_>,
     native: NativeState<'_>,
     password: Zeroizing<String>,
     confirmation: Zeroizing<String>,
+    alias: Option<String>,
 ) -> Result<(), MobileError> {
-    check_master(&password)?;
-    if password.chars().count() < MIN_MASTER_CHARS {
-        return Err(MobileError::Invalid(
-            "Le mot de passe maître doit compter au moins 12 caractères.",
-        ));
-    }
-    if !hirzla_crypto::util::constant_time_eq(password.as_bytes(), confirmation.as_bytes()) {
-        return Err(MobileError::Invalid("Les deux saisies diffèrent."));
-    }
-    drop(confirmation);
-    state
-        .call(
-            &native,
-            &Request::Init {
-                password,
-                kdf: None,
-            },
-        )
-        .map(drop)
+    check_new_master(&password, confirmation)?;
+    guard(&state.vaults).create(&*native, alias.as_deref(), &password, None)
 }
 
 /// Unlocks the vault with the master password.
@@ -509,20 +557,19 @@ pub async fn create_login(
 }
 
 /// Starts the enrolment of this phone with the invitation link (ADR 0081): the code to type
-/// on the certification device.
+/// on the certification device. On a phone that already holds a vault, the vault to come is
+/// one more vault, named `alias`.
 #[tauri::command]
 pub async fn enrol_start(
     state: State<'_>,
     native: NativeState<'_>,
     link: String,
+    alias: Option<String>,
 ) -> Result<String, MobileError> {
     if link.len() > 128 * 1024 {
         return Err(MobileError::Invalid("Lien trop long."));
     }
-    match state.call_server(&native, &ServerRequest::DeviceEnrolStart { link })? {
-        ServerReply::EnrolCode(code) => Ok(code),
-        _ => Err(MobileError::Protocol),
-    }
+    guard(&state.vaults).enrol_start(&*native, alias.as_deref(), &link)
 }
 
 /// Looks once for the package: the member fingerprint once it arrived, `None` while waiting.
@@ -531,10 +578,7 @@ pub async fn enrol_wait(
     state: State<'_>,
     native: NativeState<'_>,
 ) -> Result<Option<String>, MobileError> {
-    match state.call_server(&native, &ServerRequest::DeviceEnrolWait)? {
-        ServerReply::EnrolState(fp) => Ok(fp),
-        _ => Err(MobileError::Protocol),
-    }
+    guard(&state.vaults).enrol_wait(&*native)
 }
 
 /// Creates the vault of this phone with the identity received, joins and synchronises.
@@ -547,26 +591,8 @@ pub async fn enrol_finish(
     confirmation: Zeroizing<String>,
     fingerprint: String,
 ) -> Result<(), MobileError> {
-    check_master(&password)?;
-    if password.chars().count() < MIN_MASTER_CHARS {
-        return Err(MobileError::Invalid(
-            "Le mot de passe maître doit compter au moins 12 caractères.",
-        ));
-    }
-    if !hirzla_crypto::util::constant_time_eq(password.as_bytes(), confirmation.as_bytes()) {
-        return Err(MobileError::Invalid("Les deux saisies diffèrent."));
-    }
-    drop(confirmation);
-    state
-        .call_server(
-            &native,
-            &ServerRequest::DeviceEnrolFinish {
-                password,
-                kdf: None,
-                fingerprint,
-            },
-        )
-        .map(drop)
+    check_new_master(&password, confirmation)?;
+    guard(&state.vaults).enrol_finish(&*native, &password, &fingerprint, None)
 }
 
 /// The form another application asks Hirzla to fill (ADR 0080 § 6). No `Debug`: the
@@ -579,8 +605,21 @@ pub struct AutofillDto {
     package: String,
     /// Web domain of the form, for a browser of the fixed list.
     domain: Option<String>,
-    /// Secrets registered for exactly that domain (none for an application).
-    matches: Vec<EntryDto>,
+    /// Secrets registered for exactly that domain, in every open vault (none for an
+    /// application).
+    matches: Vec<MatchDto>,
+}
+
+/// A secret proposed for a form, with the vault that holds it (`docs/api-locale.md`
+/// § 25.13). No `Debug`: it holds the title and user name.
+#[derive(Serialize)]
+pub struct MatchDto {
+    /// Identifier of the vault, hexadecimal.
+    vault: String,
+    /// Local name of the vault.
+    alias: String,
+    #[serde(flatten)]
+    entry: EntryDto,
 }
 
 /// The web origin of an autofill request, when its domain gives a canonical `https` origin
@@ -601,10 +640,18 @@ pub async fn autofill_request(
         return Ok(None);
     };
     let matches = match autofill_origin(&target) {
-        Some(origin) => match state.call(&native, &Request::Match { origin })? {
-            Reply::Matches(entries) => entries.into_iter().map(Into::into).collect(),
-            _ => return Err(MobileError::Protocol),
-        },
+        Some(origin) => guard(&state.vaults)
+            .matches(&*native, &origin)?
+            .into_iter()
+            .flat_map(|found| {
+                let vault = hirzla_core::registry::id_hex(&found.vault);
+                found.entries.into_iter().map(move |entry| MatchDto {
+                    vault: vault.clone(),
+                    alias: found.alias.clone(),
+                    entry: entry.into(),
+                })
+            })
+            .collect(),
         None => Vec::new(),
     };
     Ok(Some(AutofillDto {
@@ -619,14 +666,17 @@ pub async fn autofill_request(
 /// then gives the front back to the application. A secret registered for exactly the domain
 /// of the form is filled as the extension does (`Fill`); any other, and every form of an
 /// application, needs `confirmed`: the user read the warning that names the secret and the
-/// application (ADR 0072 § 3). The web view never sees the values.
+/// application (ADR 0072 § 3). `vault` names the vault of a proposed secret; without it, the
+/// secret is one of the active vault. The web view never sees the values.
 #[tauri::command]
 pub async fn autofill_fill(
     state: State<'_>,
     native: NativeState<'_>,
     target: SecretRef,
+    vault: Option<String>,
     confirmed: bool,
 ) -> Result<(), MobileError> {
+    let vault = vault.as_deref().map(vaults::vault_id).transpose()?;
     let form = native.autofill_pending()?.ok_or(MobileError::Invalid(
         "Aucune demande de saisie automatique en cours.",
     ))?;
@@ -634,7 +684,13 @@ pub async fn autofill_fill(
         return Err(MobileError::Protocol);
     };
     let registered = match autofill_origin(&form) {
-        Some(origin) => match state.call(&native, &Request::Fill { locker, id, origin }) {
+        Some(origin) => match state.with_vault(&native, vault, |l| {
+            l.call(&Request::Fill {
+                locker,
+                id,
+                origin: origin.clone(),
+            })
+        }) {
             Ok(Reply::Filled { username, password }) => Some((username, Some(password))),
             Ok(_) => return Err(MobileError::Protocol),
             // Not a secret of this domain: the manual choice below.
@@ -655,7 +711,7 @@ pub async fn autofill_fill(
             ))
         }
         None => {
-            let field = |f| match read_text(&state, &native, &target, f) {
+            let field = |f| match read_text_in(&state, &native, vault, &target, f) {
                 Ok(v) => Ok(Some(v)),
                 Err(MobileError::Refused(r)) if r.code == ErrorCode::NotFound => Ok(None),
                 Err(e) => Err(e),
@@ -678,13 +734,12 @@ pub async fn autofill_fill(
     };
     native.autofill_fill(username.as_ref(), password.as_ref())?;
     // A line of the core's log (fixed words only, ADR 0072 § 8); the fill is already done.
-    let _ = state.call(
-        &native,
-        &Request::AutoTyped {
+    let _ = state.with_vault(&native, vault, |l| {
+        l.call(&Request::AutoTyped {
             what,
             terminal: false,
-        },
-    );
+        })
+    });
     Ok(())
 }
 
@@ -709,9 +764,7 @@ pub async fn autofill_settings(native: NativeState<'_>) -> Result<(), MobileErro
 /// Abandons the enrolment in progress.
 #[tauri::command]
 pub async fn enrol_cancel(state: State<'_>, native: NativeState<'_>) -> Result<(), MobileError> {
-    state
-        .call_server(&native, &ServerRequest::DeviceEnrolCancel)
-        .map(drop)
+    guard(&state.vaults).enrol_cancel(&*native)
 }
 
 /// Synchronises the shared lockers: how many.

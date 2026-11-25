@@ -169,6 +169,26 @@ Mode Serveur :
                           certification rattaché au serveur.
   stop                    Verrouille le coffre et arrête le noyau.
 
+Plusieurs coffres sur cet appareil (chacun a son noyau et se déverrouille seul) :
+  coffres                 Liste les coffres inscrits et leur état. * : coffre par défaut.
+  coffres ajouter ALIAS FICHIER [--defaut]
+                          Inscrit un coffre existant sous le nom ALIAS (64 octets au
+                          plus). Ce nom est lisible sans déverrouiller le coffre.
+  coffres creer ALIAS [FICHIER] [--defaut] [--kdf-memory KIO --kdf-passes N]
+                          Crée un coffre de plus et l'inscrit sous le nom ALIAS. Sans
+                          FICHIER, il est rangé à côté du coffre par défaut.
+  coffres rejoindre ALIAS LIEN [FICHIER] [--defaut]
+                          Crée un coffre et le rattache au serveur du lien d'invitation
+                          (nouveau compte). LIEN : le texte, ou @FICHIER.
+  coffres enroler ALIAS LIEN [FICHIER] [--defaut]
+                          Rejoint votre compte sur le serveur du lien : enrôle cet
+                          appareil, à certifier depuis un autre (« appareil ajouter »).
+  coffres renommer ALIAS NOUVEL_ALIAS
+                          Change le nom d'un coffre inscrit.
+  coffres defaut ALIAS    Choisit le coffre des commandes sans --coffre.
+  coffres retirer ALIAS   Arrête le noyau du coffre et le retire de la liste. Son fichier
+                          n'est pas effacé.
+
 Mises à jour hors ligne (sans réseau ni noyau) :
   mise-a-jour verifier FICHIER
                           Vérifie un paquet de mise à jour signé et affiche son contenu.
@@ -180,10 +200,14 @@ Mises à jour hors ligne (sans réseau ni noyau) :
 
 Options globales :
   --version               Affiche la version de hirzla.
+  --coffre ALIAS          Coffre auquel s'adresse la commande (ou HIRZLA_COFFRE) ; par
+                          défaut, le coffre par défaut de « hirzla coffres ».
   --socket POINT          Point de connexion du noyau (ou HIRZLA_SOCKET).
   --core EXÉCUTABLE       Exécutable du noyau attendu (par défaut : hirzla-core à côté
                           de hirzla).
   --vault FICHIER         Coffre, transmis au noyau quand hirzla le démarre (ou HIRZLA_VAULT).
+                          --socket et --vault ne passent pas par la liste des coffres et
+                          excluent --coffre.
 
 Champs : titre, identifiant, mot-de-passe, notes.
 CLÉ, REBOND : titre d'une clé SSH, d'une connexion SSH du coffre. --effacer accepte port,
@@ -297,6 +321,48 @@ pub struct DeviceRevokeCommand {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeviceEnrolCommand {
     pub code: String,
+}
+
+/// `hirzla coffres` (`docs/api-locale.md` § 25.6, ADR 0085): the vault registry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VaultsCommand {
+    /// The registered vaults and their state.
+    List,
+    /// Register an existing vault file.
+    Add {
+        alias: String,
+        file: PathBuf,
+        default: bool,
+    },
+    /// Create a Self vault through a provisional core and register it (§ 25.9).
+    Create {
+        alias: String,
+        file: Option<PathBuf>,
+        default: bool,
+        kdf: Option<(u32, u32, u32)>,
+    },
+    /// Create a vault, join the server of an invitation link (a new account, ADR 0046)
+    /// and register it.
+    Join {
+        alias: String,
+        link: String,
+        file: Option<PathBuf>,
+        default: bool,
+    },
+    /// Enrol this device into the user's account on the server of the link (ADR 0081),
+    /// which creates the vault, and register it.
+    Enrol {
+        alias: String,
+        link: String,
+        file: Option<PathBuf>,
+        default: bool,
+    },
+    /// Change an alias.
+    Rename { alias: String, new_alias: String },
+    /// Choose the default vault.
+    Default { alias: String },
+    /// Stop the core of a vault and remove it from the registry; its file is kept.
+    Remove { alias: String },
 }
 
 /// A command on shared lockers (`docs/api-locale.md` § 15.6).
@@ -505,6 +571,8 @@ pub enum Command {
     Quarantine(QuarantineCommand),
     DeviceRevoke(DeviceRevokeCommand),
     DeviceEnrol(DeviceEnrolCommand),
+    /// `coffres …` (ADR 0085).
+    Vaults(VaultsCommand),
     Update(UpdateCommand),
     /// `--version`: prints the version of `hirzla`, without starting the core.
     Version,
@@ -543,6 +611,8 @@ pub struct Args {
     pub socket: Option<OsString>,
     pub core: Option<PathBuf>,
     pub vault: Option<PathBuf>,
+    /// `--coffre ALIAS` or `HIRZLA_COFFRE`: the registered vault the command is for.
+    pub vault_alias: Option<String>,
     pub command: Command,
 }
 
@@ -750,10 +820,25 @@ fn number<T: std::str::FromStr>(v: &str, what: &str) -> Result<T, String> {
 }
 
 pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
+    parse_with(args, &|name| std::env::var_os(name))
+}
+
+/// [`parse`] with the environment given: `HIRZLA_SOCKET`, `HIRZLA_VAULT` and `HIRZLA_COFFRE`
+/// are read through `env`.
+fn parse_with(
+    args: impl IntoIterator<Item = OsString>,
+    env: &dyn Fn(&str) -> Option<OsString>,
+) -> Result<Args, String> {
     let mut it = args.into_iter().peekable();
-    let mut socket = std::env::var_os("HIRZLA_SOCKET");
+    let mut socket = env("HIRZLA_SOCKET");
     let mut core = None;
-    let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
+    let mut vault = env("HIRZLA_VAULT").map(PathBuf::from);
+    // An empty variable is no choice; an alias that is not UTF-8 names no vault.
+    let env_alias = match env("HIRZLA_COFFRE").filter(|v| !v.is_empty()) {
+        Some(v) => Some(text(v, "HIRZLA_COFFRE")?),
+        None => None,
+    };
+    let mut vault_alias: Option<String> = None;
     let command = loop {
         let Some(arg) = it.next() else {
             return Err(USAGE.to_owned());
@@ -767,12 +852,14 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
             "--socket" => socket = Some(value("--socket")?),
             "--core" => core = Some(PathBuf::from(value("--core")?)),
             "--vault" => vault = Some(PathBuf::from(value("--vault")?)),
+            "--coffre" => vault_alias = Some(text(value("--coffre")?, "--coffre")?),
             "-h" | "--help" | "help" => return Err(USAGE.to_owned()),
             "-V" | "--version" => {
                 return Ok(Args {
                     socket,
                     core,
                     vault,
+                    vault_alias: None,
                     command: Command::Version,
                 })
             }
@@ -893,6 +980,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte", "--mot-de-passe", "--nom"],
         "appareil" => &["--oui"],
+        "coffres" => &["--defaut", "--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
         "totp" => &[
@@ -948,24 +1036,28 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         }
     };
 
+    // The explicit derivation cost of a vault to create (`init`, `coffres creer`).
+    let kdf_cost = || -> Result<Option<(u32, u32, u32)>, String> {
+        let m = one("--kdf-memory")?;
+        let t = one("--kdf-passes")?;
+        let p = one("--kdf-lanes")?;
+        match (m, t, p) {
+            (None, None, None) => Ok(None),
+            (Some(m), Some(t), p) => Ok(Some((
+                number(&m, "--kdf-memory")?,
+                number(&t, "--kdf-passes")?,
+                p.map(|p| number(&p, "--kdf-lanes"))
+                    .transpose()?
+                    .unwrap_or(1),
+            ))),
+            _ => Err("--kdf-memory et --kdf-passes vont ensemble.".to_owned()),
+        }
+    };
+
     let command = match command.as_str() {
         "init" => {
             max_positional(0)?;
-            let m = one("--kdf-memory")?;
-            let t = one("--kdf-passes")?;
-            let p = one("--kdf-lanes")?;
-            let kdf = match (m, t, p) {
-                (None, None, None) => None,
-                (Some(m), Some(t), p) => Some((
-                    number(&m, "--kdf-memory")?,
-                    number(&t, "--kdf-passes")?,
-                    p.map(|p| number(&p, "--kdf-lanes"))
-                        .transpose()?
-                        .unwrap_or(1),
-                )),
-                _ => return Err("--kdf-memory et --kdf-passes vont ensemble.".to_owned()),
-            };
-            Command::Init { kdf }
+            Command::Init { kdf: kdf_cost()? }
         }
         "unlock" if has("--materiel") => {
             max_positional(1)?;
@@ -1704,6 +1796,103 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
                 }
             }
         }
+        "coffres" => {
+            max_positional(4)?;
+            let sub = positional.first().map(String::as_str);
+            let creates = matches!(sub, Some("creer" | "rejoindre" | "enroler"));
+            if has("--defaut") && !(creates || sub == Some("ajouter")) {
+                return Err(
+                    "--defaut ne s'applique qu'à « coffres ajouter », « creer », « rejoindre » \
+                     et « enroler »."
+                        .into(),
+                );
+            }
+            if sub != Some("creer")
+                && ["--kdf-memory", "--kdf-passes", "--kdf-lanes"]
+                    .iter()
+                    .any(|f| has(f))
+            {
+                return Err(
+                    "--kdf-memory, --kdf-passes et --kdf-lanes ne s'appliquent qu'à \
+                            « coffres creer »."
+                        .into(),
+                );
+            }
+            let arg = |n: usize, what: &str| {
+                positional
+                    .get(n)
+                    .cloned()
+                    .ok_or_else(|| format!("« coffres {} » attend {what}.", sub.unwrap_or("")))
+            };
+            let at_most = |n: usize| {
+                if positional.len() > n {
+                    Err(format!(
+                        "trop d'arguments pour « coffres {} ».",
+                        sub.unwrap_or("")
+                    ))
+                } else {
+                    Ok(())
+                }
+            };
+            Command::Vaults(match sub {
+                None => VaultsCommand::List,
+                Some("liste") => {
+                    at_most(1)?;
+                    VaultsCommand::List
+                }
+                Some("ajouter") => {
+                    at_most(3)?;
+                    VaultsCommand::Add {
+                        alias: arg(1, "ALIAS FICHIER")?,
+                        file: PathBuf::from(arg(2, "ALIAS FICHIER")?),
+                        default: has("--defaut"),
+                    }
+                }
+                Some("creer") => {
+                    at_most(3)?;
+                    VaultsCommand::Create {
+                        alias: arg(1, "ALIAS [FICHIER]")?,
+                        file: positional.get(2).map(PathBuf::from),
+                        default: has("--defaut"),
+                        kdf: kdf_cost()?,
+                    }
+                }
+                Some("rejoindre") => VaultsCommand::Join {
+                    alias: arg(1, "ALIAS LIEN [FICHIER]")?,
+                    link: arg(2, "ALIAS LIEN [FICHIER]")?,
+                    file: positional.get(3).map(PathBuf::from),
+                    default: has("--defaut"),
+                },
+                Some("enroler") => VaultsCommand::Enrol {
+                    alias: arg(1, "ALIAS LIEN [FICHIER]")?,
+                    link: arg(2, "ALIAS LIEN [FICHIER]")?,
+                    file: positional.get(3).map(PathBuf::from),
+                    default: has("--defaut"),
+                },
+                Some("renommer") => {
+                    at_most(3)?;
+                    VaultsCommand::Rename {
+                        alias: arg(1, "ALIAS NOUVEL_ALIAS")?,
+                        new_alias: arg(2, "ALIAS NOUVEL_ALIAS")?,
+                    }
+                }
+                Some("defaut") => {
+                    at_most(2)?;
+                    VaultsCommand::Default {
+                        alias: arg(1, "l'ALIAS du coffre")?,
+                    }
+                }
+                Some("retirer") => {
+                    at_most(2)?;
+                    VaultsCommand::Remove {
+                        alias: arg(1, "l'ALIAS du coffre")?,
+                    }
+                }
+                Some(_) => {
+                    return Err(format!("sous-commande de « coffres » inconnue.\n\n{USAGE}"))
+                }
+            })
+        }
         "mise-a-jour" => {
             max_positional(2)?;
             let usage = "« mise-a-jour » attend verifier FICHIER ou appliquer FICHIER.";
@@ -1758,10 +1947,23 @@ pub fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Args, String> {
         }
         other => return Err(format!("commande inconnue : {other}\n\n{USAGE}")),
     };
+    // `--socket` and `--vault` name a core outside the registry (§ 25.5): with them, an
+    // alias on the command line would be silently ignored, so it is refused; the alias of
+    // the environment only gives way.
+    let outside_registry = socket.is_some() || vault.is_some();
+    if vault_alias.is_some() && outside_registry {
+        return Err(
+            "--coffre ne se combine pas avec --socket ni --vault (ni HIRZLA_SOCKET, \
+             HIRZLA_VAULT)."
+                .into(),
+        );
+    }
+    let vault_alias = vault_alias.or(env_alias.filter(|_| !outside_registry));
     Ok(Args {
         socket,
         core,
         vault,
+        vault_alias,
         command,
     })
 }
@@ -1775,6 +1977,221 @@ mod tests {
         parse(a.iter().map(OsString::from))
     }
 
+    /// `parse` with a chosen environment, whatever the environment of the test process.
+    fn pe(a: &[&str], env: &[(&str, &str)]) -> Result<Args, String> {
+        parse_with(a.iter().map(OsString::from), &|name| {
+            env.iter()
+                .find(|(n, _)| *n == name)
+                .map(|(_, v)| OsString::from(v))
+        })
+    }
+
+    /// `--coffre` and `HIRZLA_COFFRE` (ADR 0085): the vault a command is for.
+    #[test]
+    fn parses_the_vault_alias() {
+        let a = pe(&["ls"], &[]).unwrap();
+        assert_eq!((a.vault_alias, a.socket, a.vault), (None, None, None));
+        assert_eq!(
+            pe(&["--coffre", "Client X", "ls"], &[])
+                .unwrap()
+                .vault_alias,
+            Some("Client X".to_owned())
+        );
+        assert_eq!(
+            pe(&["ls"], &[("HIRZLA_COFFRE", "société")])
+                .unwrap()
+                .vault_alias,
+            Some("société".to_owned())
+        );
+        // The option wins over the variable; an empty variable chooses nothing.
+        assert_eq!(
+            pe(&["--coffre", "perso", "ls"], &[("HIRZLA_COFFRE", "client")])
+                .unwrap()
+                .vault_alias,
+            Some("perso".to_owned())
+        );
+        assert_eq!(
+            pe(&["ls"], &[("HIRZLA_COFFRE", "")]).unwrap().vault_alias,
+            None
+        );
+        assert!(pe(&["--coffre"], &[]).is_err());
+
+        // `--socket` and `--vault` name a core outside the registry: `--coffre` with them
+        // is refused, whether they come from the command line or from the environment.
+        for (args, env) in [
+            (&["--coffre", "x", "--socket", "/s", "ls"][..], &[][..]),
+            (&["--vault", "/v", "--coffre", "x", "ls"][..], &[][..]),
+            (&["--coffre", "x", "ls"][..], &[("HIRZLA_SOCKET", "/s")][..]),
+            (&["--coffre", "x", "ls"][..], &[("HIRZLA_VAULT", "/v")][..]),
+        ] {
+            let err = pe(args, env).unwrap_err();
+            assert!(err.contains("--coffre"), "{err}");
+        }
+        // The alias of the environment only gives way to them.
+        let a = pe(&["--socket", "/s", "ls"], &[("HIRZLA_COFFRE", "client")]).unwrap();
+        assert_eq!(
+            (a.vault_alias, a.socket),
+            (None, Some(OsString::from("/s")))
+        );
+        let a = pe(
+            &["ls"],
+            &[("HIRZLA_COFFRE", "client"), ("HIRZLA_VAULT", "/v")],
+        )
+        .unwrap();
+        assert_eq!((a.vault_alias, a.vault), (None, Some(PathBuf::from("/v"))));
+    }
+
+    /// `hirzla coffres` (`docs/api-locale.md` § 25.6).
+    #[test]
+    fn parses_the_vault_registry_commands() {
+        let v = |a: &[&str]| match pe(a, &[]).unwrap().command {
+            Command::Vaults(c) => c,
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(v(&["coffres"]), VaultsCommand::List);
+        assert_eq!(v(&["coffres", "liste"]), VaultsCommand::List);
+        assert_eq!(
+            v(&["coffres", "ajouter", "Client X", "/d/client.hirzla"]),
+            VaultsCommand::Add {
+                alias: "Client X".to_owned(),
+                file: PathBuf::from("/d/client.hirzla"),
+                default: false,
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "ajouter", "perso", "p.hirzla", "--defaut"]),
+            VaultsCommand::Add {
+                alias: "perso".to_owned(),
+                file: PathBuf::from("p.hirzla"),
+                default: true,
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "renommer", "perso", "maison"]),
+            VaultsCommand::Rename {
+                alias: "perso".to_owned(),
+                new_alias: "maison".to_owned(),
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "defaut", "perso"]),
+            VaultsCommand::Default {
+                alias: "perso".to_owned(),
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "retirer", "perso"]),
+            VaultsCommand::Remove {
+                alias: "perso".to_owned(),
+            }
+        );
+        // Creation through a provisional core (§ 25.9).
+        assert_eq!(
+            v(&["coffres", "creer", "Client X"]),
+            VaultsCommand::Create {
+                alias: "Client X".to_owned(),
+                file: None,
+                default: false,
+                kdf: None,
+            }
+        );
+        assert_eq!(
+            v(&[
+                "coffres",
+                "creer",
+                "perso",
+                "p.hirzla",
+                "--defaut",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3"
+            ]),
+            VaultsCommand::Create {
+                alias: "perso".to_owned(),
+                file: Some(PathBuf::from("p.hirzla")),
+                default: true,
+                kdf: Some((65536, 3, 1)),
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "rejoindre", "société", "hirzla-invitation:x"]),
+            VaultsCommand::Join {
+                alias: "société".to_owned(),
+                link: "hirzla-invitation:x".to_owned(),
+                file: None,
+                default: false,
+            }
+        );
+        assert_eq!(
+            v(&[
+                "coffres",
+                "enroler",
+                "société",
+                "@lien.txt",
+                "s.hirzla",
+                "--defaut"
+            ]),
+            VaultsCommand::Enrol {
+                alias: "société".to_owned(),
+                link: "@lien.txt".to_owned(),
+                file: Some(PathBuf::from("s.hirzla")),
+                default: true,
+            }
+        );
+        for bad in [
+            &["coffres", "creer"][..],
+            &["coffres", "creer", "a", "f", "g"],
+            &["coffres", "creer", "a", "--kdf-memory", "65536"],
+            &["coffres", "rejoindre", "a"],
+            &["coffres", "rejoindre", "a", "l", "f", "g"],
+            &[
+                "coffres",
+                "rejoindre",
+                "a",
+                "l",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3",
+            ],
+            &["coffres", "enroler", "a"],
+            &["coffres", "enroler", "a", "l", "--kdf-passes", "3"],
+            &[
+                "coffres",
+                "ajouter",
+                "a",
+                "f",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3",
+            ],
+            &["coffres", "renommer", "a", "b", "c"],
+        ] {
+            assert!(pe(bad, &[]).is_err(), "{bad:?}");
+        }
+        for bad in [
+            &["coffres", "ajouter"][..],
+            &["coffres", "ajouter", "perso"],
+            &["coffres", "ajouter", "perso", "a", "b"],
+            &["coffres", "renommer", "perso"],
+            &["coffres", "defaut"],
+            &["coffres", "defaut", "a", "b"],
+            &["coffres", "retirer"],
+            &["coffres", "retirer", "a", "b"],
+            &["coffres", "liste", "a"],
+            &["coffres", "effacer", "perso"],
+            &["coffres", "--defaut"],
+            &["coffres", "retirer", "perso", "--defaut"],
+            &["coffres", "retirer", "perso", "--purger"],
+        ] {
+            assert!(pe(bad, &[]).is_err(), "{bad:?}");
+        }
+        // The registry commands take no vault: the alias is an argument, not `--coffre`.
+        let a = pe(&["--coffre", "perso", "coffres"], &[]).unwrap();
+        assert_eq!(a.command, Command::Vaults(VaultsCommand::List));
+    }
     #[test]
     fn parses_totp() {
         let t = |a: &[&str]| match p(a).unwrap().command {

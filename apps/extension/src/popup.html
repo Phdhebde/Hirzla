@@ -25,6 +25,7 @@
     <main>
       <p id="message" class="message" role="status" hidden></p>
       <button id="open-app" type="button" class="primary" hidden>Ouvrir Hirzla</button>
+      <p id="locked-vaults" class="hint" hidden></p>
 
       <section id="logins" hidden>
         <h2>Identifiants pour ce site</h2>
@@ -36,6 +37,7 @@
         <h2>Nouvel identifiant</h2>
         <label>Titre <input id="save-title" type="text" maxlength="512" autocomplete="off" /></label>
         <label>Identifiant <input id="save-username" type="text" maxlength="1024" autocomplete="off" /></label>
+        <label id="save-vault-field" hidden>Coffre <select id="save-vault"></select></label>
         <p class="hint">Le mot de passe saisi dans la page sera enregistré pour <code id="save-origin"></code> uniquement.</p>
         <div class="row">
           <button type="submit" class="primary">Enregistrer</button>

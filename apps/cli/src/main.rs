@@ -17,18 +17,23 @@ mod server;
 mod term;
 mod totp;
 mod update;
+mod vault_new;
+mod vaults;
 
+use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
-use std::process::{Command as Process, ExitCode, Stdio};
-use std::time::{Duration, Instant};
+use std::process::ExitCode;
+use std::time::Duration;
 
 use hirzla_core::auth::ServerRefusal;
+use hirzla_core::client::router::{Route, RouteError, VaultRouter};
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, Reply, Request, Selector, SetChanges,
     StatusInfo, VaultState, MAX_PASSWORD,
 };
+use hirzla_core::registry::RegistryError;
 use hirzla_core::transport::Endpoint;
 use hirzla_keystore::platform::HardeningStatus;
 use hirzla_vault::secret::{Field, SecretType};
@@ -129,6 +134,61 @@ fn client_message(e: &ClientError) -> String {
     }
 }
 
+fn registry_message(e: RegistryError) -> String {
+    match e {
+        RegistryError::Malformed => {
+            "la liste des coffres de cet appareil est illisible ou altérée ; elle n'a pas été \
+             modifiée."
+        }
+        RegistryError::SymlinkInPath => {
+            "le chemin de la liste des coffres passe par un lien symbolique : refusé."
+        }
+        RegistryError::NotPrivate => {
+            "la liste des coffres n'est pas réservée à votre compte (propriétaire ou droits) : \
+             refusée."
+        }
+        RegistryError::TooManyVaults => "cet appareil tient déjà 16 coffres, le maximum.",
+        RegistryError::InvalidAlias => {
+            "nom de coffre refusé : 1 à 64 octets, sans caractère de contrôle ni espace en tête \
+             ou en fin."
+        }
+        RegistryError::InvalidPath => "chemin du coffre refusé : chemin absolu en UTF-8 attendu.",
+        RegistryError::DuplicateAlias => "un coffre porte déjà ce nom.",
+        RegistryError::DuplicateVault => "ce coffre est déjà inscrit.",
+        RegistryError::UnknownAlias => "aucun coffre ne porte ce nom. Voir « hirzla coffres ».",
+        RegistryError::NoVault => "le fichier du coffre est introuvable.",
+        RegistryError::NotAVault => "ce fichier n'est pas un coffre Hirzla lisible.",
+        RegistryError::VaultMismatch => {
+            "le fichier à cet emplacement n'est plus le coffre inscrit (autre identifiant) : \
+             refusé."
+        }
+        RegistryError::Io => "la liste des coffres n'a pas pu être lue ou écrite.",
+    }
+    .into()
+}
+
+fn route_message(e: &RouteError) -> String {
+    match e {
+        RouteError::Registry(e) => registry_message(*e),
+        RouteError::UnknownAlias => registry_message(RegistryError::UnknownAlias),
+        RouteError::NoDefault => {
+            "plusieurs coffres sont inscrits et aucun n'est le coffre par défaut. Précisez \
+             --coffre ALIAS."
+                .into()
+        }
+        RouteError::NoEndpoint => "point de connexion introuvable.".into(),
+        RouteError::WrongVault => {
+            "le noyau à l'écoute sert un autre coffre que celui demandé : connexion refusée, \
+             rien d'autre n'a été envoyé."
+                .into()
+        }
+        RouteError::CoreNotStarted => {
+            "impossible de démarrer le noyau (hirzla-core introuvable ?).".into()
+        }
+        RouteError::Client(e) => client_message(e),
+    }
+}
+
 fn type_name(t: u64) -> &'static str {
     match t {
         1 => "mot de passe",
@@ -180,80 +240,90 @@ fn say(text: &str) {
 // Connection
 // -----------------------------------------------------------------------------------------
 
-struct Session<'a> {
-    args: &'a Args,
-    endpoint: Endpoint,
+struct Session {
+    /// Where the core of the vault this command is for listens, and how to start it.
+    route: Route,
     core: PathBuf,
 }
 
-impl<'a> Session<'a> {
-    fn new(args: &'a Args) -> Result<Session<'a>, String> {
-        let endpoint = match &args.socket {
-            Some(s) => {
-                Endpoint::parse(s).map_err(|_| "point de connexion non valide.".to_owned())?
-            }
-            None => Endpoint::default_for_user()
-                .map_err(|_| "point de connexion introuvable.".to_owned())?,
+/// The core executable this client expects: `--core`, or `hirzla-core` next to `hirzla`.
+fn expected_core(args: &Args) -> Result<PathBuf, String> {
+    match &args.core {
+        Some(c) => Ok(c.clone()),
+        None => Ok(sibling_core(
+            &std::env::current_exe().map_err(|_| "exécutable introuvable.".to_owned())?,
+        )),
+    }
+}
+
+impl Session {
+    fn new(args: &Args) -> Result<Session, String> {
+        let default_endpoint = || {
+            Endpoint::default_for_user().map_err(|_| "point de connexion introuvable.".to_owned())
         };
-        let core = match &args.core {
-            Some(c) => c.clone(),
-            None => sibling_core(
-                &std::env::current_exe().map_err(|_| "exécutable introuvable.".to_owned())?,
-            ),
+        let route = if args.socket.is_some() || args.vault.is_some() {
+            // Outside the vault registry, as before it existed (`docs/api-locale.md`
+            // § 25.5): the endpoint given, and the vault passed to a core started here.
+            let endpoint = match &args.socket {
+                Some(s) => {
+                    Endpoint::parse(s).map_err(|_| "point de connexion non valide.".to_owned())?
+                }
+                None => default_endpoint()?,
+            };
+            let mut start_args = Vec::new();
+            if let Some(s) = &args.socket {
+                start_args.extend([OsString::from("--socket"), s.clone()]);
+            }
+            if let Some(v) = &args.vault {
+                start_args.extend([OsString::from("--vault"), v.clone().into_os_string()]);
+            }
+            Route::unregistered(endpoint, args.socket.is_none(), start_args)
+        } else {
+            match (VaultRouter::for_user(), &args.vault_alias) {
+                (Some(router), alias) => match router.route(alias.as_deref()) {
+                    Ok(route) => route,
+                    Err(RouteError::NoDefault) => return Err(vaults::no_default_message(&router)),
+                    Err(e) => return Err(route_message(&e)),
+                },
+                // No configuration directory, hence no registry: the single vault, as before.
+                (None, None) => Route::unregistered(default_endpoint()?, true, Vec::new()),
+                (None, Some(_)) => return Err(registry_message(RegistryError::Io)),
+            }
         };
         Ok(Session {
-            args,
-            endpoint,
-            core,
+            route,
+            core: expected_core(args)?,
         })
     }
 
     /// Connects, waits for the core to accept this process (one `Status` round trip, since
-    /// the core reads this executable when it accepts), then hardens this process. Nothing
-    /// secret is read or held before that point.
-    fn try_connect(&self) -> Result<Client, ClientError> {
-        let mut client = Client::connect(&self.endpoint, Some(&self.core))?;
-        client.call(&Request::Status)?;
+    /// the core reads this executable when it accepts), checks that it serves the vault of
+    /// the route, then hardens this process. Nothing secret is read or held before that
+    /// point.
+    fn try_connect(&self) -> Result<Client, RouteError> {
+        let client = self.route.connect(Some(&self.core))?;
         let _ = hirzla_keystore::platform::harden_process();
         Ok(client)
     }
 
     /// Connects; when `start` is set and no core runs, starts one, detached.
     fn connect(&self, start: bool) -> Result<Client, String> {
-        match self.try_connect() {
-            Ok(c) => Ok(c),
-            Err(ClientError::NotRunning) if start => {
-                self.start_core()?;
-                let deadline = Instant::now() + START_TIMEOUT;
-                loop {
-                    match self.try_connect() {
-                        Ok(c) => return Ok(c),
-                        Err(ClientError::NotRunning) if Instant::now() < deadline => {
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
-                        Err(e) => return Err(client_message(&e)),
-                    }
-                }
-            }
-            Err(e) => Err(client_message(&e)),
+        let client = if start {
+            self.route.connect_or_start(&self.core, START_TIMEOUT)
+        } else {
+            self.route.connect(Some(&self.core))
         }
+        .map_err(|e| route_message(&e))?;
+        let _ = hirzla_keystore::platform::harden_process();
+        Ok(client)
     }
 
-    fn start_core(&self) -> Result<(), String> {
-        let mut cmd = Process::new(&self.core);
-        if let Some(s) = &self.args.socket {
-            cmd.arg("--socket").arg(s);
-        }
-        if let Some(v) = &self.args.vault {
-            cmd.arg("--vault").arg(v);
-        }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        clipboard::detach(&mut cmd);
-        cmd.spawn()
-            .map(drop)
-            .map_err(|_| "impossible de démarrer le noyau (hirzla-core introuvable ?).".to_owned())
+    /// The line that names the vault a command talked to, when it comes from the registry.
+    fn vault_line(&self) -> Option<String> {
+        self.route
+            .entry
+            .as_ref()
+            .map(|e| format!("Coffre « {} » : {}", e.alias.as_str(), e.path.display()))
     }
 }
 
@@ -383,12 +453,24 @@ fn run(args: &Args) -> Result<(), String> {
     if let Command::Update(command) = &args.command {
         return update::run(command);
     }
+    // The vault registry itself: no vault is chosen yet (ADR 0085).
+    if let Command::Vaults(command) = &args.command {
+        return vaults::run(args, command);
+    }
     let session = Session::new(args)?;
     match &args.command {
         Command::Init { kdf } => {
             let mut c = session.connect(true)?;
             if status(&mut c)?.state != VaultState::Absent {
-                return Err(refusal_message(&ErrorReply::new(ErrorCode::VaultExists)));
+                // The core of a registered vault creates none (§ 25.3): a vault of more is
+                // created through a provisional core (§ 25.9).
+                return Err(if session.route.entry.is_some() {
+                    "ce coffre existe déjà. Pour créer un coffre de plus : « hirzla coffres \
+                     creer ALIAS »."
+                        .into()
+                } else {
+                    refusal_message(&ErrorReply::new(ErrorCode::VaultExists))
+                });
             }
             let password = term::read_secret("Nouveau mot de passe maître : ", true, MAX_PASSWORD)?;
             call(
@@ -425,11 +507,11 @@ fn run(args: &Args) -> Result<(), String> {
         Command::UnlockHardware { rank } => methods::unlock(&session, *rank),
         Command::Methods(command) => methods::run(&session, command),
         Command::Lock => match session.try_connect() {
-            Err(ClientError::NotRunning) => {
+            Err(RouteError::Client(ClientError::NotRunning)) => {
                 say("Le coffre est verrouillé (noyau arrêté).");
                 Ok(())
             }
-            Err(e) => Err(client_message(&e)),
+            Err(e) => Err(route_message(&e)),
             Ok(mut c) => {
                 call(&mut c, &Request::Lock)?;
                 say("Coffre verrouillé.");
@@ -437,13 +519,19 @@ fn run(args: &Args) -> Result<(), String> {
             }
         },
         Command::Status => match session.try_connect() {
-            Err(ClientError::NotRunning) => {
+            Err(RouteError::Client(ClientError::NotRunning)) => {
+                if let Some(line) = session.vault_line() {
+                    say(&line);
+                }
                 say("Noyau : arrêté. Coffre : verrouillé.");
                 Ok(())
             }
-            Err(e) => Err(client_message(&e)),
+            Err(e) => Err(route_message(&e)),
             Ok(mut c) => {
                 let s = status(&mut c)?;
+                if let Some(line) = session.vault_line() {
+                    say(&line);
+                }
                 let state = match s.state {
                     VaultState::Absent => "aucun coffre",
                     VaultState::Locked => "verrouillé",
@@ -475,11 +563,11 @@ fn run(args: &Args) -> Result<(), String> {
             }
         },
         Command::Stop => match session.try_connect() {
-            Err(ClientError::NotRunning) => {
+            Err(RouteError::Client(ClientError::NotRunning)) => {
                 say("Le noyau n'est pas démarré.");
                 Ok(())
             }
-            Err(e) => Err(client_message(&e)),
+            Err(e) => Err(route_message(&e)),
             Ok(mut c) => {
                 call(&mut c, &Request::Shutdown)?;
                 say("Coffre verrouillé, noyau arrêté.");
@@ -615,7 +703,10 @@ fn run(args: &Args) -> Result<(), String> {
             destination,
         } => folders::move_secret(&session, name.as_deref(), id.as_deref(), destination),
         Command::Totp(command) => totp::run(&session, command),
-        Command::ClipboardHelper { .. } | Command::Update(_) | Command::Version => Ok(()),
+        Command::ClipboardHelper { .. }
+        | Command::Update(_)
+        | Command::Vaults(_)
+        | Command::Version => Ok(()),
     }
 }
 
@@ -651,7 +742,7 @@ fn set_changes(
     Ok(SetChanges::between(&urls, &new_urls, &tags, &new_tags))
 }
 
-fn set(session: &Session<'_>, command: &Command) -> Result<(), String> {
+fn set(session: &Session, command: &Command) -> Result<(), String> {
     let Command::Set {
         name,
         username,

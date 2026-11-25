@@ -92,11 +92,7 @@ fn report_lines(r: &ImportReport) -> Vec<String> {
 }
 
 /// `import-kdbx FICHIER [--fichier-cle FICHIER]`.
-pub fn import_kdbx(
-    session: &Session<'_>,
-    file: &Path,
-    key_file: Option<&Path>,
-) -> Result<(), String> {
+pub fn import_kdbx(session: &Session, file: &Path, key_file: Option<&Path>) -> Result<(), String> {
     // The core reads both files itself: only their absolute paths travel.
     let absolute = |f: &Path, what: &str| -> Result<String, String> {
         let path = std::fs::canonicalize(f).map_err(|_| format!("{what} introuvable."))?;
@@ -192,7 +188,7 @@ fn history_of(
 }
 
 /// `history NOM | --id ID`.
-pub fn history(session: &Session<'_>, name: Option<&str>, id: Option<&str>) -> Result<(), String> {
+pub fn history(session: &Session, name: Option<&str>, id: Option<&str>) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let (_, versions) = history_of(&mut c, name, id)?;
     let mut out = std::io::stdout();
@@ -225,7 +221,7 @@ pub fn history(session: &Session<'_>, name: Option<&str>, id: Option<&str>) -> R
 /// `restore NOM | --id ID [--version N] [--champ C --stdout]`: out of the trash, back to
 /// version N, or one field of version N.
 pub fn restore(
-    session: &Session<'_>,
+    session: &Session,
     name: Option<&str>,
     id: Option<&str>,
     version: Option<usize>,
@@ -268,7 +264,7 @@ pub fn restore(
 
 /// `history NOM --version N --champ C`: one field of an earlier version.
 pub fn read_version(
-    session: &Session<'_>,
+    session: &Session,
     name: Option<&str>,
     id: Option<&str>,
     version: usize,
@@ -303,7 +299,7 @@ pub fn read_version(
 }
 
 /// `passwd`.
-pub fn change_password(session: &Session<'_>) -> Result<(), String> {
+pub fn change_password(session: &Session) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let current = term::read_secret("Mot de passe maître actuel : ", false, MAX_PASSWORD)?;
     let new = new_password("Nouveau mot de passe maître : ")?;
@@ -330,7 +326,7 @@ pub struct SettingsChange {
 }
 
 /// `settings [--verrouillage S] [--presse-papiers S] [--veille oui|non] [--session oui|non]`.
-pub fn settings(session: &Session<'_>, change: &SettingsChange) -> Result<(), String> {
+pub fn settings(session: &Session, change: &SettingsChange) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let SelfReply::Settings(mut s) = call(&mut c, &SelfRequest::GetSettings)? else {
         return Err(unexpected());
@@ -425,7 +421,7 @@ pub enum Recovery {
 }
 
 /// `recovery status | create T N DOSSIER | unlock PART… | remove`.
-pub fn recovery(session: &Session<'_>, what: &Recovery) -> Result<(), String> {
+pub fn recovery(session: &Session, what: &Recovery) -> Result<(), String> {
     match what {
         Recovery::Status => {
             let mut c = session.connect(false)?;

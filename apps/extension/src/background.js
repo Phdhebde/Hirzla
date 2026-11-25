@@ -67,6 +67,8 @@ async function details(p) {
       title: c.title,
       userName: c.userName ?? null,
       displayName: c.displayName ?? null,
+      // With several vaults (ADR 0085): the vault this account comes from.
+      alias: typeof c.alias === 'string' ? c.alias : null,
     })),
   };
 }
@@ -93,7 +95,7 @@ async function answer(p, choice, index) {
   } else {
     const c = p.candidates?.[index];
     if (!c) return { done: false, error: 'bad_request' };
-    reply = await ask({
+    const message = {
       type: 'passkey_assert',
       origin: p.origin,
       rpId: p.rpId,
@@ -101,7 +103,10 @@ async function answer(p, choice, index) {
       locker: c.locker,
       id: c.id,
       uv: p.request.uv,
-    });
+    };
+    // The assertion is asked to the vault that proposed the account, never to another one.
+    if (typeof c.vault === 'string') message.vault = c.vault;
+    reply = await ask(message);
   }
   if (!reply.ok) {
     // Excluded or unsupported: the page learns it now. Locked, verification: the window

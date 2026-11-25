@@ -13,6 +13,7 @@ use std::time::Duration;
 use std::os::unix::net::{UnixListener, UnixStream};
 
 use hirzla_keystore::platform;
+use hirzla_vault::model::Id16;
 
 /// The kernel's view of the process at the other end of a connection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +90,57 @@ impl Endpoint {
             let sid = platform::current_user_sid()?;
             Ok(Endpoint {
                 name: format!("{PIPE_PREFIX}hirzla-core-{sid}"),
+            })
+        }
+    }
+
+    /// The endpoint of the core of one vault (`docs/api-locale.md` § 25.2, ADR 0085 § 3):
+    /// `core-<id>.sock` next to the default socket on Unix, `\\.\pipe\hirzla-core-<SID>-<id>`
+    /// on Windows, where `<id>` is the vault identifier in lower-case hexadecimal.
+    ///
+    /// # Errors
+    /// [`TransportError::Io`] if the user cannot be identified (Windows).
+    pub fn for_vault(vault_id: &Id16) -> Result<Endpoint, TransportError> {
+        let id = crate::registry::id_hex(vault_id);
+        let default = Endpoint::default_for_user()?;
+        #[cfg(unix)]
+        {
+            Ok(Endpoint {
+                path: default.path.with_file_name(format!("core-{id}.sock")),
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Endpoint {
+                name: format!("{}-{id}", default.name),
+            })
+        }
+    }
+
+    /// A provisional endpoint (`docs/api-locale.md` § 25.9): where a provisional core listens
+    /// while it creates a vault, which has no identifier yet. `core-new-<random>.sock` next
+    /// to the default socket on Unix, `\\.\pipe\hirzla-core-<SID>-new-<random>` on Windows;
+    /// `<random>` is 8 bytes of the system generator in hexadecimal. The name is no secret:
+    /// it only keeps two creations apart.
+    ///
+    /// # Errors
+    /// [`TransportError::Io`] if the user cannot be identified (Windows) or the generator
+    /// fails.
+    pub fn provisional() -> Result<Endpoint, TransportError> {
+        let tag = hirzla_crypto::util::random_array::<8>()
+            .map(|bytes| crate::registry::hex(&bytes))
+            .map_err(|_| TransportError::Io(io::ErrorKind::Other.into()))?;
+        let default = Endpoint::default_for_user()?;
+        #[cfg(unix)]
+        {
+            Ok(Endpoint {
+                path: default.path.with_file_name(format!("core-new-{tag}.sock")),
+            })
+        }
+        #[cfg(windows)]
+        {
+            Ok(Endpoint {
+                name: format!("{}-new-{tag}", default.name),
             })
         }
     }
@@ -486,6 +538,60 @@ mod tests {
         assert!(Endpoint::parse(OsStr::new(r"\\.\pipe\a\b")).is_err());
         assert!(Endpoint::parse(OsStr::new(r"\\server\pipe\x")).is_err());
         assert!(Endpoint::parse(OsStr::new(r"\\.\pipe\hirzla-test")).is_ok());
+    }
+
+    /// A provisional endpoint (§ 25.9) is next to the default one, never the default one nor
+    /// the endpoint of a vault, differs at each draw, and is one the core accepts on its
+    /// command line.
+    #[test]
+    fn provisional_endpoints_are_drawn_apart() {
+        let default = Endpoint::default_for_user().unwrap();
+        let a = Endpoint::provisional().unwrap();
+        let b = Endpoint::provisional().unwrap();
+        assert_ne!(a, b);
+        assert_ne!(a, default);
+        assert_eq!(Endpoint::parse(OsStr::new(&a.display())).unwrap(), a);
+        let (shown, base) = (a.display(), default.display());
+        #[cfg(unix)]
+        let tag = shown
+            .strip_prefix(base.strip_suffix("core.sock").unwrap())
+            .and_then(|n| n.strip_prefix("core-new-"))
+            .and_then(|n| n.strip_suffix(".sock"))
+            .unwrap();
+        #[cfg(windows)]
+        let tag = shown
+            .strip_prefix(base.as_str())
+            .and_then(|n| n.strip_prefix("-new-"))
+            .unwrap();
+        assert_eq!(tag.len(), 16, "{shown}");
+        assert!(tag
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+        // A vault identifier is 32 digits: no vault endpoint can be mistaken for it.
+        assert_ne!(a, Endpoint::for_vault(&[0xab; 16]).unwrap());
+    }
+
+    /// The endpoint of a vault is next to the default one, carries the identifier of the
+    /// vault, and differs from the default endpoint and from the one of another vault.
+    #[test]
+    fn vault_endpoints_carry_the_vault_identifier() {
+        let default = Endpoint::default_for_user().unwrap();
+        let a = Endpoint::for_vault(&[0xab; 16]).unwrap();
+        let b = Endpoint::for_vault(&[0x01; 16]).unwrap();
+        assert!(a.display().contains(&"ab".repeat(16)));
+        assert_ne!(a, b);
+        assert_ne!(a, default);
+        // It is an endpoint the core accepts on its command line.
+        assert_eq!(
+            Endpoint::parse(OsStr::new(&a.display())).unwrap(),
+            a,
+            "{}",
+            a.display()
+        );
+        #[cfg(unix)]
+        assert_eq!(a.path.parent(), default.path.parent());
+        #[cfg(windows)]
+        assert!(a.name.starts_with(&default.name));
     }
 
     /// A socket directory readable by others, or reached through a link, is refused at both

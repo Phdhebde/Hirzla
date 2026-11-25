@@ -116,7 +116,7 @@ fn existing_file_path(file: &Path) -> Result<String, String> {
 }
 
 /// `casier exporter` and `casier importer`.
-pub fn run(session: &Session<'_>, command: &LockerCommand) -> Result<(), String> {
+pub fn run(session: &Session, command: &LockerCommand) -> Result<(), String> {
     match command {
         LockerCommand::Export {
             locker,

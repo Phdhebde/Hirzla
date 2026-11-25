@@ -983,3 +983,81 @@ fn set_changes_are_the_difference() {
     assert!(c.add_tags.is_empty() && c.remove_tags.is_empty());
     assert!(SetChanges::between(&l(&["a"]), &l(&["a"]), &[], &[]).is_empty());
 }
+
+/// `VaultInfo` (version 16, ADR 0085, `docs/api-locale.md` § 25.4).
+#[test]
+fn vault_info_is_version_16() {
+    assert_eq!(PROTOCOL_VERSION, 16);
+    assert!(SUPPORTED_VERSIONS.contains(&VAULT_INFO_VERSION));
+    let b = Request::VaultInfo.encode(3).unwrap();
+    assert!(Request::decode_versioned(&b).unwrap() == (3, 16, Request::VaultInfo));
+    round_trip(&Request::VaultInfo);
+    // It takes no argument.
+    let b = versioned(16, Op::VaultInfo, Value::map(vec![]));
+    assert_eq!(refused(&b), (3, ErrorCode::Malformed));
+    // Earlier versions do not know it.
+    for v in [1, 2, 7, 8, 15] {
+        let b = encode_map(vec![
+            (1, Value::Uint(v)),
+            (2, Value::Uint(3)),
+            (3, Value::Uint(Op::VaultInfo as u64)),
+        ]);
+        assert_eq!(refused(&b), (3, ErrorCode::UnknownOperation));
+    }
+
+    // Locked: the identifier alone. Open: the mode, and the server in server mode.
+    let id = [0x5a; 16];
+    for (mode, server) in [
+        (None, None),
+        (Some(VaultMode::Standalone), None),
+        (
+            Some(VaultMode::Server),
+            Some("hirzla://coffre.exemple:8443".to_owned()),
+        ),
+    ] {
+        reply_round_trip(
+            Op::VaultInfo,
+            Ok(Reply::VaultInfo(VaultInfo {
+                vault_id: id,
+                mode,
+                server,
+            })),
+        );
+    }
+    // A reply of version 16 cannot be written for a request of version 15.
+    let info = Reply::VaultInfo(VaultInfo {
+        vault_id: id,
+        mode: None,
+        server: None,
+    });
+    assert!(Reply::encode_versioned(15, 3, &Ok(info)).is_err());
+
+    // Refused replies: no identifier, an identifier of the wrong size, an unknown mode, a
+    // server without the server mode, the server mode without a server, an empty server,
+    // an unknown key.
+    let reply = |body: Vec<(u64, Value)>| {
+        encode_map(vec![
+            (1, Value::Uint(16)),
+            (2, Value::Uint(9)),
+            (3, Value::Uint(0)),
+            (4, Value::map(body)),
+        ])
+    };
+    let server = || Value::text("hirzla://coffre.exemple:8443");
+    for body in [
+        vec![],
+        vec![(1, Value::bytes(&[1; 15]))],
+        vec![(1, Value::bytes(&id)), (2, Value::Uint(2))],
+        vec![(1, Value::bytes(&id)), (3, server())],
+        vec![(1, Value::bytes(&id)), (2, Value::Uint(0)), (3, server())],
+        vec![(1, Value::bytes(&id)), (2, Value::Uint(1))],
+        vec![
+            (1, Value::bytes(&id)),
+            (2, Value::Uint(1)),
+            (3, Value::text("")),
+        ],
+        vec![(1, Value::bytes(&id)), (4, Value::Uint(0))],
+    ] {
+        assert!(Reply::decode(Op::VaultInfo, &reply(body)).is_err());
+    }
+}

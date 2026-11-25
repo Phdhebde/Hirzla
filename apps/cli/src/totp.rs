@@ -53,7 +53,7 @@ fn read_input() -> Result<Zeroizing<String>, String> {
     )
 }
 
-pub fn run(session: &Session<'_>, t: &TotpCommand) -> Result<(), String> {
+pub fn run(session: &Session, t: &TotpCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     if let TotpAction::Create {
         username,

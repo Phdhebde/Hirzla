@@ -21,6 +21,8 @@ import { announce, byId, h, icon } from "./dom.js";
  * @property {(e: import("./api.js").ApiError) => boolean} onError  True when handled.
  * @property {(entry: Entry) => void} onOpen  Shows the record of this secret.
  * @property {() => PaletteAction[]} actions
+ * @property {() => string | null} vaultName  Alias of the vault shown, when several are registered.
+ * @property {(vault: string, entry: Entry) => void} onOpenIn  Shows this secret of another open vault.
  * @property {(kind: string) => string} iconOf
  */
 
@@ -33,7 +35,7 @@ export class Palette {
     this.dialog = /** @type {HTMLDialogElement} */ (byId("dialogue-palette"));
     this.input = /** @type {HTMLInputElement} */ (byId("palette-recherche"));
     this.list = byId("palette-liste");
-    /** @type {{ entry?: Entry, action?: PaletteAction }[]} */
+    /** @type {{ entry?: Entry, action?: PaletteAction, vault?: { id: string, alias: string } }[]} */
     this.rows = [];
     this.active = 0;
     this.timer = 0;
@@ -86,6 +88,17 @@ export class Palette {
       this.close();
       return;
     }
+    // Common search (ADR 0085): the other open vaults answer too, once something is typed.
+    // A vault that does not answer is left out.
+    /** @type {import("./api.js").VaultMatches[]} */
+    let elsewhere = [];
+    if (query && this.hooks.vaultName() !== null) {
+      try {
+        elsewhere = await api.searchVaults(query);
+      } catch {
+        elsewhere = [];
+      }
+    }
     if (serial !== this.serial) return;
     const needle = query.toLocaleLowerCase("fr");
     const actions = this.hooks.actions().filter((a) => !needle || a.label.toLocaleLowerCase("fr").includes(needle));
@@ -93,6 +106,7 @@ export class Palette {
     if (!query) entries.sort((a, b) => Number(b.favorite) - Number(a.favorite));
     this.rows = [
       ...entries.slice(0, MAX_ROWS).map((entry) => ({ entry })),
+      ...elsewhere.flatMap((m) => m.entries.map((entry) => ({ entry, vault: { id: m.vault, alias: m.alias } }))),
       ...actions.map((action) => ({ action })),
     ];
     this.active = 0;
@@ -102,10 +116,13 @@ export class Palette {
   render() {
     byId("palette-vide").hidden = this.rows.length > 0;
     this.list.hidden = this.rows.length === 0;
+    // With several vaults, every secret carries the name of its vault.
+    const here = this.hooks.vaultName();
     this.list.replaceChildren(
       ...this.rows.map((row, i) => {
         const e = row.entry;
         const a = row.action;
+        const where = row.vault?.alias ?? here;
         const li = h(
           "li",
           { id: `palette-${i}`, class: "palette-ligne", role: "option", "aria-selected": i === this.active ? "true" : "false" },
@@ -116,6 +133,7 @@ export class Palette {
                   h("span", { class: "element-titre", text: e.title }),
                   h("span", { class: "element-sous", text: e.username || e.hosts[0] || "" }),
                 ]),
+                where !== null ? h("span", { class: "etiquette palette-coffre", text: where }) : null,
               ]
             : [
                 h("span", { class: "vignette vignette-action", "aria-hidden": "true" }, [icon(a?.icon ?? "secret")]),
@@ -174,6 +192,11 @@ export class Palette {
     }
     const entry = row.entry;
     if (!entry) return;
+    if (row.vault) {
+      // A secret of another vault: that vault is shown first; nothing is copied from afar.
+      this.hooks.onOpenIn(row.vault.id, entry);
+      return;
+    }
     if (copy && entry.kind === "password") {
       void api
         .copyField({ locker: entry.locker, id: entry.id }, "password")

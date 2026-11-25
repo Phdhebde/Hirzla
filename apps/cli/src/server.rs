@@ -17,7 +17,7 @@ use crate::args::{
 };
 use crate::{client_message, hex, refusal_message, say, Session};
 
-fn server_message(code: ServerCode) -> String {
+pub(crate) fn server_message(code: ServerCode) -> String {
     match code {
         ServerCode::General(c) => refusal_message(&ErrorReply::new(c)),
         ServerCode::NotJoined => {
@@ -64,7 +64,7 @@ fn server_message(code: ServerCode) -> String {
 }
 
 /// A text argument: the text itself, or `@FILE` to read it from a file.
-fn text_arg(typed: &str) -> Result<String, String> {
+pub(crate) fn text_arg(typed: &str) -> Result<String, String> {
     match typed.strip_prefix('@') {
         Some(path) => std::fs::read_to_string(path)
             .map(|t| t.trim().to_owned())
@@ -80,7 +80,7 @@ pub(crate) fn note(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
-fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, String> {
+pub(crate) fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, String> {
     match c.call_server(request) {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(code)) => Err(server_message(code)),
@@ -88,12 +88,12 @@ fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, S
     }
 }
 
-fn bad_reply<T>() -> Result<T, String> {
+pub(crate) fn bad_reply<T>() -> Result<T, String> {
     Err("réponse non valide du noyau.".into())
 }
 
 /// A fingerprint in groups of five characters, easier to compare aloud.
-fn grouped(fp: &str) -> String {
+pub(crate) fn grouped(fp: &str) -> String {
     fp.as_bytes()
         .chunks(5)
         .map(|c| String::from_utf8_lossy(c).into_owned())
@@ -193,7 +193,7 @@ pub fn resolve_locker(c: &mut Client, typed: &str) -> Result<Id16, String> {
     }
 }
 
-pub fn run_server(session: &Session<'_>, command: &ServerCommand) -> Result<(), String> {
+pub fn run_server(session: &Session, command: &ServerCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         ServerCommand::Invitation => {
@@ -540,7 +540,7 @@ fn member_id(member_keys: &[u8]) -> Result<Id16, String> {
         .map_err(|_| "réponse non valide du noyau.".to_owned())
 }
 
-pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), String> {
+pub fn run_locker(session: &Session, command: &LockerCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         LockerCommand::Create { name } => {
@@ -637,10 +637,7 @@ pub fn run_locker(session: &Session<'_>, command: &LockerCommand) -> Result<(), 
 
 /// `appareil revoquer APPAREIL [--oui]` (ADR 0059): the member key of this device signs
 /// the revocation, published in every locker where the device appears.
-pub fn run_device_revoke(
-    session: &Session<'_>,
-    command: &DeviceRevokeCommand,
-) -> Result<(), String> {
+pub fn run_device_revoke(session: &Session, command: &DeviceRevokeCommand) -> Result<(), String> {
     let device = device_arg(&command.device)?;
     if !command.yes {
         if !crate::term::interactive() {
@@ -676,7 +673,7 @@ pub fn run_device_revoke(
 /// `appareil ajouter CODE` (ADR 0081): fetches the keys of the new device by its code,
 /// shows the member fingerprint to compare, certifies it on « oui », then waits until it has
 /// authenticated to add it to the shared lockers.
-pub fn run_device_enrol(session: &Session<'_>, command: &DeviceEnrolCommand) -> Result<(), String> {
+pub fn run_device_enrol(session: &Session, command: &DeviceEnrolCommand) -> Result<(), String> {
     if !crate::term::interactive() {
         return Err("l'ajout d'un appareil se confirme au terminal.".into());
     }
@@ -722,7 +719,7 @@ pub fn run_device_enrol(session: &Session<'_>, command: &DeviceEnrolCommand) -> 
 }
 
 /// Refusals of the enrolment operations (ADR 0081).
-fn device_enrol_message(code: ServerCode) -> String {
+pub(crate) fn device_enrol_message(code: ServerCode) -> String {
     match code {
         ServerCode::Forbidden => "ce poste ne détient pas votre clé de membre : ajoutez \
              l'appareil depuis un appareil de certification."
@@ -933,7 +930,7 @@ fn resolve_request(c: &mut Client, typed: &str) -> Result<Id16, String> {
     }
 }
 
-pub fn run_quorum(session: &Session<'_>, command: &QuorumCommand) -> Result<(), String> {
+pub fn run_quorum(session: &Session, command: &QuorumCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     match command {
         QuorumCommand::Prepare { locker, what } => {
@@ -1185,7 +1182,7 @@ fn resolve_ops(listed: &[QuarantinedOp], typed: &[String]) -> Result<Vec<OpId>, 
     Ok(out)
 }
 
-pub fn run_quarantine(session: &Session<'_>, command: &QuarantineCommand) -> Result<(), String> {
+pub fn run_quarantine(session: &Session, command: &QuarantineCommand) -> Result<(), String> {
     let mut c = session.connect(false)?;
     let locker = resolve_locker(&mut c, &command.locker)?;
     let ServerReply::Quarantine { ops, can_decide } =

@@ -323,7 +323,9 @@ fn a_large_listing_is_cut_to_fit_one_message() {
             state: 0,
         })
         .collect();
-    let out = entries_json(&entries);
+    let tagged: Vec<(Option<&VaultTag>, ListEntry)> =
+        entries.into_iter().map(|e| (None, e)).collect();
+    let out = entries_json(&tagged);
     assert!(out.len() <= MAX_REPLY);
     assert!(out.ends_with("\"truncated\":true}"));
 }
@@ -522,4 +524,364 @@ mod passkeys {
         }
         assert!(fake.passkeys.is_empty());
     }
+}
+
+// --- Several vaults (`docs/api-locale.md` § 25.11) ------------------------------------------
+
+/// A core of one vault: a fixed state, the logins it holds, and what it received.
+struct Vaulted {
+    /// `None`: the core cannot be reached.
+    state: Option<VaultState>,
+    titles: Vec<&'static str>,
+    app: bool,
+    seen: Vec<Request>,
+    passkeys: Vec<PasskeyRequest>,
+}
+
+impl Vaulted {
+    fn new(state: Option<VaultState>, titles: &[&'static str]) -> Vaulted {
+        Vaulted {
+            state,
+            titles: titles.to_vec(),
+            app: false,
+            seen: Vec::new(),
+            passkeys: Vec::new(),
+        }
+    }
+}
+
+impl CoreLink for Vaulted {
+    fn call(&mut self, request: &Request) -> Result<Reply, ClientError> {
+        let Some(state) = self.state else {
+            return Err(ClientError::NotRunning);
+        };
+        self.seen.push(request.clone());
+        let locked = || Err(ClientError::Refused(ErrorReply::new(ErrorCode::Locked)));
+        match request {
+            Request::Status => Ok(Reply::Status(StatusInfo {
+                state,
+                auto_lock_s: 300,
+                clipboard_clear_s: 30,
+                hardening: HardeningReport {
+                    memory_locked: HardeningStatus::Applied,
+                    dumps_disabled: HardeningStatus::Applied,
+                    tracing_blocked: HardeningStatus::Applied,
+                },
+                core_version: "0.0.0".into(),
+                versions: vec![16],
+            })),
+            Request::ShowApp => Ok(Reply::Flag(self.app)),
+            Request::Lock => {
+                self.state = Some(VaultState::Locked);
+                Ok(Reply::Done)
+            }
+            _ if state != VaultState::Unlocked => locked(),
+            Request::Match { .. } => Ok(Reply::Matches(
+                self.titles
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| ListEntry {
+                        locker: [1; 16],
+                        id: [u8::try_from(i).unwrap() + 2; 16],
+                        secret_type: 1,
+                        title: z(t),
+                        username: None,
+                        hosts: vec![],
+                        tags: vec![],
+                        favorite: false,
+                        state: 0,
+                    })
+                    .collect(),
+            )),
+            Request::Fill { .. } => Ok(Reply::Filled {
+                username: None,
+                password: z(self.titles.first().copied().unwrap_or("")),
+            }),
+            Request::Create { .. } => Ok(Reply::Created {
+                locker: [1; 16],
+                id: [9; 16],
+            }),
+            _ => Ok(Reply::Done),
+        }
+    }
+
+    fn call_passkey(
+        &mut self,
+        request: &PasskeyRequest,
+    ) -> Result<Result<PasskeyReply, PasskeyCode>, ClientError> {
+        match self.state {
+            None => Err(ClientError::NotRunning),
+            Some(VaultState::Unlocked) => {
+                self.passkeys.push(request.clone());
+                Ok(Ok(PasskeyReply::Candidates(Vec::new())))
+            }
+            Some(_) => Ok(Err(PasskeyCode::General(ErrorCode::Locked))),
+        }
+    }
+}
+
+const VAULT_A: &str = "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+const VAULT_B: &str = "b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2";
+const VAULT_C: &str = "c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3";
+
+fn vault(byte: u8, alias: &str, default: bool, core: Vaulted) -> VaultCore<Vaulted> {
+    VaultCore {
+        tag: Some(VaultTag {
+            id: [byte; 16],
+            alias: alias.to_owned(),
+            default,
+        }),
+        link: core,
+    }
+}
+
+/// Personnel (default, open), Client X (open), Mairie (locked).
+fn three() -> Vec<VaultCore<Vaulted>> {
+    vec![
+        vault(
+            0xa1,
+            "Personnel",
+            true,
+            Vaulted::new(Some(VaultState::Unlocked), &["Banque"]),
+        ),
+        vault(
+            0xb2,
+            "Client X",
+            false,
+            Vaulted::new(Some(VaultState::Unlocked), &["Console", "Portail"]),
+        ),
+        vault(
+            0xc3,
+            "Mairie",
+            false,
+            Vaulted::new(Some(VaultState::Locked), &["Jamais montré"]),
+        ),
+    ]
+}
+
+fn ask(vaults: &mut [VaultCore<Vaulted>], input: &str) -> String {
+    respond_vaults(vaults, input.as_bytes()).to_string()
+}
+
+fn asked(v: &VaultCore<Vaulted>, what: fn(&Request) -> bool) -> usize {
+    v.link.seen.iter().filter(|r| what(r)).count()
+}
+
+#[test]
+fn status_names_every_vault_and_the_destination() {
+    let mut v = three();
+    assert_eq!(
+        ask(&mut v, r#"{"type":"status"}"#),
+        format!(
+            concat!(
+                r#"{{"ok":true,"state":"unlocked","vaults":["#,
+                r#"{{"state":"unlocked","vault":"{a}","alias":"Personnel","default":true,"target":true}},"#,
+                r#"{{"state":"unlocked","vault":"{b}","alias":"Client X"}},"#,
+                r#"{{"state":"locked","vault":"{c}","alias":"Mairie"}}]}}"#
+            ),
+            a = VAULT_A,
+            b = VAULT_B,
+            c = VAULT_C
+        )
+    );
+    // The default vault locked: the first open vault is the destination.
+    v[0].link.state = Some(VaultState::Locked);
+    let out = ask(&mut v, r#"{"type":"status"}"#);
+    assert!(out.contains(r#""alias":"Client X","target":true"#), "{out}");
+    // A core that does not run is unavailable; the whole says locked when nothing is open.
+    v[1].link.state = None;
+    let out = ask(&mut v, r#"{"type":"status"}"#);
+    assert!(out.starts_with(r#"{"ok":true,"state":"locked""#), "{out}");
+    assert!(
+        out.contains(r#"{"state":"unavailable","vault":"b2"#),
+        "{out}"
+    );
+    // The destination is then the default vault, which will answer that it is locked.
+    assert!(out.contains(r#""default":true,"target":true"#), "{out}");
+    // One vault named: its state alone, as before.
+    assert_eq!(
+        ask(
+            &mut v,
+            &format!(r#"{{"type":"status","vault":"{VAULT_C}"}}"#)
+        ),
+        r#"{"ok":true,"state":"locked"}"#
+    );
+    // No core at all: the error of before.
+    for x in &mut v {
+        x.link.state = None;
+    }
+    assert_eq!(
+        ask(&mut v, r#"{"type":"status"}"#),
+        r#"{"ok":false,"error":"core_not_running"}"#
+    );
+}
+
+#[test]
+fn match_asks_every_open_vault_and_marks_each_entry() {
+    let mut v = three();
+    let out = ask(
+        &mut v,
+        r#"{"type":"match","origin":"https://bank.example"}"#,
+    );
+    assert!(out.contains(&format!(
+        r#""title":"Banque","vault":"{VAULT_A}","alias":"Personnel""#
+    )));
+    assert!(out.contains(&format!(
+        r#""title":"Console","vault":"{VAULT_B}","alias":"Client X""#
+    )));
+    assert!(out.contains(r#""title":"Portail""#));
+    // The locked vault is not asked, and nothing of it is shown.
+    assert!(!out.contains("Jamais") && !out.contains("Mairie"), "{out}");
+    let is_match = |r: &Request| matches!(r, Request::Match { .. });
+    assert_eq!(
+        (
+            asked(&v[0], is_match),
+            asked(&v[1], is_match),
+            asked(&v[2], is_match)
+        ),
+        (1, 1, 0)
+    );
+    // One vault named: that vault only.
+    let out = ask(
+        &mut v,
+        &format!(r#"{{"type":"match","origin":"https://bank.example","vault":"{VAULT_B}"}}"#),
+    );
+    assert!(out.contains("Console") && !out.contains("Banque"), "{out}");
+    // Nothing open: locked, without asking any core for logins.
+    for x in &mut v {
+        x.link.state = Some(VaultState::Locked);
+        x.link.seen.clear();
+    }
+    assert_eq!(
+        ask(
+            &mut v,
+            r#"{"type":"match","origin":"https://bank.example"}"#
+        ),
+        r#"{"ok":false,"error":"locked"}"#
+    );
+    assert!(v.iter().all(|x| asked(x, is_match) == 0));
+}
+
+#[test]
+fn a_login_is_asked_to_the_vault_that_proposed_it() {
+    let mut v = three();
+    let fill = |vault: &str| {
+        format!(
+            r#"{{"type":"fill","origin":"https://bank.example","locker":"{LOCKER}","id":"{ID}","vault":"{vault}"}}"#
+        )
+    };
+    let is_fill = |r: &Request| matches!(r, Request::Fill { .. });
+    assert!(ask(&mut v, &fill(VAULT_B)).contains(r#""password":"Console""#));
+    assert_eq!(
+        (
+            asked(&v[0], is_fill),
+            asked(&v[1], is_fill),
+            asked(&v[2], is_fill)
+        ),
+        (0, 1, 0)
+    );
+    // A locked vault named answers that it is locked: no other vault is tried.
+    assert_eq!(
+        ask(&mut v, &fill(VAULT_C)),
+        r#"{"ok":false,"error":"locked"}"#
+    );
+    assert_eq!((asked(&v[0], is_fill), asked(&v[1], is_fill)), (0, 1));
+    // A vault that is not in the registry, or a malformed identifier.
+    assert_eq!(
+        ask(&mut v, &fill("00000000000000000000000000000000")),
+        r#"{"ok":false,"error":"unknown_vault"}"#
+    );
+    assert_eq!(
+        ask(&mut v, &fill("A1A1")),
+        r#"{"ok":false,"error":"bad_request"}"#
+    );
+    assert_eq!(
+        ask(&mut v, r#"{"type":"status","vault":7}"#),
+        r#"{"ok":false,"error":"bad_request"}"#
+    );
+}
+
+#[test]
+fn a_save_goes_to_the_destination_vault_unless_one_is_named() {
+    let save = r#"{"type":"save","origin":"https://bank.example","password":"p4ss"}"#;
+    let is_create = |r: &Request| matches!(r, Request::Create { .. });
+    let mut v = three();
+    assert_eq!(ask(&mut v, save), r#"{"ok":true}"#);
+    assert_eq!((asked(&v[0], is_create), asked(&v[1], is_create)), (1, 0));
+    // The default vault locked: the first open one.
+    v[0].link.state = Some(VaultState::Locked);
+    assert_eq!(ask(&mut v, save), r#"{"ok":true}"#);
+    assert_eq!((asked(&v[0], is_create), asked(&v[1], is_create)), (1, 1));
+    // Named: that one, even when another is the destination.
+    let named = format!(
+        r#"{{"type":"save","origin":"https://bank.example","password":"p4ss","vault":"{VAULT_A}"}}"#
+    );
+    assert_eq!(ask(&mut v, &named), r#"{"ok":false,"error":"locked"}"#);
+    assert_eq!(asked(&v[1], is_create), 1);
+}
+
+#[test]
+fn lock_reaches_every_vault_and_show_stops_at_the_listening_core() {
+    let mut v = three();
+    v[1].link.app = true;
+    assert_eq!(ask(&mut v, r#"{"type":"show"}"#), r#"{"ok":true}"#);
+    let is_show = |r: &Request| matches!(r, Request::ShowApp);
+    assert_eq!(
+        (
+            asked(&v[0], is_show),
+            asked(&v[1], is_show),
+            asked(&v[2], is_show)
+        ),
+        (1, 1, 0)
+    );
+    v[1].link.app = false;
+    assert_eq!(
+        ask(&mut v, r#"{"type":"show"}"#),
+        r#"{"ok":false,"error":"no_app"}"#
+    );
+    // One core that does not run does not prevent the others from locking.
+    v[0].link.state = None;
+    assert_eq!(ask(&mut v, r#"{"type":"lock"}"#), r#"{"ok":true}"#);
+    assert_eq!(v[1].link.state, Some(VaultState::Locked));
+    assert_eq!(v[2].link.state, Some(VaultState::Locked));
+}
+
+#[test]
+fn passkey_candidates_are_asked_to_every_open_vault() {
+    let mut v = three();
+    let out = ask(
+        &mut v,
+        r#"{"type":"passkey_candidates","origin":"https://bank.example","rpId":"bank.example"}"#,
+    );
+    assert_eq!(out, r#"{"ok":true,"candidates":[]}"#);
+    assert_eq!(
+        (
+            v[0].link.passkeys.len(),
+            v[1].link.passkeys.len(),
+            v[2].link.passkeys.len()
+        ),
+        (1, 1, 0)
+    );
+}
+
+#[test]
+fn a_single_vault_outside_the_registry_answers_as_before() {
+    let mut v = vec![VaultCore {
+        tag: None,
+        link: Vaulted::new(Some(VaultState::Unlocked), &["Banque"]),
+    }];
+    assert_eq!(
+        ask(&mut v, r#"{"type":"status"}"#),
+        r#"{"ok":true,"state":"unlocked"}"#
+    );
+    let out = ask(
+        &mut v,
+        r#"{"type":"match","origin":"https://bank.example"}"#,
+    );
+    assert!(out.contains("Banque") && !out.contains("vault") && !out.contains("alias"));
+    // No vault can be named there.
+    assert_eq!(
+        ask(&mut v, &format!(r#"{{"type":"lock","vault":"{VAULT_A}"}}"#)),
+        r#"{"ok":false,"error":"unknown_vault"}"#
+    );
 }

@@ -7,17 +7,23 @@
 //! process hides its executable, which the core reads to authorise it. For the same reason,
 //! once hardened on Linux this process cannot open a new connection; losing the connection
 //! then asks the user to restart the application ([`DesktopError::CoreLost`]).
+//!
+//! With several vaults (`docs/api-locale.md` § 25.10) there is one link per registered vault,
+//! each to the route of its registry entry, and the hardening is shared ([`Hardening`]): this
+//! process hardens itself only after it has tried to join every core.
 
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 
+use hirzla_core::client::router::{Route, RouteError};
 use hirzla_core::client::{sibling_core, Client, ClientError};
 use hirzla_core::connections::proto::{ConnectionReply, ConnectionRequest};
 use hirzla_core::folders::proto::{FolderReply, FolderRequest};
 use hirzla_core::locker_export::proto::{ExportCode, ExportReply, ExportRequest};
 use hirzla_core::methods::proto::{MethodCode, MethodOp, MethodReply, MethodRequest};
 use hirzla_core::proto::{ErrorCode, Op, Reply, Request, StatusInfo};
+use hirzla_core::registry::RegistryError;
 use hirzla_core::selfmode::proto::{SelfCode, SelfOp, SelfReply, SelfRequest};
 use hirzla_core::server_mode::proto::{ServerCode, ServerOp, ServerReply, ServerRequest};
 use hirzla_core::totp::proto::{TotpReply, TotpRequest};
@@ -29,44 +35,90 @@ use crate::error::DesktopError;
 /// How long to wait for a core just started.
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// The hardening of this process, shared by its links: applied once, after the cores it
+/// talks to have accepted it.
+#[derive(Debug, Clone, Default)]
+pub struct Hardening(Arc<OnceLock<HardeningReport>>);
+
+impl Hardening {
+    /// What hardening this process obtained, once it is hardened.
+    #[must_use]
+    pub fn get(&self) -> Option<HardeningReport> {
+        self.0.get().copied()
+    }
+
+    /// Hardens this process, once.
+    pub fn apply(&self) -> HardeningReport {
+        // Not `harden_process`: locking all memory of a process that hosts a web engine
+        // would pin gigabytes of reserved address space and get it killed.
+        *self
+            .0
+            .get_or_init(hirzla_keystore::platform::harden_process_without_memory_lock)
+    }
+}
+
 /// Where the core is and how to treat this process.
 #[derive(Debug, Clone)]
 pub struct LinkConfig {
-    /// Endpoint of the core.
-    pub endpoint: Endpoint,
+    /// Where the core listens, the arguments it is started with, and the registered vault
+    /// it must serve (none outside the registry).
+    pub route: Route,
     /// Expected core executable (also the one started when none runs).
     pub core: PathBuf,
     /// Start the core when none runs.
     pub start_core: bool,
     /// Harden this process after the first accepted request.
     pub harden: bool,
-    /// `--socket` given to a core started by this process (none: the core's own default,
-    /// or `HIRZLA_SOCKET` inherited from this process).
-    pub socket_arg: Option<std::ffi::OsString>,
 }
 
 impl LinkConfig {
-    /// The default configuration: the user's endpoint, `hirzla-core` next to this executable,
-    /// started on demand, process hardened.
+    /// The configuration outside the registry: the endpoint of `HIRZLA_SOCKET`, or the
+    /// user's default one; `hirzla-core` next to this executable, started on demand without
+    /// argument (it inherits `HIRZLA_SOCKET` and `HIRZLA_VAULT` from this process), process
+    /// hardened.
     ///
     /// # Errors
     /// [`DesktopError::CoreNotRunning`] when the endpoint or the executable cannot be found.
     pub fn for_this_process() -> Result<LinkConfig, DesktopError> {
-        // Same environment as the command line and the core (which inherits it when this
-        // process starts it): `HIRZLA_SOCKET`, `HIRZLA_VAULT`.
-        let endpoint = match std::env::var_os("HIRZLA_SOCKET") {
-            Some(s) => Endpoint::parse(&s).map_err(|_| DesktopError::UntrustedCore)?,
-            None => Endpoint::default_for_user().map_err(|_| DesktopError::CoreNotRunning)?,
+        let (endpoint, default_endpoint) = match std::env::var_os("HIRZLA_SOCKET") {
+            Some(s) => (
+                Endpoint::parse(&s).map_err(|_| DesktopError::UntrustedCore)?,
+                false,
+            ),
+            None => (
+                Endpoint::default_for_user().map_err(|_| DesktopError::CoreNotRunning)?,
+                true,
+            ),
         };
-        let exe = std::env::current_exe().map_err(|_| DesktopError::CoreNotRunning)?;
         Ok(LinkConfig {
-            endpoint,
-            core: sibling_core(&exe),
+            route: Route::unregistered(endpoint, default_endpoint, Vec::new()),
+            core: core_for_this_process()?,
             start_core: true,
             harden: true,
-            socket_arg: None,
         })
     }
+
+    /// The configuration of a link to a route of the registry (`docs/api-locale.md`
+    /// § 25.10): the core is started on demand; this process is hardened by its set of
+    /// links, once all were tried.
+    #[must_use]
+    pub fn for_route(route: Route, core: PathBuf) -> LinkConfig {
+        LinkConfig {
+            route,
+            core,
+            start_core: true,
+            harden: false,
+        }
+    }
+}
+
+/// `hirzla-core` next to this executable.
+///
+/// # Errors
+/// [`DesktopError::CoreNotRunning`] when this executable cannot be found.
+pub fn core_for_this_process() -> Result<PathBuf, DesktopError> {
+    let exe = std::env::current_exe().map_err(|_| DesktopError::CoreNotRunning)?;
+    Ok(sibling_core(&exe))
 }
 
 /// Asks a running core to bring the window of the application already started to the front
@@ -75,16 +127,20 @@ impl LinkConfig {
 /// trace. One more try after a second if the core had just received the same call.
 #[must_use]
 pub fn another_instance_shown(config: &LinkConfig) -> bool {
-    let Ok(mut client) = Client::connect(&config.endpoint, Some(&config.core)) else {
-        return false;
-    };
-    for attempt in 0..2 {
-        match client.call(&Request::ShowApp) {
-            Ok(Reply::Flag(listening)) => return listening,
-            Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
-                std::thread::sleep(Duration::from_millis(1100));
+    // The core of the vault, or the one still serving it at its former endpoint (§ 25.12).
+    let endpoints = std::iter::once(&config.route.endpoint).chain(config.route.legacy.as_ref());
+    for endpoint in endpoints {
+        let Ok(mut client) = Client::connect(endpoint, Some(&config.core)) else {
+            continue;
+        };
+        for attempt in 0..2 {
+            match client.call(&Request::ShowApp) {
+                Ok(Reply::Flag(true)) => return true,
+                Err(ClientError::Refused(r)) if r.code == ErrorCode::Throttled && attempt == 0 => {
+                    std::thread::sleep(Duration::from_millis(1100));
+                }
+                _ => break,
             }
-            _ => return false,
         }
     }
     false
@@ -94,7 +150,9 @@ pub fn another_instance_shown(config: &LinkConfig) -> bool {
 pub struct CoreLink {
     config: LinkConfig,
     client: Option<Client>,
-    hardening: Option<HardeningReport>,
+    hardening: Hardening,
+    /// The core accepted this process at least once.
+    joined: bool,
 }
 
 /// Requests that may be sent again on a new connection when the old one broke: they change
@@ -127,83 +185,102 @@ fn is_idempotent_server(op: ServerOp) -> bool {
 }
 
 impl CoreLink {
-    /// A link not yet connected.
+    /// A link not yet connected, with its own hardening.
     #[must_use]
     pub fn new(config: LinkConfig) -> CoreLink {
+        CoreLink::sharing(config, Hardening::default())
+    }
+
+    /// A link not yet connected, which shares `hardening` with the other links of this
+    /// process.
+    #[must_use]
+    pub fn sharing(config: LinkConfig, hardening: Hardening) -> CoreLink {
         CoreLink {
             config,
             client: None,
-            hardening: None,
+            hardening,
+            joined: false,
         }
+    }
+
+    /// The configuration of this link.
+    #[must_use]
+    pub fn config(&self) -> &LinkConfig {
+        &self.config
+    }
+
+    /// Gives this link the route its vault has now: another alias or rank in the registry,
+    /// or the route of the entry a vault just created was adopted under. The connection
+    /// already open, if any, is kept: it is to that same vault.
+    pub fn set_route(&mut self, route: Route) {
+        self.config.route = route;
     }
 
     /// What hardening this process obtained, once it is hardened.
     #[must_use]
     pub fn hardening(&self) -> Option<HardeningReport> {
-        self.hardening
+        self.hardening.get()
     }
 
-    /// Connects (starting the core if allowed and needed), then waits for the core to accept
-    /// this process with one `Status`, then hardens this process once.
+    /// Connects (starting the core if allowed and needed), waits for the core to accept this
+    /// process with one `Status`, checks that it serves the vault of the route
+    /// (`docs/api-locale.md` § 25.5), then hardens this process once if this link is the one
+    /// that decides it.
     fn connect(&mut self) -> Result<Client, DesktopError> {
-        let mut client = match self.try_connect() {
-            Ok(c) => c,
-            Err(ClientError::NotRunning) if self.config.start_core && self.hardening.is_none() => {
-                self.start_core()?;
-                let deadline = Instant::now() + START_TIMEOUT;
-                loop {
-                    match self.try_connect() {
-                        Ok(c) => break c,
-                        Err(ClientError::NotRunning) if Instant::now() < deadline => {
-                            std::thread::sleep(Duration::from_millis(50));
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                }
-            }
-            Err(e) => return Err(self.connection_error(e)),
+        let route = &self.config.route;
+        let core = &self.config.core;
+        // A core is started by a link that was never accepted, or by a process not hardened
+        // yet; afterwards a core that went away is said lost.
+        let may_start = self.config.start_core && (!self.joined || self.hardening.get().is_none());
+        let connected = if may_start {
+            route.connect_or_start(core, START_TIMEOUT)
+        } else {
+            route.connect(Some(core))
         };
-        match client.call(&Request::Status) {
-            Ok(_) => {}
-            Err(e) => return Err(self.connection_error(e)),
-        }
-        if self.config.harden && self.hardening.is_none() {
-            // Not `harden_process`: locking all memory of a process that hosts a web engine
-            // would pin gigabytes of reserved address space and get it killed.
-            self.hardening = Some(hirzla_keystore::platform::harden_process_without_memory_lock());
+        let client = connected.map_err(|e| self.route_error(e))?;
+        self.joined = true;
+        if self.config.harden {
+            self.hardening.apply();
         }
         Ok(client)
     }
 
-    fn try_connect(&self) -> Result<Client, ClientError> {
-        Client::connect(&self.config.endpoint, Some(&self.config.core))
+    /// Opens the connection if it is not open: used to join every core before this process
+    /// hardens itself.
+    ///
+    /// # Errors
+    /// [`DesktopError`].
+    pub fn join(&mut self) -> Result<(), DesktopError> {
+        if self.client.is_none() {
+            self.client = Some(self.connect()?);
+        }
+        Ok(())
     }
 
     /// A connection error after this process was hardened on Linux cannot be repaired from
     /// here: the core can no longer read this executable.
     fn connection_error(&self, e: ClientError) -> DesktopError {
-        let hidden = cfg!(target_os = "linux") && self.hardening.is_some();
+        let hardened = self.hardening.get().is_some();
+        let hidden = cfg!(target_os = "linux") && hardened;
         match e {
             ClientError::Refused(r) if hidden && r.code == ErrorCode::Unauthorized => {
                 DesktopError::CoreLost
             }
-            ClientError::NotRunning if self.hardening.is_some() => DesktopError::CoreLost,
+            ClientError::NotRunning if hardened && self.joined => DesktopError::CoreLost,
             e => e.into(),
         }
     }
 
-    fn start_core(&self) -> Result<(), DesktopError> {
-        let mut cmd = Command::new(&self.config.core);
-        if let Some(s) = &self.config.socket_arg {
-            cmd.arg("--socket").arg(s);
+    fn route_error(&self, e: RouteError) -> DesktopError {
+        match e {
+            RouteError::Client(e) => self.connection_error(e),
+            RouteError::Registry(RegistryError::NoVault) => DesktopError::VaultMissing,
+            RouteError::WrongVault | RouteError::Registry(_) => DesktopError::WrongVault,
+            RouteError::CoreNotStarted
+            | RouteError::NoEndpoint
+            | RouteError::UnknownAlias
+            | RouteError::NoDefault => DesktopError::CoreNotRunning,
         }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        detach(&mut cmd);
-        cmd.spawn()
-            .map(drop)
-            .map_err(|_| DesktopError::CoreNotRunning)
     }
 
     /// Sends one request; reconnects once if the connection broke and the request is safe
@@ -475,21 +552,6 @@ impl CoreLink {
     /// Drops the connection (the next call opens a new one, if this process still can).
     pub fn disconnect(&mut self) {
         self.client = None;
-    }
-}
-
-/// Starts `cmd` in its own process group, so that the core outlives the application.
-fn detach(cmd: &mut Command) {
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        cmd.process_group(0);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        // DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP.
-        cmd.creation_flags(0x0000_0008 | 0x0000_0200);
     }
 }
 

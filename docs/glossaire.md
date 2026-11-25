@@ -68,3 +68,8 @@ l'anglais dans le code.
 | Lien de secret | `SecretLink` | Référence faible d'un secret vers un autre (casier et secret) ; ne donne aucun droit et peut être rompue |
 | Rebond | `Jump` | Connexion SSH par laquelle passe une autre connexion (bastion) |
 | Empreinte de l'hôte | `HostKey` | Empreinte SHA-256 de la clé publique d'un hôte SSH ou du certificat d'un serveur RDP, comparée à la connexion |
+| Registre des coffres | `VaultRegistry` | Liste locale des coffres d'un appareil, sans clé ni secret (ADR 0085) |
+| Alias de coffre | `VaultAlias` | Nom local d'un coffre, choisi par l'utilisateur, lisible sans déverrouiller (ADR 0085) |
+| Aiguillage | `VaultRouter` | Partie du client qui trouve, lance et vérifie le noyau d'un coffre (ADR 0085) |
+| Emplacement de noyau | `CoreSlot` | Sur Android, l'un des seize processus déclarés d'avance, qui sert au plus un coffre (ADR 0085, étape 5) |
+| Coffre actif | `ActiveVault` | Dans une application, le coffre que visent les commandes de l'écran en cours (ADR 0085) |

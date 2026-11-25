@@ -16,12 +16,12 @@ use hirzla_vault::secret::{
 use hirzla_vault::{CreateOptions, KdfCost, Vault, VaultError};
 use zeroize::Zeroizing;
 
-use crate::events::{Event, LockReason, Log};
+use crate::events::{Event, LockReason, Log, VaultRefusal};
 use crate::generator;
 use crate::origin::origin_host;
 use crate::proto::{
     ApiValue, ErrorCode, ErrorReply, KdfParams, ListEntry, LockerEntry, Reply, Request, Selector,
-    StatusInfo, VaultState, SUPPORTED_VERSIONS,
+    StatusInfo, VaultInfo, VaultMode, VaultState, SUPPORTED_VERSIONS,
 };
 use crate::selfmode::proto::SystemEventKind;
 use crate::server_mode::proto::{ServerCode, ServerReply, ServerRequest};
@@ -84,6 +84,21 @@ pub struct Core {
     /// An enrolment of this device in progress, while it has no vault (ADR 0081). Holds the
     /// device's private keys in memory only: lost if the core stops.
     enrolling: Option<crate::server_mode::enrol::Enrolling>,
+    /// The registered vault this core was started for (`--vault-id`, `docs/api-locale.md`
+    /// § 25.3): any other vault at the path is refused, and no vault is ever created.
+    expected_vault: Option<Id16>,
+}
+
+/// Why the file at `path` is not the vault `expected`, read from its clear header without
+/// any key; `None` when it is.
+#[must_use]
+pub fn vault_file_refusal(path: &Path, expected: &Id16) -> Option<VaultRefusal> {
+    match hirzla_vault::vault_id_of(path) {
+        Ok(id) if id == *expected => None,
+        Ok(_) => Some(VaultRefusal::IdMismatch),
+        Err(VaultError::NotFound) => Some(VaultRefusal::Absent),
+        Err(_) => Some(VaultRefusal::Unreadable),
+    }
 }
 
 /// How long after its last `AppPoll` the desktop application counts as listening.
@@ -222,6 +237,35 @@ impl Core {
             totp_clock: None,
             verified_at: None,
             enrolling: None,
+            expected_vault: None,
+        }
+    }
+
+    /// Makes this core the core of the registered vault `vault_id` (`--vault-id`,
+    /// `docs/api-locale.md` § 25.3): it opens no other vault and creates none.
+    pub fn expect_vault(&mut self, vault_id: Id16) {
+        self.expected_vault = Some(vault_id);
+    }
+
+    /// Refuses an opened vault that is not the one this core was started for. The
+    /// identifier compared is the one the vault authenticated when it was opened.
+    pub(crate) fn expected(&self, vault: &Vault) -> Result<(), ErrorReply> {
+        if self.expected_vault.is_some_and(|id| id != vault.vault_id()) {
+            self.log.record(Event::VaultRefused {
+                reason: VaultRefusal::IdMismatch,
+            });
+            return Err(ErrorReply::new(ErrorCode::Corrupt));
+        }
+        Ok(())
+    }
+
+    /// Refuses to create a vault in a core started for a registered one: `VaultExists`
+    /// while its file is there, `Unsupported` if it is gone.
+    fn creates_no_vault(&self) -> Result<(), ErrorCode> {
+        match self.expected_vault {
+            None => Ok(()),
+            Some(_) if self.config.vault_path.exists() => Err(ErrorCode::VaultExists),
+            Some(_) => Err(ErrorCode::Unsupported),
         }
     }
 
@@ -337,13 +381,19 @@ impl Core {
         self.throttled_until = None;
     }
 
-    /// An opened vault: resets the failures, starts the inactivity delay, logs.
-    pub(crate) fn opened(&mut self, vault: Vault) {
+    /// An opened vault: resets the failures, starts the inactivity delay, logs. A vault that
+    /// is not the one this core was started for is closed at once and refused (§ 25.3).
+    pub(crate) fn opened(&mut self, vault: Vault) -> Result<(), ErrorReply> {
+        if let Err(refusal) = self.expected(&vault) {
+            vault.close();
+            return Err(refusal);
+        }
         self.vault = Some(vault);
         self.password_proven();
         self.last_activity = Instant::now();
         self.verified_at = Some(self.last_activity);
         self.log.record(Event::Unlocked);
+        Ok(())
     }
 
     /// Answers one request and logs its outcome (operation and result code only).
@@ -401,6 +451,7 @@ impl Core {
     /// `DeviceEnrolStart` (ADR 0081): only without a vault; a new start replaces the one in
     /// progress.
     fn enrol_start(&mut self, link: &str) -> Result<ServerReply, ServerCode> {
+        self.creates_no_vault().map_err(ServerCode::General)?;
         if self.vault.is_some() || self.config.vault_path.exists() {
             return Err(ServerCode::General(ErrorCode::VaultExists));
         }
@@ -424,6 +475,7 @@ impl Core {
         kdf: Option<crate::proto::KdfParams>,
         fingerprint: &str,
     ) -> Result<ServerReply, ServerCode> {
+        self.creates_no_vault().map_err(ServerCode::General)?;
         if self.vault.is_some() || self.config.vault_path.exists() {
             return Err(ServerCode::General(ErrorCode::VaultExists));
         }
@@ -469,7 +521,8 @@ impl Core {
         )
         .map_err(|e| ServerCode::General(vault_error(e).code))?;
         self.log.record(Event::VaultCreated);
-        self.opened(vault);
+        self.opened(vault)
+            .map_err(|e| ServerCode::General(e.code))?;
         self.server = None;
         self.load_server();
         match (self.vault.as_ref(), self.server.as_mut()) {
@@ -577,6 +630,7 @@ impl Core {
     fn dispatch(&mut self, request: Request) -> Result<Reply, ErrorReply> {
         match request {
             Request::Status => Ok(Reply::Status(self.status())),
+            Request::VaultInfo => self.vault_info(),
             Request::Generate { length, classes } => {
                 Ok(Reply::Generated(generator::generate(length, classes)?))
             }
@@ -716,7 +770,39 @@ impl Core {
         }
     }
 
+    /// `VaultInfo` (§ 25.4): the identifier of the vault, read from the open vault or from
+    /// the clear header of its file, and the mode and server once it is open. Not an
+    /// activity: it does not postpone the automatic lock.
+    fn vault_info(&mut self) -> Result<Reply, ErrorReply> {
+        let Some(vault_id) = self.vault.as_ref().map(Vault::vault_id) else {
+            return match hirzla_vault::vault_id_of(&self.config.vault_path) {
+                Ok(vault_id) => Ok(Reply::VaultInfo(VaultInfo {
+                    vault_id,
+                    mode: None,
+                    server: None,
+                })),
+                Err(VaultError::NotFound) => Err(ErrorReply::new(ErrorCode::NoVault)),
+                Err(_) => Err(ErrorReply::new(ErrorCode::Corrupt)),
+            };
+        };
+        self.load_server();
+        let server = match self.server.as_ref() {
+            Some(Ok(mode)) => mode.server_url().map(str::to_owned),
+            _ => return Err(ErrorReply::new(ErrorCode::Corrupt)),
+        };
+        Ok(Reply::VaultInfo(VaultInfo {
+            vault_id,
+            mode: Some(if server.is_some() {
+                VaultMode::Server
+            } else {
+                VaultMode::Standalone
+            }),
+            server,
+        }))
+    }
+
     fn init(&mut self, password: &str, kdf: Option<KdfParams>) -> Result<Reply, ErrorReply> {
+        self.creates_no_vault()?;
         if self.vault.is_some() || self.config.vault_path.exists() {
             return Err(ErrorReply::new(ErrorCode::VaultExists));
         }
@@ -760,7 +846,7 @@ impl Core {
         self.check_throttle()?;
         match Vault::open(&self.config.vault_path, password) {
             Ok(v) => {
-                self.opened(v);
+                self.opened(v)?;
                 Ok(Reply::Done)
             }
             Err(VaultError::Unlock) => {
