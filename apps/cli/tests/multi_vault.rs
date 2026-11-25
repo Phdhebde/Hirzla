@@ -497,9 +497,11 @@ fn two_vaults_are_open_at_the_same_time_in_two_cores() {
     }
 }
 
-/// A workstation with a single vault keeps working without intervention: `init` and the
-/// commands that follow use the default connection point as before, the vault is registered
-/// at the first command, and a second vault is added next to it.
+/// A workstation with a single vault keeps working without intervention: `init` creates it
+/// at the default connection point as before, the vault is registered at the first command,
+/// and a second vault is added next to it. The core that created the vault keeps serving it
+/// where it listens; once it is stopped, the core of that vault is started at the connection
+/// point of the vault, like any other (`docs/api-locale.md` § 25.12).
 ///
 /// Unix only: on Windows the default connection point is one pipe per user, shared with the
 /// Hirzla installed on the machine that runs the tests.
@@ -524,13 +526,22 @@ fn the_single_vault_of_a_workstation_is_adopted_and_joined_by_a_second_one() {
         "nothing to register before the vault existed"
     );
 
-    // As before: no option, the default connection point.
+    // No option: the vault is registered, and the core that created it at the default
+    // connection point is the one used; no second core is started on its file.
     ok(&s.run(&["set", "Perso-Banque"], Some(SECRET_A)));
     assert_eq!(
         ok(&s.run(&["get", "Perso-Banque"], None)),
         format!("{SECRET_A}\n")
     );
-    assert!(s.runtime.path().join("hirzla").join("core.sock").exists());
+    let sockets = || -> Vec<String> {
+        let mut names: Vec<String> = std::fs::read_dir(s.runtime.path().join("hirzla"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(sockets(), ["core.sock"]);
     // The first command after the creation registered it, as the default vault.
     assert!(s.registry().is_file());
     let listing = ok(&s.run(&["coffres"], None));
@@ -557,16 +568,16 @@ fn the_single_vault_of_a_workstation_is_adopted_and_joined_by_a_second_one() {
     s.started("client");
     ok(&s.run(&["--coffre", "client", "unlock"], Some(MASTER_B)));
     ok(&s.run(&["--coffre", "client", "set", "Client-VPN"], Some(SECRET_B)));
-    let sockets: Vec<String> = std::fs::read_dir(s.runtime.path().join("hirzla"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(sockets.len(), 2, "{sockets:?}");
+    // Two cores: the one of the workstation where it was created, the one of the client at
+    // the connection point of its vault.
+    let names = sockets();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(names.contains(&"core.sock".to_owned()), "{names:?}");
     assert!(
-        sockets
+        names
             .iter()
             .any(|n| n.starts_with("core-") && n.len() == "core-.sock".len() + 32),
-        "{sockets:?}"
+        "{names:?}"
     );
     // A command without `--coffre` still means the vault of the workstation.
     let ls = ok(&s.run(&["ls"], None));
@@ -583,11 +594,100 @@ fn the_single_vault_of_a_workstation_is_adopted_and_joined_by_a_second_one() {
         "{listing}"
     );
     assert!(line_of(&listing, "client").contains("ouvert"), "{listing}");
-    // `unlock` starts the core of the workstation again, at the default connection point.
+    // `unlock` starts the core of the workstation again: now at the connection point of its
+    // vault. Nothing listens at the default connection point any more.
     ok(&s.run(&["unlock"], Some(MASTER_A)));
+    s.started("principal");
     assert!(ok(&s.run(&["ls"], None)).contains("Perso-Banque"));
+    let names = sockets();
+    assert_eq!(names.len(), 2, "{names:?}");
+    assert!(
+        names
+            .iter()
+            .all(|n| n.starts_with("core-") && n.len() == "core-.sock".len() + 32),
+        "{names:?}"
+    );
+    let status = ok(&s.run(&["status"], None));
+    assert!(
+        status.contains("Coffre « principal »") && status.contains("ouvert"),
+        "{status}"
+    );
     ok(&s.run(&["--coffre", "client", "stop"], None));
     ok(&s.run(&["stop"], None));
+    assert!(sockets().is_empty());
+}
+
+/// A core of the vault of the default location that was started at the connection point of
+/// the vault is the one found, and a core left at the default connection point by an earlier
+/// start is never doubled: whichever answers first for this vault is used, and `stop` stops
+/// it where it listens.
+#[cfg(unix)]
+#[test]
+fn the_vault_of_the_default_location_is_served_by_one_core_only() {
+    let s = Station::new();
+    ok(&s.run(
+        &["init", "--kdf-memory", "65536", "--kdf-passes", "3"],
+        Some(MASTER_A),
+    ));
+    let dir = s.runtime.path().join("hirzla");
+    let count = || std::fs::read_dir(&dir).unwrap().count();
+    // Created at the default connection point, then registered.
+    ok(&s.run(&["set", "Perso-Banque"], Some(SECRET_A)));
+    assert_eq!(count(), 1);
+    assert!(dir.join("core.sock").exists());
+    // Commands that would start a core find the one that runs: still one core.
+    ok(&s.run(&["unlock"], Some(MASTER_A)));
+    ok(&s.run(&["--coffre", "principal", "status"], None));
+    assert_eq!(count(), 1);
+    assert!(dir.join("core.sock").exists());
+    // Stopped where it listened; started again at the connection point of the vault.
+    ok(&s.run(&["--coffre", "principal", "stop"], None));
+    assert_eq!(count(), 0);
+    ok(&s.run(&["unlock"], Some(MASTER_A)));
+    s.started("principal");
+    assert_eq!(count(), 1);
+    assert!(!dir.join("core.sock").exists());
+    assert_eq!(
+        ok(&s.run(&["get", "Perso-Banque"], None)),
+        format!("{SECRET_A}\n")
+    );
+    // A core at the default connection point that serves another vault is ignored: the
+    // vault of the workstation keeps its own core.
+    let other = s.path("autre.hirzla");
+    let started = s.run(
+        &[
+            "--vault",
+            other.to_str().unwrap(),
+            "init",
+            "--kdf-memory",
+            "65536",
+            "--kdf-passes",
+            "3",
+        ],
+        Some(MASTER_B),
+    );
+    ok(&started);
+    assert!(dir.join("core.sock").exists());
+    assert_eq!(count(), 2);
+    assert_eq!(
+        ok(&s.run(&["get", "Perso-Banque"], None)),
+        format!("{SECRET_A}\n")
+    );
+    // Even when the core of the workstation must be started: the foreign core at the default
+    // connection point is asked which vault it serves, and left alone.
+    ok(&s.run(&["stop"], None));
+    assert_eq!(count(), 1);
+    ok(&s.run(&["unlock"], Some(MASTER_A)));
+    assert_eq!(count(), 2);
+    assert_eq!(
+        ok(&s.run(&["get", "Perso-Banque"], None)),
+        format!("{SECRET_A}\n")
+    );
+    let foreign = ok(&s.run(&["--vault", other.to_str().unwrap(), "ls"], None));
+    assert!(!foreign.contains("Perso-Banque"), "{foreign}");
+    ok(&s.run(&["--vault", other.to_str().unwrap(), "stop"], None));
+    ok(&s.run(&["stop"], None));
+    assert_eq!(count(), 0);
 }
 
 /// The directory of the default vault location of a station, where `coffres creer` puts a

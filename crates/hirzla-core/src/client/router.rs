@@ -60,6 +60,11 @@ pub struct Route {
     pub default_endpoint: bool,
     /// The arguments of the core when this client starts it.
     pub start_args: Vec<OsString>,
+    /// The former endpoint of the vault kept at the default location (`docs/api-locale.md`
+    /// § 25.12): the default endpoint of the user, where the core that created this vault,
+    /// or a core of an earlier version, may still serve it. Such a core is used as it is; no
+    /// core is ever started there for a registered vault.
+    pub legacy: Option<Endpoint>,
 }
 
 /// Starts `core` with `args`, away from the terminal and its Ctrl+C, without any standard
@@ -102,30 +107,29 @@ impl Route {
             endpoint,
             default_endpoint,
             start_args,
+            legacy: None,
         }
     }
 
-    /// The route of a registry entry (§ 25.5). At the default endpoint the core is started
-    /// without argument; elsewhere with the endpoint, the file and the identifier of the
-    /// vault, which the core then checks by itself (§ 25.3).
-    fn registered(entry: &VaultEntry, endpoint: Endpoint, default_endpoint: bool) -> Route {
-        let start_args = if default_endpoint {
-            Vec::new()
-        } else {
-            vec![
-                OsString::from("--socket"),
-                OsString::from(endpoint.display()),
-                OsString::from("--vault"),
-                entry.path.clone().into_os_string(),
-                OsString::from("--vault-id"),
-                OsString::from(registry::id_hex(&entry.vault_id)),
-            ]
-        };
+    /// The route of a registry entry (§ 25.5): the endpoint of the vault, where its core is
+    /// started with the endpoint, the file and the identifier of the vault, which the core
+    /// then checks by itself (§ 25.3). `legacy` is the former endpoint of the vault kept at
+    /// the default location (§ 25.12).
+    fn registered(entry: &VaultEntry, endpoint: Endpoint, legacy: Option<Endpoint>) -> Route {
+        let start_args = vec![
+            OsString::from("--socket"),
+            OsString::from(endpoint.display()),
+            OsString::from("--vault"),
+            entry.path.clone().into_os_string(),
+            OsString::from("--vault-id"),
+            OsString::from(registry::id_hex(&entry.vault_id)),
+        ];
         Route {
             entry: Some(entry.clone()),
             endpoint,
-            default_endpoint,
+            default_endpoint: false,
             start_args,
+            legacy,
         }
     }
 
@@ -139,6 +143,12 @@ impl Route {
     /// [`RouteError::WrongVault`], [`RouteError::Registry`] when the core has no readable
     /// vault file, or the refusal of the core.
     pub fn verify(&self, client: &mut Client) -> Result<(), RouteError> {
+        self.verify_at(client, self.default_endpoint)
+    }
+
+    /// [`Route::verify`], where `default_endpoint` tells whether `client` talks to the
+    /// default endpoint of the user: there only, an earlier core is accepted.
+    fn verify_at(&self, client: &mut Client, default_endpoint: bool) -> Result<(), RouteError> {
         let Some(entry) = &self.entry else {
             return Ok(());
         };
@@ -147,7 +157,7 @@ impl Route {
             Ok(Reply::VaultInfo(_)) => Err(RouteError::WrongVault),
             Ok(_) => Err(ClientError::Protocol.into()),
             Err(ClientError::Refused(e))
-                if self.default_endpoint
+                if default_endpoint
                     && matches!(
                         e.code,
                         ErrorCode::UnsupportedVersion | ErrorCode::UnknownOperation
@@ -169,12 +179,42 @@ impl Route {
     /// signature in a delivery build (ADR 0055), one accepted `Status` (the core reads the
     /// executable of this process when it accepts), then the vault it serves.
     ///
+    ///
+    /// When no core listens at the endpoint of the vault kept at the default location, a core
+    /// that serves this vault at its former endpoint is used as it is (§ 25.12): a client
+    /// never starts a second core on a file that a core already serves there. A core there
+    /// that serves another vault, or none, is ignored; one that cannot be checked is an
+    /// error, since it may be serving this vault.
+    ///
     /// # Errors
     /// [`RouteError`]; [`ClientError::NotRunning`] inside it when no core listens.
     pub fn connect(&self, expected_core: Option<&Path>) -> Result<Client, RouteError> {
-        let mut client = Client::connect(&self.endpoint, expected_core)?;
+        match self.connect_at(&self.endpoint, self.default_endpoint, expected_core) {
+            Err(RouteError::Client(ClientError::NotRunning)) => {}
+            other => return other,
+        }
+        if let Some(legacy) = &self.legacy {
+            match self.connect_at(legacy, true, expected_core) {
+                Err(
+                    RouteError::Client(ClientError::NotRunning)
+                    | RouteError::WrongVault
+                    | RouteError::Registry(_),
+                ) => {}
+                other => return other,
+            }
+        }
+        Err(ClientError::NotRunning.into())
+    }
+
+    fn connect_at(
+        &self,
+        endpoint: &Endpoint,
+        default_endpoint: bool,
+        expected_core: Option<&Path>,
+    ) -> Result<Client, RouteError> {
+        let mut client = Client::connect(endpoint, expected_core)?;
         client.call(&Request::Status)?;
-        self.verify(&mut client)?;
+        self.verify_at(&mut client, default_endpoint)?;
         Ok(client)
     }
 
@@ -350,25 +390,24 @@ impl VaultRouter {
         self.route_of(entry)
     }
 
-    /// The route of one registry entry (§ 25.5). The vault kept at the default location
-    /// keeps the default endpoint during this version: the desktop application and the
-    /// native host still talk there and start that core; a second endpoint for it would let
-    /// two cores run on the same file.
+    /// The route of one registry entry (§ 25.5): the endpoint of the vault. The vault kept
+    /// at the default location also has a former endpoint, the default one of the user
+    /// (§ 25.12).
     ///
     /// # Errors
     /// [`RouteError::NoEndpoint`].
     pub fn route_of(&self, entry: &VaultEntry) -> Result<Route, RouteError> {
-        let default_endpoint = self
+        let at_default_location = self
             .default_vault
             .as_deref()
             .is_some_and(|d| same_file(d, &entry.path));
-        let endpoint = if default_endpoint {
-            Endpoint::default_for_user()
+        let endpoint = Endpoint::for_vault(&entry.vault_id).map_err(|_| RouteError::NoEndpoint)?;
+        let legacy = if at_default_location {
+            Some(Endpoint::default_for_user().map_err(|_| RouteError::NoEndpoint)?)
         } else {
-            Endpoint::for_vault(&entry.vault_id)
-        }
-        .map_err(|_| RouteError::NoEndpoint)?;
-        Ok(Route::registered(entry, endpoint, default_endpoint))
+            None
+        };
+        Ok(Route::registered(entry, endpoint, legacy))
     }
 }
 

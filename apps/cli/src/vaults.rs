@@ -206,7 +206,7 @@ pub fn run(args: &Args, command: &VaultsCommand) -> Result<(), String> {
             if registry.is_empty()
                 && router
                     .route_of(&entry)
-                    .is_ok_and(|route| route.default_endpoint)
+                    .is_ok_and(|route| route.legacy.is_some())
             {
                 say(
                     "Ce coffre est à l'emplacement par défaut : il sera inscrit de nouveau à la \

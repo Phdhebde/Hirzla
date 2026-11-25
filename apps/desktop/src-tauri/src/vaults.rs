@@ -294,10 +294,11 @@ impl Vaults {
                 continue;
             };
             // The same vault at the same place keeps its link; the vault just created at the
-            // default endpoint, now adopted by the registry, keeps the link that created it.
+            // default endpoint, now adopted by the registry, keeps the connection that
+            // created it, and learns the route of its entry (§ 25.12).
             let kept = old.iter().position(|s| match &s.entry {
                 Some(e) => e.vault_id == entry.vault_id && e.path == entry.path,
-                None => route.default_endpoint,
+                None => route.legacy.is_some(),
             });
             let slot = match kept {
                 Some(i) => {
@@ -305,7 +306,7 @@ impl Vaults {
                     if slot.entry.as_ref() != Some(entry) {
                         // A link busy with a long request learns its new entry next time.
                         if let Ok(mut link) = slot.link.try_lock() {
-                            link.set_entry(entry.clone());
+                            link.set_route(route);
                             slot.entry = Some(entry.clone());
                         }
                     }
@@ -598,6 +599,53 @@ mod tests {
         assert!(link.config().route.start_args.is_empty());
         // The registry was not written: there is nothing to adopt.
         assert!(!dir.path().join("coffres").exists());
+    }
+
+    /// The first vault is created through the single link, at the default endpoint; once the
+    /// registry adopts it, the same link serves it, with the route of its entry: the
+    /// endpoint of the vault, and the default endpoint as its former one (§ 25.12). Nothing
+    /// is connected here.
+    #[test]
+    fn the_vault_created_at_the_default_endpoint_keeps_its_link_once_adopted() {
+        use hirzla_crypto::password::{MIN_M_KIB, MIN_T};
+        use hirzla_vault::{CreateOptions, KdfCost, Vault};
+
+        let dir = private_dir();
+        let vault_file = dir.path().join("coffre.hirzla");
+        let router = VaultRouter::new(dir.path().join("coffres"), Some(vault_file.clone()));
+        let vaults = Vaults::routed(router, PathBuf::from("hirzla-core"), false, false);
+        let mut inner = guard(&vaults.inner);
+        vaults.sync(&mut inner);
+        let before = Arc::clone(&inner.slots[0].link);
+        assert!(inner.slots[0].entry.is_none());
+
+        let options = CreateOptions {
+            device_label: "essai".to_owned(),
+            personal_locker_name: "Personnel".to_owned(),
+            kdf: KdfCost::Params {
+                m_kib: MIN_M_KIB,
+                t: MIN_T,
+                p: 1,
+            },
+        };
+        let vault = Vault::create(&vault_file, "mot-de-passe-du-poste", &options).unwrap();
+        let id = vault.vault_id();
+        vault.close();
+
+        vaults.sync(&mut inner);
+        assert_eq!(inner.slots.len(), 1);
+        assert_eq!(inner.active, 0);
+        let slot = &inner.slots[0];
+        assert!(Arc::ptr_eq(&slot.link, &before));
+        assert!(slot.default);
+        assert_eq!(slot.alias(), registry::ADOPTED_ALIAS);
+        assert_eq!(slot.id(), Some(id));
+        let link = guard(&slot.link);
+        let route = &link.config().route;
+        assert_eq!(route.entry.as_ref().map(|e| e.vault_id), Some(id));
+        assert_eq!(route.endpoint, Endpoint::for_vault(&id).unwrap());
+        assert_eq!(route.legacy, Some(Endpoint::default_for_user().unwrap()));
+        assert!(!route.default_endpoint);
     }
 
     /// A registry that cannot be read leaves no link, and says why.

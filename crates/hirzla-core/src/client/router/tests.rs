@@ -90,8 +90,9 @@ fn a_new_workstation_uses_the_default_endpoint() {
 }
 
 /// A workstation with a single vault keeps working without intervention: the first command
-/// registers the vault of the default location as the default vault, and its core stays at
-/// the default endpoint, started without argument.
+/// registers the vault of the default location as the default vault. Its core is started at
+/// the endpoint of the vault, like any other; the default endpoint is only its former
+/// endpoint, where a core that already serves it is still found (§ 25.12).
 #[test]
 fn the_single_vault_of_a_workstation_is_adopted() {
     let s = Station::new();
@@ -101,9 +102,20 @@ fn the_single_vault_of_a_workstation_is_adopted() {
     assert_eq!(entry.vault_id, id);
     assert_eq!(entry.path, s.default_vault());
     assert_eq!(entry.alias.as_str(), ADOPTED_ALIAS);
-    assert_eq!(route.endpoint, Endpoint::default_for_user().unwrap());
-    assert!(route.default_endpoint);
-    assert!(route.start_args.is_empty());
+    assert_eq!(route.endpoint, Endpoint::for_vault(&id).unwrap());
+    assert!(!route.default_endpoint);
+    assert_eq!(route.legacy, Some(Endpoint::default_for_user().unwrap()));
+    assert_eq!(
+        route.start_args,
+        [
+            OsString::from("--socket"),
+            OsString::from(route.endpoint.display()),
+            OsString::from("--vault"),
+            s.default_vault().into_os_string(),
+            OsString::from("--vault-id"),
+            OsString::from(registry::id_hex(&id)),
+        ]
+    );
     // Written once, as the default vault; the next commands find it there.
     let stored = s.stored();
     assert_eq!(stored.vaults(), std::slice::from_ref(&entry));
@@ -130,8 +142,9 @@ fn adoption_does_not_depend_on_writing_the_registry() {
     std::fs::write(s.dir.path().join("config"), b"").unwrap();
     assert_eq!(s.router.save(&VaultRegistry::new()), Err(RegistryError::Io));
     let route = s.router.route(None).unwrap();
-    assert_eq!(route.entry.unwrap().vault_id, id);
-    assert!(route.default_endpoint && route.start_args.is_empty());
+    assert_eq!(route.entry.as_ref().unwrap().vault_id, id);
+    assert_eq!(route.endpoint, Endpoint::for_vault(&id).unwrap());
+    assert!(route.legacy.is_some());
     assert!(s.dir.path().join("config").is_file());
 }
 
@@ -154,11 +167,14 @@ fn each_registered_vault_has_its_own_endpoint() {
     // Without alias: the default vault, the one adopted.
     let default = s.router.route(None).unwrap();
     assert_eq!(default.entry.as_ref().unwrap().vault_id, default_id);
-    assert!(default.default_endpoint);
+    assert_eq!(default.endpoint, Endpoint::for_vault(&default_id).unwrap());
+    assert!(default.legacy.is_some());
 
     let route = s.router.route(Some("client x")).unwrap();
     assert_eq!(route.entry.as_ref().unwrap().vault_id, client_id);
     assert!(!route.default_endpoint);
+    // Only the vault of the default location has a former endpoint.
+    assert_eq!(route.legacy, None);
     assert_eq!(route.endpoint, Endpoint::for_vault(&client_id).unwrap());
     assert_eq!(
         route.start_args,
