@@ -60,6 +60,8 @@ pub enum VaultRefusal {
     Unreadable,
     /// The file is another vault.
     IdMismatch,
+    /// Something already exists where a provisional core was to create a vault (§ 25.9).
+    Exists,
 }
 
 impl VaultRefusal {
@@ -70,6 +72,7 @@ impl VaultRefusal {
             VaultRefusal::Absent => "absent",
             VaultRefusal::Unreadable => "unreadable",
             VaultRefusal::IdMismatch => "id_mismatch",
+            VaultRefusal::Exists => "exists",
         }
     }
 }
@@ -478,6 +481,7 @@ mod tests {
             VaultRefusal::Absent,
             VaultRefusal::Unreadable,
             VaultRefusal::IdMismatch,
+            VaultRefusal::Exists,
         ] {
             events.push(Event::VaultRefused { reason });
         }

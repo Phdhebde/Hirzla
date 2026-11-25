@@ -136,11 +136,19 @@ pub struct VaultRegistry {
 /// connection point of the vault and in `--vault-id`.
 #[must_use]
 pub fn id_hex(id: &Id16) -> String {
+    hex(id)
+}
+
+/// Bytes in lower-case hexadecimal: identifiers and random name parts, never a secret.
+#[must_use]
+pub fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
-    id.iter().fold(String::with_capacity(32), |mut s, b| {
-        let _ = write!(s, "{b:02x}");
-        s
-    })
+    bytes
+        .iter()
+        .fold(String::with_capacity(2 * bytes.len()), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// The registry file of the current user: `$XDG_CONFIG_HOME/hirzla/coffres` (or
@@ -324,6 +332,29 @@ impl VaultRegistry {
             rank,
         });
         self.vaults.last().ok_or(RegistryError::Malformed)
+    }
+
+    /// Whether a vault still to be created could be registered at `path` under `alias`
+    /// (`docs/api-locale.md` § 25.9, step 1): every refusal of [`VaultRegistry::add`] that
+    /// does not need the identifier of the vault, checked before anything is started.
+    ///
+    /// # Errors
+    /// [`RegistryError::TooManyVaults`], [`RegistryError::InvalidAlias`],
+    /// [`RegistryError::InvalidPath`], [`RegistryError::DuplicateAlias`] or
+    /// [`RegistryError::DuplicateVault`].
+    pub fn check_new(&self, path: &Path, alias: &str) -> Result<(), RegistryError> {
+        if self.vaults.len() >= MAX_VAULTS {
+            return Err(RegistryError::TooManyVaults);
+        }
+        let alias = VaultAlias::new(alias)?;
+        path_text(path)?;
+        if self.find(alias.as_str()).is_some() {
+            return Err(RegistryError::DuplicateAlias);
+        }
+        if self.vaults.iter().any(|e| e.path == path) {
+            return Err(RegistryError::DuplicateVault);
+        }
+        Ok(())
     }
 
     /// Registers the existing vault file at `path`: its identifier is read from its clear

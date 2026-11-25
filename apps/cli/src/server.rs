@@ -17,7 +17,7 @@ use crate::args::{
 };
 use crate::{client_message, hex, refusal_message, say, Session};
 
-fn server_message(code: ServerCode) -> String {
+pub(crate) fn server_message(code: ServerCode) -> String {
     match code {
         ServerCode::General(c) => refusal_message(&ErrorReply::new(c)),
         ServerCode::NotJoined => {
@@ -64,7 +64,7 @@ fn server_message(code: ServerCode) -> String {
 }
 
 /// A text argument: the text itself, or `@FILE` to read it from a file.
-fn text_arg(typed: &str) -> Result<String, String> {
+pub(crate) fn text_arg(typed: &str) -> Result<String, String> {
     match typed.strip_prefix('@') {
         Some(path) => std::fs::read_to_string(path)
             .map(|t| t.trim().to_owned())
@@ -80,7 +80,7 @@ pub(crate) fn note(text: &str) {
     let _ = writeln!(std::io::stderr(), "{text}");
 }
 
-fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, String> {
+pub(crate) fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, String> {
     match c.call_server(request) {
         Ok(Ok(r)) => Ok(r),
         Ok(Err(code)) => Err(server_message(code)),
@@ -88,12 +88,12 @@ fn call_server(c: &mut Client, request: &ServerRequest) -> Result<ServerReply, S
     }
 }
 
-fn bad_reply<T>() -> Result<T, String> {
+pub(crate) fn bad_reply<T>() -> Result<T, String> {
     Err("réponse non valide du noyau.".into())
 }
 
 /// A fingerprint in groups of five characters, easier to compare aloud.
-fn grouped(fp: &str) -> String {
+pub(crate) fn grouped(fp: &str) -> String {
     fp.as_bytes()
         .chunks(5)
         .map(|c| String::from_utf8_lossy(c).into_owned())
@@ -719,7 +719,7 @@ pub fn run_device_enrol(session: &Session, command: &DeviceEnrolCommand) -> Resu
 }
 
 /// Refusals of the enrolment operations (ADR 0081).
-fn device_enrol_message(code: ServerCode) -> String {
+pub(crate) fn device_enrol_message(code: ServerCode) -> String {
     match code {
         ServerCode::Forbidden => "ce poste ne détient pas votre clé de membre : ajoutez \
              l'appareil depuis un appareil de certification."

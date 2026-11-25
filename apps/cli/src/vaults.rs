@@ -1,6 +1,7 @@
 //! `hirzla coffres` (`docs/api-locale.md` § 25.6, ADR 0085): the vault registry of this
-//! device. These commands start no core and ask for no password; they read the registry,
-//! and for the listing ask each running core which vault it serves.
+//! device. The commands here start no core and ask for no password; they read the registry,
+//! and for the listing ask each running core which vault it serves. Creating a vault is in
+//! [`crate::vault_new`].
 
 use std::io::Write;
 
@@ -13,9 +14,9 @@ use crate::args::{Args, VaultsCommand};
 use crate::{expected_core, hex, registry_message, route_message, say};
 
 /// What the alias of a vault is: said at registration, since it is stored in the clear.
-const ALIAS_NOTICE: &str = "Ce nom est lisible sans déverrouiller le coffre.";
+pub(crate) const ALIAS_NOTICE: &str = "Ce nom est lisible sans déverrouiller le coffre.";
 
-fn router() -> Result<VaultRouter, String> {
+pub(crate) fn router() -> Result<VaultRouter, String> {
     VaultRouter::for_user().ok_or_else(|| registry_message(RegistryError::Io))
 }
 
@@ -137,6 +138,9 @@ fn stop_core(router: &VaultRouter, entry: &VaultEntry, args: &Args) -> Result<bo
 pub fn run(args: &Args, command: &VaultsCommand) -> Result<(), String> {
     match command {
         VaultsCommand::List => list(args),
+        VaultsCommand::Create { .. } | VaultsCommand::Join { .. } | VaultsCommand::Enrol { .. } => {
+            crate::vault_new::run(args, command)
+        }
         VaultsCommand::Add {
             alias,
             file,

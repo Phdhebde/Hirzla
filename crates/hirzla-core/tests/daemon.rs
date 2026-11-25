@@ -976,3 +976,154 @@ fn a_core_started_for_one_vault_serves_that_vault_only() {
     );
     assert!(!log.contains("coffre.hirzla"), "{log}");
 }
+
+fn init(c: &mut Client) {
+    c.call(&Request::Init {
+        password: z(PASSWORD),
+        kdf: Some(KdfParams {
+            m_kib: 65536,
+            t: 3,
+            p: 1,
+        }),
+    })
+    .unwrap();
+}
+
+/// A provisional core (`--provisional`, `docs/api-locale.md` § 25.9, ADR 0085): it creates
+/// the vault, names the identifier it drew, and stops by itself when its client leaves,
+/// without any `Shutdown`.
+#[test]
+fn a_provisional_core_creates_a_vault_and_stops_with_its_client() {
+    let dir = private_dir();
+    let me = std::env::current_exe().unwrap();
+    let vault = dir.path().join("coffre.hirzla");
+    let ep = endpoint(dir.path(), "provisional");
+    let core = start(dir.path(), &ep, &me, &["--provisional"]);
+    let mut c = connect(&ep);
+    assert_eq!(state(&mut c), VaultState::Absent);
+    assert_eq!(refused(c.call(&Request::VaultInfo)), ErrorCode::NoVault);
+    init(&mut c);
+    let Reply::VaultInfo(info) = c.call(&Request::VaultInfo).unwrap() else {
+        panic!("unexpected reply");
+    };
+    // The identifier the core returns is the one it wrote in the clear header.
+    assert_eq!(info.vault_id, hirzla_vault::vault_id_of(&vault).unwrap());
+    // A second connection, then both closed: the core stops with the last one only.
+    // (The second one is served before the first one leaves: on Windows a pipe is open for
+    // the client before the core has accepted it.)
+    let mut second = connect(&ep);
+    assert_eq!(state(&mut second), VaultState::Unlocked);
+    drop(c);
+    assert_eq!(state(&mut second), VaultState::Unlocked);
+    drop(second);
+    assert_eq!(exit_code(core), Some(0));
+    assert!(matches!(
+        Client::connect(&ep, Some(&core_exe())),
+        Err(ClientError::NotRunning)
+    ));
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=locked reason=shutdown"), "{log}");
+    assert!(log.trim_end().ends_with("event=stopped"), "{log}");
+    assert!(
+        !log.contains(&hirzla_core::registry::id_hex(&info.vault_id)),
+        "{log}"
+    );
+    #[cfg(unix)]
+    assert!(!Path::new(&ep.display()).exists(), "the socket is left");
+}
+
+/// A provisional core only creates: with anything at the vault path it does not start, and
+/// leaves what is there untouched. It takes neither a vault identifier nor default places.
+#[test]
+fn a_provisional_core_refuses_an_existing_path_and_bad_usage() {
+    let dir = private_dir();
+    let me = std::env::current_exe().unwrap();
+    let ep = endpoint(dir.path(), "provisional-refused");
+    let existing = dir.path().join("coffre.hirzla");
+    std::fs::write(&existing, b"un fichier deja la").unwrap();
+    let folder = dir.path().join("dossier.hirzla");
+    std::fs::create_dir(&folder).unwrap();
+    for path in [&existing, &folder] {
+        let core = start(
+            dir.path(),
+            &ep,
+            &me,
+            &["--provisional", "--vault", path.to_str().unwrap()],
+        );
+        assert_eq!(exit_code(core), Some(1));
+        assert!(matches!(
+            Client::connect(&ep, Some(&core_exe())),
+            Err(ClientError::NotRunning)
+        ));
+    }
+    assert_eq!(std::fs::read(&existing).unwrap(), b"un fichier deja la");
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert_eq!(
+        log.matches("event=vault_refused reason=exists").count(),
+        2,
+        "{log}"
+    );
+    assert!(!log.contains("event=listening"), "{log}");
+    assert!(!log.contains("coffre.hirzla"), "{log}");
+
+    // Usage errors (exit code 2): with a vault identifier; without an endpoint; without a
+    // vault file.
+    let free = dir.path().join("libre.hirzla");
+    let hex = "000102030405060708090a0b0c0d0e0f";
+    let core = start(
+        dir.path(),
+        &ep,
+        &me,
+        &[
+            "--provisional",
+            "--vault",
+            free.to_str().unwrap(),
+            "--vault-id",
+            hex,
+        ],
+    );
+    assert_eq!(exit_code(core), Some(2));
+    for args in [
+        vec!["--provisional", "--vault", free.to_str().unwrap()],
+        vec!["--provisional", "--socket", &ep.display()],
+    ] {
+        let child = Command::new(core_exe())
+            .args(&args)
+            .env_remove("HIRZLA_SOCKET")
+            .env_remove("HIRZLA_VAULT")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        assert_eq!(exit_code(Core { child }), Some(2), "{args:?}");
+    }
+    assert!(!free.exists());
+}
+
+/// A provisional core nobody joins stops by itself after its grace delay (30 seconds):
+/// a creation given up before the first connection leaves no core behind.
+#[test]
+fn a_provisional_core_nobody_joins_stops() {
+    let dir = private_dir();
+    let me = std::env::current_exe().unwrap();
+    let ep = endpoint(dir.path(), "provisional-alone");
+    let mut core = start(dir.path(), &ep, &me, &["--provisional"]);
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = core.child.try_wait().unwrap() {
+            break status;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(60),
+            "the core kept running"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+    };
+    assert_eq!(status.code(), Some(0));
+    assert!(started.elapsed() >= Duration::from_secs(25));
+    assert!(!dir.path().join("coffre.hirzla").exists());
+    let log = std::fs::read_to_string(dir.path().join("core.log")).unwrap();
+    assert!(log.contains("event=listening"), "{log}");
+    assert!(log.trim_end().ends_with("event=stopped"), "{log}");
+}

@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -23,7 +23,7 @@ use crate::auth::authorize_same_app;
 use crate::auth::{authorize_client_profile, AllowList, ClientProfile};
 use crate::codesign::{self, ClientSignatures, SignatureMode};
 use crate::connections::proto::{is_connection_request, ConnectionReply, ConnectionRequest};
-use crate::events::{Event, Log, Refusal, VaultRefusal};
+use crate::events::{Event, LockReason, Log, Refusal, VaultRefusal};
 use crate::folders::proto::{is_folder_request, FolderReply, FolderRequest};
 use crate::locker_export::proto::{is_export_request, ExportCode, ExportReply, ExportRequest};
 use crate::locker_export::service as export_service;
@@ -53,6 +53,9 @@ const IDLE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 const REFUSAL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Period of the automatic lock check.
 const TICK: Duration = Duration::from_millis(250);
+/// Time left to the client of a provisional core to connect before that core stops
+/// (`docs/api-locale.md` § 25.9).
+const PROVISIONAL_GRACE: Duration = Duration::from_secs(30);
 
 /// Which clients the core admits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -77,6 +80,9 @@ pub struct Options {
     /// The registered vault this core is started for (`--vault-id`, `docs/api-locale.md`
     /// § 25.3): the file must carry this identifier, at start and at every opening.
     pub vault_id: Option<Id16>,
+    /// Provisional core (`--provisional`, `docs/api-locale.md` § 25.9): started to create a
+    /// vault at a path where nothing exists, and stopped with its last client.
+    pub provisional: bool,
     /// Log file; standard error when absent.
     pub log: Option<PathBuf>,
     /// Allowed client executables; the default list when absent.
@@ -101,7 +107,7 @@ pub struct Options {
 }
 
 const USAGE: &str = "Usage : hirzla-core [--socket POINT] [--vault FICHIER] [--vault-id HEX] \
-[--log FICHIER] [--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
+[--provisional] [--log FICHIER] [--allow-exe EXÉCUTABLE]... [--allow-browser-exe EXÉCUTABLE]... [--auto-lock SECONDES] \
 [--hornn-issuer HEX --hornn-key FICHIER] [--client-signatures required|off] \
 [--publisher-key FICHIER] [--client-manifest FICHIER]";
 
@@ -137,6 +143,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
     let mut endpoint = std::env::var_os("HIRZLA_SOCKET");
     let mut vault = std::env::var_os("HIRZLA_VAULT").map(PathBuf::from);
     let mut vault_id: Option<Id16> = None;
+    let mut provisional = false;
     let mut log = None;
     let mut allow: Option<Vec<PathBuf>> = None;
     let mut allow_browser: Option<Vec<PathBuf>> = None;
@@ -163,6 +170,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
                         .ok_or_else(|| "--vault-id attend 32 chiffres hexadécimaux.".to_owned())?,
                 );
             }
+            Some("--provisional") => provisional = true,
             Some("--log") => log = Some(PathBuf::from(value("--log")?)),
             Some("--allow-exe") => allow
                 .get_or_insert_with(Vec::new)
@@ -221,6 +229,14 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
             _ => return Err(format!("argument inconnu. {USAGE}")),
         }
     }
+    // A provisional core is told where to listen and where to create: it has no vault
+    // identifier yet, and never the default vault location by omission (§ 25.9).
+    if provisional && (vault_id.is_some() || endpoint.is_none() || vault.is_none()) {
+        return Err(format!(
+            "--provisional exige --socket et --vault, et ne se combine pas avec --vault-id. \
+             {USAGE}"
+        ));
+    }
     let endpoint = match (endpoint, &vault_id) {
         (Some(e), _) => {
             Endpoint::parse(&e).map_err(|_| "point de connexion invalide.".to_owned())?
@@ -244,6 +260,7 @@ pub fn parse_args(args: impl IntoIterator<Item = OsString>) -> Result<Options, S
         endpoint,
         vault,
         vault_id,
+        provisional,
         log,
         allow,
         allow_browser,
@@ -367,6 +384,7 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
         endpoint,
         vault: files_dir.join("coffre.hirzla"),
         vault_id: None,
+        provisional: false,
         log: Some(core_dir.join("core.log")),
         allow: None,
         allow_browser: None,
@@ -435,6 +453,17 @@ fn cleanup(endpoint: &Endpoint) {
     }
 }
 
+/// Stops the core without a `Shutdown` request, with the same effects: the vault locked, the
+/// socket removed.
+fn stop(core: &Mutex<Core>, log: &Log, endpoint: &Endpoint) -> ! {
+    core.lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .lock(LockReason::Shutdown);
+    log.record(Event::Stopped);
+    cleanup(endpoint);
+    std::process::exit(0);
+}
+
 /// Runs the core until a `Shutdown` request.
 ///
 /// # Errors
@@ -486,12 +515,25 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
                 VaultRefusal::Unreadable => {
                     "le fichier à l'emplacement inscrit n'est pas un coffre lisible."
                 }
-                VaultRefusal::IdMismatch => {
+                VaultRefusal::IdMismatch | VaultRefusal::Exists => {
                     "le coffre à cet emplacement n'est pas celui qui est inscrit."
                 }
             }
             .to_owned());
         }
+    }
+    // A provisional core only creates (§ 25.9): with anything at the vault path it would
+    // become a second core on an existing vault.
+    if options.provisional
+        && !matches!(
+            std::fs::symlink_metadata(&options.vault),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound
+        )
+    {
+        log.record(Event::VaultRefused {
+            reason: VaultRefusal::Exists,
+        });
+        return Err("un fichier existe déjà là où le coffre doit être créé.".to_owned());
     }
     let mut listener = Listener::bind(&options.endpoint).map_err(|e| match e {
         crate::transport::TransportError::InUse => {
@@ -563,6 +605,24 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
     let active = Arc::new(AtomicUsize::new(0));
     let refusing = Arc::new(AtomicUsize::new(0));
     let endpoint = Arc::new(options.endpoint.clone());
+    let provisional = options.provisional;
+    // A provisional core does not outlive its client (§ 25.9): it stops when its last
+    // connection closes, or when no client was admitted soon after it started listening.
+    let served = Arc::new(AtomicBool::new(false));
+    if provisional {
+        let (core, log, endpoint, served) = (
+            Arc::clone(&core),
+            Arc::clone(log),
+            Arc::clone(&endpoint),
+            Arc::clone(&served),
+        );
+        std::thread::spawn(move || {
+            std::thread::sleep(PROVISIONAL_GRACE);
+            if !served.load(Ordering::SeqCst) {
+                stop(&core, &log, &endpoint);
+            }
+        });
+    }
     loop {
         let (conn, peer) = match listener.accept() {
             Ok(x) => x,
@@ -592,6 +652,7 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
             continue;
         }
         log.record(Event::ConnectionAccepted { pid: peer.pid });
+        served.store(true, Ordering::SeqCst);
         let core = Arc::clone(&core);
         let log = Arc::clone(log);
         let active = Arc::clone(&active);
@@ -599,7 +660,9 @@ pub fn run(options: &Options, hardening: HardeningReport, log: &Arc<Log>) -> Res
         let agent = agent.clone();
         std::thread::spawn(move || {
             serve(conn, &core, agent.as_deref(), &log, &endpoint, profile);
-            active.fetch_sub(1, Ordering::SeqCst);
+            if active.fetch_sub(1, Ordering::SeqCst) == 1 && provisional {
+                stop(&core, &log, &endpoint);
+            }
         });
     }
 }
@@ -1382,6 +1445,36 @@ mod tests {
         }
         assert!(parse_args(args(&["--vault", "v", "--vault-id"])).is_err());
     }
+    /// `--provisional` (`docs/api-locale.md` § 25.9): told where to listen and where to
+    /// create, never for a vault that already has an identifier.
+    #[test]
+    fn parses_the_provisional_option() {
+        let ep = Endpoint::provisional().unwrap().display();
+        assert!(!parse_args(args(&["--vault", "v"])).unwrap().provisional);
+        let o = parse_args(args(&["--socket", &ep, "--vault", "v", "--provisional"])).unwrap();
+        assert!(o.provisional);
+        assert_eq!(o.vault_id, None);
+        assert_eq!(o.endpoint.display(), ep);
+        let hex = "000102030405060708090a0b0c0d0e0f";
+        assert!(parse_args(args(&[
+            "--socket",
+            &ep,
+            "--vault",
+            "v",
+            "--provisional",
+            "--vault-id",
+            hex
+        ]))
+        .is_err());
+        // The environment may name an endpoint or a vault, as for any core.
+        if std::env::var_os("HIRZLA_SOCKET").is_none() {
+            assert!(parse_args(args(&["--vault", "v", "--provisional"])).is_err());
+        }
+        if std::env::var_os("HIRZLA_VAULT").is_none() {
+            assert!(parse_args(args(&["--socket", &ep, "--provisional"])).is_err());
+        }
+    }
+
     #[test]
     fn refuses_bad_arguments() {
         assert!(parse_args(args(&["--nope"])).is_err());

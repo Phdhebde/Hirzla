@@ -17,6 +17,7 @@ mod server;
 mod term;
 mod totp;
 mod update;
+mod vault_new;
 mod vaults;
 
 use std::ffi::OsString;
@@ -461,7 +462,15 @@ fn run(args: &Args) -> Result<(), String> {
         Command::Init { kdf } => {
             let mut c = session.connect(true)?;
             if status(&mut c)?.state != VaultState::Absent {
-                return Err(refusal_message(&ErrorReply::new(ErrorCode::VaultExists)));
+                // The core of a registered vault creates none (§ 25.3): a vault of more is
+                // created through a provisional core (§ 25.9).
+                return Err(if session.route.entry.is_some() {
+                    "ce coffre existe déjà. Pour créer un coffre de plus : « hirzla coffres \
+                     creer ALIAS »."
+                        .into()
+                } else {
+                    refusal_message(&ErrorReply::new(ErrorCode::VaultExists))
+                });
             }
             let password = term::read_secret("Nouveau mot de passe maître : ", true, MAX_PASSWORD)?;
             call(

@@ -174,6 +174,15 @@ Plusieurs coffres sur cet appareil (chacun a son noyau et se déverrouille seul)
   coffres ajouter ALIAS FICHIER [--defaut]
                           Inscrit un coffre existant sous le nom ALIAS (64 octets au
                           plus). Ce nom est lisible sans déverrouiller le coffre.
+  coffres creer ALIAS [FICHIER] [--defaut] [--kdf-memory KIO --kdf-passes N]
+                          Crée un coffre de plus et l'inscrit sous le nom ALIAS. Sans
+                          FICHIER, il est rangé à côté du coffre par défaut.
+  coffres rejoindre ALIAS LIEN [FICHIER] [--defaut]
+                          Crée un coffre et le rattache au serveur du lien d'invitation
+                          (nouveau compte). LIEN : le texte, ou @FICHIER.
+  coffres enroler ALIAS LIEN [FICHIER] [--defaut]
+                          Rejoint votre compte sur le serveur du lien : enrôle cet
+                          appareil, à certifier depuis un autre (« appareil ajouter »).
   coffres renommer ALIAS NOUVEL_ALIAS
                           Change le nom d'un coffre inscrit.
   coffres defaut ALIAS    Choisit le coffre des commandes sans --coffre.
@@ -323,6 +332,29 @@ pub enum VaultsCommand {
     Add {
         alias: String,
         file: PathBuf,
+        default: bool,
+    },
+    /// Create a Self vault through a provisional core and register it (§ 25.9).
+    Create {
+        alias: String,
+        file: Option<PathBuf>,
+        default: bool,
+        kdf: Option<(u32, u32, u32)>,
+    },
+    /// Create a vault, join the server of an invitation link (a new account, ADR 0046)
+    /// and register it.
+    Join {
+        alias: String,
+        link: String,
+        file: Option<PathBuf>,
+        default: bool,
+    },
+    /// Enrol this device into the user's account on the server of the link (ADR 0081),
+    /// which creates the vault, and register it.
+    Enrol {
+        alias: String,
+        link: String,
+        file: Option<PathBuf>,
         default: bool,
     },
     /// Change an alias.
@@ -948,7 +980,7 @@ fn parse_with(
         "serveur" => &["--sortie", "--ac", "--empreinte"],
         "casier" => &["--empreinte", "--mot-de-passe", "--nom"],
         "appareil" => &["--oui"],
-        "coffres" => &["--defaut"],
+        "coffres" => &["--defaut", "--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "mise-a-jour" => &["--repertoire", "--cle-editeur"],
         "rm" => &["--purger", "--id"],
         "totp" => &[
@@ -1004,24 +1036,28 @@ fn parse_with(
         }
     };
 
+    // The explicit derivation cost of a vault to create (`init`, `coffres creer`).
+    let kdf_cost = || -> Result<Option<(u32, u32, u32)>, String> {
+        let m = one("--kdf-memory")?;
+        let t = one("--kdf-passes")?;
+        let p = one("--kdf-lanes")?;
+        match (m, t, p) {
+            (None, None, None) => Ok(None),
+            (Some(m), Some(t), p) => Ok(Some((
+                number(&m, "--kdf-memory")?,
+                number(&t, "--kdf-passes")?,
+                p.map(|p| number(&p, "--kdf-lanes"))
+                    .transpose()?
+                    .unwrap_or(1),
+            ))),
+            _ => Err("--kdf-memory et --kdf-passes vont ensemble.".to_owned()),
+        }
+    };
+
     let command = match command.as_str() {
         "init" => {
             max_positional(0)?;
-            let m = one("--kdf-memory")?;
-            let t = one("--kdf-passes")?;
-            let p = one("--kdf-lanes")?;
-            let kdf = match (m, t, p) {
-                (None, None, None) => None,
-                (Some(m), Some(t), p) => Some((
-                    number(&m, "--kdf-memory")?,
-                    number(&t, "--kdf-passes")?,
-                    p.map(|p| number(&p, "--kdf-lanes"))
-                        .transpose()?
-                        .unwrap_or(1),
-                )),
-                _ => return Err("--kdf-memory et --kdf-passes vont ensemble.".to_owned()),
-            };
-            Command::Init { kdf }
+            Command::Init { kdf: kdf_cost()? }
         }
         "unlock" if has("--materiel") => {
             max_positional(1)?;
@@ -1761,10 +1797,26 @@ fn parse_with(
             }
         }
         "coffres" => {
-            max_positional(3)?;
+            max_positional(4)?;
             let sub = positional.first().map(String::as_str);
-            if has("--defaut") && sub != Some("ajouter") {
-                return Err("--defaut ne s'applique qu'à « coffres ajouter ».".into());
+            let creates = matches!(sub, Some("creer" | "rejoindre" | "enroler"));
+            if has("--defaut") && !(creates || sub == Some("ajouter")) {
+                return Err(
+                    "--defaut ne s'applique qu'à « coffres ajouter », « creer », « rejoindre » \
+                     et « enroler »."
+                        .into(),
+                );
+            }
+            if sub != Some("creer")
+                && ["--kdf-memory", "--kdf-passes", "--kdf-lanes"]
+                    .iter()
+                    .any(|f| has(f))
+            {
+                return Err(
+                    "--kdf-memory, --kdf-passes et --kdf-lanes ne s'appliquent qu'à \
+                            « coffres creer »."
+                        .into(),
+                );
             }
             let arg = |n: usize, what: &str| {
                 positional
@@ -1788,15 +1840,42 @@ fn parse_with(
                     at_most(1)?;
                     VaultsCommand::List
                 }
-                Some("ajouter") => VaultsCommand::Add {
-                    alias: arg(1, "ALIAS FICHIER")?,
-                    file: PathBuf::from(arg(2, "ALIAS FICHIER")?),
+                Some("ajouter") => {
+                    at_most(3)?;
+                    VaultsCommand::Add {
+                        alias: arg(1, "ALIAS FICHIER")?,
+                        file: PathBuf::from(arg(2, "ALIAS FICHIER")?),
+                        default: has("--defaut"),
+                    }
+                }
+                Some("creer") => {
+                    at_most(3)?;
+                    VaultsCommand::Create {
+                        alias: arg(1, "ALIAS [FICHIER]")?,
+                        file: positional.get(2).map(PathBuf::from),
+                        default: has("--defaut"),
+                        kdf: kdf_cost()?,
+                    }
+                }
+                Some("rejoindre") => VaultsCommand::Join {
+                    alias: arg(1, "ALIAS LIEN [FICHIER]")?,
+                    link: arg(2, "ALIAS LIEN [FICHIER]")?,
+                    file: positional.get(3).map(PathBuf::from),
                     default: has("--defaut"),
                 },
-                Some("renommer") => VaultsCommand::Rename {
-                    alias: arg(1, "ALIAS NOUVEL_ALIAS")?,
-                    new_alias: arg(2, "ALIAS NOUVEL_ALIAS")?,
+                Some("enroler") => VaultsCommand::Enrol {
+                    alias: arg(1, "ALIAS LIEN [FICHIER]")?,
+                    link: arg(2, "ALIAS LIEN [FICHIER]")?,
+                    file: positional.get(3).map(PathBuf::from),
+                    default: has("--defaut"),
                 },
+                Some("renommer") => {
+                    at_most(3)?;
+                    VaultsCommand::Rename {
+                        alias: arg(1, "ALIAS NOUVEL_ALIAS")?,
+                        new_alias: arg(2, "ALIAS NOUVEL_ALIAS")?,
+                    }
+                }
                 Some("defaut") => {
                     at_most(2)?;
                     VaultsCommand::Default {
@@ -2006,6 +2085,92 @@ mod tests {
                 alias: "perso".to_owned(),
             }
         );
+        // Creation through a provisional core (§ 25.9).
+        assert_eq!(
+            v(&["coffres", "creer", "Client X"]),
+            VaultsCommand::Create {
+                alias: "Client X".to_owned(),
+                file: None,
+                default: false,
+                kdf: None,
+            }
+        );
+        assert_eq!(
+            v(&[
+                "coffres",
+                "creer",
+                "perso",
+                "p.hirzla",
+                "--defaut",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3"
+            ]),
+            VaultsCommand::Create {
+                alias: "perso".to_owned(),
+                file: Some(PathBuf::from("p.hirzla")),
+                default: true,
+                kdf: Some((65536, 3, 1)),
+            }
+        );
+        assert_eq!(
+            v(&["coffres", "rejoindre", "société", "hirzla-invitation:x"]),
+            VaultsCommand::Join {
+                alias: "société".to_owned(),
+                link: "hirzla-invitation:x".to_owned(),
+                file: None,
+                default: false,
+            }
+        );
+        assert_eq!(
+            v(&[
+                "coffres",
+                "enroler",
+                "société",
+                "@lien.txt",
+                "s.hirzla",
+                "--defaut"
+            ]),
+            VaultsCommand::Enrol {
+                alias: "société".to_owned(),
+                link: "@lien.txt".to_owned(),
+                file: Some(PathBuf::from("s.hirzla")),
+                default: true,
+            }
+        );
+        for bad in [
+            &["coffres", "creer"][..],
+            &["coffres", "creer", "a", "f", "g"],
+            &["coffres", "creer", "a", "--kdf-memory", "65536"],
+            &["coffres", "rejoindre", "a"],
+            &["coffres", "rejoindre", "a", "l", "f", "g"],
+            &[
+                "coffres",
+                "rejoindre",
+                "a",
+                "l",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3",
+            ],
+            &["coffres", "enroler", "a"],
+            &["coffres", "enroler", "a", "l", "--kdf-passes", "3"],
+            &[
+                "coffres",
+                "ajouter",
+                "a",
+                "f",
+                "--kdf-memory",
+                "65536",
+                "--kdf-passes",
+                "3",
+            ],
+            &["coffres", "renommer", "a", "b", "c"],
+        ] {
+            assert!(pe(bad, &[]).is_err(), "{bad:?}");
+        }
         for bad in [
             &["coffres", "ajouter"][..],
             &["coffres", "ajouter", "perso"],

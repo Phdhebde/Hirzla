@@ -1,8 +1,10 @@
 //! Client of the local API, used by the command line (and later the desktop application and
 //! the native host). It holds no key: it sends a request and receives only what it asked for.
 //!
-//! [`router`] finds the core of one vault among those of the device (ADR 0085).
+//! [`router`] finds the core of one vault among those of the device (ADR 0085);
+//! [`creation`] has a vault of more created by a provisional core.
 
+pub mod creation;
 pub mod router;
 
 use std::path::{Path, PathBuf};
