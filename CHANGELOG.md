@@ -8,6 +8,57 @@ la version de l'espace de travail Cargo, de l'application, de l'extension et l'�
 Le corps de la page de chaque version sur GitHub reprend la section correspondante
 (`.github/release-notes.md`).
 
+## [2.0.0] — 2026-11-26
+
+### Plusieurs coffres par appareil (ADR 0085)
+
+- Un appareil tient jusqu'à 16 coffres côte à côte : le vôtre, celui d'une organisation,
+  celui de chaque client. Chaque coffre garde son mot de passe maître, ses méthodes de
+  déverrouillage, son serveur et ses règles. Chacun se verrouille et s'ouvre seul ; aucun
+  coffre n'en ouvre un autre.
+- **Un noyau par coffre.** Chaque coffre est servi par son propre processus `hirzla-core` :
+  les clés d'un coffre ne partagent jamais la mémoire d'un autre. Trois coffres de trois
+  serveurs sont trois identités sans lien, qu'aucun serveur ne peut recouper.
+- **Registre des coffres** : une liste locale (alias, fichier, coffre par défaut), sans clé
+  ni secret. L'alias est choisi par vous et reste lisible sans déverrouiller le coffre.
+- **Ligne de commande** : `hirzla coffres` liste les coffres ; `coffres creer`, `rejoindre`
+  et `enroler` en créent un de plus (coffre Self, nouveau compte sur un serveur, appareil de
+  plus de votre compte) ; `ajouter`, `renommer`, `defaut` et `retirer` gèrent la liste.
+  `--coffre ALIAS` (ou `HIRZLA_COFFRE`) choisit le coffre d'une commande.
+- **Application** : dès que deux coffres sont inscrits, un onglet par coffre choisit le
+  coffre affiché. La palette (Ctrl+K) cherche aussi dans les autres coffres ouverts et
+  nomme le coffre de chaque résultat. La zone de notification montre l'état de chaque coffre
+  et propose « Tout verrouiller ».
+- **Extension** : pour un site, chaque coffre ouvert propose ses identifiants et ses clés
+  d'accès, marqués du nom de leur coffre. Un nouvel identifiant s'enregistre dans le coffre
+  que vous choisissez. Un coffre verrouillé n'est jamais ouvert d'office.
+- **Rien à faire pour un poste à un seul coffre** : il est inscrit de lui-même sous l'alias
+  `principal` et se comporte comme avant. Aucune migration.
+- API locale version 16 (`docs/api-locale.md` § 25) : opération `VaultInfo`. Aucun
+  changement du format du coffre, du protocole de synchronisation ni du serveur `hirzlad`.
+
+### Pourquoi une version majeure
+
+- Le noyau d'un coffre inscrit écoute à un point de connexion propre à ce coffre, et non
+  plus au point par défaut. Un outil qui parlait au noyau par le point par défaut sans passer
+  par `hirzla` doit suivre le registre, ou donner son point de connexion (`--socket`).
+  `sdk/go` reçoit toujours son point de connexion de l'appelant : donnez-lui celui du coffre
+  (`core-<identifiant>.sock`, § 25.2).
+- Mettez à jour ensemble l'application, la ligne de commande et l'extension : ils sont
+  livrés dans le même installeur.
+
+### Application Android (en développement, hors livraison)
+
+- L'application Android tient elle aussi plusieurs coffres, un processus par coffre. Elle
+  ne fait pas partie des fichiers de cette version.
+
+### Limites connues
+
+- Un coffre de plus se crée, se renomme et se retire en ligne de commande ; l'application
+  ne le fait pas encore.
+- Aucune copie de secret d'un coffre à l'autre.
+- L'agent gateway Hornn reste à un coffre.
+
 ## [1.2.0] — 2026-11-24
 
 ### Adresses web et étiquettes modifiables (ADR 0082)
