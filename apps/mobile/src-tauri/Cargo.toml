@@ -7,8 +7,8 @@ edition.workspace = true
 rust-version.workspace = true
 publish.workspace = true
 
-# Tauri loads `libhirzla_mobile.so` in the interface process; the core runs apart, in the
-# `:core` process (`apps/mobile/core`).
+# Tauri loads `libhirzla_mobile.so` in the interface process; the cores run apart, one process
+# per vault (`apps/mobile/core`, ADR 0085 step 5).
 [lib]
 name = "hirzla_mobile"
 crate-type = ["cdylib", "rlib"]
@@ -29,3 +29,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
 zeroize = { version = "1.8", features = ["serde"] }
+
+[dev-dependencies]
+# Private temporary directories for the end-to-end tests with real cores.
+tempfile = "3.27.0"

@@ -70,6 +70,10 @@ Règles de `CLAUDE.md` concernées : 4 (clés dans le noyau), 5 (secrets typés)
   (`PackageManager.GET_SIGNING_CERTIFICATES`) est l'une des empreintes d'éditeur compilées ; il
   échoue fermé sinon.
 
+**Plusieurs coffres (ADR 0085, étape 5).** Le processus `:core` devient seize processus
+`:core0` à `:core15`, un par coffre, déclarés d'avance et lancés à la demande
+(`api-locale.md` § 25.13). Tout ce qui précède vaut pour chacun.
+
 Ce que cela garde de l'ADR 0007 : une faille dans la vue web ou dans le moteur de rendu ne
 donne pas la mémoire du noyau. Ce que cela perd : sur le poste, deux utilisateurs du même
 compte sont distingués par leur exécutable ; ici l'UID suffit, ce qui est la frontière

@@ -46,5 +46,6 @@ pub mod release;
 pub mod selfmode;
 pub mod server_mode;
 pub mod service;
+pub mod slots;
 pub mod totp;
 pub mod transport;

@@ -12,7 +12,7 @@ const $ = (id) => /** @type {HTMLElement} */ (document.getElementById(id));
 /** @param {string} id */
 const input = (id) => /** @type {HTMLInputElement} */ (document.getElementById(id));
 
-const ECRANS = ["attente", "creation", "rejoindre", "ouverture", "liste", "remplir", "detail", "ajout", "reglages"];
+const ECRANS = ["attente", "creation", "rejoindre", "ouverture", "coffres", "nouveau", "liste", "remplir", "detail", "ajout", "reglages"];
 
 /** @param {string} nom */
 function montrer(nom) {
@@ -63,8 +63,20 @@ async function occupe(form, f) {
   }
 }
 
-/** @type {{ state: string, fingerprint: boolean, can_enrol: boolean, clipboard_clear_s: number, joined: boolean } | null} */
+/** @type {{ state: string, fingerprint: boolean, can_enrol: boolean, clipboard_clear_s: number, joined: boolean, alias: string | null, vaults: number } | null} */
 let etat = null;
+
+/** Shows which vault the screens talk to, once the phone holds several (ADR 0085). */
+function montrerCoffre() {
+  const plusieurs = !!etat && etat.vaults > 1 && !!etat.alias;
+  const nom = plusieurs && etat ? (etat.alias ?? "") : "";
+  $("ouverture-coffre").textContent = nom;
+  $("ouverture-coffre").hidden = !plusieurs;
+  $("liste-coffre").textContent = nom;
+  $("liste-coffre").hidden = !plusieurs;
+  // Without a registered vault there is nothing to choose: the first vault comes first.
+  $("ouverture-coffres").hidden = !etat || etat.vaults < 1;
+}
 
 /** Groups a code or fingerprint by 5 characters. @param {string} s */
 const grouper = (s) => (s.match(/.{1,5}/g) ?? []).join(" ");
@@ -84,6 +96,7 @@ async function demarrer() {
     return;
   }
   if (!etat) return;
+  montrerCoffre();
   if (etat.state === "absent") {
     montrer("creation");
   } else if (etat.state === "locked") {
@@ -122,16 +135,19 @@ $("liste-synchroniser").addEventListener("click", () => void synchroniser(true))
 
 // ---- Autofill (ADR 0080 § 6) -------------------------------------------------------------
 
-/** @typedef {{ app: string, package: string, domain: string | null, matches: Entree[] }} Demande */
+/** A secret proposed for a form: `vault` and `alias` name the vault that holds it.
+ * @typedef {Entree & { vault?: string, alias?: string }} Proposition */
+/** @typedef {{ app: string, package: string, domain: string | null, matches: Proposition[] }} Demande */
 
 /** @type {Demande | null} */
 let demande = null;
-/** The secret awaiting confirmation. @type {Entree | null} */
+/** The secret awaiting confirmation. @type {Proposition | null} */
 let aRemplir = null;
 /** @type {number | undefined} */
 let remplirMinuteur;
 
-/** A row of a list of secrets. @param {Entree} e @param {(e: Entree) => void} choisir */
+/** A row of a list of secrets; a proposal of another vault says which one.
+ * @param {Proposition} e @param {(e: Proposition) => void} choisir */
 function ligneSecret(e, choisir) {
   const li = document.createElement("li");
   const b = document.createElement("button");
@@ -142,7 +158,8 @@ function ligneSecret(e, choisir) {
   const s = document.createElement("span");
   s.className = "sous-titre";
   const casier = casiers.find((c) => c.id === e.locker);
-  s.textContent = [e.username, e.hosts[0], casier && !casier.personal ? casier.name : null].filter(Boolean).join(" · ");
+  const coffre = e.alias && etat && etat.vaults > 1 ? `Coffre ${e.alias}` : null;
+  s.textContent = [e.username, e.hosts[0], casier && !casier.personal ? casier.name : null, coffre].filter(Boolean).join(" · ");
   b.append(t, s);
   b.addEventListener("click", () => choisir(e));
   li.append(b);
@@ -195,7 +212,7 @@ async function chercherRemplir() {
 }
 
 /** The warning before filling a secret that is not registered for the target (ADR 0072 § 3).
- * @param {Entree} e */
+ * @param {Proposition} e */
 function confirmerRemplir(e) {
   if (!demande) return;
   aRemplir = e;
@@ -208,10 +225,10 @@ function confirmerRemplir(e) {
   window.scrollTo(0, 0);
 }
 
-/** @param {Entree} e @param {boolean} confirme */
+/** @param {Proposition} e @param {boolean} confirme */
 async function remplir(e, confirme) {
   try {
-    await invoke("autofill_fill", { target: { locker: e.locker, id: e.id }, confirmed: confirme });
+    await invoke("autofill_fill", { target: { locker: e.locker, id: e.id }, vault: e.vault ?? null, confirmed: confirme });
   } catch (err) {
     if (confirme) erreur($("remplir-confirmation"), err);
     else annoncer(message(err));
@@ -259,6 +276,9 @@ let rejoindreActif = false;
 let empreinteRecue = null;
 /** @type {string | null} */
 let empreinteConfirmee = null;
+/** Name of the vault to come when the phone already holds one; `null` for the first vault.
+ * @type {string | null} */
+let nouveauNom = null;
 
 /** @param {"form-lien" | "rejoindre-code" | "rejoindre-empreinte" | "form-rejoindre-mdp"} partie */
 function etape(partie) {
@@ -281,19 +301,23 @@ async function abandonner() {
 }
 
 $("creation-rejoindre").addEventListener("click", () => {
+  nouveauNom = null;
   /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value = "";
   erreur($("form-lien"), null);
   etape("form-lien");
   montrer("rejoindre");
 });
 
-$("lien-retour").addEventListener("click", () => montrer("creation"));
+$("lien-retour").addEventListener("click", () => montrer(nouveauNom === null ? "creation" : "nouveau"));
 
 $("form-lien").addEventListener("submit", (ev) => {
   ev.preventDefault();
   const form = /** @type {HTMLFormElement} */ (ev.currentTarget);
   occupe(form, async () => {
-    const code = await invoke("enrol_start", { link: /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value });
+    const code = await invoke("enrol_start", {
+      link: /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value,
+      alias: nouveauNom,
+    });
     $("rejoindre-code-valeur").textContent = grouper(code);
     $("rejoindre-attente").textContent = "En attente du poste…";
     erreur($("rejoindre-code"), null);
@@ -356,7 +380,12 @@ $("form-rejoindre-mdp").addEventListener("submit", (ev) => {
     input("rejoindre-mdp").value = "";
     input("rejoindre-confirmation").value = "";
     synchronise = false;
-    annoncer("Coffre créé. Votre poste ajoute ce téléphone à vos casiers partagés.");
+    annoncer(
+      nouveauNom === null
+        ? "Coffre créé. Votre poste ajoute ce téléphone à vos casiers partagés."
+        : "Coffre créé et inscrit. Ouvrez-le avec son mot de passe.",
+    );
+    nouveauNom = null;
     await demarrer();
   });
 });
@@ -370,6 +399,7 @@ $("form-creation").addEventListener("submit", (ev) => {
     await invoke("create_vault", {
       password: input("creation-mdp").value,
       confirmation: input("creation-confirmation").value,
+      alias: null,
     });
     input("creation-mdp").value = "";
     input("creation-confirmation").value = "";
@@ -396,6 +426,123 @@ $("ouverture-empreinte").addEventListener("click", () => {
 });
 
 $("attente-reessayer").addEventListener("click", demarrer);
+
+// ---- Vaults of this phone (ADR 0085, docs/api-locale.md § 25.13) ------------------------
+
+/** @typedef {{ id: string, alias: string, default: boolean, active: boolean, state: string }} Coffre */
+
+async function afficherCoffres() {
+  /** @type {Coffre[]} */
+  let coffres;
+  try {
+    coffres = await invoke("list_vaults");
+  } catch (e) {
+    annoncer(message(e));
+    return;
+  }
+  const ul = $("coffres-liste");
+  ul.replaceChildren();
+  for (const c of coffres) {
+    const li = document.createElement("li");
+    const b = document.createElement("button");
+    b.type = "button";
+    const t = document.createElement("span");
+    t.className = "titre";
+    t.textContent = c.alias;
+    const s = document.createElement("span");
+    s.className = "sous-titre";
+    s.textContent = [
+      c.state === "unlocked" ? "Ouvert" : "Verrouillé",
+      c.active ? "affiché" : null,
+      c.default ? "par défaut" : null,
+    ].filter(Boolean).join(" · ");
+    b.append(t, s);
+    b.addEventListener("click", () => void choisirCoffre(c));
+    li.append(b);
+    ul.append(li);
+  }
+  // Nothing to choose or to lock without a registered vault; the first vault comes first.
+  /** @type {HTMLButtonElement} */ ($("coffres-ajouter")).hidden = coffres.length === 0;
+  /** @type {HTMLButtonElement} */ ($("coffres-verrouiller")).hidden = coffres.length === 0;
+  montrer("coffres");
+}
+
+/** Makes `c` the vault the screens talk to. @param {Coffre} c */
+async function choisirCoffre(c) {
+  try {
+    await invoke("select_vault", { vault: c.id });
+  } catch (e) {
+    annoncer(message(e));
+    return;
+  }
+  // Nothing of the previous vault stays on screen.
+  input("liste-recherche").value = "";
+  $("liste").replaceChildren();
+  casiers = [];
+  courant = null;
+  synchronise = false;
+  await demarrer();
+}
+
+$("ouverture-coffres").addEventListener("click", () => void afficherCoffres());
+$("liste-coffre").addEventListener("click", () => void afficherCoffres());
+$("reglages-coffres").addEventListener("click", () => void afficherCoffres());
+$("coffres-retour").addEventListener("click", () => void demarrer());
+
+$("coffres-verrouiller").addEventListener("click", async () => {
+  try {
+    await invoke("lock_all");
+    synchronise = false;
+    annoncer("Tous les coffres sont verrouillés.");
+  } catch (e) {
+    annoncer(message(e));
+  }
+  await afficherCoffres();
+});
+
+$("coffres-ajouter").addEventListener("click", () => {
+  for (const id of ["nouveau-nom", "nouveau-mdp", "nouveau-confirmation"]) input(id).value = "";
+  erreur($("form-nouveau"), null);
+  montrer("nouveau");
+});
+
+$("nouveau-retour").addEventListener("click", () => {
+  input("nouveau-mdp").value = "";
+  input("nouveau-confirmation").value = "";
+  void afficherCoffres();
+});
+
+$("form-nouveau").addEventListener("submit", (ev) => {
+  ev.preventDefault();
+  const form = /** @type {HTMLFormElement} */ (ev.currentTarget);
+  occupe(form, async () => {
+    await invoke("create_vault", {
+      password: input("nouveau-mdp").value,
+      confirmation: input("nouveau-confirmation").value,
+      alias: input("nouveau-nom").value.trim(),
+    });
+    input("nouveau-mdp").value = "";
+    input("nouveau-confirmation").value = "";
+    synchronise = false;
+    annoncer("Coffre créé. Ouvrez-le avec son mot de passe.");
+    await demarrer();
+  });
+});
+
+$("nouveau-rejoindre").addEventListener("click", () => {
+  const nom = input("nouveau-nom").value.trim();
+  if (!nom) {
+    erreur($("form-nouveau"), { message: "Donnez un nom à ce coffre." });
+    return;
+  }
+  input("nouveau-mdp").value = "";
+  input("nouveau-confirmation").value = "";
+  nouveauNom = nom;
+  /** @type {HTMLTextAreaElement} */ ($("lien-saisie")).value = "";
+  erreur($("form-lien"), null);
+  etape("form-lien");
+  montrer("rejoindre");
+});
 
 // ---- List ----------------------------------------------------------------------------
 
@@ -609,6 +756,8 @@ $("form-empreinte").addEventListener("submit", (ev) => {
 document.addEventListener("visibilitychange", () => {
   // Not while joining: the user leaves the application to copy the link.
   if (!$("ecran-rejoindre").hidden) return;
+  // Nor while naming one more vault, for the same reason.
+  if (!$("ecran-nouveau").hidden) return;
   if (document.visibilityState === "visible") demarrer();
   else masquer();
 });

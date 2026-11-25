@@ -85,11 +85,49 @@
     <form id="form-ouverture" class="pile" novalidate>
       <div class="marque"><img src="img/hirzla-symbole-fond-sombre.svg" alt="" class="symbole"><span class="logotype">HIRZLA</span></div>
       <h1><span class="forme forme-carre" aria-hidden="true"></span> Coffre verrouillé</h1>
+      <p id="ouverture-coffre" class="secondaire" hidden></p>
       <button id="ouverture-empreinte" class="bouton bouton-principal" type="button" hidden>Ouvrir avec l'empreinte</button>
       <label class="champ"><span>Mot de passe maître</span>
         <input id="ouverture-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
       <p class="erreur" hidden></p>
       <button class="bouton" type="submit">Ouvrir</button>
+      <button id="ouverture-coffres" class="bouton bouton-discret" type="button">Coffres</button>
+    </form>
+  </main>
+
+  <!-- The vaults of this phone (ADR 0085): choose the active one, add one, lock them all. -->
+  <main id="ecran-coffres" class="ecran" hidden>
+    <header class="barre">
+      <button id="coffres-retour" class="bouton bouton-discret" type="button">‹ Retour</button>
+    </header>
+    <h1>Coffres</h1>
+    <p class="secondaire">Chaque coffre a son mot de passe et s'ouvre seul. Un coffre que vous n'ouvrez pas reste
+      verrouillé.</p>
+    <ul id="coffres-liste" class="liste liste-courte"></ul>
+    <div class="pile">
+      <button id="coffres-ajouter" class="bouton" type="button">Ajouter un coffre</button>
+      <button id="coffres-verrouiller" class="bouton" type="button">Tout verrouiller</button>
+    </div>
+  </main>
+
+  <!-- One more vault: a name, then a new vault or an existing account. -->
+  <main id="ecran-nouveau" class="ecran" hidden>
+    <header class="barre">
+      <button id="nouveau-retour" class="bouton bouton-discret" type="button">‹ Annuler</button>
+    </header>
+    <form id="form-nouveau" class="pile" novalidate>
+      <h1>Ajouter un coffre</h1>
+      <label class="champ"><span>Nom du coffre</span>
+        <input id="nouveau-nom" type="text" autocomplete="off" spellcheck="false" maxlength="64"></label>
+      <p class="secondaire">Ce nom reste sur ce téléphone. Il est lisible sans déverrouiller le coffre : évitez
+        d'y mettre ce que vous ne voulez pas montrer.</p>
+      <label class="champ"><span>Mot de passe maître (12 caractères au moins)</span>
+        <input id="nouveau-mdp" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <label class="champ"><span>Confirmation</span>
+        <input id="nouveau-confirmation" type="password" autocomplete="off" spellcheck="false" maxlength="1024"></label>
+      <p class="erreur" hidden></p>
+      <button class="bouton bouton-principal" type="submit">Créer le coffre</button>
+      <button id="nouveau-rejoindre" class="bouton" type="button">Rejoindre un compte à la place (lien d'invitation)</button>
     </form>
   </main>
 
@@ -97,6 +135,7 @@
   <main id="ecran-liste" class="ecran" hidden>
     <header class="barre">
       <span class="etat"><span class="forme forme-rond" aria-hidden="true"></span> Ouvert</span>
+      <button id="liste-coffre" class="bouton bouton-discret coffre-nom" type="button" hidden></button>
       <span class="espace"></span>
       <button id="liste-synchroniser" class="bouton bouton-discret" type="button" hidden>Synchroniser</button>
       <button id="liste-reglages" class="bouton bouton-discret" type="button">Réglages</button>
@@ -195,6 +234,12 @@
         vous choisissez le secret, et vous revenez au formulaire rempli. Dans Chrome, activez aussi « Saisie
         automatique à l'aide d'un autre service » dans les réglages du navigateur.</p>
       <button id="saisie-activer" class="bouton" type="button">Choisir Hirzla dans les réglages d'Android</button>
+    </section>
+    <section class="pile">
+      <h1>Coffres</h1>
+      <p class="secondaire">Ce téléphone peut tenir plusieurs coffres côte à côte, par exemple le vôtre et celui
+        d'un compte rejoint. Chacun garde son mot de passe et ses règles.</p>
+      <button id="reglages-coffres" class="bouton" type="button">Gérer les coffres</button>
     </section>
   </main>
 </body>

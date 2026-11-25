@@ -356,16 +356,23 @@ pub fn main() -> ExitCode {
     }
 }
 
-/// Entry point of the core on Android (ADR 0080 § 2), called by the service of the `:core`
-/// process with the application's private directory. Listens on `core/core.sock` under it,
-/// keeps the vault in `coffre.hirzla` and the log in `core/core.log`, and admits the processes
-/// of the application. Returns only if the core cannot start.
+/// Entry point of the core on Android (ADR 0080 § 2, `docs/api-locale.md` § 25.13), called
+/// by the service of the process of `slot` with the application's private directory and how
+/// to start. The core derives everything from its slot ([`crate::slots`]): the vault file,
+/// the endpoint, the log `core/core-<slot>.log`. It admits the processes of the application.
+/// Returns only if the core cannot start.
 ///
 /// # Errors
 /// A message in French. A delivery build refuses to start: the check of the APK's own signing
 /// certificate (ADR 0080 § 2) is not written yet, and the core fails closed.
 #[cfg(target_os = "android")]
-pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
+pub fn run_android(
+    files_dir: &std::path::Path,
+    slot: u8,
+    start: &crate::slots::SlotStart,
+) -> Result<(), String> {
+    use crate::slots::{SlotLayout, SlotStart};
+
     if release::DELIVERY_BUILD {
         return Err(
             "la vérification du certificat de l'application n'est pas encore en place.".to_owned(),
@@ -374,18 +381,26 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
     let hardening = platform::harden_process();
     // `getFilesDir()` is under `/data/user/0`, a symbolic link to `/data/data` set by the
     // system; the vault refuses a path through a link, so resolve it once here.
-    let files_dir = std::fs::canonicalize(files_dir)
+    let layout = SlotLayout::resolve(files_dir)
         .map_err(|_| "répertoire de l'application illisible.".to_owned())?;
-    let core_dir = files_dir.join("core");
-    let endpoint = Endpoint::parse(core_dir.join("core.sock").as_os_str())
-        .map_err(|_| "point de connexion invalide.".to_owned())?;
+    let no_slot = || "emplacement de noyau invalide.".to_owned();
+    // The first vault lives in slot 0 only: anywhere else it would be a second default
+    // endpoint on another file.
+    if matches!(start, SlotStart::First) && slot != 0 {
+        return Err(no_slot());
+    }
     let options = Options {
         clients: ClientPolicy::SameApp,
-        endpoint,
-        vault: files_dir.join("coffre.hirzla"),
-        vault_id: None,
-        provisional: false,
-        log: Some(core_dir.join("core.log")),
+        endpoint: layout
+            .endpoint(slot, start)
+            .map_err(|_| "point de connexion invalide.".to_owned())?,
+        vault: layout.vault(slot).ok_or_else(no_slot)?,
+        vault_id: match start {
+            SlotStart::Vault(id) => Some(*id),
+            SlotStart::First | SlotStart::New => None,
+        },
+        provisional: matches!(start, SlotStart::New),
+        log: Some(layout.log(slot).ok_or_else(no_slot)?),
         allow: None,
         allow_browser: None,
         auto_lock: None,
@@ -395,7 +410,8 @@ pub fn run_android(files_dir: &std::path::Path) -> Result<(), String> {
         client_manifest: None,
     };
     // The listener creates the directory 0700; the log needs it first.
-    std::fs::create_dir_all(&core_dir).map_err(|_| "répertoire du noyau illisible.".to_owned())?;
+    std::fs::create_dir_all(layout.core_dir())
+        .map_err(|_| "répertoire du noyau illisible.".to_owned())?;
     let log = open_log(options.log.as_ref())
         .map(|l| Arc::new(Log::new(l)))
         .map_err(|_| "impossible d'ouvrir le journal.".to_owned())?;

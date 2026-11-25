@@ -34,6 +34,49 @@ pub enum MobileError {
     /// The Kotlin layer failed.
     #[error("native layer error")]
     Native,
+    /// The vault registry was refused, or names a file that is no core slot.
+    #[error("vault registry refused")]
+    Registry,
+    /// The file of a registered vault is missing.
+    #[error("vault file missing")]
+    VaultMissing,
+    /// The file, or the core answering, is not the registered vault: nothing more was sent.
+    #[error("not the registered vault")]
+    WrongVault,
+    /// No registered vault carries this identifier.
+    #[error("unknown vault")]
+    UnknownVault,
+}
+
+impl From<hirzla_core::registry::RegistryError> for MobileError {
+    fn from(e: hirzla_core::registry::RegistryError) -> Self {
+        use hirzla_core::registry::RegistryError;
+        match e {
+            RegistryError::TooManyVaults => {
+                MobileError::Invalid("Ce téléphone tient déjà 16 coffres, le maximum.")
+            }
+            RegistryError::InvalidAlias => MobileError::Invalid(
+                "Nom de coffre refusé : 1 à 64 octets, sans espace en tête ou en fin.",
+            ),
+            RegistryError::DuplicateAlias => MobileError::Invalid("Un coffre porte déjà ce nom."),
+            RegistryError::NoVault => MobileError::VaultMissing,
+            RegistryError::NotAVault | RegistryError::VaultMismatch => MobileError::WrongVault,
+            _ => MobileError::Registry,
+        }
+    }
+}
+
+impl From<hirzla_core::client::router::RouteError> for MobileError {
+    fn from(e: hirzla_core::client::router::RouteError) -> Self {
+        use hirzla_core::client::router::RouteError;
+        match e {
+            RouteError::Registry(e) => e.into(),
+            RouteError::WrongVault => MobileError::WrongVault,
+            RouteError::Client(e) => e.into(),
+            RouteError::UnknownAlias | RouteError::NoDefault => MobileError::UnknownVault,
+            RouteError::NoEndpoint | RouteError::CoreNotStarted => MobileError::CoreNotRunning,
+        }
+    }
 }
 
 impl From<ClientError> for MobileError {
@@ -72,6 +115,28 @@ impl Serialize for MobileError {
             MobileError::Invalid(m) => ("invalid", (*m).into(), None),
             MobileError::Protocol => ("protocol", "Réponse du noyau non conforme.".into(), None),
             MobileError::Native => ("native", "Erreur du système Android.".into(), None),
+            MobileError::Registry => (
+                "registry",
+                "La liste des coffres de ce téléphone est illisible ou altérée.".into(),
+                None,
+            ),
+            MobileError::VaultMissing => (
+                "vault_missing",
+                "Le fichier de ce coffre est introuvable.".into(),
+                None,
+            ),
+            MobileError::WrongVault => (
+                "wrong_vault",
+                "Le fichier, ou le noyau à l'écoute, n'est pas le coffre inscrit. Rien d'autre \
+                 ne lui a été envoyé."
+                    .into(),
+                None,
+            ),
+            MobileError::UnknownVault => (
+                "unknown_vault",
+                "Ce coffre n'est plus inscrit sur ce téléphone.".into(),
+                None,
+            ),
         };
         Wire {
             code,
