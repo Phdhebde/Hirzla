@@ -98,8 +98,10 @@ impl Drop for Core {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
-        #[cfg(unix)]
-        let _ = std::fs::remove_file(&self.1);
+        // A named pipe goes with its core; a socket file stays behind.
+        if cfg!(unix) {
+            let _ = std::fs::remove_file(&self.1);
+        }
     }
 }
 
