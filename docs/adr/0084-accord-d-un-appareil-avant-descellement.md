@@ -1,6 +1,7 @@
 # ADR 0084 — Accord d'un appareil avant le descellement, réveil par le serveur
 
-- Statut : proposé
+- Statut : proposé ; un point tranché le 2026-11-26 (session de veille portée par l'interface,
+  voir « Décisions du mainteneur »)
 - Date : 2026-11-24
 
 ## Contexte
@@ -229,6 +230,30 @@ services de notification des systèmes.
 - **Relève périodique** : 15 minutes au mieux sur Android ; inutilisable pour un accord.
 - **Authentifier la session de veille par les clés de l'appareil** : elles sont dans le coffre,
   indisponibles quand il est verrouillé ; les sortir du coffre les affaiblirait.
+
+## Décisions du mainteneur (2026-11-26)
+
+1. **La session de veille est portée par l'interface, pas par le noyau** (variante B de la
+   revue des ADR). Le noyau reste sans tâche de fond ni session ouverte (ADR 0048, ADR 0080) :
+   - sur Android, le service au premier plan du processus de l'interface tient la session de
+     veille ; sur le poste, le processus Rust de l'application de poste ;
+   - le **jeton de veille** est gardé par ce processus (préférences privées de l'application,
+     ou magasin matériel sans geste quand il existe). Il ne donne aucun accès : il permet
+     seulement de recevoir `MailWake` et de répondre à `Ping`. Le perdre apprend à un tiers
+     l'heure des réveils de l'appareil, rien de plus ;
+   - à la réception de `MailWake`, l'interface affiche la notification locale ; c'est ensuite
+     le **noyau**, une fois le coffre déverrouillé, qui ouvre la session authentifiée, relève le
+     courrier et traite la demande, comme décrit au § 4 ;
+   - le jeton est remis par le serveur au noyau dans une session authentifiée, puis transmis à
+     l'interface par l'API locale (une opération de lecture, profil complet seulement) ;
+   - l'ADR 0085 § 3 (« un coffre verrouillé garde son noyau en marche pour la session de
+     veille ») tombe : sur Android, le noyau d'un coffre verrouillé peut s'arrêter.
+2. **Web Push reste écarté**, même porté par l'interface (alternative déjà écartée
+   ci-dessous). Une application web avec notifications Web Push dépend du service de
+   notification de l'éditeur du navigateur (Google, Mozilla, Apple) : c'est un appel sortant
+   vers un tiers, qui ne marche pas en réseau isolé (règle 7). Et l'accord se ferait dans une
+   page servie par le serveur, qui fournirait alors le code qui manipule la clé d'accord
+   (règle 3), sans KEM post-quantique dans le navigateur (règle 2).
 
 ## Points ouverts
 

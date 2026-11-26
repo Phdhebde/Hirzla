@@ -173,6 +173,16 @@ Ajoutés à `sync-protocol.md` § 11.5 :
 | 65 | `KeyLogObject` | S → P | `{1: object (bstr)}` : l'objet encodé dont le SHA-384 est demandé |
 | 66 | `GetKeyLogConsistency` | P → S | `{1: first (uint), 2: second (uint)}` |
 | 67 | `KeyLogConsistency` | S → P | `{1: path (array<bstr(48)>), 2: head (KeyLogHead)}`, `head.size` = `second` |
+| 68 | `PostRevocation` | P → S | `{1: revocation (DeviceRevocation)}` (`format.md` § 3.6) : révocation d'un appareil du membre de la session (ADR 0066) |
+| 69 | `RevocationPosted` | S → P | `{1: index (uint)}` : rang de l'entrée kind 3 |
+
+**`PostRevocation`** — contrôles du serveur, dans cet ordre : `member` est le membre de la
+session (sinon code 4) ; `device` n'est pas l'appareil de la session (code 4) ; une entrée
+kind 2 existe pour l'appareil (code 4) ; si une entrée kind 3 existe déjà pour lui, la
+réponse donne son rang, sans rien inscrire ; la révocation vérifie avec la clé inscrite du
+membre (sinon code 7). Le serveur l'enregistre, l'inscrit, puis répond. Un serveur antérieur
+répond code 1 au type inconnu. C'est le seul chemin d'une révocation vers le registre quand
+aucun casier ne porte l'appareil ; sinon, la `DeviceRemove` reste la voie (§ 5.1).
 
 Les messages 50 à 53 (`PutMemberProfile`, `FindMembers`, `sync-protocol.md` § 11.11)
 inscrivent et servent les profils de membre (kind 6).
@@ -188,7 +198,7 @@ session et applique le § 6.7.
 | --- | --- | --- |
 | Création d'un compte | kind 1 | `member_id` sans entrée kind 1 |
 | `DeviceAdd` dans un casier personnel, ou certificat présenté à `Auth` (premier contact) | kind 2 | Certificat signé par la clé inscrite du membre ; pas d'entrée kind 2 pour cet appareil |
-| `DeviceRemove` reçue dans un casier, ou révocation reçue par `GetMemberKeys` | kind 3 | Révocation signée par la clé inscrite ; entrée kind 2 présente ; pas d'entrée kind 3 |
+| `DeviceRemove` reçue dans un casier, ou `PostRevocation` d'un appareil du même membre (§ 4, ADR 0066) | kind 3 | Révocation signée par la clé inscrite ; entrée kind 2 présente ; pas d'entrée kind 3 |
 | `Revoke` acceptée par le serveur (§ 11.8) | kind 5 | Une seule entrée par `op_id` |
 | `PutMemberProfile` (`sync-protocol.md` § 11.11) | kind 6 | Session du membre ; profil signé par la clé inscrite ; nom valide ; `seq` supérieur à celui du profil courant ; au plus 256 profils par membre |
 

@@ -1,6 +1,6 @@
 # ADR 0066 — Révoquer un appareil qui ne figure dans aucun casier tenu par le poste
 
-- Statut : proposé
+- Statut : accepté (2026-11-26, décision du mainteneur : option B, avec les précisions ci-dessous)
 - Date : 2026-11-16
 
 ## Contexte
@@ -115,3 +115,45 @@ et demander »). Rien n'est implémenté par cet ADR.
 - **Révocation « différée » gardée dans l'annexe jusqu'à ce qu'un casier porte l'appareil** :
   la fenêtre d'exposition reste la même (la révocation ne part qu'après la première enveloppe),
   et demande un changement de format de l'annexe.
+
+## Décision du mainteneur (2026-11-26)
+
+Option B retenue. Précisions apportées à la spécification, qui priment sur le texte de
+l'option :
+
+1. **Réponse** : `RevocationPosted` (69) porte seulement `{1: index (uint)}`, le rang de
+   l'entrée kind 3, comme `MemberProfileResult` (51). La tête n'est pas jointe : le noyau
+   relit le registre dans la même session (`GetKeyLog`), qui lui donne la tête signée et
+   vérifie l'inscription comme toute autre entrée.
+2. **Pas de nouvelle version du protocole**, comme pour le courrier des accords (ADR 0070) :
+   un serveur antérieur répond code 1 au type inconnu, et le noyau rend `Unsupported`, comme
+   avant cet ADR.
+3. **Quand le noyau l'envoie** : seulement quand aucun casier tenu ici ne porte l'appareil.
+   Dès qu'un casier le porte, la `DeviceRemove` reste le chemin (elle fait aussi tourner la
+   clé du casier), et le serveur inscrit l'entrée kind 3 à sa réception, comme avant.
+4. **Contrôles du serveur**, dans cet ordre : révocation du membre de la session (code 4
+   sinon) ; appareil autre que celui de la session (code 4) ; entrée kind 2 de l'appareil au
+   registre (code 4 sinon) ; déjà révoqué : réponse avec le rang existant (idempotent) ;
+   signature avec la clé inscrite du membre (code 7 sinon). Puis enregistrement durable,
+   inscription, événement d'audit `device_revoked`, réponse.
+
+## Mise en œuvre (2026-11-26)
+
+- `hirzla-sync` : messages 68 et 69 (`net::proto`), `Client::post_revocation`.
+- `hirzlad` : contrôles du point 4 ci-dessus, enregistrement `Revocation` existant (aucune
+  nouvelle version du répertoire de données), événement d'audit `device_revoked`.
+- Noyau : `DeviceRevoke` (49) dépose la révocation quand aucun casier ne la porte et rend
+  `{1: 0}` ; un serveur antérieur donne `Unsupported`.
+- **Correction trouvée en chemin** : après la révocation d'un appareil, plus aucun poste ne
+  pouvait partager un casier avec son membre (`KeyLogRejected`). La preuve de
+  `MemberKeysResult` se termine par une révocation par élément de `revoked`
+  (`transparence.md` § 3.4), ce que le noyau n'attendait pas ; et un `Grant` ne doit porter
+  que la clé et les certificats. Le noyau vérifie désormais les révocations listées (signature
+  de la clé du membre, entrées kind 3 de la preuve) et demande par `GetKeyLogProof` la preuve
+  de la seule clé et des seuls certificats pour le `Grant` (§ 6.2). Le défaut existait déjà
+  avec la `DeviceRemove` ; aucun test ne partageait après une révocation.
+- Tests : `apps/server/tests/revocation.rs` (refus : autre membre, appareil de la session,
+  appareil inconnu, signature d'une autre clé, révocation altérée ; idempotence ; sessions
+  refusées, aussi après redémarrage) et
+  `a_device_in_no_locker_is_revoked_through_the_key_log` (`crates/hirzla-core/tests/server_mode.rs` :
+  révocation sans casier, pas d'alerte 3, partage ultérieur sans l'appareil révoqué).

@@ -76,8 +76,9 @@ Un fichier `coffres` dans le répertoire de configuration de l'utilisateur (mode
 - Un noyau ne connaît pas les autres. Les clés d'un coffre client ne partagent jamais la
   mémoire du coffre personnel ; un noyau qui tombe ou qu'une politique verrouille ne touche
   pas les autres.
-- Un coffre verrouillé garde son noyau en marche (il porte la session de veille de l'ADR 0084
-  et attend le déverrouillage) ; un coffre retiré du registre arrête le sien.
+- Un coffre verrouillé garde son noyau en marche sur le poste (il attend le déverrouillage) ;
+  un coffre retiré du registre arrête le sien. La session de veille de l'ADR 0084, si elle est
+  adoptée, est portée par l'interface, pas par le noyau (décision du 2026-11-26).
 
 ### 4. Clients
 

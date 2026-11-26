@@ -1863,12 +1863,6 @@ fn an_unknown_device_is_revoked_from_its_alert() {
     assert_eq!(revoke(alice, [0x77; 16]), not_found);
     // Bob cannot revoke Alice's device: only her member key signs its revocation.
     assert_eq!(revoke(bob, p), not_found);
-    // The device is in no locker held by Alice yet: nowhere to publish the revocation.
-    assert_eq!(
-        revoke(alice, p),
-        Err(ServerCode::General(ErrorCode::Unsupported))
-    );
-
     // Bob shares his locker with Alice: the grant envelopes the key for both her devices.
     grant(bob, locker, alice.id, Role::Reader, None).unwrap();
     let alice_id = alice.id;
@@ -1910,6 +1904,67 @@ fn an_unknown_device_is_revoked_from_its_alert() {
     // Already revoked, also after a restart (from the annex and the key log).
     alice.restart();
     assert_eq!(revoke(alice, p), Err(ServerCode::AlreadyRevoked));
+}
+
+/// ADR 0066: a device certified with the member key, in no locker held by the member (it has
+/// received no key yet), is revoked from its alert: the revocation goes to the key log
+/// directly (`PostRevocation`). The server refuses its sessions, and nobody envelopes a key
+/// for it afterwards.
+#[test]
+fn a_device_in_no_locker_is_revoked_through_the_key_log() {
+    let tmp = tempdir();
+    let (server, mut m, locker) = joined(tmp.path(), &["bob", "alice"]);
+    let [bob, alice] = &mut m[..] else {
+        unreachable!()
+    };
+    alice.core.handle(Request::Lock).unwrap();
+    let pirate = pirate_device(alice);
+    let p = pirate.device_id();
+    assert_eq!(session_lockers(&server, &pirate), Some(Vec::new()));
+    alice
+        .core
+        .handle(Request::Unlock {
+            password: z(PASSWORD),
+        })
+        .unwrap();
+    alice.sync();
+    assert!(alerts(alice)
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnDevice && a.device == Some(p)));
+
+    // Bob still cannot revoke it: only Alice's member key signs its revocation.
+    assert_eq!(
+        bob.server(ServerRequest::DeviceRevoke { device: p }),
+        Err(ServerCode::General(ErrorCode::NotFound))
+    );
+    let revoke = |m: &mut Member| m.server(ServerRequest::DeviceRevoke { device: p });
+    assert_eq!(revoke(alice), Ok(ServerReply::DeviceRevoked { lockers: 0 }));
+    // Her own revocation is expected in the key log: no « révocation inconnue ».
+    assert!(!alerts(alice)
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnRevocation));
+    assert_eq!(revoke(alice), Err(ServerCode::AlreadyRevoked));
+    // The server refuses the sessions of the revoked device.
+    assert_eq!(session_lockers(&server, &pirate), None);
+
+    // Bob shares his locker with Alice: only her own device receives the key.
+    grant(bob, locker, alice.id, Role::Reader, None).unwrap();
+    let alice_id = alice.id;
+    match bob.server(ServerRequest::LockerMembers { locker }).unwrap() {
+        ServerReply::Members { members, .. } => {
+            let a = members.iter().find(|x| x.member == alice_id).unwrap();
+            assert_eq!(a.devices, 1);
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    alice.sync();
+    // Still revoked, without an alert, after a restart.
+    alice.restart();
+    assert_eq!(revoke(alice), Err(ServerCode::AlreadyRevoked));
+    alice.sync();
+    assert!(!alerts(alice)
+        .iter()
+        .any(|a| a.kind == AlertKind::UnknownOwnRevocation));
 }
 
 /// Replaces the local key log (key 5, `format.md` § 15.2) of `m`'s annex with the one of

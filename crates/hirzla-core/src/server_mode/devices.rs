@@ -8,16 +8,21 @@
 //!   where the member has a role and the device is still active; `hirzlad` inscribes it in the
 //!   key log (entry kind 3) when it accepts the first one, and learns nothing it did not
 //!   know: it already has every control body in clear (`sync-protocol.md` § 12).
+//! - A device that no locker held here carries (the usual case of a device certified with a
+//!   stolen member key, which has not received any key yet) has its revocation posted to the
+//!   key log directly, by `PostRevocation` (ADR 0066, `transparence.md` § 4).
 
 use std::collections::BTreeSet;
 
 use hirzla_access::keylog::revocation_object;
 use hirzla_sync::control::DeviceRevocation;
+use hirzla_sync::net::proto::code;
+use hirzla_sync::net::NetError;
 use hirzla_vault::model::Id16;
 use hirzla_vault::{Vault, VaultError};
 
 use super::proto::{ServerCode, ServerReply};
-use super::{emit_error, general, internal, read_log, write_log, ServerMode};
+use super::{emit_error, general, internal, net, read_log, write_log, ServerMode};
 use crate::proto::ErrorCode;
 
 impl ServerMode {
@@ -27,8 +32,9 @@ impl ServerMode {
     /// [`ErrorCode::NotFound`] for this device or a device unknown to the member,
     /// [`ServerCode::AlreadyRevoked`], [`ServerCode::Forbidden`] without the member key,
     /// [`ServerCode::KeyLogRejected`] while the key log is suspect, [`ErrorCode::Unsupported`]
-    /// when no locker held here carries the device, [`ServerCode::LockerFrozen`] when every
-    /// locker that carries it is frozen, network errors.
+    /// when no locker held here carries the device and the server does not know
+    /// `PostRevocation`, [`ServerCode::LockerFrozen`] when every locker that carries it is
+    /// frozen, network errors.
     pub(super) fn device_revoke(
         &mut self,
         vault: &Vault,
@@ -51,7 +57,9 @@ impl ServerMode {
         let now = self.now();
         let carriers = self.carriers(&me.member, &device)?;
         if carriers.is_empty() {
-            return Err(general(ErrorCode::Unsupported));
+            let result = self.post_revocation(vault, &mut client, device, now);
+            let _ = client.bye();
+            return result;
         }
         let frozen = self.frozen_lockers(now)?;
         let open: Vec<Id16> = carriers
@@ -61,19 +69,7 @@ impl ServerMode {
         if open.is_empty() {
             return Err(ServerCode::LockerFrozen);
         }
-        let issuer_sig = vault
-            .sign_device_revocation(&device, now)
-            .map_err(|e| match e {
-                VaultError::Unsupported => ServerCode::Forbidden,
-                VaultError::InvalidInput => general(ErrorCode::NotFound),
-                other => internal(other),
-            })?;
-        let rev = DeviceRevocation {
-            member: me.member,
-            device,
-            revoked_ms: now,
-            issuer_sig,
-        };
+        let rev = self.sign_revocation(vault, me.member, device, now)?;
         // A revocation issued here is expected in the key log, not an alert (§ 6.4).
         let object = revocation_object(&rev).map_err(internal)?;
         write_log(&self.joined()?.keylog.monitor)?.expect_own(object);
@@ -102,6 +98,54 @@ impl ServerMode {
             Some(e) => Err(e),
             None => Ok(ServerReply::DeviceRevoked { lockers: emitted }),
         }
+    }
+
+    /// Posts the revocation of `device` to the key log, when no locker held here carries it
+    /// (ADR 0066), then reads the key log again, where the inscription is expected.
+    fn post_revocation(
+        &mut self,
+        vault: &Vault,
+        client: &mut hirzla_sync::net::client::Client,
+        device: Id16,
+        now: u64,
+    ) -> Result<ServerReply, ServerCode> {
+        let me = self.me();
+        let rev = self.sign_revocation(vault, me.member, device, now)?;
+        let object = revocation_object(&rev).map_err(internal)?;
+        write_log(&self.joined()?.keylog.monitor)?.expect_own(object);
+        match client.post_revocation(&rev) {
+            Ok(_) => {}
+            // A server older than ADR 0066 does not know the message: as before it.
+            Err(NetError::Refused(c)) if c == code::MALFORMED => {
+                return Err(general(ErrorCode::Unsupported));
+            }
+            Err(e) => return Err(net(e)),
+        }
+        self.update_keylog(vault, client)?;
+        Ok(ServerReply::DeviceRevoked { lockers: 0 })
+    }
+
+    /// Signs the revocation of `device` with the member key, inside the vault.
+    fn sign_revocation(
+        &self,
+        vault: &Vault,
+        member: Id16,
+        device: Id16,
+        now: u64,
+    ) -> Result<DeviceRevocation, ServerCode> {
+        let issuer_sig = vault
+            .sign_device_revocation(&device, now)
+            .map_err(|e| match e {
+                VaultError::Unsupported => ServerCode::Forbidden,
+                VaultError::InvalidInput => general(ErrorCode::NotFound),
+                other => internal(other),
+            })?;
+        Ok(DeviceRevocation {
+            member,
+            device,
+            revoked_ms: now,
+            issuer_sig,
+        })
     }
 
     /// Whether `device` is a device of `member` known here and not revoked yet: in the key

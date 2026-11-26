@@ -90,6 +90,11 @@ pub mod kind {
     pub const KEYLOG_OBJECT: u64 = 65;
     pub const GET_KEYLOG_CONSISTENCY: u64 = 66;
     pub const KEYLOG_CONSISTENCY: u64 = 67;
+    /// `PostRevocation` (`transparence.md` § 4, ADR 0066): a device revocation posted to the
+    /// key log when no locker carries the device.
+    pub const POST_REVOCATION: u64 = 68;
+    /// `RevocationPosted`: the rank of the entry of kind 3.
+    pub const REVOCATION_POSTED: u64 = 69;
     // Administration channel (ADR 0028), never accepted on the device port.
     pub const ADMIN_STATUS: u64 = 100;
     pub const ADMIN_STATUS_RESULT: u64 = 101;
@@ -1408,6 +1413,22 @@ pub fn keylog_consistency_value(path: &[[u8; 48]], head: Value) -> Value {
         ),
         (2, head),
     ])
+}
+
+/// `PostRevocation` (68) body (ADR 0066).
+#[must_use]
+pub fn post_revocation_value(rev: &DeviceRevocation) -> Value {
+    Value::map(vec![(1, rev.to_value())])
+}
+
+/// Reads a `PostRevocation` (68) body. The answer, `RevocationPosted` (69), is read by
+/// [`read_index`].
+///
+/// # Errors
+/// [`NetError::Malformed`].
+pub fn read_post_revocation(v: &Value) -> Result<DeviceRevocation, NetError> {
+    let f = Fields::new(v, &[1])?;
+    Ok(DeviceRevocation::from_value(f.req(1)?)?)
 }
 
 // -----------------------------------------------------------------------------------------
