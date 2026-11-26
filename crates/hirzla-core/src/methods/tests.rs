@@ -141,6 +141,7 @@ fn methods(c: &mut Core) -> (Vec<MethodEntry>, Vec<u8>) {
         MethodReply::Methods {
             methods,
             enrollable,
+            ..
         } => (methods, enrollable),
         other => panic!("{other:?}"),
     }
@@ -631,6 +632,8 @@ fn wire_format_round_trips_and_refuses() {
                     },
                 ],
                 enrollable: vec![4, 5],
+                bound: false,
+                bindable: true,
             },
         ),
         (MethodOp::EnrollMethod, MethodReply::Enrolled { rank: 3 }),
@@ -743,4 +746,220 @@ fn android_keystore_needs_no_acknowledgement_and_opens() {
         .sink
         .text()
         .contains("event=unlock_method op=enroll_method kind=android result=ok"));
+}
+
+// -----------------------------------------------------------------------------------------
+// Device-bound mode (ADR 0087)
+// -----------------------------------------------------------------------------------------
+
+fn bind(without_recovery: bool) -> MethodRequest {
+    MethodRequest::BindToDevice {
+        password: z(PASSWORD),
+        without_recovery,
+    }
+}
+
+fn bound_flags(c: &mut Core) -> (bool, bool) {
+    match c.handle_methods(MethodRequest::UnlockMethods).unwrap() {
+        MethodReply::Methods {
+            bound, bindable, ..
+        } => (bound, bindable),
+        other => panic!("{other:?}"),
+    }
+}
+
+fn unlock_password(c: &mut Core, password: &str) -> Result<(), ErrorCode> {
+    c.handle(Request::Unlock {
+        password: z(password),
+    })
+    .map(|_| ())
+    .map_err(|e| e.code)
+}
+
+#[test]
+fn a_bound_vault_opens_with_the_password_and_this_device_only() {
+    let mut f = fixture();
+    assert_eq!(bound_flags(&mut f.core), (false, true));
+    // Without a recovery kit, the user must accept to lose the vault with the device; nothing
+    // is spent from the brake and no key is created before that.
+    assert_eq!(
+        refused(&mut f.core, bind(false)),
+        (MethodCode::RecoveryRequired, None)
+    );
+    assert_eq!(f.enclave.gestures(), 0);
+    // A wrong password is a failed unlock.
+    assert_eq!(
+        refused(
+            &mut f.core,
+            MethodRequest::BindToDevice {
+                password: z("pas le bon"),
+                without_recovery: true,
+            }
+        ),
+        general(ErrorCode::UnlockFailed)
+    );
+    f.core.handle_methods(bind(true)).unwrap();
+    assert_eq!(
+        f.enclave.gestures(),
+        0,
+        "no gesture: the password is the gesture"
+    );
+    assert_eq!(bound_flags(&mut f.core), (true, true));
+    // Binding again is refused.
+    assert_eq!(
+        refused(&mut f.core, bind(true)),
+        general(ErrorCode::Unsupported)
+    );
+    // The acknowledgement leaves a trace in the log, never the password.
+    let log = f.sink.text();
+    assert!(log.contains("op=bind_to_device kind=bound_without_recovery result=ok"));
+    assert!(!log.contains(PASSWORD));
+
+    lock(&mut f.core);
+    let (list, _) = methods(&mut f.core);
+    assert_eq!(list[0].kind, 8);
+    assert!(list[0].usable);
+    // The password opens it, the hardware of this device answering without a gesture.
+    assert_eq!(
+        unlock_password(&mut f.core, "pas le bon"),
+        Err(ErrorCode::UnlockFailed)
+    );
+    unlock_password(&mut f.core, PASSWORD).unwrap();
+    assert!(f.core.is_unlocked());
+    lock(&mut f.core);
+    // On another device, or once the hardware key is gone, the password alone opens nothing.
+    f.enclave.reset();
+    assert_eq!(
+        unlock_password(&mut f.core, PASSWORD),
+        Err(ErrorCode::Unsupported)
+    );
+    let (list, _) = methods(&mut f.core);
+    assert!(
+        list[0].usable,
+        "the factor is here, its key is not: told at the unlock"
+    );
+    f.enclave.set_available(false);
+    let (list, _) = methods(&mut f.core);
+    assert!(!list[0].usable);
+    assert_eq!(
+        unlock_password(&mut f.core, PASSWORD),
+        Err(ErrorCode::Unsupported)
+    );
+}
+
+#[test]
+fn a_bound_vault_changes_its_password_and_unbinds_with_the_hardware() {
+    let mut f = fixture();
+    let kit = match f
+        .core
+        .handle_self(crate::selfmode::proto::SelfRequest::RecoveryCreate {
+            threshold: 2,
+            count: 2,
+        })
+        .unwrap()
+    {
+        crate::selfmode::proto::SelfReply::RecoveryKit { shares, .. } => shares,
+        other => panic!("{other:?}"),
+    };
+    // With a kit, no acknowledgement is needed.
+    f.core.handle_methods(bind(false)).unwrap();
+    // Other methods still enrol: the password is checked with the hardware.
+    f.core.handle_methods(enrol(4, None)).unwrap();
+    // The password changes, through the bound method.
+    f.core
+        .handle_self(crate::selfmode::proto::SelfRequest::ChangePassword {
+            current: z(PASSWORD),
+            new: z("un autre mot de passe maître"),
+        })
+        .unwrap();
+    lock(&mut f.core);
+    assert_eq!(
+        unlock_password(&mut f.core, PASSWORD),
+        Err(ErrorCode::UnlockFailed)
+    );
+    unlock_password(&mut f.core, "un autre mot de passe maître").unwrap();
+    // Unbinding needs the password, and gives back the password method.
+    assert_eq!(
+        refused(
+            &mut f.core,
+            MethodRequest::Unbind {
+                password: z(PASSWORD)
+            }
+        ),
+        general(ErrorCode::UnlockFailed)
+    );
+    f.core
+        .handle_methods(MethodRequest::Unbind {
+            password: z("un autre mot de passe maître"),
+        })
+        .unwrap();
+    assert!(!bound_flags(&mut f.core).0);
+    lock(&mut f.core);
+    f.enclave.set_available(false);
+    unlock_password(&mut f.core, "un autre mot de passe maître").unwrap();
+
+    // Bound again, then recovered by the kit on a device without the hardware: the vault
+    // comes back unbound, with the new password.
+    f.enclave.set_available(true);
+    f.core
+        .handle_methods(MethodRequest::BindToDevice {
+            password: z("un autre mot de passe maître"),
+            without_recovery: false,
+        })
+        .unwrap();
+    lock(&mut f.core);
+    f.enclave.reset();
+    f.core
+        .handle_self(crate::selfmode::proto::SelfRequest::RecoveryUnlock {
+            shares: kit,
+            new_password: z("le mot de passe après le kit"),
+        })
+        .unwrap();
+    assert!(!bound_flags(&mut f.core).0);
+    lock(&mut f.core);
+    unlock_password(&mut f.core, "le mot de passe après le kit").unwrap();
+}
+
+#[test]
+fn a_device_without_binding_hardware_cannot_bind() {
+    let mut f = fixture();
+    let only: Vec<Arc<dyn UnlockFactor>> = vec![f.hello.clone(), f.fido.clone()];
+    f.core.set_unlock_factors(only);
+    assert_eq!(bound_flags(&mut f.core), (false, false));
+    assert_eq!(
+        refused(&mut f.core, bind(true)),
+        (MethodCode::Unavailable, None)
+    );
+}
+
+#[test]
+fn bind_and_unbind_round_trip_on_the_wire() {
+    for r in [
+        bind(true),
+        bind(false),
+        MethodRequest::Unbind {
+            password: z(PASSWORD),
+        },
+    ] {
+        let frame = r.encode(7).unwrap();
+        assert!(is_method_request(&frame));
+        assert_eq!(MethodRequest::decode(&frame).unwrap(), (7, r.clone()));
+        assert!(!format!("{r:?}").contains(PASSWORD));
+    }
+    let reply = MethodReply::Methods {
+        methods: vec![],
+        enrollable: vec![3],
+        bound: true,
+        bindable: true,
+    };
+    let frame = MethodReply::encode(9, Ok(&reply)).unwrap();
+    assert_eq!(
+        MethodReply::decode(MethodOp::UnlockMethods, &frame).unwrap(),
+        (9, Ok(reply))
+    );
+    let frame = MethodReply::encode(9, Err((MethodCode::RecoveryRequired, None))).unwrap();
+    assert_eq!(
+        MethodReply::decode(MethodOp::BindToDevice, &frame).unwrap(),
+        (9, Err((MethodCode::RecoveryRequired, None)))
+    );
 }

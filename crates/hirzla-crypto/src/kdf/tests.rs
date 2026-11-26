@@ -193,3 +193,65 @@ fn hardware_secret_label_and_material() {
     assert!(derive_key_from_material(&material, &[], label).is_err());
     assert!(derive_key_from_material(&[1u8; MIN_MATERIAL_LEN], &salt, label).is_ok());
 }
+
+#[test]
+fn bound_secret_label_and_both_inputs() {
+    // 0x0016 = 22, the length of "hirzla/v1/bound-secret", then the kind.
+    let label = KdfLabel::BoundSecret { method_kind: 8 };
+    assert_eq!(
+        label.info(),
+        [
+            &[0x00, 0x16][..],
+            b"hirzla/v1/bound-secret",
+            &[0x00, 0x01, 0x08]
+        ]
+        .concat()
+    );
+    let salt = hex("000102030405060708090a0b0c0d0e0f");
+    let pw_bytes: Vec<u8> = (0..32u8).collect();
+    let pw = SymmetricKey::from_bytes(&pw_bytes).unwrap();
+    let material: Vec<u8> = (0x40..0x60u8).collect();
+    let got = derive_bound_key(&pw, &material, &salt, label).unwrap();
+    // Frozen vector, computed by an independent implementation (Python `hmac`, RFC 5869).
+    assert_eq!(
+        &got.as_bytes()[..],
+        &hex("a41993fd428d11923050c04d73ec7a89ce7832c910a71ac504b783fb99fa594e")[..]
+    );
+    let expected = reference(
+        &[pw_bytes.clone(), material.clone()].concat(),
+        &salt,
+        &label.info(),
+        32,
+    )
+    .unwrap();
+    assert_eq!(&got.as_bytes()[..], &expected[..]);
+    // Both inputs count: another password secret, or other material, gives another key.
+    let other_pw = SymmetricKey::from_bytes(&[7u8; 32]).unwrap();
+    assert_ne!(
+        derive_bound_key(&other_pw, &material, &salt, label)
+            .unwrap()
+            .as_bytes(),
+        got.as_bytes()
+    );
+    assert_ne!(
+        derive_bound_key(&pw, &[9u8; 32], &salt, label)
+            .unwrap()
+            .as_bytes(),
+        got.as_bytes()
+    );
+    // Not the hardware secret of the same material.
+    assert_ne!(
+        derive_key_from_material(
+            &material,
+            &salt,
+            KdfLabel::HardwareSecret { method_kind: 8 }
+        )
+        .unwrap()
+        .as_bytes(),
+        got.as_bytes()
+    );
+    // Refusals: material out of bounds, empty salt.
+    assert!(derive_bound_key(&pw, &[1u8; 31], &salt, label).is_err());
+    assert!(derive_bound_key(&pw, &[1u8; MAX_MATERIAL_LEN + 1], &salt, label).is_err());
+    assert!(derive_bound_key(&pw, &material, &[], label).is_err());
+}

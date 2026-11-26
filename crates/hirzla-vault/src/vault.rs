@@ -1960,6 +1960,7 @@ impl Vault {
     }
 }
 
+mod bound;
 mod folders;
 mod hardware;
 mod keys;
@@ -2007,6 +2008,8 @@ mod tests_connections;
 #[cfg(test)]
 mod tests_keys;
 
+#[cfg(test)]
+mod tests_bound;
 #[cfg(test)]
 mod tests_folders;
 #[cfg(test)]

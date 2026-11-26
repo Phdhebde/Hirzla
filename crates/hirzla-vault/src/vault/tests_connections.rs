@@ -403,7 +403,7 @@ fn inconsistent_or_unknown_versions_are_refused() {
     v.close();
     Connection::open(&path)
         .unwrap()
-        .pragma_update(None, "user_version", 4)
+        .pragma_update(None, "user_version", 5)
         .unwrap();
     assert_eq!(
         Vault::open(&path, PASSWORD).err(),
@@ -413,7 +413,8 @@ fn inconsistent_or_unknown_versions_are_refused() {
     assert!(crate::reads_format_version(1));
     assert!(crate::reads_format_version(2));
     assert!(crate::reads_format_version(3));
-    assert!(!crate::reads_format_version(4));
+    assert!(crate::reads_format_version(4));
+    assert!(!crate::reads_format_version(5));
 }
 
 #[test]

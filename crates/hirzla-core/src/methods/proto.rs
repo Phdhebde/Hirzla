@@ -40,15 +40,21 @@ pub enum MethodOp {
     UnlockWithMethod = 162,
     /// Remove a hardware method.
     RemoveMethod = 163,
+    /// Bind the vault to this device (ADR 0087).
+    BindToDevice = 164,
+    /// Unbind the vault from this device (ADR 0087).
+    Unbind = 165,
 }
 
 impl MethodOp {
     /// Every operation.
-    pub const ALL: [MethodOp; 4] = [
+    pub const ALL: [MethodOp; 6] = [
         MethodOp::UnlockMethods,
         MethodOp::EnrollMethod,
         MethodOp::UnlockWithMethod,
         MethodOp::RemoveMethod,
+        MethodOp::BindToDevice,
+        MethodOp::Unbind,
     ];
 
     /// The operation from its number.
@@ -65,6 +71,8 @@ impl MethodOp {
             MethodOp::EnrollMethod => "enroll_method",
             MethodOp::UnlockWithMethod => "unlock_with_method",
             MethodOp::RemoveMethod => "remove_method",
+            MethodOp::BindToDevice => "bind_to_device",
+            MethodOp::Unbind => "unbind",
         }
     }
 }
@@ -87,6 +95,9 @@ pub enum MethodCode {
     /// 165: a classical-only method (Windows Hello, Touch ID) without the acknowledgement of
     /// its residual post-quantum risk.
     ClassicalFactorNotAccepted,
+    /// 166: binding the vault to the device needs a recovery kit, or the user's explicit
+    /// acknowledgement that losing the device loses the vault (ADR 0087 § 6).
+    RecoveryRequired,
 }
 
 impl MethodCode {
@@ -101,6 +112,7 @@ impl MethodCode {
             MethodCode::PinRequired => 163,
             MethodCode::PinBlocked => 164,
             MethodCode::ClassicalFactorNotAccepted => 165,
+            MethodCode::RecoveryRequired => 166,
         }
     }
 
@@ -114,6 +126,7 @@ impl MethodCode {
             163 => MethodCode::PinRequired,
             164 => MethodCode::PinBlocked,
             165 => MethodCode::ClassicalFactorNotAccepted,
+            166 => MethodCode::RecoveryRequired,
             n => MethodCode::General(ErrorCode::from_u64(n)?),
         })
     }
@@ -129,6 +142,7 @@ impl MethodCode {
             MethodCode::PinRequired => "pin_required",
             MethodCode::PinBlocked => "pin_blocked",
             MethodCode::ClassicalFactorNotAccepted => "classical_factor_not_accepted",
+            MethodCode::RecoveryRequired => "recovery_required",
         }
     }
 }
@@ -182,6 +196,19 @@ pub enum MethodRequest {
         /// Rank of the method.
         rank: u8,
     },
+    /// 164: bind the vault to this device (ADR 0087).
+    BindToDevice {
+        /// The master password, retyped.
+        password: Zeroizing<String>,
+        /// The user accepted that losing this device loses the vault, when it has no recovery
+        /// kit (ADR 0087 § 6).
+        without_recovery: bool,
+    },
+    /// 165: unbind the vault from this device.
+    Unbind {
+        /// The master password, retyped.
+        password: Zeroizing<String>,
+    },
 }
 
 impl std::fmt::Debug for MethodRequest {
@@ -201,6 +228,10 @@ pub enum MethodReply {
         methods: Vec<MethodEntry>,
         /// Kinds this device can enrol now.
         enrollable: Vec<u8>,
+        /// The vault is bound to a device (`kind` 8 at rank 0, ADR 0087).
+        bound: bool,
+        /// This device can bind a vault (Secure Enclave, Android Keystore).
+        bindable: bool,
     },
     /// 161: rank of the new method.
     Enrolled {
@@ -254,6 +285,8 @@ impl MethodRequest {
             MethodRequest::EnrollMethod { .. } => MethodOp::EnrollMethod,
             MethodRequest::UnlockWithMethod { .. } => MethodOp::UnlockWithMethod,
             MethodRequest::RemoveMethod { .. } => MethodOp::RemoveMethod,
+            MethodRequest::BindToDevice { .. } => MethodOp::BindToDevice,
+            MethodRequest::Unbind { .. } => MethodOp::Unbind,
         }
     }
 
@@ -287,6 +320,19 @@ impl MethodRequest {
             }
             MethodRequest::RemoveMethod { rank } => {
                 Some(Value::map(vec![(1, Value::Uint(u64::from(*rank)))]))
+            }
+            MethodRequest::BindToDevice {
+                password,
+                without_recovery,
+            } => {
+                let mut e = vec![(1, Value::text(password))];
+                if *without_recovery {
+                    e.push((2, Value::Bool(true)));
+                }
+                Some(Value::map(e))
+            }
+            MethodRequest::Unbind { password } => {
+                Some(Value::map(vec![(1, Value::text(password))]))
             }
         }
     }
@@ -366,6 +412,19 @@ impl MethodRequest {
                     rank: rank(m(f.req(1))?)?,
                 })
             }
+            MethodOp::BindToDevice => {
+                let f = m(Fields::new(args()?, &[1, 2]))?;
+                Ok(MethodRequest::BindToDevice {
+                    password: secret_text(m(f.req(1))?, MAX_PASSWORD)?,
+                    without_recovery: f.opt(2).map(|a| m(boolean(a))).transpose()? == Some(true),
+                })
+            }
+            MethodOp::Unbind => {
+                let f = m(Fields::new(args()?, &[1]))?;
+                Ok(MethodRequest::Unbind {
+                    password: secret_text(m(f.req(1))?, MAX_PASSWORD)?,
+                })
+            }
         }
     }
 }
@@ -399,6 +458,8 @@ impl MethodReply {
             MethodReply::Methods {
                 methods,
                 enrollable,
+                bound,
+                bindable,
             } => Some(Value::map(vec![
                 (1, Value::Array(methods.iter().map(entry_value).collect())),
                 (
@@ -410,6 +471,8 @@ impl MethodReply {
                             .collect(),
                     ),
                 ),
+                (3, Value::Bool(*bound)),
+                (4, Value::Bool(*bindable)),
             ])),
             MethodReply::Enrolled { rank } => {
                 Some(Value::map(vec![(1, Value::Uint(u64::from(*rank)))]))
@@ -483,15 +546,28 @@ impl MethodReply {
             return Ok((id, Err((code, retry))));
         }
         let reply = match op {
-            MethodOp::UnlockWithMethod | MethodOp::RemoveMethod => {
+            MethodOp::UnlockWithMethod
+            | MethodOp::RemoveMethod
+            | MethodOp::BindToDevice
+            | MethodOp::Unbind => {
                 if body.is_some() {
                     return Err(ErrorCode::Malformed);
                 }
                 MethodReply::Done
             }
             MethodOp::UnlockMethods => {
-                let b = Fields::new(body.ok_or(ErrorCode::Malformed)?, &[1, 2]).map_err(bad)?;
+                let b =
+                    Fields::new(body.ok_or(ErrorCode::Malformed)?, &[1, 2, 3, 4]).map_err(bad)?;
+                let flag = |k: u64| -> Result<bool, ErrorCode> {
+                    b.opt(k)
+                        .map(boolean)
+                        .transpose()
+                        .map_err(bad)
+                        .map(|o| o == Some(true))
+                };
                 MethodReply::Methods {
+                    bound: flag(3)?,
+                    bindable: flag(4)?,
                     methods: b
                         .req(1)
                         .and_then(|l| array_max(l, 8))

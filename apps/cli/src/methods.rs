@@ -26,7 +26,15 @@ pub enum MethodsCommand {
     },
     /// Removes the method at a rank.
     Remove { rank: u8 },
+    /// Binds the vault to this device (ADR 0087); `--sans-kit` accepts to lose the vault with
+    /// the device when it has no recovery kit.
+    Bind { without_recovery: bool },
+    /// Unbinds the vault from this device.
+    Unbind,
 }
+
+/// The option that accepts to lose the vault with the device (ADR 0087 § 6).
+pub const WITHOUT_RECOVERY_FLAG: &str = "--sans-kit";
 
 /// The kind of method named on the command line.
 pub fn kind_from_name(name: &str) -> Option<u8> {
@@ -47,6 +55,7 @@ fn kind_label(kind: u8) -> &'static str {
         5 => "Windows Hello",
         6 => "kit de recouvrement",
         7 => "empreinte Android",
+        8 => "mot de passe lié à ce poste",
         _ => "méthode inconnue",
     }
 }
@@ -109,6 +118,12 @@ fn method_message(code: MethodCode, retry_after_s: Option<u64>) -> String {
         MethodCode::PinBlocked => {
             "la clé de sécurité est bloquée après trop de codes PIN erronés.".into()
         }
+        MethodCode::RecoveryRequired => format!(
+            "ce coffre n'a pas de kit de recouvrement : lié à ce poste, il serait perdu avec lui \
+             (carte mère changée, Mac effacé, téléphone réinitialisé). Créez d'abord un kit \
+             (« hirzla recovery create »), ou acceptez ce risque : « hirzla methods bind \
+             {WITHOUT_RECOVERY_FLAG} »."
+        ),
         MethodCode::ClassicalFactorNotAccepted => format!(
             "le noyau refuse Windows Hello et Touch ID sans l'acceptation du risque              post-quantique résiduel ({ACCEPT_CLASSICAL_FLAG})."
         ),
@@ -136,6 +151,7 @@ fn list(client: &mut Client) -> Result<(Vec<MethodEntry>, Vec<u8>), String> {
         MethodReply::Methods {
             methods,
             enrollable,
+            ..
         } => Ok((methods, enrollable)),
         _ => Err(unexpected()),
     }
@@ -229,6 +245,29 @@ pub fn run(session: &Session, command: &MethodsCommand) -> Result<(), String> {
         MethodsCommand::Remove { rank } => {
             done(call(&mut c, &MethodRequest::RemoveMethod { rank: *rank })?)?;
             say(&format!("Méthode du rang {rank} retirée."));
+            Ok(())
+        }
+        MethodsCommand::Bind { without_recovery } => {
+            let password =
+                term::read_secret("Mot de passe maître (confirmation) : ", false, MAX_PASSWORD)?;
+            done(call(
+                &mut c,
+                &MethodRequest::BindToDevice {
+                    password,
+                    without_recovery: *without_recovery,
+                },
+            )?)?;
+            say(
+                "Coffre lié à ce poste : le mot de passe maître seul ne l'ouvre plus ailleurs. \
+                 Sur ce poste, rien ne change à l'ouverture.",
+            );
+            Ok(())
+        }
+        MethodsCommand::Unbind => {
+            let password =
+                term::read_secret("Mot de passe maître (confirmation) : ", false, MAX_PASSWORD)?;
+            done(call(&mut c, &MethodRequest::Unbind { password })?)?;
+            say("Coffre délié : le mot de passe maître l'ouvre de nouveau sur tout poste.");
             Ok(())
         }
     }

@@ -68,11 +68,17 @@ fn cf_error(e: &CFError) -> FactorError {
     }
 }
 
-/// Creates the enclave key.
-fn create_enclave_key() -> Result<SecKey, FactorError> {
+/// Creates the enclave key: usable after Touch ID (`biometry`), or without any gesture for the
+/// device-bound method (ADR 0087), where the password is the gesture.
+fn create_enclave_key(biometry: bool) -> Result<SecKey, FactorError> {
+    let flags = if biometry {
+        kSecAccessControlPrivateKeyUsage | kSecAccessControlBiometryCurrentSet
+    } else {
+        kSecAccessControlPrivateKeyUsage
+    };
     let access = SecAccessControl::create_with_protection(
         Some(ProtectionMode::AccessibleWhenPasscodeSetThisDeviceOnly),
-        kSecAccessControlPrivateKeyUsage | kSecAccessControlBiometryCurrentSet,
+        flags,
     )
     .map_err(|_| FactorError::Unavailable)?;
     let mut options = GenerateKeyOptions::default();
@@ -195,64 +201,89 @@ impl UnlockFactor for SecureEnclave {
 
     fn available(&self) -> bool {
         // Creating an enclave key needs no gesture; it is dropped at once (not permanent).
-        create_enclave_key().is_ok()
+        create_enclave_key(true).is_ok()
+    }
+
+    fn can_bind(&self) -> bool {
+        create_enclave_key(false).is_ok()
+    }
+
+    fn bind_enrol(&self, _gesture: &Gesture<'_>) -> Result<(KeyRef, Material), FactorError> {
+        enrol_key(false)
+    }
+
+    fn bind_release(&self, key: &KeyRef) -> Result<Material, FactorError> {
+        release_key(key)
     }
 
     fn enrol(&self, _gesture: &Gesture<'_>) -> Result<(KeyRef, Material), FactorError> {
-        let enclave = create_enclave_key()?;
-        let wrapped_key = wrapped_form(&enclave)?;
-        let mut options = GenerateKeyOptions::default();
-        options
-            .set_key_type(KeyType::ec_sec_prime_random())
-            .set_size_in_bits(256)
-            .set_token(Token::Software);
-        let ephemeral = SecKey::new(&options).map_err(|_| FactorError::Failed)?;
-        let ephemeral_public: [u8; X963_P256_LEN] = ephemeral
-            .public_key()
-            .and_then(|k| k.external_representation())
-            .and_then(|d| d.bytes().try_into().ok())
-            .ok_or(FactorError::Failed)?;
-        // Used here, then forgotten: never written (ADR 0075 § 4).
-        let enclave_public = enclave.public_key().ok_or(FactorError::Failed)?;
-        let shared = ephemeral
-            .key_exchange(
-                Algorithm::ECDHKeyExchangeStandard,
-                &enclave_public,
-                32,
-                None,
-            )
-            .map_err(|e| cf_error(&e))?;
-        let material = Zeroizing::new(shared);
-        if material.len() != 32 {
-            return Err(FactorError::Failed);
-        }
-        Ok((
-            KeyRef::SecureEnclave {
-                wrapped_key,
-                ephemeral_public,
-            },
-            Material::new(material),
-        ))
+        enrol_key(true)
     }
 
     fn release(&self, key: &KeyRef, _gesture: &Gesture<'_>) -> Result<Material, FactorError> {
-        let KeyRef::SecureEnclave {
+        // Touch ID is asked by the system, for a key created with biometry.
+        release_key(key)
+    }
+}
+
+/// Creates an enclave key, with or without biometry, and releases its material once.
+fn enrol_key(biometry: bool) -> Result<(KeyRef, Material), FactorError> {
+    let enclave = create_enclave_key(biometry)?;
+    let wrapped_key = wrapped_form(&enclave)?;
+    let mut options = GenerateKeyOptions::default();
+    options
+        .set_key_type(KeyType::ec_sec_prime_random())
+        .set_size_in_bits(256)
+        .set_token(Token::Software);
+    let ephemeral = SecKey::new(&options).map_err(|_| FactorError::Failed)?;
+    let ephemeral_public: [u8; X963_P256_LEN] = ephemeral
+        .public_key()
+        .and_then(|k| k.external_representation())
+        .and_then(|d| d.bytes().try_into().ok())
+        .ok_or(FactorError::Failed)?;
+    // Used here, then forgotten: never written (ADR 0075 § 4).
+    let enclave_public = enclave.public_key().ok_or(FactorError::Failed)?;
+    let shared = ephemeral
+        .key_exchange(
+            Algorithm::ECDHKeyExchangeStandard,
+            &enclave_public,
+            32,
+            None,
+        )
+        .map_err(|e| cf_error(&e))?;
+    let material = Zeroizing::new(shared);
+    if material.len() != 32 {
+        return Err(FactorError::Failed);
+    }
+    Ok((
+        KeyRef::SecureEnclave {
             wrapped_key,
             ephemeral_public,
-        } = key
-        else {
-            return Err(FactorError::Invalidated);
-        };
-        let enclave = enclave_key(wrapped_key)?;
-        let peer = public_key(ephemeral_public)?;
-        // Touch ID is asked here, by the system.
-        let shared = enclave
-            .key_exchange(Algorithm::ECDHKeyExchangeStandard, &peer, 32, None)
-            .map_err(|e| cf_error(&e))?;
-        let material = Zeroizing::new(shared);
-        if material.len() != 32 {
-            return Err(FactorError::Failed);
-        }
-        Ok(Material::new(material))
+        },
+        Material::new(material),
+    ))
+}
+
+/// Releases the material of an enclave key; Touch ID is asked by the system if the key was
+/// created with biometry.
+fn release_key(key: &KeyRef) -> Result<Material, FactorError> {
+    let KeyRef::SecureEnclave {
+        wrapped_key,
+        ephemeral_public,
+    } = key
+    else {
+        return Err(FactorError::Invalidated);
+    };
+    let enclave = enclave_key(wrapped_key)?;
+    let peer = public_key(ephemeral_public)?;
+    // Touch ID is asked here by the system, for a key created with biometry; a device-bound
+    // key (ADR 0087) answers without any gesture.
+    let shared = enclave
+        .key_exchange(Algorithm::ECDHKeyExchangeStandard, &peer, 32, None)
+        .map_err(|e| cf_error(&e))?;
+    let material = Zeroizing::new(shared);
+    if material.len() != 32 {
+        return Err(FactorError::Failed);
     }
+    Ok(Material::new(material))
 }

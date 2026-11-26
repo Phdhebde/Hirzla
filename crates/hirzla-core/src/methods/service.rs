@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use hirzla_keystore::unlock::{FactorError, FactorKind, Gesture, KeyRef, Material, UnlockFactor};
 use hirzla_vault::model::hardware::{is_hardware_kind, HardwareKey};
-use hirzla_vault::model::UNLOCK_PASSWORD;
+use hirzla_vault::model::{UNLOCK_BOUND, UNLOCK_PASSWORD};
 use hirzla_vault::{unlock_methods, MethodInfo, Vault, VaultError};
 use zeroize::Zeroizing;
 
@@ -265,6 +265,18 @@ impl Core {
                 let (kind, r) = self.prepare_unlock(usize::from(rank), pin);
                 (kind, r.map_or_else(Prepared::Done, Prepared::Gesture))
             }
+            // No gesture: the password is the gesture (ADR 0087), answered at once.
+            MethodRequest::BindToDevice {
+                password,
+                without_recovery,
+            } => {
+                let (kind, r) = self.bind_to_device(&password, without_recovery);
+                (kind, Prepared::Done(r))
+            }
+            MethodRequest::Unbind { password } => {
+                let (kind, r) = self.unbind(&password);
+                (kind, Prepared::Done(r))
+            }
         };
         if let Prepared::Done(r) = &prepared {
             self.log_method(op, kind, r);
@@ -301,6 +313,19 @@ impl Core {
         let methods = info
             .iter()
             .map(|m| {
+                if m.kind == UNLOCK_BOUND {
+                    // Usable when this device's hardware holds the key it names.
+                    let usable = m
+                        .hardware
+                        .as_ref()
+                        .is_some_and(|k| self.factor(k.kind()).is_some_and(|f| f.can_bind()));
+                    return MethodEntry {
+                        rank: m.index,
+                        kind: m.kind,
+                        usable,
+                        needs_pin: false,
+                    };
+                }
                 let factor = m.hardware.as_ref().and_then(|_| self.factor(m.kind));
                 MethodEntry {
                     rank: m.index,
@@ -318,6 +343,8 @@ impl Core {
             .map(|f| f.kind().number())
             .collect();
         Ok(MethodReply::Methods {
+            bound: info.first().is_some_and(|m| m.kind == UNLOCK_BOUND),
+            bindable: self.binding_factor().is_some(),
             methods,
             enrollable,
         })
@@ -331,14 +358,14 @@ impl Core {
         accept_classical_risk: bool,
     ) -> Result<PendingGesture, Result<MethodReply, MethodRefusal>> {
         self.check_throttle().map_err(|e| Err(general(e)))?;
-        let vault = self.vault().map_err(|e| Err(general(e)))?;
+        self.vault().map_err(|e| Err(general(e)))?;
         // Windows Hello and Touch ID are classical only: off unless the user accepted the
         // residual post-quantum risk (ADR 0075 § 4). Checked before the password, so that a
         // client that forgot the flag does not spend an attempt of the brake.
         if is_classical_kind(kind) && !accept_classical_risk {
             return Err(Err(method(MethodCode::ClassicalFactorNotAccepted)));
         }
-        match vault.verify_password(password) {
+        match self.verify_master(password) {
             Ok(()) => {}
             Err(VaultError::Unlock) => {
                 self.record_failure();
@@ -554,5 +581,145 @@ impl Core {
             }
         }
         (kind, Ok(MethodReply::Done))
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Device-bound mode (ADR 0087, `docs/format.md` § 4.2.2)
+    // -------------------------------------------------------------------------------------
+
+    /// The factor of this device that can bind a vault to it (Secure Enclave, Android
+    /// Keystore), if any.
+    fn binding_factor(&self) -> Option<Arc<dyn UnlockFactor>> {
+        self.factors.iter().find(|f| f.can_bind()).cloned()
+    }
+
+    /// The material of the device-bound key `key`, released without any gesture.
+    ///
+    /// # Errors
+    /// [`FactorError`], [`FactorError::Unavailable`] when this device has no such hardware.
+    pub(crate) fn bound_material(&self, key: &HardwareKey) -> Result<Material, FactorError> {
+        let key = key_ref(key);
+        let factor = self
+            .factor(key.kind().number())
+            .filter(|f| f.can_bind())
+            .ok_or(FactorError::Unavailable)?;
+        factor.bind_release(&key)
+    }
+
+    /// Deletes the device-bound key `key` from this system when it lives there (Android
+    /// Keystore). Best effort.
+    pub(crate) fn forget_bound_key(&self, key: &HardwareKey) {
+        let k = key_ref(key);
+        if let Some(f) = self.factor(k.kind().number()) {
+            let _ = f.forget(&k);
+        }
+    }
+
+    /// Checks the master password of the open vault, with the hardware of this device when
+    /// the vault is bound to it.
+    ///
+    /// # Errors
+    /// [`VaultError::Unlock`] for a wrong password, [`VaultError::Unsupported`] when the
+    /// hardware of a bound vault is not here.
+    pub(crate) fn verify_master(&mut self, password: &str) -> Result<(), VaultError> {
+        let bound = self.vault.as_ref().ok_or(VaultError::NotFound)?.bound()?;
+        let material = match &bound {
+            Some(key) => Some(
+                self.bound_material(key)
+                    .map_err(|_| VaultError::Unsupported)?,
+            ),
+            None => None,
+        };
+        let vault = self.vault.as_ref().ok_or(VaultError::NotFound)?;
+        match (bound, material) {
+            (Some(key), Some(m)) => vault.verify_bound(password, &key, m.as_bytes()),
+            _ => vault.verify_password(password),
+        }
+    }
+
+    /// `BindToDevice` (164): the password method is replaced by the device-bound method.
+    fn bind_to_device(
+        &mut self,
+        password: &str,
+        without_recovery: bool,
+    ) -> (&'static str, Result<MethodReply, MethodRefusal>) {
+        let Some(factor) = self.binding_factor() else {
+            return ("-", Err(method(MethodCode::Unavailable)));
+        };
+        let kind = factor.kind().name();
+        let r = (|| {
+            self.check_throttle().map_err(general)?;
+            let vault = self.vault().map_err(general)?;
+            if vault.bound().map_err(verr)?.is_some() {
+                return Err(code(ErrorCode::Unsupported));
+            }
+            // A recovery kit, or the user's acknowledgement that losing this device loses the
+            // vault (ADR 0087 § 6). Checked before the password: no attempt is spent.
+            if vault.recovery().map_err(verr)?.is_none() && !without_recovery {
+                return Err(method(MethodCode::RecoveryRequired));
+            }
+            match vault.verify_password(password) {
+                Ok(()) => {}
+                Err(VaultError::Unlock) => {
+                    self.record_failure();
+                    return Err(code(ErrorCode::UnlockFailed));
+                }
+                Err(e) => return Err(verr(e)),
+            }
+            self.password_proven();
+            let vault = self.vault().map_err(general)?;
+            let random = Zeroizing::new(
+                hirzla_crypto::util::random_array::<64>().map_err(|_| code(ErrorCode::Internal))?,
+            );
+            let gesture = Gesture {
+                vault_id: vault.vault_id(),
+                pin: None,
+                random: &random,
+            };
+            let (key, material) = factor
+                .bind_enrol(&gesture)
+                .map_err(|e| method(factor_error(e)))?;
+            if let Err(e) = vault.bind_to_device(password, &hardware_key(&key), material.as_bytes())
+            {
+                let _ = factor.forget(&key);
+                return Err(verr(e));
+            }
+            Ok(MethodReply::Done)
+        })();
+        // The explicit acknowledgement leaves a trace (ADR 0087 § 6).
+        let kind = match (&r, without_recovery) {
+            (Ok(_), true) => "bound_without_recovery",
+            _ => kind,
+        };
+        (kind, r)
+    }
+
+    /// `Unbind` (165): the device-bound method is replaced by the password method.
+    fn unbind(&mut self, password: &str) -> (&'static str, Result<MethodReply, MethodRefusal>) {
+        let r = (|| {
+            self.check_throttle().map_err(general)?;
+            let key = self
+                .vault()
+                .map_err(general)?
+                .bound()
+                .map_err(verr)?
+                .ok_or(code(ErrorCode::Unsupported))?;
+            let material = self
+                .bound_material(&key)
+                .map_err(|e| method(factor_error(e)))?;
+            let vault = self.vault().map_err(general)?;
+            match vault.unbind(password, &key, material.as_bytes()) {
+                Ok(_) => {}
+                Err(VaultError::Unlock) => {
+                    self.record_failure();
+                    return Err(code(ErrorCode::UnlockFailed));
+                }
+                Err(e) => return Err(verr(e)),
+            }
+            self.password_proven();
+            self.forget_bound_key(&key);
+            Ok(MethodReply::Done)
+        })();
+        ("-", r)
     }
 }

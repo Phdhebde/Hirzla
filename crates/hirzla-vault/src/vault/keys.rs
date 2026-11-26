@@ -21,7 +21,7 @@ use crate::cbor::{self, Fields, Value};
 use crate::error::VaultError;
 use crate::model::{
     lens, Header, Id16, RecoveryParams, Settings, UnlockMethod, UnlockParams, RECOVERY_MAX_COUNT,
-    RECOVERY_MIN_THRESHOLD, UNLOCK_PASSWORD, UNLOCK_RECOVERY,
+    RECOVERY_MIN_THRESHOLD, UNLOCK_BOUND, UNLOCK_PASSWORD, UNLOCK_RECOVERY,
 };
 
 /// Magic text of a share file (ADR 0034).
@@ -133,7 +133,7 @@ pub(super) fn method_kek(
     )?)
 }
 
-fn password_params(kdf: KdfCost) -> Result<PasswordParams, VaultError> {
+pub(super) fn password_params(kdf: KdfCost) -> Result<PasswordParams, VaultError> {
     match kdf {
         KdfCost::Params { m_kib, t, p } => PasswordParams::generate(m_kib, t, p),
         KdfCost::Calibrate {
@@ -235,6 +235,12 @@ impl Vault {
                     t: p.t(),
                     p: p.p(),
                 }),
+                // The password part of the device-bound method (ADR 0087).
+                UnlockParams::Bound(b) => Some(KdfCost::Params {
+                    m_kib: b.password.m_kib(),
+                    t: b.password.t(),
+                    p: b.password.p(),
+                }),
                 _ => None,
             })
             .ok_or(VaultError::Unsupported)
@@ -250,7 +256,11 @@ impl Vault {
     }
 
     /// Rewrites the header and its authentication inside the transaction `tx`.
-    fn write_header_in(&self, tx: &Connection, header: &Header) -> Result<(), VaultError> {
+    pub(super) fn write_header_in(
+        &self,
+        tx: &Connection,
+        header: &Header,
+    ) -> Result<(), VaultError> {
         let body = header.encode()?;
         let auth = seal_padded(
             &self.dev_wrap,
@@ -319,10 +329,13 @@ impl Vault {
         let pwd = nfc(new)?;
         let params = password_params(kdf)?;
         let (_, _, mut header) = Self::read_header(&self.conn)?;
+        // After a recovery, a device-bound vault is unbound: the new password is written in
+        // place of the bound method (`docs/format.md` § 4.2.2), for the hardware of this device
+        // may be gone.
         let index = header
             .unlock
             .iter()
-            .position(|m| m.kind == UNLOCK_PASSWORD)
+            .position(|m| m.kind == UNLOCK_PASSWORD || m.kind == UNLOCK_BOUND)
             .ok_or(VaultError::Unsupported)?;
         let secret = password::derive_key(&pwd, &params)?;
         let kek = method_kek(&secret, &self.vault_id, index, UNLOCK_PASSWORD)?;

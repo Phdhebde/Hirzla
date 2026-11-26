@@ -99,6 +99,7 @@ impl AppState {
             MethodReply::Methods {
                 methods,
                 enrollable,
+                ..
             } => Ok(MethodsDto {
                 methods: methods.into_iter().map(MethodDto::from).collect(),
                 enrollable: enrollable.into_iter().map(kind_name).collect(),

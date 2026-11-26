@@ -20,7 +20,7 @@ use crate::model::hardware::{
     is_hardware_kind, HardwareKey, UNLOCK_ANDROID_KEYSTORE, UNLOCK_FIDO2, UNLOCK_SECURE_ENCLAVE,
     UNLOCK_WINDOWS_HELLO,
 };
-use crate::model::{Header, Id16, UnlockMethod, UnlockParams, UNLOCK_PASSWORD};
+use crate::model::{Header, Id16, UnlockMethod, UnlockParams, UNLOCK_BOUND, UNLOCK_PASSWORD};
 
 /// Most methods in a header (`docs/format.md` § 5.4).
 const MAX_METHODS: usize = 8;
@@ -49,6 +49,8 @@ fn describe(header: &Header) -> Vec<MethodInfo> {
                 UnlockParams::Hardware(blob) if is_hardware_kind(m.kind) => {
                     HardwareKey::decode(m.kind, blob).ok()
                 }
+                // The device-bound method (ADR 0087): its key, in the format it names.
+                UnlockParams::Bound(b) => HardwareKey::decode(b.hardware, &b.keystore_blob).ok(),
                 _ => None,
             },
         })
@@ -234,8 +236,13 @@ impl Vault {
             _ => None,
         };
         header.unlock.truncate(index);
-        // The password method is at rank 0 and is never the one removed here.
-        if !header.unlock.iter().any(|m| m.kind == UNLOCK_PASSWORD) {
+        // The password method, or the device-bound method that replaced it, is at rank 0 and is
+        // never the one removed here.
+        if !header
+            .unlock
+            .iter()
+            .any(|m| m.kind == UNLOCK_PASSWORD || m.kind == UNLOCK_BOUND)
+        {
             return Err(VaultError::Corrupt);
         }
         self.write_header(&header)?;

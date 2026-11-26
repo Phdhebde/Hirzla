@@ -496,7 +496,20 @@ fn run(args: &Args) -> Result<(), String> {
                 VaultState::Locked => {}
             }
             let password = term::read_secret("Mot de passe maître : ", false, MAX_PASSWORD)?;
-            call(&mut c, &Request::Unlock { password })?;
+            match c.call(&Request::Unlock { password }) {
+                Ok(_) => {}
+                // A vault bound to a device whose hardware is not here (ADR 0087).
+                Err(ClientError::Refused(e)) if e.code == ErrorCode::Unsupported => {
+                    return Err(
+                        "ce coffre est lié à un autre appareil, ou sa clé matérielle \
+                                a disparu (réinitialisation) : le mot de passe seul ne l'ouvre \
+                                pas. Ouvrez-le avec le kit de recouvrement \
+                                (« hirzla recovery unlock »)."
+                            .into(),
+                    );
+                }
+                Err(e) => return Err(client_message(&e)),
+            }
             let s = status(&mut c)?;
             say(&format!(
                 "Coffre ouvert. Verrouillage automatique après {} s d'inactivité.",

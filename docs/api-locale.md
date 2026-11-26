@@ -1776,10 +1776,11 @@ journalisé. `Status` n'annonce pas la version 12 : un client la découvre en l'
 | Nom | Encodage |
 | --- | --- |
 | Méthode | `{1: rang uint (0 à 7), 2: kind uint, 3: utilisable ici bool, 4: PIN à demander bool}` |
-| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement, 7 Android Keystore (`format.md` § 4.2) |
+| `kind` | 1 mot de passe, 2 TPM, 3 Secure Enclave (Touch ID), 4 FIDO2, 5 Windows Hello, 6 kit de recouvrement, 7 Android Keystore, 8 mot de passe lié au poste (`format.md` § 4.2, § 4.2.2) |
 | PIN | `tstr` de 1 à 63 octets (CTAP 2.1) |
 
-« Utilisable ici » : le mot de passe toujours ; une méthode matérielle quand ce poste a le
+« Utilisable ici » : le mot de passe toujours ; la méthode liée (8) quand le matériel de ce
+poste tient la clé qu'elle nomme ; une méthode matérielle quand ce poste a le
 facteur de ce type, disponible maintenant, et lit son `keystore_blob`. « PIN à demander » : le
 client doit demander le PIN de la clé de sécurité et le transmettre (FIDO2 sous Linux et
 macOS) ; sous Windows, le système le demande lui-même.
@@ -1788,10 +1789,12 @@ macOS) ; sous Windows, le système le demande lui-même.
 
 | Code | Nom | Coffre | Arguments | Résultat |
 | --- | --- | --- | --- | --- |
-| 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste]}` |
+| 160 | `UnlockMethods` | existant, ouvert ou non | — | `{1: [méthode], 2: [kind enrôlable sur ce poste], 3?: lié bool, 4?: liable ici bool}` |
 | 161 | `EnrollMethod` | ouvert | `{1: kind (3, 4, 5 ou 7), 2: mot de passe maître tstr, 3?: PIN, 4?: risque classique accepté bool}` | `{1: rang}` |
 | 162 | `UnlockWithMethod` | verrouillé | `{1: rang, 2?: PIN}` | — |
 | 163 | `RemoveMethod` | ouvert | `{1: rang}` | — |
+| 164 | `BindToDevice` | ouvert | `{1: mot de passe maître tstr, 2?: sans kit accepté bool}` | — |
+| 165 | `Unbind` | ouvert | `{1: mot de passe maître tstr}` | — |
 
 - `UnlockMethods` lit l'en-tête en clair quand le coffre est verrouillé ; aucun geste.
 - `EnrollMethod` : frein (§ 6) ; coffre ouvert ; pour Windows Hello (5) et Touch ID (3),
@@ -1814,6 +1817,23 @@ macOS) ; sous Windows, le système le demande lui-même.
 - `RemoveMethod` : la dernière méthode seulement (`Unsupported` sinon) ; le mot de passe et le
   kit (`InvalidInput`) ne se retirent pas ici. La clé Windows Hello ou Android Keystore est
   ensuite supprimée du système.
+- `BindToDevice` (ADR 0087, `format.md` § 4.2.2) : frein ; coffre ouvert et non lié
+  (`Unsupported` sinon) ; ce poste doit pouvoir lier (Secure Enclave, Android Keystore :
+  `MethodUnavailable` sinon) ; **un kit de recouvrement présent, ou la clé 2 à `true`**, sinon
+  `RecoveryRequired`, avant la vérification du mot de passe ; puis mot de passe maître (un
+  mot de passe faux compte comme un échec de déverrouillage), création de la clé matérielle
+  **sans geste**, et réécriture de l'en-tête : la méthode liée remplace le mot de passe au rang
+  0 et le fichier passe en version 4. Un lien sans kit s'écrit au journal
+  `kind=bound_without_recovery`.
+- `Unbind` : frein ; coffre ouvert et lié (`Unsupported` sinon) ; mot de passe maître et
+  matériel de ce poste ; la méthode du mot de passe revient au rang 0, la clé matérielle est
+  supprimée du système quand elle y vit (Android Keystore).
+- **Coffre lié** : `Unlock` (2) avec le mot de passe ouvre le coffre lié, le noyau demandant
+  au matériel de ce poste son matériau sans geste ; si ce matériel manque ou ne tient pas la
+  clé (autre poste, réinitialisation), `Unsupported`, et le client propose le kit de
+  recouvrement. `ChangePassword` (63) et `EnrollMethod` vérifient le mot de passe de même. Une
+  ouverture par le kit impose un nouveau mot de passe, écrit **délié** : le client propose de
+  lier de nouveau.
 - Le geste se fait **hors du verrou du noyau** (comme l'import KeePass) : les autres clients et
   le verrouillage automatique continuent. Un seul geste à la fois : une seconde demande qui en
   exige un reçoit `Busy`. Le système abandonne après 60 s.
@@ -1828,6 +1848,7 @@ macOS) ; sous Windows, le système le demande lui-même.
 | 163 | `PinRequired` | PIN absent ou faux ; le nombre d'essais restants n'est pas donné |
 | 164 | `PinBlocked` | Clé de sécurité bloquée |
 | 165 | `ClassicalFactorNotAccepted` | Ajout de Windows Hello ou Touch ID sans l'acceptation explicite du risque post-quantique résiduel (clé 4 d'`EnrollMethod`) ; le client affiche l'avertissement et fait confirmer |
+| 166 | `RecoveryRequired` | `BindToDevice` sans kit de recouvrement et sans l'acceptation explicite de perdre le coffre avec le poste (clé 2) ; le client propose de créer un kit, ou fait confirmer |
 
 Les codes généraux gardent leur sens : `UnlockFailed` (mot de passe maître faux, refus du
 matériel, en-tête altéré), `Throttled` avec `{1: secondes}`, `Locked`, `AlreadyUnlocked`,
@@ -1846,6 +1867,8 @@ Une méthode Windows Hello ou Touch ID déjà enrôlée continue d'ouvrir le cof
 | `methods` | `UnlockMethods` |
 | `methods add hello\|touchid\|fido2` | `EnrollMethod` (mot de passe maître redemandé sans écho ; PIN demandé si le noyau répond `PinRequired`). `hello` et `touchid` exigent `--accepter-risque-classique` : sans elle, l'avertissement s'affiche et la commande échoue sans rien demander |
 | `methods remove RANG` | `RemoveMethod` |
+| `methods bind [--sans-kit]` | `BindToDevice` (mot de passe redemandé sans écho ; `--sans-kit` accepte de perdre le coffre avec le poste quand il n'a pas de kit) |
+| `methods unbind` | `Unbind` (mot de passe redemandé sans écho) |
 | `unlock --materiel [RANG]` | `Status`, `UnlockMethods`, `UnlockWithMethod` (sans rang : la première méthode matérielle utilisable), `Status` |
 
 ### 21.6 Points ouverts

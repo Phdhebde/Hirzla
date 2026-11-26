@@ -1,14 +1,16 @@
-# Format du coffre `.hirzla` — spécification v3
+# Format du coffre `.hirzla` — spécification v4
 
 - Statut : proposé pour relecture (étape 1 de `PROMPTS.md`)
-- `FORMAT_VERSION` : 3. Les versions 1 et 2 restent lisibles (§ 5.3, ADR 0067, ADR 0076).
+- `FORMAT_VERSION` : 3 pour un coffre neuf, 4 pour un coffre lié au poste (§ 4.2.2, ADR 0087).
+  Les versions 1 à 3 restent lisibles (§ 5.3, ADR 0067, ADR 0076).
 - Documents liés : `docs/crypto.md` (mécanismes), `docs/sync-protocol.md` (sémantique des
   opérations, fusion, échanges), ADR 0002, 0005, 0006, 0010, 0067, 0076.
 
 La version 2 ajoute les connexions SSH et RDP : types de secret 7 et 8, champs 50 à 55, lien
 de secret (§ 8.1, § 8.3, § 8.5). La version 3 ajoute les dossiers d'un casier : clé 3 de
-`LockerBody`, champ 4 de `SecretBody`, clés optionnelles de l'index (§ 7.5, § 8.2, § 10). Tout
-le reste est celui de la version 1. Les étiquettes
+`LockerBody`, champ 4 de `SecretBody`, clés optionnelles de l'index (§ 7.5, § 8.2, § 10). La
+version 4 ajoute la méthode de déverrouillage liée au poste, `kind = 8` (§ 4.2.2). Tout le
+reste est celui de la version 1. Les étiquettes
 `hirzla/v1/…` (§ 2.5) nomment la génération du schéma cryptographique, qui ne change pas.
 
 « Doit » est une obligation. Un lecteur qui rencontre une valeur non conforme **refuse** le
@@ -128,6 +130,7 @@ Ordre total des `Stamp` : `lamport`, puis `member` en octets, puis `device` en o
 | --- | --- | --- |
 | `hirzla/v1/unlock` | Info HKDF, clé de déverrouillage | § 4.2 |
 | `hirzla/v1/hardware-secret` | Info HKDF, secret d'une méthode matérielle (ADR 0075) | § 4.2.1 |
+| `hirzla/v1/bound-secret` | Info HKDF, secret de la méthode liée au poste (ADR 0087) | § 4.2.2 |
 | `hirzla/v1/device-wrap` | Info HKDF, `K_dev_wrap` | § 4.3 |
 | `hirzla/v1/header` | AAD, authentification de l'en-tête | § 5.4 |
 | `hirzla/v1/identity` | AAD, identité scellée | § 5.5 |
@@ -371,7 +374,7 @@ l'enveloppe séparément.
 
 | Clé | Nom | Type | Contraintes |
 | --- | --- | --- | --- |
-| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034), 7 Android Keystore (ADR 0080) |
+| 1 | `kind` | `uint` | 1 mot de passe, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2 `hmac-secret`, 5 Windows Hello, 6 kit de recouvrement (ADR 0034), 7 Android Keystore (ADR 0080), 8 mot de passe lié au poste (ADR 0087, § 4.2.2) |
 | 2 | `params` | map | Selon `kind`, ci-dessous |
 | 3 | `wrapped_device_key` | `bstr(40)` | AES-256-KW-pad(`KEK_unlock`, `DeviceKey`) |
 
@@ -463,6 +466,50 @@ chaque clé FIDO2 ajoute une méthode ; huit méthodes au plus (§ 5.4). Le rang
 le `keystore_blob` doit être celle que le client a présentée au matériel, puis l'en-tête est
 authentifié comme pour le mot de passe (§ 5.3). Ces méthodes ne changent pas la version du
 format : un lecteur qui ne les connaît pas ouvre le coffre avec le mot de passe.
+
+#### 4.2.2 Mot de passe lié au poste (`kind = 8`, ADR 0087)
+
+La méthode combine le mot de passe et un secret que seul le matériel de ce poste rend : il
+faut les deux pour ouvrir. Paramètres :
+
+| Clé | Nom | Type | Contraintes |
+| --- | --- | --- | --- |
+| 1 à 5 | `m_kib`, `t`, `p`, `salt`, `version` | | Ceux du mot de passe (`kind = 1`), mêmes bornes |
+| 6 | `hardware` | `uint` | 3 (Secure Enclave) ou 7 (Android Keystore) : format de `keystore_blob` |
+| 7 | `keystore_blob` | `bstr(≤65536)` | Celui du `kind` nommé par `hardware` (§ 4.2.1) |
+
+Matériau, 32 octets, rendu **sans geste** : le mot de passe est le geste.
+
+- `hardware = 3` : `ECDH(clé de l'enclave, ephemeral_public)`, comme au § 4.2.1, mais la clé
+  de l'enclave est créée avec le seul contrôle d'accès `PrivateKeyUsage`
+  (`WhenPasscodeSetThisDeviceOnly`), sans biométrie. Mac à puce Apple ou T2 seulement.
+- `hardware = 7` : `HMAC-SHA-256(clé alias, challenge)`, clé non exportable créée sans
+  authentification de l'utilisateur et utilisable seulement téléphone déverrouillé
+  (`setUnlockedDeviceRequired`), dans StrongBox, ou dans le TEE à défaut. L'alias est
+  `hirzla-bound-` suivi de `vault_id` en hexadécimal minuscule, distinct de celui du `kind` 7.
+
+```text
+P      = Argon2id(mot de passe NFC, salt, m, t, p)                       (comme kind 1)
+secret = HKDF-SHA-512(ikm = P ‖ matériau, salt = vault_id,
+                      info = len ‖ "hirzla/v1/bound-secret" ‖ len ‖ 8 (1 octet), L = 32)
+```
+
+puis `KEK_unlock` comme ci-dessus (rang 0, `kind` 8). Un matériau hors des bornes du § 4.2.1
+est refusé avant toute dérivation.
+
+Règles d'en-tête :
+
+- une méthode `kind = 8` au plus, **au rang 0** seulement, jamais avec une méthode
+  `kind = 1` : le mot de passe seul n'ouvre plus le coffre ;
+- un en-tête qui porte `kind = 8` a `format_version` ≥ 4 ; sinon il est refusé (`Corrupt`) ;
+- **lier** remplace sur place la méthode du mot de passe (rang 0) par la méthode liée, dans la
+  transaction qui monte le fichier en v4. Les autres méthodes gardent leur rang, donc leur
+  clé : rien d'autre n'est réécrit. **Délier** fait l'inverse ; le fichier reste en v4 (pas
+  de retour en arrière) ;
+- changer de mot de passe d'un coffre lié demande le matériel ; ouvrir par le kit de
+  recouvrement (§ 4.4) impose un nouveau mot de passe, écrit en `kind = 1` au rang 0 : le
+  coffre est alors **délié**, et le client propose de le lier de nouveau ;
+- les autres méthodes restent permises (Windows Hello, Touch ID, Android Keystore, FIDO2, kit).
 
 ### 4.3 Clé d'emballage locale
 
@@ -624,13 +671,14 @@ Dans cet ordre. Le premier échec arrête l'ouverture.
 Un fichier dont `format_version` est inconnu est refusé, même plus récent. Un `user_version`
 différent du `format_version` de l'en-tête est refusé (`Corrupt`).
 
-**Versions lues et montée de version (ADR 0067, ADR 0076).** Un lecteur v3 ouvre les fichiers
-v1, v2 et v3, et ne réécrit rien à l'ouverture. Un coffre neuf est créé en v3. Un coffre reste
-dans sa version tant qu'aucun objet d'une version plus récente n'y est écrit :
+**Versions lues et montée de version (ADR 0067, ADR 0076, ADR 0087).** Un lecteur v4 ouvre les
+fichiers v1 à v4, et ne réécrit rien à l'ouverture. Un coffre neuf est créé en v3. Un coffre
+reste dans sa version tant qu'aucun objet d'une version plus récente n'y est écrit :
 
 - objets v2 : secret de type 7 ou 8 (§ 8.1) ;
 - objets v3 : `LockerBody` qui porte des dossiers (§ 7.5), version de secret qui porte le
-  champ `folder` (§ 8.2).
+  champ `folder` (§ 8.2) ;
+- objet v4 : méthode de déverrouillage `kind = 8` (§ 4.2.2).
 
 Le rédacteur monte le fichier **dans la transaction** qui écrit le premier de ces objets, à la
 version qu'il demande (un dossier écrit dans un coffre v1 le passe directement en v3) : il

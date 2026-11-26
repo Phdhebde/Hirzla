@@ -57,6 +57,11 @@ const REVIEWED: &[(&str, &str, &str)] = &[
     ),
     ("ServerInfo", "server_key", "server's public verifying key"),
     (
+        "BoundParams",
+        "keystore_blob",
+        "public reference to the device-bound hardware key, in the clear header (ADR 0087)",
+    ),
+    (
         "KeyEnvelopeEntry",
         "recipient_key",
         "recipient's public key identifier",

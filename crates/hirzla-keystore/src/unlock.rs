@@ -258,6 +258,33 @@ pub trait UnlockFactor: Send + Sync {
     /// [`FactorError`].
     fn release(&self, key: &KeyRef, gesture: &Gesture<'_>) -> Result<Material, FactorError>;
 
+    /// Whether this factor can bind a vault to this device (ADR 0087, `docs/format.md`
+    /// § 4.2.2): a key of this device's hardware that releases its material **without any
+    /// gesture**, the password being the gesture. The Secure Enclave and the Android Keystore
+    /// can; the default cannot.
+    fn can_bind(&self) -> bool {
+        false
+    }
+
+    /// Creates the device-bound key of the vault named by `gesture.vault_id` and releases its
+    /// material once, without any gesture.
+    ///
+    /// # Errors
+    /// [`FactorError::Unavailable`] by default.
+    fn bind_enrol(&self, gesture: &Gesture<'_>) -> Result<(KeyRef, Material), FactorError> {
+        let _ = gesture;
+        Err(FactorError::Unavailable)
+    }
+
+    /// Releases the material of the device-bound key `key` again, without any gesture.
+    ///
+    /// # Errors
+    /// [`FactorError::Unavailable`] by default.
+    fn bind_release(&self, key: &KeyRef) -> Result<Material, FactorError> {
+        let _ = key;
+        Err(FactorError::Unavailable)
+    }
+
     /// Deletes `key` from the system when it lives there (Windows Hello, Android Keystore).
     /// Best effort; the
     /// default does nothing (a FIDO2 credential or an enclave key kept in the vault has
@@ -311,6 +338,13 @@ fn hello_key_name(vault_id: &[u8; 16]) -> String {
 #[cfg(any(target_os = "android", feature = "test-software"))]
 fn android_key_alias(vault_id: &[u8; 16]) -> String {
     format!("hirzla-{}", hex(vault_id))
+}
+
+/// Alias of the device-bound Android Keystore key of a vault (`docs/format.md` § 4.2.2),
+/// distinct from the fingerprint key of [`android_key_alias`].
+#[cfg(any(target_os = "android", feature = "test-software"))]
+fn android_bound_alias(vault_id: &[u8; 16]) -> String {
+    format!("hirzla-bound-{}", hex(vault_id))
 }
 
 #[cfg(test)]

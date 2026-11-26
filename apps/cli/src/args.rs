@@ -7,7 +7,9 @@ use std::path::PathBuf;
 use hirzla_core::generator::{rules, Profile, Spec};
 use hirzla_core::proto::classes;
 
-use crate::methods::{kind_from_name, MethodsCommand, ACCEPT_CLASSICAL_FLAG};
+use crate::methods::{
+    kind_from_name, MethodsCommand, ACCEPT_CLASSICAL_FLAG, WITHOUT_RECOVERY_FLAG,
+};
 use crate::selfmode::{Recovery, SettingsChange};
 
 pub const USAGE: &str = "\
@@ -98,6 +100,11 @@ Commandes :
                           Windows Hello et Touch ID, cryptographie classique seulement :
                           --accepter-risque-classique, après lecture de l'avertissement.
   methods remove RANG     Retire la méthode matérielle du RANG (la dernière seulement).
+  methods bind [--sans-kit]
+                          Lie le coffre à ce poste (Secure Enclave du Mac, Keystore du
+                          téléphone) : le mot de passe seul ne l'ouvre plus ailleurs. Sans kit
+                          de recouvrement, --sans-kit accepte de perdre le coffre avec le poste.
+  methods unbind          Délie le coffre de ce poste.
   recovery status         État du kit de recouvrement à quorum.
   recovery create T N DOSSIER
                           Crée un kit : N parts, T suffisent. Écrit les parts dans DOSSIER.
@@ -941,7 +948,7 @@ fn parse_with(
         "init" => &["--kdf-memory", "--kdf-passes", "--kdf-lanes"],
         "ls" => &["--corbeille"],
         "unlock" => &["--materiel"],
-        "methods" => &[ACCEPT_CLASSICAL_FLAG],
+        "methods" => &[ACCEPT_CLASSICAL_FLAG, WITHOUT_RECOVERY_FLAG],
         "get" => &["--champ", "--id", "--stdout"],
         "set" => &[
             "--identifiant",
@@ -1073,7 +1080,12 @@ fn parse_with(
             Command::Unlock
         }
         "methods" => {
-            let usage = "« methods » attend rien, add hello|touchid|fido2 ou remove RANG.";
+            let usage =
+                "« methods » attend rien, add hello|touchid|fido2, remove RANG, bind ou unbind.";
+            if has(WITHOUT_RECOVERY_FLAG) && positional.first().map(String::as_str) != Some("bind")
+            {
+                return Err(format!("{WITHOUT_RECOVERY_FLAG} va avec « methods bind »."));
+            }
             Command::Methods(match positional.as_slice() {
                 [a, k] if a == "add" => MethodsCommand::Add {
                     kind: kind_from_name(k).ok_or_else(|| usage.to_owned())?,
@@ -1086,6 +1098,10 @@ fn parse_with(
                 [a, r] if a == "remove" => MethodsCommand::Remove {
                     rank: number(r, "RANG")?,
                 },
+                [a] if a == "bind" => MethodsCommand::Bind {
+                    without_recovery: has(WITHOUT_RECOVERY_FLAG),
+                },
+                [a] if a == "unbind" => MethodsCommand::Unbind,
                 _ => return Err(usage.to_owned()),
             })
         }
@@ -2306,6 +2322,24 @@ mod tests {
         );
         assert!(p(&["methods", "add", "tpm"]).is_err());
         assert!(p(&["methods", "remove"]).is_err());
+        assert_eq!(
+            p(&["methods", "bind"]).unwrap().command,
+            Command::Methods(MethodsCommand::Bind {
+                without_recovery: false
+            })
+        );
+        assert_eq!(
+            p(&["methods", "bind", "--sans-kit"]).unwrap().command,
+            Command::Methods(MethodsCommand::Bind {
+                without_recovery: true
+            })
+        );
+        assert_eq!(
+            p(&["methods", "unbind"]).unwrap().command,
+            Command::Methods(MethodsCommand::Unbind)
+        );
+        assert!(p(&["methods", "unbind", "--sans-kit"]).is_err());
+        assert!(p(&["methods", "--sans-kit"]).is_err());
         assert!(p(&["methods", "add", "fido2", "--materiel"]).is_err());
         let a = p(&["--socket", "/s", "get", "GitHub", "--champ", "identifiant"]).unwrap();
         assert_eq!(a.socket, Some(OsString::from("/s")));
