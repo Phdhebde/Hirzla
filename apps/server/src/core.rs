@@ -1404,6 +1404,51 @@ impl Core {
                     proto::index_value(index),
                 )])
             }
+            kind::POST_REVOCATION => {
+                // A revocation of a device of the member of the session, signed by the member
+                // key, posted to the key log when no locker carries the device (ADR 0066).
+                // The server inscribes what it would have inscribed at the first
+                // `DeviceRemove`, and refuses the sessions of the device from now on.
+                let rev = proto::read_post_revocation(&m.body)?;
+                if rev.member != member || rev.device == device {
+                    return err(code::ACCESS);
+                }
+                let Some(entry) = self.keylog.directory().device(&member, &rev.device) else {
+                    return err(code::ACCESS);
+                };
+                if let Some(h) = entry.revocation {
+                    // Already revoked: the rank of the entry, nothing more is inscribed.
+                    let index = self.keylog.index_of(&h).ok_or(ServerError::Storage)?;
+                    return Ok(vec![Message::new(
+                        kind::REVOCATION_POSTED,
+                        req,
+                        proto::index_value(index),
+                    )]);
+                }
+                let Some(keys) = self.registered(&member) else {
+                    return err(code::ACCESS);
+                };
+                if rev.verify(keys).is_err() {
+                    return err(code::SIGNATURE);
+                }
+                self.store.append(&Record::Revocation {
+                    rev: rev.clone(),
+                    logged_ms: now,
+                })?;
+                let index = self
+                    .keylog
+                    .append_revocation(&rev, now)
+                    .map_err(|_| ServerError::Storage)?;
+                self.audit(Event::DeviceRevoked {
+                    member: mid(&rev.member),
+                    device: did(&rev.device),
+                })?;
+                Ok(vec![Message::new(
+                    kind::REVOCATION_POSTED,
+                    req,
+                    proto::index_value(index),
+                )])
+            }
             kind::FIND_MEMBERS => {
                 let query = proto::read_find_members(&m.body)?;
                 Ok(vec![Message::new(

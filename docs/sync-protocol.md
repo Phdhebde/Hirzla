@@ -674,6 +674,11 @@ appareil compromis, ou une copie de coffre utilisée sur deux postes.
   auteur sans rôle) ne crée pas d'époque, mais sa `DeviceRevocation`, si elle est signée par
   la clé du membre, retire quand même l'appareil (§ 9.4, ADR 0023).
 - Le serveur refuse les sessions de `d` dès que la révocation est publiée dans le casier personnel.
+- Un appareil qui ne figure dans aucun casier tenu par l'émetteur n'a pas de porteur : la
+  révocation est alors déposée directement au registre par `PostRevocation`
+  (`transparence.md` § 4, ADR 0066). Le serveur l'inscrit (kind 3) et refuse dès lors les
+  sessions de `d` ; les autres postes ne lui enveloppent plus aucune clé
+  (`transparence.md` § 6.2), et la publient dans un casier s'ils l'y voient (§ 6.5).
 
 ## 10. Compaction
 
@@ -836,7 +841,7 @@ appareil. `PeerVector` = `{1: device, 2: vector (array<VectorEntry>)}`. Tableaux
 | 35 à 38 | Courrier des accords | | § 11.12 (ADR 0070) |
 | 40 | `Error` | S → P | `{1: code (uint)}` |
 | 50 à 53 | Profils de membre | | § 11.11 (ADR 0069) |
-| 60 à 67 | Registre de transparence | | `transparence.md` § 4 |
+| 60 à 69 | Registre de transparence | | `transparence.md` § 4 |
 | 41 | `Ping` / 42 `Pong` | Les deux | `{}` |
 | 43 | `Bye` | Les deux | `{}` |
 

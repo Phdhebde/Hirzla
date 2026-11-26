@@ -130,7 +130,7 @@ articulation avec la révocation définitive et monotone du § 9.7.
   de porteur, et la demande est refusée (`Unsupported`) sans rien signer. L'appareil n'a alors
   aucune clé de casier ; mais un `Grant` ultérieur l'enveloppera, puisque `GetMemberKeys` le
   liste. Publier la révocation dans le casier personnel sur le serveur, ou directement au
-  registre, reste à spécifier : options examinées dans l'ADR 0066 (proposé).
+  registre, reste à spécifier : options examinées dans l'ADR 0066, qui retient le dépôt direct au registre (`PostRevocation`).
 - **Casier gelé** : laissé de côté plutôt que différé (une révocation différée demanderait de
   la garder dans l'annexe, donc un changement de format).
 - ~~**Redémarrage avant l'envoi.** L'attente déclarée au registre local n'est pas gardée dans

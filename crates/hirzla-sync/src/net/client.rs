@@ -9,6 +9,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::control::DeviceRevocation;
 use crate::wire::OpItem;
 use crate::{Authorizer, LocalDevice, Replica};
 use hirzla_crypto::sign::{Domain, Signature, VerifyingKey};
@@ -406,6 +407,35 @@ impl Client {
     /// [`NetError::Refused`], I/O errors.
     pub fn put_member_profile(&mut self, profile: &[u8]) -> Result<u64, NetError> {
         let m = self.request(kind::PUT_MEMBER_PROFILE, proto::blob_value(profile))?;
+        proto::read_index(&m.body)
+    }
+
+    /// `GetKeyLogProof` (`transparence.md` § 4): the inclusion proof of the entries at
+    /// `indices` (1 to 65), for the head of `size` entries, or the current one. Nothing in the
+    /// answer is trusted: the caller verifies the proof with the pinned server key.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn keylog_proof(
+        &mut self,
+        indices: &[u64],
+        size: Option<u64>,
+    ) -> Result<Vec<u8>, NetError> {
+        let m = self.request(
+            kind::GET_KEYLOG_PROOF,
+            proto::get_keylog_proof_value(indices, size),
+        )?;
+        proto::read_blob(&m.body, 64 * 1024)
+    }
+
+    /// `PostRevocation` (`transparence.md` § 4, ADR 0066): asks the server to inscribe a
+    /// revocation of a device of the member of the session, signed by the member key, when no
+    /// locker carries the device. Returns the rank of its entry of kind 3 in the key log.
+    ///
+    /// # Errors
+    /// [`NetError::Refused`], I/O errors.
+    pub fn post_revocation(&mut self, rev: &DeviceRevocation) -> Result<u64, NetError> {
+        let m = self.request(kind::POST_REVOCATION, proto::post_revocation_value(rev))?;
         proto::read_index(&m.body)
     }
 

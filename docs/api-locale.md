@@ -879,10 +879,12 @@ Détails :
     ordre : `NotJoined` ; `NotFound` pour l'appareil du poste, un appareil inconnu du poste ou
     d'un autre membre ; `AlreadyRevoked` si l'appareil est déjà révoqué (registre local ou
     casier tenu ici) ; `Forbidden` si le poste n'a pas la clé du membre (pas un appareil de
-    certification) ; `KeyLogRejected` si le registre est suspect ; `Unsupported` si aucun
-    casier tenu ici ne porte l'appareil (rien n'est signé : le noyau ne tient pas de casier
-    personnel sur le serveur) ; `LockerFrozen` si tous les casiers porteurs sont gelés (un
-    casier gelé parmi d'autres est laissé de côté).
+    certification) ; `KeyLogRejected` si le registre est suspect ; `LockerFrozen` si tous les
+    casiers porteurs sont gelés (un casier gelé parmi d'autres est laissé de côté).
+    Si **aucun casier tenu ici ne porte l'appareil** (cas courant d'un appareil pirate qui n'a
+    encore reçu aucune clé), le noyau dépose la révocation au registre par `PostRevocation`
+    (`transparence.md` § 4, ADR 0066) et rend `{1: 0}` ; un serveur qui ne connaît pas ce
+    message donne `Unsupported`, et rien n'est inscrit.
 
 Une opération réseau qui a déjà émis puis perd la connexion garde l'opération dans la réplique
 et l'annexe : elle part à la synchronisation suivante (« à envoyer » de `ServerStatus`).

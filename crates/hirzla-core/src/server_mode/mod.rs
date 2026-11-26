@@ -1282,6 +1282,20 @@ impl ServerMode {
                 object: device_cert_object(d).map_err(internal)?,
             });
         }
+        // The proof of `MemberKeysResult` ends with one revocation per element of `revoked`
+        // (`transparence.md` § 3.4).
+        let carried = expected.len();
+        for r in &mk.revoked {
+            if r.member != *member || r.verify(&mk.keys).is_err() {
+                return Err(ServerCode::KeyLogRejected);
+            }
+            expected.push(ExpectedEntry {
+                kind: EntryKind::DeviceRevocation,
+                member: *member,
+                device: Some(r.device),
+                object: revocation_object(r).map_err(internal)?,
+            });
+        }
         let pinned = VerifyingKey::from_bytes(&j.info.server_key).map_err(corrupt)?;
         let proof = KeyLogProof::decode(&proof_bytes).map_err(|_| ServerCode::KeyLogRejected)?;
         proof
@@ -1292,7 +1306,22 @@ impl ServerMode {
         write_log(&j.keylog.monitor)?
             .compare_proof(&proof)
             .map_err(|_| ServerCode::KeyLogRejected)?;
-        Ok((mk.keys, mk.devices, proof_bytes))
+        if mk.revoked.is_empty() {
+            return Ok((mk.keys, mk.devices, proof_bytes));
+        }
+        // A `Grant` or a `LockerCreate` carries only the key and the certificates (§ 3.4): a
+        // proof of those entries alone (§ 6.2, `GetKeyLogProof`), for the current head, which
+        // the local log must not contradict either.
+        let indices: Vec<u64> = proof.items[..carried].iter().map(|i| i.index).collect();
+        let grant_bytes = client.keylog_proof(&indices, None).map_err(net)?;
+        let grant = KeyLogProof::decode(&grant_bytes).map_err(|_| ServerCode::KeyLogRejected)?;
+        grant
+            .verify(&pinned, &j.info.server_id, &expected[..carried])
+            .map_err(|_| ServerCode::KeyLogRejected)?;
+        write_log(&j.keylog.monitor)?
+            .compare_proof(&grant)
+            .map_err(|_| ServerCode::KeyLogRejected)?;
+        Ok((mk.keys, mk.devices, grant_bytes))
     }
 
     fn create_locker(&mut self, vault: &Vault, name: &str) -> Result<ServerReply, ServerCode> {
