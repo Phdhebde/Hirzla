@@ -14,6 +14,7 @@
 //! | [`KdfLabel::DeviceWrap`] | `hirzla/v1/device-wrap` | none |
 //! | [`KdfLabel::HardwareSecret`] | `hirzla/v1/hardware-secret` | method kind (1 byte) |
 //! | [`KdfLabel::LockerExport`] | `hirzla/v1/locker-export-key` | none |
+//! | [`KdfLabel::BoundSecret`] | `hirzla/v1/bound-secret` | method kind (1 byte) |
 //!
 //! The output is always a 32-byte [`SymmetricKey`].
 
@@ -49,6 +50,12 @@ pub enum KdfLabel {
     /// `K_export`, the key of an encrypted locker export, derived from the Argon2id output of
     /// the export password (`docs/format.md` § 16, ADR 0077).
     LockerExport,
+    /// Method secret of the device-bound method, from the password secret and the material
+    /// released by the hardware of this device (`docs/format.md` § 4.2.2, ADR 0087).
+    BoundSecret {
+        /// Kind of the method (8).
+        method_kind: u8,
+    },
 }
 
 impl KdfLabel {
@@ -58,6 +65,7 @@ impl KdfLabel {
             KdfLabel::DeviceWrap => b"hirzla/v1/device-wrap",
             KdfLabel::HardwareSecret { .. } => b"hirzla/v1/hardware-secret",
             KdfLabel::LockerExport => b"hirzla/v1/locker-export-key",
+            KdfLabel::BoundSecret { .. } => b"hirzla/v1/bound-secret",
         }
     }
 
@@ -68,7 +76,9 @@ impl KdfLabel {
                 method_kind,
             } => vec![vec![method_index], vec![method_kind]],
             KdfLabel::DeviceWrap | KdfLabel::LockerExport => Vec::new(),
-            KdfLabel::HardwareSecret { method_kind } => vec![vec![method_kind]],
+            KdfLabel::HardwareSecret { method_kind } | KdfLabel::BoundSecret { method_kind } => {
+                vec![vec![method_kind]]
+            }
         }
     }
 
@@ -124,6 +134,33 @@ pub fn derive_key_from_material(
         return Err(Error::InvalidEncoding);
     }
     let okm = hkdf_sha512(material, salt, &label.info(), KEY_LEN)?;
+    SymmetricKey::from_bytes(&okm).map_err(|_| Error::Internal)
+}
+
+/// Derives the method secret of the device-bound method (`docs/format.md` § 4.2.2, ADR 0087):
+/// HKDF-SHA-512 of `password_secret ‖ material`, both needed. `password_secret` is the
+/// Argon2id output of the password; `material` is what the hardware of the device released,
+/// within the bounds of [`derive_key_from_material`].
+///
+/// # Errors
+/// [`Error::InvalidContext`] if `salt` is empty, [`Error::InvalidEncoding`] for material out of
+/// bounds, [`Error::Internal`] if the library fails.
+pub fn derive_bound_key(
+    password_secret: &SymmetricKey,
+    material: &[u8],
+    salt: &[u8],
+    label: KdfLabel,
+) -> Result<SymmetricKey, Error> {
+    if salt.is_empty() {
+        return Err(Error::InvalidContext);
+    }
+    if !(MIN_MATERIAL_LEN..=MAX_MATERIAL_LEN).contains(&material.len()) {
+        return Err(Error::InvalidEncoding);
+    }
+    let mut ikm = Zeroizing::new(Vec::with_capacity(KEY_LEN + material.len()));
+    ikm.extend_from_slice(password_secret.as_bytes());
+    ikm.extend_from_slice(material);
+    let okm = hkdf_sha512(&ikm, salt, &label.info(), KEY_LEN)?;
     SymmetricKey::from_bytes(&okm).map_err(|_| Error::Internal)
 }
 

@@ -844,7 +844,7 @@ impl Core {
             return Err(ErrorReply::new(ErrorCode::NoVault));
         }
         self.check_throttle()?;
-        match Vault::open(&self.config.vault_path, password) {
+        match self.open_with_password(password) {
             Ok(v) => {
                 self.opened(v)?;
                 Ok(Reply::Done)
@@ -854,6 +854,24 @@ impl Core {
                 Err(ErrorReply::new(ErrorCode::UnlockFailed))
             }
             Err(e) => Err(vault_error(e)),
+        }
+    }
+
+    /// Opens the vault with `password`, and with the hardware of this device when the vault
+    /// is bound to it (ADR 0087): the material is released without any gesture, the password
+    /// being the gesture. A bound vault whose hardware is not here answers `Unsupported`.
+    fn open_with_password(&self, password: &str) -> Result<Vault, VaultError> {
+        let path = &self.config.vault_path;
+        let methods = hirzla_vault::unlock_methods(path)?;
+        match methods.first() {
+            Some(m) if m.kind == hirzla_vault::model::UNLOCK_BOUND => {
+                let key = m.hardware.clone().ok_or(VaultError::Unsupported)?;
+                let material = self
+                    .bound_material(&key)
+                    .map_err(|_| VaultError::Unsupported)?;
+                Vault::open_bound(path, password, &key, material.as_bytes())
+            }
+            _ => Vault::open(path, password),
         }
     }
 

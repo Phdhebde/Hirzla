@@ -35,5 +35,9 @@ pub const MIN_FORMAT_VERSION: u16 = 1;
 /// Whether this build reads format version `v`.
 #[must_use]
 pub fn reads_format_version(v: u64) -> bool {
-    (u64::from(MIN_FORMAT_VERSION)..=u64::from(FORMAT_VERSION)).contains(&v)
+    (u64::from(MIN_FORMAT_VERSION)..=u64::from(MAX_FORMAT_VERSION)).contains(&v)
 }
+
+/// Latest format version this build reads and writes: 4, the version of a device-bound vault
+/// (ADR 0087). A new vault is still created in [`FORMAT_VERSION`].
+pub const MAX_FORMAT_VERSION: u16 = model::BOUND_FORMAT_VERSION;

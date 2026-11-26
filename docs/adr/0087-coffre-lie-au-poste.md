@@ -163,14 +163,17 @@ deux plates-formes disponibles pour les essais)
   lu, rien n'est écrit, aucune synchronisation n'a lieu tant que le coffre n'est pas lié.
   Ainsi l'utilisateur peut se mettre en règle sans jamais être enfermé dehors.
 
-  Le noyau tire ensuite la clé matérielle, puis réécrit l'en-tête dans une transaction :
-  `kind = 8` au rang 0, les autres méthodes admises renveloppées à leur nouveau rang (la
-  `DeviceKey` est connue, coffre ouvert), `kind = 1` retiré. Aucune donnée n'est réécrite hors
-  de l'en-tête.
-- **Sortir** (`Unbind`) : même chemin en sens inverse ; la clé matérielle est supprimée ensuite.
+  Le noyau tire ensuite la clé matérielle, puis réécrit l'en-tête dans une transaction : la
+  méthode liée **remplace sur place** le mot de passe au rang 0, et le fichier passe en v4.
+  *Correction apportée au codage (2026-11-26)* : la proposition renveloppait les autres
+  méthodes à un nouveau rang ; c'est impossible, il faudrait leurs secrets (matériau des puces,
+  clé du kit effacée). Le remplacement sur place laisse chaque autre méthode à son rang, donc
+  avec sa clé : rien d'autre n'est réécrit.
+- **Sortir** (`Unbind`) : mot de passe et matériel ; le mot de passe revient au rang 0, la clé
+  matérielle est supprimée du système quand elle y vit. Le fichier reste en v4.
 - **Changer de mot de passe** en mode lié : demande aussi le matériel.
-- Les règles de l'ADR 0075 § 1.5 (« seule la dernière méthode se retire ») ne s'appliquent pas
-  à ces deux opérations, qui réécrivent tout le tableau.
+- **Ouvrir par le kit** impose un nouveau mot de passe, écrit délié (le matériel peut avoir
+  disparu) ; le client propose de lier de nouveau.
 
 ### 7. Politique
 
@@ -189,8 +192,8 @@ deux plates-formes disponibles pour les essais)
 - `kind = 8` est une valeur nouvelle du registre (`format.md` § 4.2) ; nouvelle étiquette
   `hirzla/v1/bound-secret`. Un coffre lié n'a plus de `kind = 1` : un lecteur antérieur ne
   sait pas l'ouvrir, et doit le refuser net. **Version de format 4** : un lecteur v3 refuse dès
-  l'en-tête (`UnsupportedVersion`), comme pour les v2 et v3 (ADR 0067, 0076). Un coffre non lié
-  reste en v3.
+  l'en-tête (`UnsupportedVersion`), comme pour les v2 et v3 (ADR 0067, 0076). Un coffre neuf
+  reste créé en v3 : seul le lien fait monter en v4.
 - L'annexe du mode Serveur, le protocole et `hirzlad` ne changent pas : les autres appareils
   reçoivent des opérations, jamais le fichier.
 
@@ -198,8 +201,9 @@ deux plates-formes disponibles pour les essais)
 
 Famille du déverrouillage matériel (ADR 0075, codes 160 à 169) : `BindToDevice` (164),
 `Unbind` (165) ; `UnlockMethods` (160) rend en plus `{3: lié bool, 4: lien possible ici
-bool}`. `Unlock` (2) sur un coffre lié rend `MethodUnavailable` si le matériel manque. Numéros
-à confirmer avec la décision sur les versions de l'API.
+bool}` ; erreur 166 `RecoveryRequired`. `Unlock` (2) sur un coffre lié rend `Unsupported` (code
+général : `Unlock` n'appartient pas à la famille 160) si le matériel manque. Numéros fixés au
+codage (`api-locale.md` § 21) ; ils suivront la décision de l'ADR 0088 sur les versions.
 
 ## Conséquences
 
@@ -237,3 +241,29 @@ bool}`. `Unlock` (2) sur un coffre lié rend `MethodUnavailable` si le matériel
 5. Essais sur matériel : macOS fait sur un programme jetable (§ 3), à refaire dans le noyau
    livré et après redémarrage ; Pixel fait sur une sonde jetable (§ 4), à refaire dans
    l'application.
+
+## Mise en œuvre, premier lot (2026-11-26)
+
+- Spécifications : `format.md` § 4.2.2 et version 4, `crypto.md` (étiquette
+  `hirzla/v1/bound-secret`), `api-locale.md` § 21.
+- `hirzla-crypto` : `KdfLabel::BoundSecret`, `kdf::derive_bound_key` (HKDF de
+  `P ‖ matériau`), vecteur figé calculé en Python.
+- `hirzla-vault` : `UnlockParams::Bound`, règles d'en-tête (rang 0, jamais avec `kind = 1`,
+  v4), `Vault::open_bound`, `bind_to_device`, `unbind`, `verify_bound`,
+  `change_bound_password` ; le recouvrement délie. Un coffre neuf reste en v3.
+- `hirzla-keystore` : `UnlockFactor::can_bind`, `bind_enrol`, `bind_release` ; Secure Enclave
+  sans biométrie (`PrivateKeyUsage` seul) ; Android Keystore sans authentification,
+  `setUnlockedDeviceRequired`, StrongBox puis TEE, alias `hirzla-bound-…` ; faux matériel
+  logiciel pour les tests.
+- Noyau : `BindToDevice` (164), `Unbind` (165), `RecoveryRequired` (166), `Unlock` d'un coffre
+  lié sans geste, `ChangePassword` et `EnrollMethod` vérifiés avec le matériel ; journal
+  `kind=bound_without_recovery` pour le refus explicite.
+- Ligne de commande : `hirzla methods bind [--sans-kit]`, `hirzla methods unbind`.
+- **Essai réel sur ce Mac (M1 Pro)**, noyau de développement, coffre jetable : lien refusé sans
+  kit, lien accepté avec `--sans-kit`, méthode 0 « mot de passe lié à ce poste », mauvais mot de
+  passe refusé, ouverture par le mot de passe sans aucune fenêtre, fichier en version 4.
+- **Pas encore fait** : écrans de l'application de poste et de l'application Android ; essai
+  dans l'application Android sur le Pixel (le code Android est compilé et passé à clippy pour
+  `aarch64-linux-android`, et la sonde du § 4 a validé le Keystore) ; état restreint sous une
+  politique, qui attend l'ADR 0086.
+

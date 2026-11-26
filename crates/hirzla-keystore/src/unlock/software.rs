@@ -14,8 +14,8 @@ use hirzla_crypto::util::{constant_time_eq, random_array, sha384};
 use zeroize::Zeroizing;
 
 use super::{
-    android_key_alias, hello_key_name, FactorError, FactorKind, Gesture, KeyRef, Material,
-    UnlockFactor,
+    android_bound_alias, android_key_alias, hello_key_name, FactorError, FactorKind, Gesture,
+    KeyRef, Material, UnlockFactor,
 };
 
 /// PIN tries before the fake security key blocks.
@@ -214,6 +214,53 @@ impl UnlockFactor for SoftwareFactor {
         Ok(material(secret, &input))
     }
 
+    fn can_bind(&self) -> bool {
+        self.state().available
+            && matches!(
+                self.kind,
+                FactorKind::SecureEnclave | FactorKind::AndroidKeystore
+            )
+    }
+
+    fn bind_enrol(&self, gesture: &Gesture<'_>) -> Result<(KeyRef, Material), FactorError> {
+        if !self.can_bind() {
+            return Err(FactorError::Unavailable);
+        }
+        // No gesture: the password is the gesture (ADR 0087).
+        let key = match self.kind {
+            FactorKind::SecureEnclave => KeyRef::SecureEnclave {
+                wrapped_key: random::<64>()?.to_vec(),
+                ephemeral_public: {
+                    let mut p = [4u8; 65];
+                    p[1..].copy_from_slice(&[random::<32>()?, random::<32>()?].concat());
+                    p
+                },
+            },
+            _ => KeyRef::AndroidKeystore {
+                alias: android_bound_alias(&gesture.vault_id),
+                challenge: random()?,
+            },
+        };
+        let (identity, input) = split(&key);
+        let secret = Zeroizing::new(random::<32>()?);
+        let m = material(&secret, &input);
+        self.state().keys.insert(identity, secret);
+        Ok((key, m))
+    }
+
+    fn bind_release(&self, key: &KeyRef) -> Result<Material, FactorError> {
+        if key.kind() != self.kind {
+            return Err(FactorError::Invalidated);
+        }
+        let state = self.state();
+        if !state.available {
+            return Err(FactorError::Unavailable);
+        }
+        let (identity, input) = split(key);
+        let secret = state.keys.get(&identity).ok_or(FactorError::Invalidated)?;
+        Ok(material(secret, &input))
+    }
+
     fn forget(&self, key: &KeyRef) -> Result<(), FactorError> {
         let (identity, _) = split(key);
         self.state().keys.remove(&identity);
@@ -310,5 +357,26 @@ mod tests {
         f.set_available(true);
         assert!(f.release(&key, &gesture(None)).is_ok());
         assert_eq!(f.gestures(), 4);
+    }
+
+    #[test]
+    fn a_device_bound_key_needs_no_gesture() {
+        let f = SoftwareFactor::new(FactorKind::AndroidKeystore);
+        assert!(f.can_bind());
+        let (key, m) = f.bind_enrol(&gesture(None)).unwrap();
+        let KeyRef::AndroidKeystore { alias, .. } = &key else {
+            unreachable!()
+        };
+        assert!(alias.starts_with("hirzla-bound-"));
+        assert_eq!(f.bind_release(&key).unwrap().as_bytes(), m.as_bytes());
+        assert_eq!(f.gestures(), 0);
+        f.set_available(false);
+        assert_eq!(f.bind_release(&key).err(), Some(FactorError::Unavailable));
+        f.set_available(true);
+        f.reset();
+        assert_eq!(f.bind_release(&key).err(), Some(FactorError::Invalidated));
+        // Windows Hello and FIDO2 cannot bind a vault to the device.
+        assert!(!SoftwareFactor::new(FactorKind::Fido2).can_bind());
+        assert!(!SoftwareFactor::new(FactorKind::WindowsHello).can_bind());
     }
 }

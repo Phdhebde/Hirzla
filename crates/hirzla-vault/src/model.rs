@@ -216,6 +216,21 @@ pub enum UnlockParams {
     Hardware(Vec<u8>),
     /// Recovery by a quorum of shares (ADR 0034).
     Recovery(RecoveryParams),
+    /// Password bound to the hardware of this device (`kind = 8`, `docs/format.md` § 4.2.2,
+    /// ADR 0087): both are needed.
+    Bound(BoundParams),
+}
+
+/// Parameters of the device-bound method (`docs/format.md` § 4.2.2). Public, like those of the
+/// password method: the header is read before any key is available.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BoundParams {
+    /// Argon2id parameters of the password part.
+    pub password: hirzla_crypto::password::PasswordParams,
+    /// Format of `keystore_blob`: 3 (Secure Enclave) or 7 (Android Keystore).
+    pub hardware: u8,
+    /// The hardware key, as in § 4.2.1.
+    pub keystore_blob: Vec<u8>,
 }
 
 /// Parameters of the quorum recovery method (`docs/format.md` § 4.2, ADR 0034). Public: the
@@ -241,7 +256,7 @@ pub const RECOVERY_MAX_COUNT: u8 = 16;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlockMethod {
     /// 1 password, 2 TPM 2.0, 3 Secure Enclave, 4 FIDO2, 5 Windows Hello, 6 recovery kit,
-    /// 7 Android Keystore (ADR 0080).
+    /// 7 Android Keystore (ADR 0080), 8 password bound to the device (ADR 0087).
     pub kind: u8,
     /// Method parameters.
     pub params: UnlockParams,
@@ -253,17 +268,47 @@ pub struct UnlockMethod {
 pub const UNLOCK_PASSWORD: u8 = 1;
 /// Kind of the quorum recovery method (ADR 0034).
 pub const UNLOCK_RECOVERY: u8 = 6;
+/// Kind of the method that binds the password to the hardware of the device (ADR 0087).
+pub const UNLOCK_BOUND: u8 = 8;
+/// Hardware formats a device-bound method may name (`docs/format.md` § 4.2.2).
+pub const BOUND_HARDWARE: [u8; 2] = [3, 7];
+/// First format version that may carry a device-bound method.
+pub const BOUND_FORMAT_VERSION: u16 = 4;
+
+fn password_params_value(p: &hirzla_crypto::password::PasswordParams) -> Vec<(u64, Value)> {
+    vec![
+        (1, Value::Uint(u64::from(p.m_kib()))),
+        (2, Value::Uint(u64::from(p.t()))),
+        (3, Value::Uint(u64::from(p.p()))),
+        (4, Value::bytes(p.salt())),
+        (5, Value::Uint(19)),
+    ]
+}
+
+fn read_password_params(
+    p: &Fields<'_>,
+) -> Result<hirzla_crypto::password::PasswordParams, CborError> {
+    uint_in(p.req(5)?, 19..=19)?;
+    let as_u32 = |v: &Value| u32::try_from(uint(v)?).map_err(|_| CborError::Malformed);
+    hirzla_crypto::password::PasswordParams::new(
+        as_u32(p.req(1)?)?,
+        as_u32(p.req(2)?)?,
+        as_u32(p.req(3)?)?,
+        fixed::<32>(p.req(4)?)?,
+    )
+    .map_err(|_| CborError::Malformed)
+}
 
 impl UnlockMethod {
     fn to_value(&self) -> Value {
         let params = match &self.params {
-            UnlockParams::Password(p) => Value::map(vec![
-                (1, Value::Uint(u64::from(p.m_kib()))),
-                (2, Value::Uint(u64::from(p.t()))),
-                (3, Value::Uint(u64::from(p.p()))),
-                (4, Value::bytes(p.salt())),
-                (5, Value::Uint(19)),
-            ]),
+            UnlockParams::Password(p) => Value::map(password_params_value(p)),
+            UnlockParams::Bound(b) => {
+                let mut e = password_params_value(&b.password);
+                e.push((6, Value::Uint(u64::from(b.hardware))));
+                e.push((7, Value::bytes(&b.keystore_blob)));
+                Value::map(e)
+            }
             UnlockParams::Hardware(blob) => Value::map(vec![(1, Value::bytes(blob))]),
             UnlockParams::Recovery(r) => Value::map(vec![
                 (1, Value::bytes(&r.kit_id)),
@@ -281,7 +326,7 @@ impl UnlockMethod {
 
     fn from_value(v: &Value) -> Result<Self, CborError> {
         let f = Fields::new(v, &[1, 2, 3])?;
-        let kind = u8::try_from(uint_in(f.req(1)?, 1..=7)?).map_err(|_| CborError::Malformed)?;
+        let kind = u8::try_from(uint_in(f.req(1)?, 1..=8)?).map_err(|_| CborError::Malformed)?;
         let params = if kind == UNLOCK_RECOVERY {
             let p = Fields::new(f.req(2)?, &[1, 2, 3, 4])?;
             let small = |v: &Value, lo: u8| -> Result<u8, CborError> {
@@ -298,16 +343,18 @@ impl UnlockMethod {
             })
         } else if kind == UNLOCK_PASSWORD {
             let p = Fields::new(f.req(2)?, &[1, 2, 3, 4, 5])?;
-            uint_in(p.req(5)?, 19..=19)?;
-            let as_u32 = |v: &Value| u32::try_from(uint(v)?).map_err(|_| CborError::Malformed);
-            let params = hirzla_crypto::password::PasswordParams::new(
-                as_u32(p.req(1)?)?,
-                as_u32(p.req(2)?)?,
-                as_u32(p.req(3)?)?,
-                fixed::<32>(p.req(4)?)?,
-            )
-            .map_err(|_| CborError::Malformed)?;
-            UnlockParams::Password(params)
+            UnlockParams::Password(read_password_params(&p)?)
+        } else if kind == UNLOCK_BOUND {
+            let p = Fields::new(f.req(2)?, &[1, 2, 3, 4, 5, 6, 7])?;
+            let hardware = u8::try_from(uint(p.req(6)?)?).map_err(|_| CborError::Malformed)?;
+            if !BOUND_HARDWARE.contains(&hardware) {
+                return Err(CborError::Malformed);
+            }
+            UnlockParams::Bound(BoundParams {
+                password: read_password_params(&p)?,
+                hardware,
+                keystore_blob: cbor::bytes_max(p.req(7)?, 65_536)?.to_vec(),
+            })
         } else {
             let p = Fields::new(f.req(2)?, &[1])?;
             UnlockParams::Hardware(cbor::bytes_max(p.req(1)?, 65_536)?.to_vec())
@@ -396,6 +443,17 @@ pub fn decode_header(bytes: &[u8]) -> Result<Header, HeaderError> {
     // At most one recovery kit at a time (ADR 0034).
     if unlock.iter().filter(|m| m.kind == UNLOCK_RECOVERY).count() > 1 {
         return Err(HeaderError::Malformed);
+    }
+    // The device-bound method (ADR 0087): at rank 0 only, never with the password alone, in a
+    // file of version 4 or later.
+    if let Some(i) = unlock.iter().position(|m| m.kind == UNLOCK_BOUND) {
+        if i != 0
+            || unlock.iter().filter(|m| m.kind == UNLOCK_BOUND).count() > 1
+            || unlock.iter().any(|m| m.kind == UNLOCK_PASSWORD)
+            || format_version < BOUND_FORMAT_VERSION
+        {
+            return Err(HeaderError::Malformed);
+        }
     }
     Ok(Header {
         format_version,

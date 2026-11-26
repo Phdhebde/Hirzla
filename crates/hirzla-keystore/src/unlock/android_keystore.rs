@@ -7,6 +7,11 @@
 //! enrol or unlock (ADR 0080 § 4.1). Past the 5 seconds, the Keystore refuses with
 //! `UserNotAuthenticatedException`, reported as [`FactorError::Cancelled`].
 //!
+//! The device-bound method (ADR 0087, `docs/format.md` § 4.2.2) uses another key of the same
+//! kind, alias `hirzla-bound-…`, created **without user authentication** and usable only while
+//! the phone is unlocked: the password is the gesture, so the core computes the HMAC directly.
+//! StrongBox first, the TEE when the phone has no StrongBox.
+//!
 //! Every call goes through JNI with the virtual machine handed over by the service
 //! (`platform::android`); only framework classes are used, so the system class loader of an
 //! attached native thread finds them. No `unsafe` here.
@@ -16,7 +21,10 @@ use jni::JNIEnv;
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
-use super::{android_key_alias, FactorError, FactorKind, Gesture, KeyRef, Material, UnlockFactor};
+use super::{
+    android_bound_alias, android_key_alias, FactorError, FactorKind, Gesture, KeyRef, Material,
+    UnlockFactor,
+};
 use crate::platform::android::{app_context, java_vm};
 
 /// Seconds the key stays usable after a fingerprint (ADR 0080 § 4.1).
@@ -112,8 +120,21 @@ fn keystore<'a>(env: &mut JNIEnv<'a>) -> Result<JObject<'a>, FactorError> {
     Ok(ks)
 }
 
-/// Creates (or replaces) the StrongBox HMAC key `alias`.
-fn create_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), FactorError> {
+/// How a key is created.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Use {
+    /// The fingerprint method (`kind` 7): StrongBox, usable 5 seconds after a fingerprint.
+    Fingerprint,
+    /// The device-bound method (ADR 0087): no user authentication, phone unlocked only, in
+    /// StrongBox or in the TEE.
+    Bound {
+        /// In StrongBox rather than the TEE.
+        strongbox: bool,
+    },
+}
+
+/// Creates (or replaces) the HMAC key `alias`.
+fn create_key(env: &mut JNIEnv<'_>, alias: &str, how: Use) -> Result<(), FactorError> {
     let jalias = {
         let r = env.new_string(alias);
         ok(env, r)
@@ -124,31 +145,41 @@ fn create_key(env: &mut JNIEnv<'_>, alias: &str) -> Result<(), FactorError> {
         &[JValue::Object(&jalias), JValue::Int(PURPOSE_SIGN)],
     );
     let mut builder = ok(env, r)?;
-    for (method, arg) in [
-        ("setIsStrongBoxBacked", true),
-        ("setUserAuthenticationRequired", true),
-        ("setInvalidatedByBiometricEnrollment", true),
-        ("setUnlockedDeviceRequired", true),
-    ] {
+    let flags: &[(&str, bool)] = match how {
+        Use::Fingerprint => &[
+            ("setIsStrongBoxBacked", true),
+            ("setUserAuthenticationRequired", true),
+            ("setInvalidatedByBiometricEnrollment", true),
+            ("setUnlockedDeviceRequired", true),
+        ],
+        Use::Bound { strongbox } => &[
+            ("setIsStrongBoxBacked", strongbox),
+            ("setUserAuthenticationRequired", false),
+            ("setUnlockedDeviceRequired", true),
+        ],
+    };
+    for &(method, arg) in flags {
         let sig = format!("(Z){BUILDER_SIG}");
         let r = env
             .call_method(&builder, method, &sig, &[JValue::Bool(u8::from(arg))])
             .and_then(|v| v.l());
         builder = ok(env, r)?;
     }
-    let sig = format!("(II){BUILDER_SIG}");
-    let r = env
-        .call_method(
-            &builder,
-            "setUserAuthenticationParameters",
-            &sig,
-            &[
-                JValue::Int(AUTH_VALIDITY_S),
-                JValue::Int(AUTH_BIOMETRIC_STRONG),
-            ],
-        )
-        .and_then(|v| v.l());
-    builder = ok(env, r)?;
+    if how == Use::Fingerprint {
+        let sig = format!("(II){BUILDER_SIG}");
+        let r = env
+            .call_method(
+                &builder,
+                "setUserAuthenticationParameters",
+                &sig,
+                &[
+                    JValue::Int(AUTH_VALIDITY_S),
+                    JValue::Int(AUTH_BIOMETRIC_STRONG),
+                ],
+            )
+            .and_then(|v| v.l());
+        builder = ok(env, r)?;
+    }
     let r = env
         .call_method(
             &builder,
@@ -315,6 +346,28 @@ fn usable(env: &mut JNIEnv<'_>) -> Result<bool, FactorError> {
     Ok(ok(env, r)? == BIOMETRIC_SUCCESS)
 }
 
+/// Computes the HMAC twice after enrolment: a method that would not open again must not be
+/// written, and HMAC is deterministic. The key is deleted on any failure.
+fn checked(
+    env: &mut JNIEnv<'_>,
+    alias: &str,
+    challenge: &[u8; 32],
+) -> Result<Material, FactorError> {
+    let first = hmac(env, alias, challenge);
+    let second = hmac(env, alias, challenge);
+    match (first, second) {
+        (Ok(a), Ok(b)) if bool::from(a.as_bytes().ct_eq(b.as_bytes())) => Ok(a),
+        (Err(e), _) | (_, Err(e)) => {
+            let _ = delete_key(env, alias);
+            Err(e)
+        }
+        _ => {
+            let _ = delete_key(env, alias);
+            Err(FactorError::Failed)
+        }
+    }
+}
+
 impl UnlockFactor for AndroidKeystore {
     fn kind(&self) -> FactorKind {
         FactorKind::AndroidKeystore
@@ -331,22 +384,8 @@ impl UnlockFactor for AndroidKeystore {
             if !usable(env)? {
                 return Err(FactorError::Unavailable);
             }
-            create_key(env, &alias)?;
-            let first = hmac(env, &alias, &challenge);
-            // A method that would not open again must not be written: the HMAC must be
-            // deterministic, as HMAC is.
-            let second = hmac(env, &alias, &challenge);
-            match (first, second) {
-                (Ok(a), Ok(b)) if bool::from(a.as_bytes().ct_eq(b.as_bytes())) => Ok(a),
-                (Err(e), _) | (_, Err(e)) => {
-                    let _ = delete_key(env, &alias);
-                    Err(e)
-                }
-                _ => {
-                    let _ = delete_key(env, &alias);
-                    Err(FactorError::Failed)
-                }
-            }
+            create_key(env, &alias, Use::Fingerprint)?;
+            checked(env, &alias, &challenge)
         })
         .map(|m| (KeyRef::AndroidKeystore { alias, challenge }, m))
     }
@@ -355,6 +394,37 @@ impl UnlockFactor for AndroidKeystore {
         let KeyRef::AndroidKeystore { alias, challenge } = key else {
             return Err(FactorError::Invalidated);
         };
+        with_env(|env| hmac(env, alias, challenge))
+    }
+
+    fn can_bind(&self) -> bool {
+        // The Android Keystore is always there; StrongBox or the TEE is decided at enrolment.
+        with_env(|_| Ok(())).is_ok()
+    }
+
+    fn bind_enrol(&self, gesture: &Gesture<'_>) -> Result<(KeyRef, Material), FactorError> {
+        let alias = android_bound_alias(&gesture.vault_id);
+        let challenge = gesture.header_random();
+        with_env(|env| {
+            match create_key(env, &alias, Use::Bound { strongbox: true }) {
+                Ok(()) => {}
+                // No StrongBox on this phone: the TEE still binds the vault to it, and the
+                // password stays needed (ADR 0087 § 4).
+                Err(FactorError::Unavailable) => {
+                    create_key(env, &alias, Use::Bound { strongbox: false })?;
+                }
+                Err(e) => return Err(e),
+            }
+            checked(env, &alias, &challenge)
+        })
+        .map(|m| (KeyRef::AndroidKeystore { alias, challenge }, m))
+    }
+
+    fn bind_release(&self, key: &KeyRef) -> Result<Material, FactorError> {
+        let KeyRef::AndroidKeystore { alias, challenge } = key else {
+            return Err(FactorError::Invalidated);
+        };
+        // No user authentication: refused only while the phone is locked.
         with_env(|env| hmac(env, alias, challenge))
     }
 

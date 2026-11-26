@@ -135,6 +135,8 @@ info = len(nom) ‖ nom ‖ len(p1) ‖ p1 ‖ len(p2) ‖ p2 ‖ …
 | Déverrouillage | `hirzla/v1/unlock` | rang de la méthode (1 octet), type de méthode (1 octet) | `0010` ‖ nom ‖ `0001` ‖ rang ‖ `0001` ‖ type |
 | Clé d'emballage locale | `hirzla/v1/device-wrap` | aucun | `0015` ‖ nom |
 | Clé d'export de casier | `hirzla/v1/locker-export-key` | aucun ; sel = `export_id` (ADR 0077) | `001b` ‖ nom |
+| Secret d'une méthode matérielle | `hirzla/v1/hardware-secret` | type de méthode (1 octet) ; ikm = matériau libéré (ADR 0075, `format.md` § 4.2.1) | `0019` ‖ nom ‖ `0001` ‖ type |
+| Secret de la méthode liée au poste | `hirzla/v1/bound-secret` | type de méthode (1 octet) ; ikm = sortie Argon2id ‖ matériau du poste (ADR 0087, `format.md` § 4.2.2) | `0016` ‖ nom ‖ `0001` ‖ type |
 
 Le sel est obligatoire. Tests : vecteurs Wycheproof HKDF-SHA-512 (le NIST n'en publie pas pour
 HKDF seul), test croisé avec RustCrypto `hkdf`, vecteurs figés des étiquettes

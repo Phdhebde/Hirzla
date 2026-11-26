@@ -84,7 +84,27 @@ impl Core {
                 let vault = self.vault().map_err(general)?;
                 // Same cost as the current password, under a new salt.
                 let kdf = vault.password_cost().map_err(verr)?;
-                match vault.change_password(&current, &new, kdf) {
+                // A vault bound to this device changes the password part of its bound method,
+                // with the hardware (ADR 0087).
+                let changed = match vault.bound().map_err(verr)? {
+                    Some(key) => {
+                        let material = self
+                            .bound_material(&key)
+                            .map_err(|_| code(ErrorCode::Unsupported))?;
+                        self.vault().map_err(general)?.change_bound_password(
+                            &current,
+                            &new,
+                            kdf,
+                            &key,
+                            material.as_bytes(),
+                        )
+                    }
+                    None => self
+                        .vault()
+                        .map_err(general)?
+                        .change_password(&current, &new, kdf),
+                };
+                match changed {
                     Ok(()) => {
                         self.password_proven();
                         Ok(SelfReply::Done)
@@ -273,7 +293,13 @@ impl Core {
                 // Before the password is changed: never on another vault than the expected one.
                 self.expected(&v).map_err(general)?;
                 let kdf = v.password_cost().map_err(verr)?;
+                // A vault bound to a device comes back unbound: the hardware may be gone
+                // (ADR 0087). Its key is deleted from this system when it lives here.
+                let was_bound = v.bound().ok().flatten();
                 v.set_password(new_password, kdf).map_err(verr)?;
+                if let Some(key) = was_bound {
+                    self.forget_bound_key(&key);
+                }
                 self.opened(v).map_err(general)?;
                 Ok(SelfReply::Done)
             }

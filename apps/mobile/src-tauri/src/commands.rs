@@ -90,6 +90,7 @@ impl AppState {
             MethodReply::Methods {
                 methods,
                 enrollable,
+                ..
             } => Ok((
                 methods
                     .iter()
